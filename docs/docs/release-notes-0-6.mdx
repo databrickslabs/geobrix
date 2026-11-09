@@ -121,6 +121,11 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - `levels` may come in any order. Repeated and NULL elements are dropped.
   - An infinite level raises and names the value. Before, it gave no lines.
   - A NULL, error or corrupt tile gives NULL, and a tile with no line to trace gives an empty array.
+- **`gbx_rst_polygonize` runs GDAL's `raster polygonize`.** It traced the regions with rasterio before. It takes the same arguments and gives the same two columns.
+  - A float band is grouped by its exact value. Before, each pixel was rounded to a whole number first, so 1.2 and 1.4 joined one region and `value` was the rounded number, 1.
+  - A NoData pixel, a transparent pixel and a pixel hidden by the tile's own mask band still give no polygon.
+  - A `band` outside the tile raises and names the band. A `connectedness` other than 4 or 8 raises and names the value.
+  - The JAR no longer holds `RST_Polygonize`. It had no SQL form, so no call changes.
 - **`gbx_rst_fillnodata` runs GDAL's `raster fill-nodata`.** It used rasterio before. The filled pixels equal the earlier results, with a few differences.
   - GDAL fills one band for each run. The function runs it once for each band and keeps the tile's other properties, so every band is still filled by its own mask.
   - `max_search_dist` and `smoothing_iter` must be whole numbers from 0 to 2147483647. A fraction or a negative number raises and names the value. Before, `max_search_dist` took a fraction.

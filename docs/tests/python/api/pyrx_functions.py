@@ -194,9 +194,8 @@ Clipped tile is smaller than the original 4 x 3 (e.g. Row(w=2, h=1)).
 def pyrx_polygonize_example(spark):
     """Extract vector polygons from contiguous equal-value regions in the raster.
 
-    rst_polygonize (pyrx) is a streaming Python UDTF. Register first, then query
-    with a SQL LATERAL table function — this avoids buffering all polygons in
-    memory (unbounded fan-out OOM guard).
+    rst_polygonize is a table function over GDAL's raster polygonize. Register
+    first, then query it with a SQL LATERAL join: one row per region.
     """
     from databricks.labs import gbx
     import numpy as np
@@ -227,7 +226,7 @@ def pyrx_polygonize_example(spark):
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
     tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
-    # rst_polygonize is a streaming Python UDTF; invoke via SQL LATERAL.
+    # rst_polygonize is a table function; invoke via SQL LATERAL.
     gbx.register(spark)
     tile_df.createOrReplaceTempView("_pyrx_poly_demo")
     rows = spark.sql(

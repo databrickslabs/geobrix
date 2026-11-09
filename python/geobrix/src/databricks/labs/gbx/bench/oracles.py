@@ -2846,6 +2846,55 @@ def _ref_contours(args):
         gdal.Unlink(name)
 
 
+def _ref_polygons(args):
+    """GDAL's older `gdal.Polygonize` (an integer band) or `gdal.FPolygonize` (a floating point band) on band `args[1]` of
+    the tile `args[0]` (written under a `/vsimem` name), with the band's own mask and 8-connectedness when `args[2]` is 8:
+    an entry point apart from the `raster polygonize` algorithm the engine runs. ``[(value, area, ring points, holes)]``
+    per polygon, sorted.
+    """
+    import uuid
+
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+
+    b = _osgeo.bindings("the polygonize reference")
+    gdal, ogr = b.gdal, b.ogr
+    band_no = 1 if len(args) < 2 or args[1] is None else int(args[1])
+    eight = len(args) > 2 and args[2] is not None and int(args[2]) == 8
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        band = ds.GetRasterBand(band_no)
+        mem = ogr.GetDriverByName("Memory").CreateDataSource("ref")
+        lyr = mem.CreateLayer("p", srs=ds.GetSpatialRef())
+        lyr.CreateField(ogr.FieldDefn("DN", ogr.OFTReal))
+        floating = gdal.GetDataTypeName(band.DataType) in (
+            "Float32",
+            "Float64",
+        )
+        run = gdal.FPolygonize if floating else gdal.Polygonize
+        opts = ["8CONNECTED=8"] if eight else []
+        if run(band, band.GetMaskBand(), lyr, 0, opts) != 0:
+            raise RuntimeError(f"Polygonize failed: {gdal.GetLastErrorMsg()}")
+        out = []
+        for f in lyr:
+            g = shapely.from_wkb(bytes(f.GetGeometryRef().ExportToIsoWkb()))
+            out.append(
+                (
+                    f.GetField("DN"),
+                    round(g.area, 6),
+                    len(g.exterior.coords),
+                    len(g.interiors),
+                )
+            )
+        return sorted(out)
+    finally:
+        band = lyr = mem = ds = None
+        gdal.Unlink(name)
+
+
 def _ref_gdaldem_slope(args):
     """GDAL's own `gdal.DEMProcessing` slope (Horn, no edges), the `gdaldem` command line's scale handling, through
     `osgeo`: independent of the engine's `raster slope` and of the numpy kernel. The source is the tile written under
@@ -5196,6 +5245,7 @@ _ROW_CHECKS = {
     "tile_rows": _oracle_check("check_tile_rows"),
     "tessellation": _oracle_check("check_tessellation"),
     "polygons": _oracle_check("check_polygons"),
+    "polygons_ref": _oracle_check("check_polygons_ref"),
     "grid_stats": _oracle_check("check_grid_stats"),
     "drivers": _oracle_check("check_drivers"),
 }

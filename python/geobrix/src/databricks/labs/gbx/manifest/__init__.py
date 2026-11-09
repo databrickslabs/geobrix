@@ -133,6 +133,8 @@ GDAL_BINDERS = frozenset(
         "geom_wkt",
         "double_list",
         "count",
+        "band",
+        "flag_choice",
         "positive_double",
         "checked_name",
         "calc_envelope",

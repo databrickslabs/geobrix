@@ -13,6 +13,7 @@ from rasterx_generators_python_light import (
     rst_tooverlappingtiles_python_example,
     rst_separatebands_python_example,
     rst_polygonize_python_example,
+    rst_polygonize_connectedness_python_example,
     rst_maketiles_python_example,
     rst_rasterize_python_example,
 )
@@ -53,6 +54,11 @@ def test_rst_polygonize_python_light_example(spark):
     assert isinstance(result, list)
     assert len(result) >= 1
     assert "geom_wkb" in result[0].asDict() and "value" in result[0].asDict()
+
+
+def test_rst_polygonize_connectedness_python_light_example(spark):
+    """A checkerboard has four regions with 4-connectedness and two with 8."""
+    assert rst_polygonize_connectedness_python_example(spark) == [4, 2]
 
 
 def test_rst_maketiles_python_light_example(spark):

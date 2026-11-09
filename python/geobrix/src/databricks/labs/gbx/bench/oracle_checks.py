@@ -235,6 +235,31 @@ def check_polygons(case, tiles, args) -> Optional[str]:
     return None if got == want else f"{case.cid}: polygons {got}, want {want}"
 
 
+def check_polygons_ref(case, tiles, args) -> Optional[str]:
+    """`polygons_ref`: the polygons of a polygonize against GDAL's older `Polygonize` / `FPolygonize` on the same tile
+    (`oracles._ref_polygons`): the same value, area, ring size and number of holes for every polygon, order aside.
+    """
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.bench.oracles import _ref_polygons
+
+    got = []
+    for r in tiles:
+        g = parse_geom(bytes(_field(r, "geom_wkb")))
+        got.append(
+            (
+                float(_field(r, "value")),
+                round(g.area, 6),
+                len(g.exterior.coords),
+                len(g.interiors),
+            )
+        )
+    got.sort()
+    want = _ref_polygons(args)
+    if got == want:
+        return None
+    return f"{case.cid}: {len(got)} polygons {got[:4]}.., reference {len(want)} {want[:4]}.."
+
+
 def _bng_square(e: float, n: float, size: int) -> str:
     """The Ordnance Survey grid reference of the `size` m square holding (e, n): two letters for the 100 km square,
     then the easting and northing digits within it (the published OS algorithm, not the grid code under test).

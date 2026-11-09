@@ -3271,45 +3271,6 @@ def _dtmfromgeoms_udf(
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
 
-_POLYGONIZE_ROW_SCHEMA = StructType(
-    [
-        StructField("geom_wkb", BinaryType(), nullable=False),
-        StructField("value", DoubleType(), nullable=False),
-    ]
-)
-
-
-@udtf(returnType=_POLYGONIZE_ROW_SCHEMA)
-class _RstPolygonizeUDTF:
-    """Streaming UDTF: yield one (geom_wkb, value) row per contiguous value region.
-
-    Uses rasterio.features.shapes as a lazy generator — never buffers the full
-    polygon list (unbounded fan-out OOM guard).
-    """
-
-    def eval(self, tile, band=1, connectedness=4):
-        band = 1 if band is None else int(band)  # a NULL optional is its default
-        connectedness = 4 if connectedness is None else int(connectedness)
-        if connectedness not in (4, 8):
-            raise ValueError(
-                f"rst_polygonize: connectedness must be 4 or 8; got {connectedness}"
-            )
-        if _tile_is_empty(tile):  # NULL, an error tile: nothing to polygonize
-            return
-        from databricks.labs.gbx.pyrx import _env
-
-        _env.configure_gdal_env()
-        with _open_or_none(tile) as ds:
-            if ds is None:
-                return
-            if not 1 <= band <= ds.count:
-                raise ValueError(
-                    f"rst_polygonize: band {band} is outside the tile's {ds.count} band(s)"
-                )
-            for g, v in features.polygonize(ds, band, connectedness):
-                yield (g, v)
-
-
 # --- Tier 1e2: tiling UDTFs (separatebands, retile, tooverlappingtiles) -----
 # All four fan out to ARRAY<tile> in the heavyweight tier; the light tier
 # streams one tile struct per row via UDTFs (eval yields each tile dict

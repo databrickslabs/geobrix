@@ -342,13 +342,20 @@ SPEC_ANALYSIS = (
 PG = "gbx_rst_polygonize"
 
 
-def _pg_tile(z, nodata=None):
+def _pg_tile(z, nodata=None, dtype="float32"):
+    """A tile of `z` (a 2-D list, or a list of them for a raster of several bands) as `dtype`, 10 m pixels, EPSG:3857."""
     import numpy as np
 
     from databricks.labs.gbx.bench.oracles import _gtiff
 
+    a = np.array(z, dtype="float64")
     return _tile(
-        _gtiff(np.array(z, dtype="float64")[np.newaxis], "EPSG:3857", nodata=nodata)
+        _gtiff(
+            a if a.ndim == 3 else a[np.newaxis],
+            "EPSG:3857",
+            nodata=nodata,
+            dtype=dtype,
+        )
     )
 
 
@@ -365,6 +372,119 @@ def _pg_checker(tmpdir):
 @builder("pg_hole")
 def _pg_hole(tmpdir):
     return _pg_tile([[1, 1, 1], [1, -9999, 1], [1, 1, 1]], nodata=-9999.0)
+
+
+@builder("pg_float")
+def _pg_float(tmpdir):
+    """A 2 x 2 Float64 raster [[1.2, 1.4], [1.4, 1.2]]: four regions, because a float is not rounded to a whole number first."""
+    return _pg_tile([[1.2, 1.4], [1.4, 1.2]], dtype="float64")
+
+
+@builder("pg_int16")
+def _pg_int16(tmpdir):
+    return _pg_tile([[1, 2], [2, 1]], dtype="int16")
+
+
+@builder("pg_bands")
+def _pg_bands(tmpdir):
+    """Two bands: band 1 is 7 everywhere, band 2 is 1 in the left three columns and 2 in the right three."""
+    return _pg_tile([[[7] * 6] * 6, [[1, 1, 1, 2, 2, 2]] * 6])
+
+
+@builder("pg_nan")
+def _pg_nan(tmpdir):
+    """A Float32 raster of 1 whose middle pixel is NaN, declared as the NoData value."""
+    return _pg_tile([[1, 1, 1], [1, float("nan"), 1], [1, 1, 1]], nodata=float("nan"))
+
+
+@builder("pg_noise")
+def _pg_noise(tmpdir):
+    """40 x 40 pixels of five classes, in clumps, so regions touch at corners and have holes: Int16."""
+    import numpy as np
+
+    rng = np.random.RandomState(7)
+    z = rng.randint(0, 5, size=(10, 10)).repeat(4, axis=0).repeat(4, axis=1)
+    z = np.where(rng.rand(40, 40) < 0.15, rng.randint(0, 5, size=(40, 40)), z)
+    return _pg_tile(z, dtype="int16")
+
+
+@builder("pg_noise_float")
+def _pg_noise_float(tmpdir):
+    """The same clumps as Float64 with halves added, and a NoData value on some pixels."""
+    import numpy as np
+
+    rng = np.random.RandomState(11)
+    z = rng.randint(0, 4, size=(10, 10)).repeat(4, axis=0).repeat(4, axis=1) + 0.5
+    z = np.where(rng.rand(40, 40) < 0.1, -9999.0, z)
+    return _pg_tile(z, nodata=-9999.0, dtype="float64")
+
+
+def _pg_layout(count, alpha_last=True, mask=False):
+    """A `count`-band Byte raster, 6 x 6: every band 5 over rows 0-1 and 4-5 and 99 over rows 2-3. With an alpha band (the
+    last, labelled so) it is 255 over the opaque rows and 0 over rows 2-3; with `mask`, rows 2-3 are masked instead.
+    """
+    import numpy as np
+    from rasterio.enums import ColorInterp as CI
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    data = np.full((count, 6, 6), 5, dtype="uint8")
+    data[:, 2:4, :] = 99
+    if alpha_last:
+        data[-1] = 255
+        data[-1, 2:4, :] = 0
+    interp = [CI.gray] + [CI.undefined] * (count - 1)
+    if count == 4:
+        interp = [CI.red, CI.green, CI.blue, CI.undefined]
+    if alpha_last:
+        interp[-1] = CI.alpha
+    profile = dict(
+        driver="GTiff",
+        width=6,
+        height=6,
+        count=count,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        photometric="RGB" if count == 4 else "MINISBLACK",
+    )
+    import rasterio
+
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.colorinterp = (
+                interp  # before the write: GDAL ignores a label set after the pixels
+            )
+            dst.write(data)
+            if mask:
+                m = np.full((6, 6), 255, dtype="uint8")
+                m[2:4, :] = 0
+                dst.write_mask(m)
+        return _tile(mf.read())
+
+
+@builder("pg_gray_alpha")
+def _pg_gray_alpha(tmpdir):
+    """Gray and alpha: GDAL itself reads the alpha band as the mask. Rows 2-3 are transparent."""
+    return _pg_layout(2)
+
+
+@builder("pg_gray_x_alpha")
+def _pg_gray_x_alpha(tmpdir):
+    """Three bands, the last an alpha band: GDAL derives no mask from it, so the engine makes the transparent rows
+    (2-3) the tile's mask."""
+    return _pg_layout(3)
+
+
+@builder("pg_rgba")
+def _pg_rgba(tmpdir):
+    return _pg_layout(4)
+
+
+@builder("pg_own_mask")
+def _pg_own_mask(tmpdir):
+    """Three bands with no alpha band and an own mask band that hides rows 2-3."""
+    return _pg_layout(3, alpha_last=False, mask=True)
 
 
 HALVES, CHECKER, HOLE = Build("pg_halves"), Build("pg_checker"), Build("pg_hole")
@@ -411,6 +531,108 @@ SPEC_ANALYSIS += (
     Case("polygonize_null", PG, (None,), "no_rows", None, ONLY),
     Case("polygonize_error_tile", PG, (ERR,), "no_rows", None, ONLY),
     Case("polygonize_corrupt", PG, (CORRUPT,), "no_rows", None, ONLY),
+    # a NULL optional argument is the default (band 1, 4-connectedness)
+    Case(
+        "polygonize_null_optionals",
+        PG,
+        (HALVES, None, None),
+        "polygons",
+        [(1.0, 1800.0), (2.0, 1800.0)],
+        ONLY,
+    ),
+    Case("polygonize_band_zero", PG, (HALVES, 0), "raises", "0", ONLY),
+    # a float is grouped as it is, not rounded to a whole number first (which would join all four pixels into one region
+    # of value 1), and a region's value is the pixel value
+    Case(
+        "polygonize_float_exact",
+        PG,
+        (Build("pg_float"),),
+        "polygons",
+        [(1.2, 100.0), (1.2, 100.0), (1.4, 100.0), (1.4, 100.0)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_int16",
+        PG,
+        (Build("pg_int16"), 1, 8),
+        "polygons",
+        [(1.0, 200.0), (2.0, 200.0)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_second_band",
+        PG,
+        (Build("pg_bands"), 2),
+        "polygons",
+        [(1.0, 1800.0), (2.0, 1800.0)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_first_band_of_two",
+        PG,
+        (Build("pg_bands"),),
+        "polygons",
+        [(7.0, 3600.0)],
+        ONLY,
+    ),
+    # a NaN NoData pixel is no polygon, as any NoData pixel
+    Case(
+        "polygonize_nan_nodata",
+        PG,
+        (Build("pg_nan"),),
+        "polygons",
+        [(1.0, 800.0)],
+        ONLY,
+    ),
+    # transparent pixels and pixels a tile's own mask hides are no data: 24 of 36 pixels, 100 m2 each, in two regions
+    *(
+        Case(
+            f"polygonize_{name}",
+            PG,
+            (Build(f"pg_{name}"),),
+            "polygons",
+            [(5.0, 1200.0), (5.0, 1200.0)],
+            ONLY,
+        )
+        for name in ("gray_alpha", "gray_x_alpha", "rgba", "own_mask")
+    ),
+    # the polygons against GDAL's older Polygonize / FPolygonize: clumps that touch at corners and have holes, whole
+    # numbers and floats with NoData, 4- and 8-connected
+    Case("polygonize_ref_4", PG, (Build("pg_noise"), 1, 4), "polygons_ref", None, ONLY),
+    Case("polygonize_ref_8", PG, (Build("pg_noise"), 1, 8), "polygons_ref", None, ONLY),
+    Case(
+        "polygonize_ref_float_4",
+        PG,
+        (Build("pg_noise_float"), 1, 4),
+        "polygons_ref",
+        None,
+        ONLY,
+    ),
+    Case(
+        "polygonize_ref_float_8",
+        PG,
+        (Build("pg_noise_float"), 1, 8),
+        "polygons_ref",
+        None,
+        ONLY,
+    ),
+    # a virtual tile is read from its file; a file that is not there is retried, then raises naming the path
+    Case(
+        "polygonize_virtual",
+        PG,
+        (Build("vz_columns_virtual"),),
+        "polygons",
+        [(float(v), 600.0) for v in range(6)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_missing_path",
+        PG,
+        (Build("vz_missing"),),
+        "raises",
+        "gbx_missing_tile",
+        ONLY,
+    ),
 )
 
 # Unity Catalog: the fill and the proximity of a materialized tile are the session's; the summary's NULL rows are too. The

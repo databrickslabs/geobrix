@@ -243,7 +243,8 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
 
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
-    default anywhere else, Spark Connect included): the row-wise UDF alone. A row whose output is features has
+    default anywhere else, Spark Connect included): the row-wise UDF alone. A generator row (a table function) registers
+    its UDTF: the row UDTF for ``engine-c0``, the Arrow-optimized one for ``engine-c1``. A row whose output is features has
     no batch form: every form registers its row-wise UDF, and the returned form says ``engine-c0``. The default is the form the row
     measured fastest (``levels.engine_form``).
     """
@@ -256,6 +257,18 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
     name = fn.sql_name
     if form == levels.ENGINE:
         form = levels.engine_form(fn)
+    if fn.kind == "generator":
+        # a table function: no SQL wrapper and no batch UDF. engine-c0 is the row UDTF, engine-c1 the Arrow-optimized one
+        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+        arrow = form == "engine-c1"
+        reg.udtf.register(
+            name,
+            engine_l3.udtf(
+                fn.sql_name, grid, read_cap=report_detected_cap(spark), arrow=arrow
+            ),
+        )
+        return "engine-c1" if arrow else "engine-c0"
     wrapped = fn.gdal.out_kind == "raster" and (
         form == "engine-c1"
         or (

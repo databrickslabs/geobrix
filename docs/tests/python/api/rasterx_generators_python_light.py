@@ -155,6 +155,54 @@ rst_polygonize_python_example_output = """
 """
 
 
+def rst_polygonize_connectedness_python_example(spark):
+    """Count the regions of a checkerboard with 4- and 8-connectedness.
+
+    Pixels that touch at a corner are separate regions with 4 and one region
+    with 8. Returns the two counts.
+    """
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
+    gbx.register(spark)
+    # 2 x 2 pixels: 1 and 2 on the diagonals.
+    data = np.array([[1, 2], [2, 1]], dtype="uint8")
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=2,
+            height=2,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:4326",
+            transform=from_origin(0, 2, 1, 1),
+        ) as ds:
+            ds.write(data, 1)
+        raster_bytes = mf.read()
+    df = spark.createDataFrame([(raster_bytes,)], ["raster"])
+    df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")).createOrReplaceTempView(
+        "checkerboard"
+    )
+    counts = [
+        spark.sql(
+            f"SELECT count(*) AS n FROM checkerboard, LATERAL gbx_rst_polygonize(tile, 1, {c}) t"
+        ).first()["n"]
+        for c in (4, 8)
+    ]
+    return counts
+
+
+rst_polygonize_connectedness_python_example_output = """
+[4, 2]
+(four single-pixel regions with 4-connectedness; two diagonal regions with 8)
+"""
+
+
 def rst_maketiles_python_example(spark):
     """Subdivide raster into tiles by approximate size (UDTF via LATERAL).
 

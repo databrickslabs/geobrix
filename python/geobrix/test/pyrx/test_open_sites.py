@@ -362,8 +362,8 @@ OPEN_SITES = {
         "the netCDF fixture is copied from the dataset open_data opened above (GDAL writes netCDF by copy, built locally then moved to the target); no name is opened here",
     ),
     ("bench/oracles.py", "ds = gdal.Open(name)"): (
-        1,
-        "the independent contour reference reads the tile bytes the oracle wrote to a unique /vsimem name just above and unlinks it after; no caller-supplied name is opened",
+        2,
+        "the independent contour and polygonize references read the tile bytes the oracle wrote to a unique /vsimem name just above and unlink it after; no caller-supplied name is opened",
     ),
     (
         "bench/oracles.py",

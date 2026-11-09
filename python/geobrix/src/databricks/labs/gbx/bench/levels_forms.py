@@ -2458,6 +2458,53 @@ FORMS["SE"] += [
 ]
 
 
+# Polygonize, a GDAL spec engine row that is a table function (one row per region), over replicated 1024 px Byte tiles of six
+# classes in 16 px clumps with scattered single pixels (a few thousand regions a tile): the row UDTF (c0), the Arrow-optimized
+# UDTF (c1) and a floor. Its fingerprint is the number of regions and the sum of their WKB lengths.
+def _se_class_tile(size: int, seed: int) -> dict:
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    rng = np.random.default_rng(seed)
+    blocks = rng.integers(0, 6, (size // 16, size // 16))
+    z = blocks.repeat(16, axis=0).repeat(16, axis=1)
+    z = np.where(rng.random((size, size)) < 0.02, rng.integers(0, 6, (size, size)), z)
+    return oracles._tile(
+        oracles._gtiff(z[np.newaxis], "EPSG:3857", nodata=None, dtype="uint8")
+    )
+
+
+INPUTS["se_classes_1024_mem"] = _se_dems_replicated(
+    1024, tile_of=_se_class_tile, label="classes"
+)
+BASE_ROWS["se_classes_1024_mem"] = 16
+_SE_POLY_FP = (
+    "SELECT count(*) AS n, sum(length(t.geom_wkb)) AS fp, count(t.geom_wkb) AS n_out "
+    "FROM (SELECT p.* FROM {{src}}, LATERAL {call} p) t"
+)
+FORMS["SE"] += [
+    _se(
+        "gbx_rst_polygonize",
+        "L3",
+        f"{v}@mem",
+        "se_classes_1024_mem",
+        _SE_POLY_FP.format(call="{fn}(tile, 1, 4)"),
+    )
+    for v in ("engine-c0", "engine-c1")
+] + [
+    _se(
+        "gbx_rst_polygonize",
+        "L3",
+        "floor-c0@mem",
+        "se_classes_1024_mem",
+        _SE_FP.format(call="gbx_bench_floor_c0(tile)"),
+        setup="setup_se_floor",
+        register=False,
+    )
+]
+
+
 # --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
 #
 # The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF

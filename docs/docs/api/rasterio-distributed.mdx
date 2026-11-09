@@ -51,7 +51,8 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | GDAL `raster` algorithms in the worker |
 | **Fill NoData** | `rst_fillnodata` | GDAL `raster fill-nodata` in the worker |
 | **Color relief** | `rst_color_relief` | GDAL `raster color-map` in the worker |
-| **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
+| **Rasterize** | `rst_rasterize`, `rst_h3_rasterize_agg` | rasterio + shapely |
+| **Polygonize** | `rst_polygonize` | GDAL `raster polygonize` in the worker |
 | **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |
 | **Proximity** | `rst_proximity` | scipy |
 | **Contour** | `rst_contour` | GDAL `raster contour` in the worker |

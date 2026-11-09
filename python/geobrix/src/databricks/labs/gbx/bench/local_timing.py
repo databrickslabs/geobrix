@@ -215,6 +215,15 @@ SETS: Dict[str, SetSpec] = {
         fn="gbx_rst_contour",
         peer_exempt=("engine-c1@mem",),  # the same UDF as c0: recorded, not a peer
     ),
+    # polygonize, a GDAL spec engine row that is a table function: over replicated 1024 px Byte tiles of six classes, with the row
+    # UDTF (c0), the Arrow-optimized UDTF (c1) and a floor
+    "SE-polygonize": SetSpec(
+        mvp="SE",
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_polygonize",
+    ),
     # the fill (every band, each by its own mask), over replicated 1024 px EPSG:4326 tiles with NoData holes, with its two light
     # UDFs and a floor
     "SE-fillnodata": SetSpec(

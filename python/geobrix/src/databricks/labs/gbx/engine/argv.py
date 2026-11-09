@@ -177,6 +177,16 @@ def _bind_value(fn, arg, value) -> Optional[str]:
         return "" if bool(value) else None
     if t == "count":
         return str(_count(fn, arg, value))
+    if t == "flag_choice":
+        # a choice among words that switch a bare flag on (true) or leave it out (false)
+        word = str(value).strip().lower()
+        choices = {k.lower(): v for k, v in arg.map.items()}
+        if word not in choices:
+            allowed = ", ".join(f"'{k}'" for k in arg.map)
+            raise _fail(
+                fn, arg, f"{arg.source} must be one of {allowed} (got '{value}')"
+            )
+        return "" if choices[word] else None
     if t == "choice":
         word = str(value).strip().lower()
         choices = {k.lower(): v for k, v in arg.map.items()}
@@ -866,7 +876,7 @@ def _plain_token(fn, a, v) -> Optional[str]:
     text = _bind_value(fn, a, v)
     if text is None:
         return None
-    return f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}"
+    return f"--{a.arg}" if a.type in ("bool", "flag_choice") else f"--{a.arg}={text}"
 
 
 def _is_null_value(a, v, values: Mapping[str, Any]) -> bool:
@@ -907,6 +917,8 @@ def _bound_tokens(fn, a, v, values, inputs, n_texts: int):
     if a.type == "table_alpha":
         alpha = _color_table(fn.sql_name, a.source, str(v))[1]
         return ([f"--{a.arg}"] if alpha else []), None
+    if a.type == "band":
+        return [f"--{a.arg}={_band(fn, a.source, v, inputs[0])}"], None
     tok = _plain_token(fn, a, v)
     return ([tok] if tok else []), None
 

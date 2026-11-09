@@ -21,6 +21,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import errno
+import inspect
 import logging
 import threading
 from collections import OrderedDict
@@ -488,6 +489,71 @@ def c0(
         return _tile(res, cellid) if raster_out else _value(fn, res)
 
     return _c0
+
+
+def udtf(
+    sql_name: str,
+    grid_dirs: Tuple[str, ...] = (),
+    read_cap: Optional[int] = None,
+    arrow: bool = False,
+):
+    """The engine's table function for a generator row whose output is features: one output row per feature, the
+    geometry as WKB then the declared fields, in layer order. A Python UDTF over the whole tile and the other
+    arguments; it takes virtual tiles (read as c0 reads them) and materialized ones. A NULL, empty, error or unreadable
+    tile, a NULL result and a call GDAL fails (the reason is logged once per function and reason) give no rows; a
+    parameter mistake raises, and so does a virtual tile whose file is missing, after the retries. With ``arrow`` it is
+    registered as an Arrow-optimized UDTF (the same class and schema).
+
+    A table function cannot sit behind a SQL wrapper, so it has no FILE form: a virtual tile is read through its path.
+    It holds the tile's features in memory, as the algorithm's in-memory layer does, and hands them out one row at a time.
+    """
+    fn = _function(sql_name, None)
+    if fn.kind != "generator" or fn.gdal is None or fn.gdal.out_kind != "features":
+        raise ValueError(
+            f"{sql_name}: a table function runs a generator row with a features output"
+        )
+    names = [p.name for p in fn.params[1:]]
+    defaults = [_sql_default(p.default) for p in fn.params[1:]]
+    row_type = return_type(fn).elementType
+
+    class _EngineUDTF:
+        def eval(self, first, *args, **named):
+            _setup(grid_dirs)
+            values = dict(zip(names, list(args) + defaults[len(args) :]))
+            for key, val in named.items():  # `band => 2`
+                if key not in names:
+                    raise TypeError(f"{sql_name}: unknown argument '{key}'")
+                values[key] = val
+            for key in names:  # an argument left out takes its default
+                if key not in values:
+                    values[key] = defaults[names.index(key)]
+            try:
+                rasters, _passthrough, _cellid = _inputs(
+                    fn, first, read_cap, None, None, values
+                )
+            except run.DataError as exc:
+                _log_once(fn.sql_name, str(exc))
+                return
+            if rasters is None:
+                return
+            res = run.run(fn, rasters, values)
+            if res is None:
+                return
+            if res.error is not None:
+                _log_once(fn.sql_name, res.error)
+                return
+            yield from res.features
+
+    params = [
+        inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),
+        inspect.Parameter(fn.params[0].name, inspect.Parameter.POSITIONAL_OR_KEYWORD),
+    ] + [
+        inspect.Parameter(n, inspect.Parameter.POSITIONAL_OR_KEYWORD, default=None)
+        for n in names
+    ]
+    _EngineUDTF.eval.__signature__ = inspect.Signature(params)
+    _EngineUDTF.__name__ = _EngineUDTF.__qualname__ = f"_{sql_name}_engine"
+    return F.udtf(_EngineUDTF, returnType=row_type, useArrow=arrow)
 
 
 def forced_c0(

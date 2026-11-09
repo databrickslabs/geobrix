@@ -219,6 +219,10 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # three passes, c0 against c1): 0.5 to 1.2 s against 1.0 to 2.0 s at 24 tiles, 1.8 to 2.3 s against 2.8 to 3.0 s at 96, and
 # 6.4 to 9.2 s against 7.9 to 12.6 s at 384 (c1 was the faster in one of the three passes at 384, by 7 percent).
 # The summary returns a string, which has no batch form: every engine form registers the row-wise UDF.
+# Polygonize is a table function, which has one engine form per Python UDTF kind: the row UDTF (c0) and the Arrow-optimized UDTF
+# (c1). They took the same time in the local pass (1024 px Byte tiles of six classes, median of 3 runs, 24 / 96 / 384 tiles):
+# 1.1 / 3.4 / 12.6 s against 1.1 / 3.3 / 12.3 s (and 1.3 / 3.8 / 14.5 against 1.3 / 3.8 / 13.8 in the pass before). The row
+# UDTF is the default: it needs no Arrow capability. The rasterio UDTF it replaced took 2.1 / 6.9 / 25.7 s (2.0x).
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -243,6 +247,7 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "resample_to_res",
             "fillnodata",
             "summary",
+            "polygonize",
         )
     },
 }

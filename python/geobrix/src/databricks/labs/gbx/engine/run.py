@@ -795,6 +795,58 @@ def _unmask_filled(
             od = None
 
 
+def _alpha_into_mask(gdal, src: str, band: int) -> None:
+    """A tile whose last band is an alpha band that GDAL does not read as the mask of `band` (GDAL derives a mask from alpha
+    only for 2 and 4 bands, and not over a declared NoData): the pixels the algorithm leaves out are made the tile's own
+    mask band, ``valid for the band AND opaque``. The tile's transparent pixels are no data on every level, as its NoData
+    pixels are. The alpha band itself is judged by its own mask, as GDAL judges it.
+    """
+    import numpy as np
+
+    ds = _open_geotiff(gdal, src)
+    try:
+        n = ds.RasterCount
+        alpha, data = ds.GetRasterBand(n), ds.GetRasterBand(band)
+        if (
+            n < 2
+            or band == n
+            or alpha.GetColorInterpretation() != gdal.GCI_AlphaBand
+            or data.GetMaskFlags() & gdal.GMF_ALPHA
+        ):
+            return
+        w, h = ds.RasterXSize, ds.RasterYSize
+        valid = np.frombuffer(data.GetMaskBand().ReadRaster(0, 0, w, h), "u1") != 0
+        opaque = (
+            np.frombuffer(alpha.ReadRaster(0, 0, w, h, buf_type=gdal.GDT_Float64), "f8")
+            > 0
+        )  # 0, negative and NaN are transparent
+        mask = np.where(valid & opaque, 255, 0).astype("u1").tobytes()
+    finally:
+        ds = alpha = data = None
+    with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
+        od = _open_geotiff(gdal, src, update=True)
+        try:
+            if od.GetRasterBand(1).GetMaskFlags() != gdal.GMF_PER_DATASET:
+                od.CreateMaskBand(gdal.GMF_PER_DATASET)
+            od.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, mask)
+            od.FlushCache()
+        finally:
+            od = None
+
+
+def _prepare_input(gdal, fn, tokens, props, names, prefix: str, shown) -> None:
+    """The checks and input changes one algorithm needs before it runs: a map-algebra expression is checked on blank
+    inputs, and polygonize reads a transparent pixel as masked (``_alpha_into_mask``).
+    """
+    alg = fn.gdal.alg
+    if alg == "raster calc":
+        _check_expression(gdal, fn, tokens, props, names, prefix, shown)
+    elif alg == "raster polygonize":
+        _alpha_into_mask(
+            gdal, names[0], int(argv_mod._token_value(tokens, "band") or 1)
+        )
+
+
 def _copy_band(gdal, part: str, band, w: int, h: int) -> None:
     """The pixels of band 1 of the GeoTIFF `part`, written into `band` (same size and type)."""
     ds = _open_geotiff(gdal, part)
@@ -1013,8 +1065,7 @@ def run(
                     _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
             if 0 in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
-            if block.alg == "raster calc":
-                _check_expression(gdal, fn, tokens, props, names, prefix, shown)
+            _prepare_input(gdal, fn, tokens, props, names, prefix, shown)
             if block.out_kind == "json":
                 text = _execute(
                     gdal,

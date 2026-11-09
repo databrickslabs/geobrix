@@ -102,3 +102,31 @@ def test_mem_is_the_in_memory_output_of_the_engines_feature_functions(
     assert set(lines) == {1.5, 3.5}
     assert {round(g.bounds[0], 3) for g in lines.values()} == {400020.0, 400040.0}
     assert all(g.geom_type == "LineString" for g in lines.values())
+
+
+def test_the_bytes_of_a_bag_are_refused_with_the_drivers_reason(gb, spark, tmp_path):
+    """A BAG file's bytes open as a dataset with no band (the grid is in a separate group), so the policy refuses them
+    as a tile: the error tile names the driver and the reason that ``gbx_drivers`` gives in ``requires``.
+    """
+    import json
+    from test.drivers_extended._raster import BY_DRIVER
+
+    from databricks.labs.gbx.drivers import _listing
+
+    path = write_sample(gb, BY_DRIVER["BAG"][0], str(tmp_path))
+    snap = {
+        r["driver"]: r for r in json.loads(_listing.SNAPSHOT.read_text())["drivers"]
+    }
+    assert snap["BAG"]["tile_bytes"] is False
+    assert "no band" in snap["BAG"]["requires"]
+    with open(path, "rb") as fh:
+        content = fh.read()
+    row = (
+        spark.createDataFrame([(bytearray(content),)], ["content"])
+        .selectExpr("gbx_rst_fromcontent(content, 'BAG') AS tile")
+        .collect()[0]
+    )
+    tile = tile_dict(row["tile"])
+    assert tile["raster"] is None
+    reason = tile["metadata"].get("last_error") or ""
+    assert "BAG" in reason and "Fix:" in reason, reason

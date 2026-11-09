@@ -935,6 +935,20 @@ _STREAMED_DRIVERS = (
 )
 
 
+def _is_field_error(e: BaseException) -> bool:
+    """Whether *e* is pyogrio's ``FieldError`` (a column the driver could not create), by its class and not its name."""
+    try:
+        from pyogrio.errors import FieldError
+    except ImportError:  # a pyogrio without the class cannot raise it
+        return False
+    return isinstance(e, FieldError)
+
+
+# The streamed drivers whose file GDAL cannot reopen to append a second fragment (see _STREAMED_DRIVERS): when the
+# build cannot stream into one of them, a concat or append fallback would fail on every fragment after the first.
+_NO_APPEND_DRIVERS = ("KML", "GML", "DXF")
+
+
 def _stream_record_batches(frag_paths, drop_cols, rename=None):
     """Yield record batches from a sequence of Arrow-IPC fragment files, dropping
     ``drop_cols`` and optionally renaming one column (``rename=(old, new)``, used
@@ -1990,7 +2004,7 @@ class VectorGbxWriter(DataSourceWriter):
                 else:
                     _copy_file_to_fuse(src, dst)  # byte-only -> Volume-safe
         except Exception as e:  # noqa: BLE001
-            if self.driver == "GPX" and type(e).__name__ == "FieldError":
+            if self.driver == "GPX" and _is_field_error(e):
                 raise ValueError(
                     f"vector_gbx: GPX could not create a column of the DataFrame ({e}). GPX makes its own fields, "
                     "such as name, ele, time and desc. Fix: rename or drop a column that has one of those names."
@@ -2069,6 +2083,14 @@ class VectorGbxWriter(DataSourceWriter):
             # re-raise genuine write errors.
             if "does not support" not in str(e) and not isinstance(e, TypeError):
                 raise
+            if self.driver in _NO_APPEND_DRIVERS and len(frags) > 1:
+                # the fallback writes the fragments one after the other, and GDAL cannot reopen a file of this driver
+                # to append: it would fail on the second fragment, with GDAL's wording and a half-written file
+                raise ValueError(
+                    f"vector_gbx: this GDAL build cannot stream the DataFrame into {self.driver} ({e}), and GDAL "
+                    f"cannot reopen a {self.driver} file to append the rows of a second partition. "
+                    "Fix: write from one partition, df.coalesce(1).write, or choose another driver."
+                ) from e
             # Start from a clean local_out so a partial stream write cannot corrupt
             # the fallback (a .gdb is a directory, a GPKG a file).
             if os.path.isdir(local_out):

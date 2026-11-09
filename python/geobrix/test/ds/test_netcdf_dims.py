@@ -565,3 +565,59 @@ def test_banddim_stack_of_uint8_steps_has_no_alpha_band(tmp_path, steps):
     assert zeros, "fixture: the last step must hold zeros"
     assert al.labelled_alpha(raster_bytes) == []
     assert valid.all(), "no pixel of a step stack is transparent"
+
+
+# ---------------------------------------------------------------------------
+# fill_kept: the cells xarray decoded from the fill value go back to it
+# ---------------------------------------------------------------------------
+
+
+def test_fill_kept_sets_decoded_gaps_back_to_the_fill_value_and_leaves_the_rest():
+    a = np.array([[1.0, np.nan], [np.nan, 4.0]], dtype="float32")
+    out = _netcdf.fill_kept(a, -9999.0)
+    assert out.dtype == np.float32
+    assert out.tolist() == [[1.0, -9999.0], [-9999.0, 4.0]]
+    # unchanged: no fill value, an integer array, a NaN fill value, no gaps (the same array comes back)
+    assert _netcdf.fill_kept(a, None) is a
+    ints = np.array([[1, 2]], dtype="int16")
+    assert _netcdf.fill_kept(ints, -9999.0) is ints
+    assert _netcdf.fill_kept(a, float("nan")) is a
+    full = np.ones((2, 2), "float64")
+    assert _netcdf.fill_kept(full, -1.0) is full
+
+
+def test_fill_kept_covers_every_band_of_a_stack_and_the_banddim_read_keeps_the_fill(
+    tmp_path,
+):
+    """On a 3-D (band, y, x) array each band's gaps are set back; the bandDim reader, which applies it slice by slice,
+    writes a multi-band tile whose gap pixels equal the NoData in every band."""
+    stack = np.full((3, 2, 2), 5.0, "float32")
+    stack[0, 0, 0] = stack[1, 1, 1] = stack[2, 0, 1] = np.nan
+    out = _netcdf.fill_kept(stack, -1.0)
+    assert (out == -1.0).sum() == 3 and not np.isnan(out).any()
+    assert out[0, 0, 0] == out[1, 1, 1] == out[2, 0, 1] == -1.0
+
+    p = str(tmp_path / "f.nc")
+    with Dataset(p, "w") as ds:
+        ds.createDimension("time", 3)
+        ds.createDimension("lat", 2)
+        ds.createDimension("lon", 2)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name, lon.standard_name = "latitude", "longitude"
+        lat[:] = [50.0, 49.0]
+        lon[:] = [10.0, 11.0]
+        t = ds.createVariable("time", "f8", ("time",))
+        t[:] = [0.0, 1.0, 2.0]
+        v = ds.createVariable("v", "f4", ("time", "lat", "lon"), fill_value=-9999.0)
+        v[:] = 5.0
+        v[0, 0, 0] = v[1, 1, 1] = v[2, 0, 1] = -9999.0
+    rows = _read_reader(p, {"bandDim": "time"})
+    assert len(rows) == 1
+    _, (_, raster_bytes, _) = rows[0]
+    with MemoryFile(bytes(raster_bytes)) as mf, mf.open() as rds:
+        assert rds.count == 3 and rds.nodata == -9999.0
+        data = rds.read()
+    assert not np.isnan(data).any()
+    assert data[0, 0, 0] == data[1, 1, 1] == data[2, 0, 1] == -9999.0
+    assert (data == 5.0).sum() == 9

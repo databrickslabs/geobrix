@@ -115,6 +115,51 @@ def test_write_streaming_never_loads_a_whole_fragment(tmp_path, monkeypatch):
     assert pyogrio.read_info(out)["features"] == 4 * n_frags
 
 
+def test_a_build_that_cannot_stream_into_kml_gml_or_dxf_refuses_more_than_one_fragment(
+    tmp_path, monkeypatch
+):
+    """The fallback of ``_write_streaming`` writes fragments one after the other with ``append=True``, which GDAL cannot
+    do for KML, GML or DXF: with several fragments the writer refuses with a Fix instead of failing half way; one
+    fragment (no append) still falls back."""
+    import pytest
+
+    frags_dir = tmp_path / "frags"
+    frags_dir.mkdir()
+    frags = [_make_fragment(frags_dir, i, n_rows=2) for i in range(2)]
+
+    def no_stream(*a, **kw):
+        raise TypeError("this driver does not support a RecordBatchReader")
+
+    monkeypatch.setattr(pyogrio, "write_arrow", no_stream)
+    for driver in ("KML", "GML", "DXF"):
+        w = _minimal_writer(str(tmp_path / "out"))
+        w.driver = driver
+        with pytest.raises(ValueError, match=r"Fix: write from one partition"):
+            w._write_streaming(frags, str(tmp_path / "out"), "Polygon", "EPSG:4326")
+    # one fragment: the fallback path runs (stubbed here to record the call)
+    w = _minimal_writer(str(tmp_path / "out"))
+    w.driver = "DXF"
+    calls = []
+    monkeypatch.setattr(w, "_write_local", lambda t, *a: calls.append(list(t)))
+    w._write_streaming(frags[:1], str(tmp_path / "out"), "Polygon", "EPSG:4326")
+    assert len(calls) == 1 and len(calls[0]) == 1
+
+
+def test_a_gpx_field_error_is_matched_by_its_class(monkeypatch):
+    from pyogrio.errors import FieldError
+
+    from databricks.labs.gbx.ds.vector import _is_field_error
+
+    assert _is_field_error(FieldError("name")) is True
+    assert _is_field_error(RuntimeError("name")) is False
+
+    class FieldError_(Exception):  # the same name from another class is not it
+        pass
+
+    FieldError_.__name__ = "FieldError"
+    assert _is_field_error(FieldError_("x")) is False
+
+
 # ---------------------------------------------------------------------------
 # Round-trip test via Spark: rows, geometries, and CRS survive multi-fragment write
 # ---------------------------------------------------------------------------

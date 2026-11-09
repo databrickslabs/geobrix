@@ -45,11 +45,12 @@ def test_a_raw_binding_error_becomes_a_value_error_with_a_fix(monkeypatch, error
 
 def test_jpeg_2000_keeps_the_crs():
     pytest.importorskip("rasterio")
+    # skip only for a build that lacks the encoder, decided before the call: any ValueError of the call itself (an
+    # encode refusal, a bad profile) is a failure of the test, not a reason to skip it
+    if "jp2openjpeg" not in {d.lower() for d in ops._writable_drivers()}:
+        pytest.skip("the build has no JP2OpenJPEG encoder")
     with _dataset() as mf, mf.open() as ds:
-        try:
-            out = ops.as_format(ds, "JP2OpenJPEG")
-        except ValueError as exc:  # the build has no OpenJPEG
-            pytest.skip(str(exc))
+        out = ops.as_format(ds, "JP2OpenJPEG")
     with MemoryFile(out) as mf, rasterio.open(mf.name) as back:
         assert back.driver == "JP2OpenJPEG"
         assert back.crs is not None and back.crs.to_epsg() == 4326

@@ -340,25 +340,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Isoband.name, Seq(tile, breaks))
 
     // Terrain analysis (DEM processing) - Column form
-    def rst_aspect(tile: Column): Column =
-        ColumnAdapter(RST_Aspect.name, Seq(tile, lit(false), lit(false)))
-    def rst_aspect(tile: Column, trigonometric: Column): Column =
-        ColumnAdapter(RST_Aspect.name, Seq(tile, trigonometric, lit(false)))
-    def rst_aspect(tile: Column, trigonometric: Column, zeroForFlat: Column): Column =
-        ColumnAdapter(RST_Aspect.name, Seq(tile, trigonometric, zeroForFlat))
-    def rst_aspect(tile: Column, trigonometric: Boolean): Column =
-        rst_aspect(tile, lit(trigonometric))
-    def rst_aspect(tile: Column, trigonometric: Boolean, zeroForFlat: Boolean): Column =
-        rst_aspect(tile, lit(trigonometric), lit(zeroForFlat))
-
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
-    def rst_tpi(tile: Column): Column = ColumnAdapter(RST_TPI.name, Seq(tile))
-    def rst_roughness(tile: Column): Column = ColumnAdapter(RST_Roughness.name, Seq(tile))
-
-    def rst_color_relief(tile: Column, colorTablePath: Column): Column =
-        ColumnAdapter(RST_ColorRelief.name, Seq(tile, colorTablePath))
-    def rst_color_relief(tile: Column, colorTablePath: String): Column =
-        rst_color_relief(tile, lit(colorTablePath))
 
     // Resample family - gdal.Warp -tr / -ts wrappers
     def rst_resample(tile: Column, factor: Column): Column =

@@ -7,22 +7,17 @@ import java.util.UUID
 import java.util.{Vector => JVector}
 
 /**
-  * Shared thin wrapper around `gdal.DEMProcessing` for terrain-analysis
-  * expressions (slope, aspect, hillshade, TRI, TPI, roughness, color_relief).
+  * Shared thin wrapper around `gdal.DEMProcessing` for the terrain-analysis expression that still
+  * has a JVM form (TRI).
   *
-  * All 7 terrain-analysis expressions follow the same pattern: take a single source
-  * Dataset, run `gdal.DEMProcessing(processing, opts)` against it to materialize
-  * a derived raster at a `/vsimem/` GTiff path, and return that result Dataset
-  * together with output metadata. The caller is responsible for releasing the
-  * returned Dataset (via `RasterDriver.releaseDataset` or `Dataset.delete()`).
+  * It takes a single source Dataset, runs `gdal.DEMProcessing(processing, opts)` against it to
+  * materialize a derived raster at a `/vsimem/` GTiff path, and returns that result Dataset together
+  * with output metadata. The caller is responsible for releasing the returned Dataset (via
+  * `RasterDriver.releaseDataset` or `Dataset.delete()`).
   *
-  * `processing` is the GDAL processing-mode string: "slope", "aspect",
-  * "hillshade", "TRI", "TPI", "Roughness", "color-relief". `options` is the
-  * sequence of command-line tokens (e.g. `Seq("-s", "1.0", "-p")`) that gets
-  * forwarded into a `DEMProcessingOptions` Vector.
-  *
-  * For "color-relief" mode, callers must supply a fourth arg `colorFilename`;
-  * for the other modes pass `null` (the GDAL Java binding accepts null).
+  * `processing` is the GDAL processing-mode string (for example "TRI"). `options` is the sequence of
+  * command-line tokens (e.g. `Seq("-s", "1.0", "-p")`) that gets forwarded into a
+  * `DEMProcessingOptions` Vector.
   */
 object RST_DEMProcessingHelper {
 
@@ -39,8 +34,7 @@ object RST_DEMProcessingHelper {
     def process(
         srcDs: Dataset,
         processing: String,
-        options: Seq[String] = Seq.empty,
-        colorFilename: String = null
+        options: Seq[String] = Seq.empty
     ): (Dataset, Map[String, String]) = {
         require(srcDs != null, "RST_DEMProcessingHelper.process: source Dataset is null")
         require(processing != null && processing.nonEmpty, "RST_DEMProcessingHelper.process: processing mode required")
@@ -58,7 +52,7 @@ object RST_DEMProcessingHelper {
         val demOpts = new DEMProcessingOptions(opts)
         val result =
             try {
-                gdal.DEMProcessing(outPath, srcDs, processing, colorFilename, demOpts)
+                gdal.DEMProcessing(outPath, srcDs, processing, null, demOpts)
             } finally {
                 demOpts.delete()
             }

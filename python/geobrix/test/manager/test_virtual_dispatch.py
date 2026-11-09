@@ -241,10 +241,8 @@ ENGINE_ONLY_L1 = [
 
 
 def test_there_are_engine_only_rows_with_a_jvm_companion():
-    """The set is derived: the DEM rows whose numpy light form was removed keep their JVM companion."""
-    assert {"gbx_rst_aspect", "gbx_rst_tri", "gbx_rst_tpi", "gbx_rst_roughness"} <= {
-        f.sql_name for f in ENGINE_ONLY_L1
-    }
+    """The set is derived: TRI, the DEM row that kept its JVM companion, has no numpy light form."""
+    assert {"gbx_rst_tri"} <= {f.sql_name for f in ENGINE_ONLY_L1}
 
 
 @pytest.mark.parametrize("fn", ENGINE_ONLY_L1, ids=lambda f: f.sql_name)

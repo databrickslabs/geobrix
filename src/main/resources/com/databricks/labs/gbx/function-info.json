@@ -31,8 +31,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -318,8 +317,7 @@
       "description": "Colour a DEM through a `gdaldem` colour table.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1473,8 +1471,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1695,8 +1692,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },

@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for the terrain-analysis expressions.
+/** Direct-execute tests for the terrain-analysis expression (TRI) and its helper.
  *
  *  We exercise each expression's pure compute path (`execute(...)`) on a small
  *  100x100 synthetic DEM. That avoids a full Spark session bootstrap and keeps
@@ -105,38 +105,19 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("RST_DEMProcessingHelper.process returns a GTiff Dataset with the expected metadata stamp") {
-        val (out, mtd) = track(RST_DEMProcessingHelper.process(demDs, "Roughness"))
+        val (out, mtd) = track(RST_DEMProcessingHelper.process(demDs, "TRI"))
         out should not be null
         out.GetDriver().getShortName shouldBe "GTiff"
         mtd("driver") shouldBe "GTiff"
         mtd("extension") shouldBe "tif"
         mtd("format") shouldBe "GTiff"
         mtd("path") should startWith("/vsimem/dem_")
-        mtd("last_command") should include("Roughness")
+        mtd("last_command") should include("TRI")
     }
 
     // ------------------------------------------------------------------
-    // One happy-path test per expression (Task 4 budget: 7 tests)
+    // The happy-path test for the one expression with a JVM form
     // ------------------------------------------------------------------
-
-    test("RST_Aspect.execute returns ~270 deg (west-facing) for a west-to-east ramp") {
-        // A west-to-east-rising ramp slopes UP to the east; gdaldem reports the
-        // direction the slope FACES (downhill normal), which is west - ~270 deg
-        // on the compass convention.
-        val (out, _) = track(RST_Aspect.execute(demDs, trigonometric = false, zeroForFlat = false))
-        out should not be null
-        val asp = centerPixel(out)
-        asp should (be > 240.0 and be < 300.0)
-    }
-
-    test("RST_Hillshade.execute returns a Byte band with values in 0..255") {
-        val (out, _) = track(RST_Hillshade.execute(demDs, 315.0, 45.0, 1.0))
-        out should not be null
-        val band = out.GetRasterBand(1)
-        band.getDataType shouldBe gdalconstConstants.GDT_Byte
-        val hs = centerPixel(out)
-        hs should (be >= 0.0 and be <= 255.0)
-    }
 
     test("RST_TRI.execute returns a finite, non-negative ruggedness value on the ramp") {
         val (out, _) = track(RST_TRI.execute(demDs))
@@ -144,57 +125,6 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
         val v = centerPixel(out)
         v.isNaN shouldBe false
         v should be >= 0.0
-    }
-
-    test("RST_TPI.execute returns a finite value (positive or negative) on the ramp") {
-        val (out, _) = track(RST_TPI.execute(demDs))
-        out should not be null
-        val v = centerPixel(out)
-        v.isNaN shouldBe false
-        // On a perfectly linear ramp the local mean equals the central pixel ->
-        // TPI is approximately 0. Just assert finite.
-        math.abs(v) should be < 100.0
-    }
-
-    test("RST_Roughness.execute returns a positive max-neighbour difference on the ramp") {
-        val (out, _) = track(RST_Roughness.execute(demDs))
-        out should not be null
-        val v = centerPixel(out)
-        v.isNaN shouldBe false
-        // On a 1-m-per-pixel ramp, the largest inter-cell delta in a 3x3
-        // window is 2 (e.g. leftmost vs rightmost column - 2 columns apart).
-        // Assert positive but bounded by a sane upper bound.
-        v should (be > 0.5 and be <= 2.5)
-    }
-
-    test("RST_ColorRelief.execute produces a multi-band RGB(A) image given a color table") {
-        // Minimal color table covering the 0..99 elevation range we wrote.
-        val ctPath = Files.createTempFile("gbx_dem_color_", ".txt")
-        Files.writeString(ctPath,
-            """0 0 0 0
-              |50 128 128 128
-              |99 255 255 255
-              |""".stripMargin)
-        try {
-            val (out, _) = track(RST_ColorRelief.execute(demDs, ctPath.toString))
-            out should not be null
-            // gdaldem color-relief emits a 3-band (RGB) or 4-band (RGBA) raster.
-            val nb = out.GetRasterCount
-            (nb == 3 || nb == 4) shouldBe true
-            val band = out.GetRasterBand(1)
-            band.getDataType shouldBe gdalconstConstants.GDT_Byte
-        } finally {
-            Files.deleteIfExists(ctPath)
-        }
-    }
-
-    test("RST_ColorRelief.execute rejects a null or empty color_table_path") {
-        an[IllegalArgumentException] should be thrownBy {
-            RST_ColorRelief.execute(demDs, null)
-        }
-        an[IllegalArgumentException] should be thrownBy {
-            RST_ColorRelief.execute(demDs, "")
-        }
     }
 
 }

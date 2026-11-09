@@ -1262,26 +1262,6 @@ result.show(truncate = false)
   // Terrain Analysis Functions
   // ============================================================================
 
-  val rst_aspect_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_aspect(col("tile"), lit(false), lit(false)).alias("aspect"))
-result.show(truncate = false)
-""".trim
-
-  val rst_aspect_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|aspect                                                     |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(aspect in compass degrees: 0=N, 90=E, 180=S, 270=W)
-""".trim
-
   val rst_tri_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1300,66 +1280,6 @@ result.show(truncate = false)
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (TRI: mean absolute neighbour difference)
-""".trim
-
-  val rst_tpi_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_tpi(col("tile")).alias("tpi"))
-result.show(truncate = false)
-""".trim
-
-  val rst_tpi_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tpi                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TPI: positive=ridge, negative=valley)
-""".trim
-
-  val rst_roughness_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_roughness(col("tile")).alias("roughness"))
-result.show(truncate = false)
-""".trim
-
-  val rst_roughness_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|roughness                                                  |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(roughness: max absolute difference in 3x3 window)
-""".trim
-
-  val rst_color_relief_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_color_relief(col("tile"), lit("src/test/resources/binary/elevation/elevation.clr")).alias("rgba"))
-result.show(truncate = false)
-""".trim
-
-  val rst_color_relief_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|rgba                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(4-band RGBA tile mapped via gdaldem color table)
 """.trim
 
   val rst_proximity_scala_example: String =

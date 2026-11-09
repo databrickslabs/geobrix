@@ -64,7 +64,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_slope left with its companion (the GDAL spec engine's JVM form measured no faster than light): 82 - 1 = 81.
     // rst_ndvi, ndwi, nbr, evi, savi, index, threshold, mapalgebra and chm (their light level is the GDAL engine) and
     // rst_contour (it runs the lightweight level only) left with their companions: 81 - 10 = 71.
-    assert(BenchDispatch.all.size == 71)
+    // rst_aspect, tpi, roughness and color_relief (measured under 1.2x of light) and the orphan rst_hillshade left with
+    // their companions: 71 - 5 = 66.
+    assert(BenchDispatch.all.size == 66)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -103,7 +105,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_proximity") == "analysis")
     assert(BenchDispatch.minBands("rst_width") == 1)
     assert(BenchDispatch.category("rst_resample") == "resample")
-    assert(BenchDispatch.category("rst_aspect") == "terrain")
+    assert(BenchDispatch.category("rst_tri") == "terrain")
     assert(BenchDispatch.category("rst_srid") == "accessor")
     // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_setcrs is an edit/relabel (like rst_setsrid).
     assert(BenchDispatch.category("rst_crs") == "accessor")
@@ -140,7 +142,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   test("pureCore runs an accessor and a terrain op, returning a fingerprint") {
     val wfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_width", ds, Map.empty))
     assert(wfp.get("kind").asText() == "scalar")
-    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_aspect", ds, Map.empty))
+    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_tri", ds, Map.empty))
     assert(sfp.get("kind").asText() == "raster")
   }
 

@@ -82,9 +82,18 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # forms returned none. The JVM expressions are deleted. The light level is the engine alone (no numpy form).
     "gbx_rst_slope": ("L3",),
     "gbx_rst_mapalgebra": ("L3",),
-    # The file functions: color_relief is light. The JVM form reads the colour table from a path, which a UC Volume path
-    # cannot reach (the credential lives in the Python worker, so it raised FileNotFoundException on JAR compute), and it
-    # is unmeasured; the JVM block stays for a forced L1.
+    # The DEM functions, measured against the best light form (c0 or c1) on dedicated compute (DBR 19, medians of 3, about
+    # 15% spread between iterations), at 4x and 16x tiles with equal output. TRI took 1.07x at 4x and 1.24x at 16x, past the
+    # 1.2x line at 16x, so it keeps its JVM expression and runs it first on JAR compute. Aspect (1.19x, 1.17x), TPI (1.12x,
+    # 1.14x) and roughness (1.03x, 1.05x) stayed under the line, so their JVM expressions are deleted and they are light.
+    # Hillshade has no JVM level.
+    "gbx_rst_tri": ("L1", "L3"),
+    "gbx_rst_aspect": ("L3",),
+    "gbx_rst_tpi": ("L3",),
+    "gbx_rst_roughness": ("L3",),
+    # The file functions: color_relief is light and has no JVM level. The JVM form read the colour table from a path, which a
+    # UC Volume path cannot reach (the credential lives in the Python worker, so it raised FileNotFoundException on JAR
+    # compute); it measured about 1.06x in a smoke run, nowhere near the 1.2x line.
     # cog_convert (its JVM level measured 1.25x and 1.46x slower than light at 4x and 16x rows, so it has none),
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (light measured
     # 2.2x faster, so it has no JVM level) take the family order, light.
@@ -193,9 +202,9 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # Mapalgebra: the row-wise form took 13.16 s against 13.48 s for the batch form at 16x tiles (dedicated, DBR 19).
 # Slope (5.90 s batch against 6.07 s row-wise) and transformcrs (75.6 s batch against 104.0 s row-wise at 4x) take the
 # default.
-# The DEM functions took the row-wise form in the local pass (1024 px tiles, median of 3 runs, 384 tiles, c0 against c1):
-# aspect 9.4 s against 11.5 s, hillshade 3.4 against 4.9, TRI 6.3 against 8.0, TPI 5.3 against 8.5, roughness 5.2
-# against 7.4. Local ratios are provisional until the cluster pass.
+# The DEM functions, from the 16x cluster rows (dedicated, DBR 19, medians of 3, best of c0 and c1): TRI and roughness take
+# the row-wise form (c0); aspect and TPI take the batch form (c1, the default, so no entry). Hillshade keeps its local
+# pick (c0: 3.4 s against 4.9 s, 1024 px tiles, 384 tiles).
 # The band-math functions took the row-wise form in the local pass (512 px four-band tiles, median of 3 runs, 384 tiles,
 # c0 against c1): NDVI 3.5 s against 5.2, NDWI 3.4 against 4.7, NBR 3.8 against 5.4, SAVI 4.2 against 5.7, EVI 3.9
 # against 5.0, rst_index 3.6 against 5.0, threshold 7.5 against 9.1.
@@ -204,10 +213,8 @@ ENGINE_L3_FORM: Dict[str, str] = {
     **{
         f"gbx_rst_{n}": "engine-c0"
         for n in (
-            "aspect",
             "hillshade",
             "tri",
-            "tpi",
             "roughness",
             "ndvi",
             "ndwi",

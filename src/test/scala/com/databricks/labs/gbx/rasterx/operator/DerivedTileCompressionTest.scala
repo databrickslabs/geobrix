@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.operator
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
 import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_Proximity, RST_Viewshed}
-import com.databricks.labs.gbx.rasterx.expressions.dem.RST_Aspect
+import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
@@ -222,11 +222,11 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_Aspect.execute (DEM helper) defaults to DEFLATE") {
-        withRamp("aspect.tif") { src =>
-            // RST_Aspect.execute(ds: Dataset, trigonometric: Boolean, zeroForFlat: Boolean):
-            //     (Dataset, Map[String, String])   -- delegates to RST_DEMProcessingHelper.process
-            val (out, meta) = RST_Aspect.execute(src, false, false)
+    test("RST_TRI.execute (DEM helper) defaults to DEFLATE") {
+        withRamp("tri.tif") { src =>
+            // RST_TRI.execute(ds: Dataset): (Dataset, Map[String, String])
+            //     -- delegates to RST_DEMProcessingHelper.process
+            val (out, meta) = RST_TRI.execute(src)
             try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }

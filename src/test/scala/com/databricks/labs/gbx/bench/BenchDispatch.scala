@@ -89,18 +89,9 @@ object BenchDispatch {
   private val clipGeomWkt =
     "POLYGON ((-500 -500, 500 -500, 500 500, -500 500, -500 -500))"
 
-  // Synthetic gdaldem color ramp for the timing-only color_relief call; written to
-  // a temp file on first use (matches spec.py's _COLOR_RAMP_TEXT).
-  private lazy val colorTablePath: String = {
-    val p = Files.createTempFile("bench_color_", ".txt")
-    Files.write(p, "nv 0 0 0\n0% 0 0 255\n50% 0 255 0\n100% 255 0 0\n".getBytes("UTF-8"))
-    p.toString
-  }
-
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
-    "rst_aspect" -> TER, "rst_hillshade" -> TER,
-    "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
+    "rst_tri" -> TER,
     "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
@@ -124,7 +115,7 @@ object BenchDispatch {
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
-    "rst_clip" -> EDIT, "rst_color_relief" -> TER, "rst_viewshed" -> ANALYSIS,
+    "rst_clip" -> EDIT, "rst_viewshed" -> ANALYSIS,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
     // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
@@ -391,11 +382,7 @@ object BenchDispatch {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
-    case "rst_hillshade"  => fpDerived(RST_Hillshade.execute(ds, argD(a, "azimuth", 315.0), argD(a, "altitude", 45.0), argD(a, "z_factor", 1.0)))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
-    case "rst_tpi"        => fpDerived(RST_TPI.execute(ds))
-    case "rst_roughness"  => fpDerived(RST_Roughness.execute(ds))
     case "rst_transform"  => fpDerived(RST_Transform.execute(ds, Map.empty, argI(a, "target_srid", 3857)))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors
@@ -484,12 +471,6 @@ object BenchDispatch {
     case "rst_clip" =>
       val res = RST_Clip.execute(ds, Map.empty, JTS.fromWKT(shrunkBoundsBoxWkt(ds)),
         argB(a, "cutline_all_touched", false))
-      RasterDriver.releaseDataset(res._1)
-      BenchFingerprint.empty
-    // timing-only: color-relief reads a color table (synthetic) and the GDAL
-    // DEMProcessing interpolation diverges from the pyrx np.interp path.
-    case "rst_color_relief" =>
-      val res = RST_ColorRelief.execute(ds, colorTablePath)
       RasterDriver.releaseDataset(res._1)
       BenchFingerprint.empty
     // timing-only: observer must be in-extent. A fixed (0,0) is outside the
@@ -817,11 +798,7 @@ object BenchDispatch {
       case "rst_width"      => rst_width(tile)
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
-      case "rst_aspect"     => rst_aspect(tile)
-      case "rst_hillshade"  => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.dem.RST_Hillshade.name, Seq(tile, org.apache.spark.sql.functions.lit(315.0), org.apache.spark.sql.functions.lit(45.0), org.apache.spark.sql.functions.lit(1.0)))
       case "rst_tri"        => rst_tri(tile)
-      case "rst_tpi"        => rst_tpi(tile)
-      case "rst_roughness"  => rst_roughness(tile)
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors
@@ -881,8 +858,6 @@ object BenchDispatch {
       case "rst_clip" =>
         import org.apache.spark.sql.functions.lit
         org.apache.spark.sql.functions.call_function("gbx_rst_clip", tile, lit(clipGeomWkt), lit(argB(a, "cutline_all_touched", false)))
-      case "rst_color_relief" =>
-        rst_color_relief(tile, colorTablePath)
       case "rst_viewshed" =>
         import org.apache.spark.sql.functions.lit
         org.apache.spark.sql.functions.call_function("gbx_rst_viewshed", tile, lit("POINT (0 0)"),

@@ -5404,7 +5404,7 @@ Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) deri
 ### rst_aspect
 
 {/* BEGIN GENERATED gbx_rst_aspect: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5441,7 +5441,7 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 ### rst_color_relief
 
 {/* BEGIN GENERATED gbx_rst_color_relief: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5454,21 +5454,20 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 | `color_table_path` | `STRING` |  | The path of a `gdaldem` colour file: one `elevation R G B [A]` line per stop, with `nv` for NoData and `N%` for a share of the value range. The file must exist. |
 {/* END GENERATED gbx_rst_color_relief */}
 
-:::note Output differs between levels, by design
-The two levels use **different color interpolation engines**. Their pixel values are close but **not identical**, so they are not byte-comparable. The JVM level calls GDAL `gdal.DEMProcessing` color-relief (GDAL's native C interpolation). The Python level is a **NumPy** reimplementation with per-channel `np.interp`. The Python level has two known differences. It does **not** support the `gdaldem` `default` color keyword, which it skips. It clamps out-of-range elevations to the nearest color stop. Boundary and edge interpolation may also differ slightly. Both levels emit an RGB or RGBA Byte tile (RGBA when any color-table entry carries an alpha column). Because the outputs diverge, benchmarks time this function but do not compare its output. The lightweight level is the default, because the JVM level cannot read a color table on a Volume. Force the JVM level on a dedicated cluster when you need `gdaldem`-exact output and the color table is on local disk.
+:::note Output can differ from `gdaldem`
+Color relief is a NumPy implementation with per-channel `np.interp`. Its pixel values are close to `gdaldem` but not identical. It does **not** support the `gdaldem` `default` color keyword, which it skips. It clamps out-of-range elevations to the nearest color stop. Boundary and edge interpolation may differ slightly. The result is an RGB or RGBA Byte tile (RGBA when any color-table entry carries an alpha column). The function has no JVM form.
 :::
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored at every level. The `default` keyword is honored only on the JVM level (see the note above).
+Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored. The `default` keyword is not (see the note above).
 
 <FunctionExamples
   name="rst_color_relief"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
@@ -5515,7 +5514,7 @@ Shaded relief as an 8-bit image with values from 1 to 255; 0 is NoData. Common v
 ### rst_roughness
 
 {/* BEGIN GENERATED gbx_rst_roughness: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5584,7 +5583,7 @@ Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `ysc
 ### rst_tpi
 
 {/* BEGIN GENERATED gbx_rst_tpi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|

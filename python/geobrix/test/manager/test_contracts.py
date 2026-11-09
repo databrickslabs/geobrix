@@ -358,6 +358,32 @@ def test_the_array_family_keeps_the_unmeasured_rows_as_they_were_and_the_engine_
         assert "L1" not in MAN.functions[name].levels
 
 
+def test_the_dem_verdicts_tri_keeps_its_jvm_level_and_the_rest_are_light():
+    """TRI took 1.24x of the best light form at 16x tiles, so it is JVM first; aspect, TPI, roughness and colour relief
+    stayed under 1.2x, so they have no JVM level. Each light form is the faster of c0 and c1 in the 16x rows.
+    """
+    tri = MAN.functions["gbx_rst_tri"]
+    assert levels.order(tri) == ("L1", "L3")
+    assert levels.select(tri, _caps(jar=OK_JAR)).level == "L1"
+    for name in (
+        "gbx_rst_aspect",
+        "gbx_rst_tpi",
+        "gbx_rst_roughness",
+        "gbx_rst_color_relief",
+        "gbx_rst_hillshade",
+    ):
+        assert levels.order(MAN.functions[name]) == ("L3",), name
+        assert "L1" not in MAN.functions[name].levels, name
+    forms = {
+        "gbx_rst_tri": "engine-c0",
+        "gbx_rst_roughness": "engine-c0",
+        "gbx_rst_aspect": levels.ENGINE,
+        "gbx_rst_tpi": levels.ENGINE,
+    }
+    for name, form in forms.items():
+        assert levels.engine_form(MAN.functions[name]) == form, name
+
+
 # A value of one of these types cannot sit under `explode` or `inline`, where a SQL dispatch wrapper is refused.
 _ONE_VALUE = {"INT", "BIGINT", "DOUBLE", "STRING", "BOOLEAN", "BINARY"}
 JVM_FIRST_ACCESSORS = [
@@ -2895,7 +2921,7 @@ def test_transformcrs_is_light_on_a_dedicated_cluster_with_the_jvm_available(
 def test_color_relief_is_light_on_a_dedicated_cluster_with_the_jvm_available(
     monkeypatch,
 ):
-    """The JVM form reads the colour table from a path and cannot reach a Volume path, so the default omits L1."""
+    """Colour relief has no JVM level (it could not reach a Volume path), so a JAR cluster still gets the light form."""
     from databricks.labs.gbx.engine import run
 
     monkeypatch.setattr(run, "unavailable_reason", lambda: None)  # the env wheel

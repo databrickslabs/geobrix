@@ -193,6 +193,51 @@ class NativeCopyTest extends AnyFunSuite {
         }
     }
 
+    test("a gap in the sibling slots does not hide an intact later sibling: it is reused, no extra copy is made") {
+        val (_, _, c) = payload()
+        val root = Files.createTempDirectory("gbx_copies")
+        val id = sha(Paths.get(c.jni))
+        val key = keyOf(c, id)
+        // key, key-1, key-2 damaged in turn, key-3 intact; then key-2 is removed by hand
+        var last = NativeCopy.stabilize(c, root, id, sha).toOption.get
+        (1 to 3).foreach { _ =>
+            Files.write(Paths.get(last.jni), "evil".getBytes(StandardCharsets.UTF_8))
+            last = NativeCopy.stabilize(c, root, id, sha).toOption.get
+        }
+        assert(last.jni == s"$root/$key-3/x86_64/lib/$Jni", last.jni)
+        delete(root.resolve(s"$key-2").toFile)
+        assert(NativeCopy.stabilize(c, root, id, sha) == Right(last))
+        assert(entries(root) == Set(key, s"$key-1", s"$key-3", ".gbx-copy.lock"), s"${entries(root)}")
+    }
+
+    test("a copy that fails the check is marked bad once, then skipped with no hashing, and is never removed") {
+        val (_, _, c) = payload()
+        val root = Files.createTempDirectory("gbx_copies")
+        val id = sha(Paths.get(c.jni))
+        val key = keyOf(c, id)
+        val Right(first) = NativeCopy.stabilize(c, root, id, sha)
+        Files.write(Paths.get(first.jni).getParent.resolve("libgdal-0000.so.39"), "evil".getBytes(StandardCharsets.UTF_8)) // size kept
+        val Right(second) = NativeCopy.stabilize(c, root, id, sha)
+        assert(Files.isRegularFile(root.resolve(s"$key/${NativeCopy.BadMarker}")), "the failed copy was not marked")
+        val hashedPaths = scala.collection.mutable.Buffer.empty[Path]
+        val Right(third) = NativeCopy.stabilize(c, root, id, p => { hashedPaths += p; sha(p) })
+        assert(third == second)
+        assert(hashedPaths.exists(_.startsWith(root.resolve(s"$key-1"))), "the sibling was not verified")
+        assert(!hashedPaths.exists(_.startsWith(root.resolve(key))), s"a marked copy was hashed: $hashedPaths")
+        assert(Files.isRegularFile(root.resolve(s"$key/${NativeCopy.DoneMarker}")), "the marked copy was removed")
+    }
+
+    test("the manifest difference is found with set lookups, not a scan per file") {
+        val n = 200000
+        val expected = (0 until n).map(i => s"f$i" -> "h").toMap
+        val got = (0 until n).map(i => s"f${n - 1 - i}" -> "h") // reversed: the worst case for a scan per file
+        val t0 = System.nanoTime()
+        assert(NativeCopy.differing(expected, got).isEmpty)
+        assert(NativeCopy.differing(expected, got.dropRight(1) :+ ("extra" -> "h")).toSet == Set("extra", "f0"))
+        assert(NativeCopy.differing(expected, got.dropRight(1) :+ ("f1" -> "other")).toSet == Set("f1", "f0"))
+        assert((System.nanoTime() - t0) / 1e9 < 5.0, "the difference is quadratic")
+    }
+
     test("at most 8 copies of one key are made; the next is an IOException and the caller loads in place") {
         val (_, _, c) = payload()
         val root = Files.createTempDirectory("gbx_copies")
@@ -286,6 +331,11 @@ class NativeCopyTest extends AnyFunSuite {
         Seq(WRITE_DATA, DELETE_CHILD, WRITE_ACL, WRITE_OWNER, DELETE).foreach { p =>
             assert(writers("me", entry("GROUP@", ALLOW, p)).exists(_.contains("GROUP@")), p.toString)
         }
+        // NFSv4 names root as root@<domain>: root only where the filesystem reports NFSv4, and only that prefix
+        assert(NativeCopy.aclWriters(Seq(entry("root@example.com", ALLOW, WRITE_DATA)).asJava, "me", nfs4 = true).isEmpty)
+        assert(writers("me", entry("root@example.com", ALLOW, WRITE_DATA)).exists(_.contains("root@example.com")))
+        assert(NativeCopy.aclWriters(Seq(entry("rootkit@example.com", ALLOW, WRITE_DATA)).asJava, "me", nfs4 = true).isDefined)
+        assert(NativeCopy.aclWriters(Seq(entry("alice@example.com", ALLOW, WRITE_DATA)).asJava, "me", nfs4 = true).isDefined)
         // the limit the class doc names: on Linux the JDK gives no ACL view, so a POSIX ACL is not read
         if (System.getProperty("os.name").toLowerCase.contains("linux")) {
             assert(Files.getFileAttributeView(Files.createTempDirectory("gbx_acl"), classOf[AclFileAttributeView]) == null)

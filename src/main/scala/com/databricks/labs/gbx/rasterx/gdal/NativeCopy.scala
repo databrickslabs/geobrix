@@ -32,7 +32,8 @@ import scala.util.Try
   * clusters restart onto fresh local disks, and a JVM's mapped libraries and data (and the PROJ database it opens by path
   * at any time) cannot be checked safely from another process. A done copy that fails the check (a file altered, planted
   * or gone) is left where it is, and a JVM makes a sibling `<key>-1`, `<key>-2`, ... (at most 8 copies of one key) or reuses
-  * the first sibling that passes. Only an unfinished copy (a temporary directory: a JVM killed while copying) is removed,
+  * the first sibling that passes (all slots are scanned: a sibling removed by hand leaves a gap, not an end). The first
+  * time a copy fails the check, a [[BadMarker]] is written in it and later JVMs skip it without hashing it. Only an unfinished copy (a temporary directory: a JVM killed while copying) is removed,
   * by the next JVM that takes the lock.
   *
   * The JVM loads native code from the copy, so no other user may be able to write it. The root and each copy are made
@@ -58,6 +59,9 @@ private[gdal] object NativeCopy extends Logging {
     /** In a copy: present once every file is in place. Its lines: the JNI's sha256, the manifest's sha256, the source,
       * then the manifest (`<sha256>  <relative path>` per file). */
     val DoneMarker = ".gbx-copy-done"
+    /** In a copy that once failed the check: later JVMs skip it, with no hashing. The copy is never removed (a JVM may
+      * still map it). */
+    val BadMarker = ".gbx-copy-bad"
     private val LockName = ".gbx-copy.lock"
     private val TmpPrefix = ".tmp-"
     private val Sha256 = "[0-9a-f]{64}".r
@@ -121,20 +125,27 @@ private[gdal] object NativeCopy extends Logging {
     )
     private val SelfPrincipals = Set("root", "OWNER@")
 
+    /** Root, as an ACL names it: `root`, or on NFSv4 `root@<domain>`. */
+    private def isRootName(name: String, nfs4: Boolean): Boolean = SelfPrincipals.contains(name) || (nfs4 && name.startsWith("root@"))
+
     /** The first ALLOW entry of `acl` that grants write ([[WriteGrants]]) to a principal other than `owner`, root and
-      * `OWNER@`, as the reason; None when there is none. A DENY entry is not weighed: an ACL with a write grant to another
-      * principal is unsafe whatever else it holds. */
-    private[gdal] def aclWriters(acl: java.util.List[AclEntry], owner: String): Option[String] =
+      * `OWNER@`, as the reason; None when there is none. `nfs4`: the filesystem reports NFSv4 ACLs, where `root@<domain>`
+      * is root too. A DENY entry is not weighed: an ACL with a write grant to another principal is unsafe whatever else
+      * it holds. */
+    private[gdal] def aclWriters(acl: java.util.List[AclEntry], owner: String, nfs4: Boolean = false): Option[String] =
         acl.asScala.find { e =>
-            e.`type`() == AclEntryType.ALLOW && !SelfPrincipals.contains(e.principal().getName) &&
+            e.`type`() == AclEntryType.ALLOW && !isRootName(e.principal().getName, nfs4) &&
                 e.principal().getName != owner && e.permissions().asScala.exists(WriteGrants.contains)
         }.map(e => s"its ACL grants write to ${e.principal().getName}")
+
+    /** Whether the filesystem that holds `d` is NFSv4 (its file store type `nfs4`); false when that cannot be read. */
+    private def isNfs4(d: Path): Boolean = Try(Files.getFileStore(d).`type`()).toOption.exists(_.equalsIgnoreCase("nfs4"))
 
     /** Why `d`'s ACL lets another principal write it, when the filesystem gives Java an ACL (see the class doc for the
       * Linux POSIX ACL it cannot read); an ACL that cannot be read is no proof of safety. */
     private def aclWritable(d: Path): Option[String] =
         Option(Files.getFileAttributeView(d, classOf[AclFileAttributeView], LinkOption.NOFOLLOW_LINKS)).flatMap { view =>
-            try aclWriters(view.getAcl, view.getOwner.getName).map(w => s"$d: $w")
+            try aclWriters(view.getAcl, view.getOwner.getName, nfs4 = isNfs4(d)).map(w => s"$d: $w")
             catch { case e: IOException => Some(s"$d has an ACL that cannot be read ($e)") }
         }
 
@@ -321,10 +332,11 @@ private[gdal] object NativeCopy extends Logging {
                 val root = secureRoot(requested)
                 withNodeLock(root) {
                     val names = (key +: (1 until MaxCopiesPerKey).map(i => s"$key-$i")).toList
-                    // the first done copy that passes; else the first name that is free
+                    // the first done copy that passes; else the first name that is free. Every slot is scanned: a sibling
+                    // removed by hand leaves a gap, and a later intact one is still reused (no extra copy)
                     val firstFree = names.find(n => !Files.exists(root.resolve(n), LinkOption.NOFOLLOW_LINKS))
-                    val existing = names.takeWhile(n => Files.exists(root.resolve(n), LinkOption.NOFOLLOW_LINKS))
-                    existing.find(n => reusable(root.resolve(n), arch, identity, m, sha)) match {
+                    val existing = names.filter(n => Files.exists(root.resolve(n), LinkOption.NOFOLLOW_LINKS))
+                    existing.find(n => intact(root.resolve(n), arch, identity, m, sha)) match {
                         case Some(n) =>
                             logInfo(s"GDAL native payload: reusing the node-local copy ${root.resolve(n)}")
                             Right(copyChoice(root.resolve(n), arch))
@@ -336,6 +348,25 @@ private[gdal] object NativeCopy extends Logging {
                 }
             }
         }
+    }
+
+    /** [[reusable]], except a copy marked [[BadMarker]] is skipped with no hashing, and a copy that fails now is marked
+      * (never removed: a JVM may still map it). */
+    private def intact(dest: Path, arch: String, identity: String, m: Manifest, sha: Path => String): Boolean =
+        if (Files.exists(dest.resolve(BadMarker), LinkOption.NOFOLLOW_LINKS)) {
+            logInfo(s"GDAL native payload: skipping the node-local copy $dest, marked bad by an earlier check")
+            false
+        } else if (reusable(dest, arch, identity, m, sha)) true
+        else {
+            Try(Files.write(dest.resolve(BadMarker), "failed the check; see the log\n".getBytes(StandardCharsets.UTF_8)))
+                .failed.foreach(e => logWarning(s"GDAL native payload: could not mark $dest bad ($e); it is checked again next time"))
+            false
+        }
+
+    /** The manifest's paths that `got` (path, sha256) lacks or holds with another sha256, `got`'s first: set lookups. */
+    private[gdal] def differing(expected: Map[String, String], got: Seq[(String, String)]): Seq[String] = {
+        val gotPaths = got.iterator.map(_._1).toSet
+        got.filter { case (r, h) => !expected.get(r).contains(h) }.map(_._1) ++ expected.keys.filterNot(gotPaths.contains)
     }
 
     /** A copy of the payload at `dest` (not yet there): made in a temporary directory, checked against `m`, marked done,
@@ -360,9 +391,7 @@ private[gdal] object NativeCopy extends Logging {
                 case Right(())     =>
                     // the copy is hashed once: it must be the manifest's files with the manifest's bytes
                     val got = filesOf(tmp).map(r => r -> hashed(sha, tmp.resolve(r)))
-                    val expected = m.toMap
-                    val differs = got.filter { case (r, h) => !expected.get(r).contains(h) }.map(_._1) ++
-                        expected.keys.filterNot(r => got.exists(_._1 == r))
+                    val differs = differing(m.toMap, got)
                     if (differs.nonEmpty) Left(changed(src, s"the copied ${differs.take(3).mkString(", ")} differ from the manifest"))
                     else {
                         Files.write(

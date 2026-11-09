@@ -22,6 +22,7 @@ import dataclasses
 import errno
 import logging
 import threading
+from collections import OrderedDict
 from typing import Optional, Tuple
 
 import pandas as pd
@@ -59,7 +60,10 @@ _FIELD_TYPES = {
     "BIGINT": LongType(),
     "STRING": StringType(),
 }
-_logged: set = set()
+_LOGGED_MAX = 1024
+_logged: "OrderedDict" = (
+    OrderedDict()
+)  # (function, reason) -> None, least recently logged first
 _logged_lock = threading.Lock()
 
 
@@ -81,11 +85,17 @@ def return_type(fn) -> DataType:
 
 
 def _log_once(sql_name: str, reason: str) -> None:
-    """A failed call of a non-raster row is NULL; its reason is logged once per function and reason in the process."""
+    """A failed call of a non-raster row is NULL; its reason is logged once per function and reason in the process. The
+    reasons kept are the last ``_LOGGED_MAX``: a reason that has been evicted is logged again if it recurs.
+    """
+    key = (sql_name, reason)
     with _logged_lock:
-        if (sql_name, reason) in _logged:
+        if key in _logged:
+            _logged.move_to_end(key)
             return
-        _logged.add((sql_name, reason))
+        _logged[key] = None
+        while len(_logged) > _LOGGED_MAX:
+            _logged.popitem(last=False)
     logging.getLogger("databricks.labs.gbx.engine").warning(
         "%s: NULL, %s", sql_name, reason
     )

@@ -117,6 +117,16 @@ def test_the_summary_computes_its_statistics_from_the_pixels_not_from_stored_tag
     assert (band["minimum"], band["maximum"], band["mean"]) == (1.0, 12.0, 6.5)
 
 
+def test_a_driver_outside_the_allowlist_is_refused_on_the_summary_path():
+    vrt = (
+        b'<VRTDataset rasterXSize="2" rasterYSize="2"><VRTRasterBand dataType="Byte" band="1">'
+        b"<SimpleSource><SourceFilename>/etc/hostname</SourceFilename></SimpleSource>"
+        b"</VRTRasterBand></VRTDataset>"
+    )
+    res = run.run(SUMMARY, [vrt], {})
+    assert res.text is None and res.raster is None and res.error
+
+
 def test_a_band_with_no_valid_pixel_has_no_statistics_and_the_summary_is_still_given():
     res = run.run(SUMMARY, [_tif(np.full((1, 4, 4), NODATA))], {})
     assert res.error is None

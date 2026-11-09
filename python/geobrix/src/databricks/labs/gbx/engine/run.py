@@ -361,10 +361,11 @@ def _describe_in_place(gdal, tokens, names, sources, drivers) -> list:
 def _drop_stored_statistics(gdal, paths) -> None:
     """Remove the STATISTICS_* tags a staged input carries. ``raster info --stats`` returns a band's stored statistics
     instead of computing them, so a tile whose tags came from its source (a clip, a derived tile) would report the
-    source's minimum, maximum and mean. The staged copy is the engine's own; a format that cannot be updated stores no
-    such tag in the bytes and is left as it is."""
+    source's minimum, maximum and mean. Each path is the engine's own staged copy under the call's /vsimem prefix (never
+    the caller's bytes), opened as GTiff only; a tile in another format stores no such tag in its bytes and is left as
+    it is."""
     for path in paths:
-        ds = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_UPDATE)
+        ds = _open_geotiff(gdal, path, update=True)
         if ds is None:
             continue
         try:

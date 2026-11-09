@@ -704,6 +704,75 @@ def _fill_bands(
         copy = None
 
 
+def _unmask_filled(
+    gdal, alg: str, tokens, src: str, out: str, prefix: str, shown, refused
+) -> None:
+    """A source whose validity is its own mask band (not a NoData value): GDAL's fill reads that mask and leaves it as it was,
+    so a pixel it filled would still read as masked. The output mask is made ``input valid OR filled by GDAL``; a pixel the
+    search did not reach stays masked.
+
+    Which pixels GDAL fills is found by GDAL: the same fill (same ``--max-distance``, no smoothing) over a Byte raster of 1
+    where the input is valid and NoData (0) elsewhere. A pixel the fill reaches comes back 1, so the answer needs no
+    comparison of values, which a filled value equal to the masked one would defeat.
+    """
+    import numpy as np
+
+    sds = _open_geotiff(gdal, src)
+    try:
+        if sds.GetRasterBand(1).GetMaskFlags() != gdal.GMF_PER_DATASET:
+            return
+        w, h = sds.RasterXSize, sds.RasterYSize
+        valid = np.frombuffer(
+            sds.GetRasterBand(1).GetMaskBand().ReadRaster(0, 0, w, h), "u1"
+        )
+        gt = sds.GetGeoTransform()
+    finally:
+        sds = None
+    if valid.all():
+        return
+    mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
+    mem.SetGeoTransform(gt)
+    band = mem.GetRasterBand(1)
+    band.SetNoDataValue(0)
+    band.WriteRaster(0, 0, w, h, (valid != 0).astype("u1").tobytes())
+    cover_in, cover_out = f"{prefix}/cover_in.tif", f"{prefix}/cover_out.tif"
+    gdal.GetDriverByName("GTiff").CreateCopy(cover_in, mem)
+    mem = band = None
+    toks = [
+        (
+            f"--input={cover_in}"
+            if t.startswith("--input=")
+            else (
+                f"--output={cover_out}"
+                if t.startswith("--output=")
+                else (
+                    "--smoothing-iterations=0"
+                    if t.startswith("--smoothing-iterations=")
+                    else t
+                )
+            )
+        )
+        for t in tokens
+        if not t.startswith("--creation-option=")
+    ]
+    _execute(gdal, alg, toks, shown, refused)
+    cds = _open_geotiff(gdal, cover_out)
+    try:
+        filled = np.frombuffer(cds.GetRasterBand(1).ReadRaster(0, 0, w, h), "u1") != 0
+    finally:
+        cds = None
+    mask = np.where((valid != 0) | filled, 255, 0).astype("u1").tobytes()
+    with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
+        od = _open_geotiff(gdal, out, update=True)
+        try:
+            if od.GetRasterBand(1).GetMaskFlags() != gdal.GMF_PER_DATASET:
+                od.CreateMaskBand(gdal.GMF_PER_DATASET)
+            od.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, mask)
+            od.FlushCache()
+        finally:
+            od = None
+
+
 def _copy_band(gdal, part: str, band, w: int, h: int) -> None:
     """The pixels of band 1 of the GeoTIFF `part`, written into `band` (same size and type)."""
     ds = _open_geotiff(gdal, part)
@@ -958,6 +1027,10 @@ def run(
                     shown,
                     refused,
                     props[0].bands,
+                )
+            if block.alg == "raster fill-nodata":
+                _unmask_filled(
+                    gdal, block.alg, tokens, names[0], out, prefix, shown, refused
                 )
             if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
                 _remask_zero_for_flat(gdal, names[0], out)

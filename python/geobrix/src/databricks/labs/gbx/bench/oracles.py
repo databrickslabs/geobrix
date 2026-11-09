@@ -47,6 +47,7 @@ class Case:
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
     # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
     # json_subset: the output is JSON text that holds every key and value of the `expect` dict (extra keys allowed).
+    # fill_mask: the output of a fill over a tile with its own mask band has the mask `input valid OR filled by GDAL`.
     # json_ref: the output is JSON text equal to GDAL's own `gdal.Info(format="json", stats=True)` of the first argument
     # (the same keys, numbers within a relative 1e-9; its path shown as `<input>`).
     # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
@@ -182,6 +183,12 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "L1": "the JVM fill takes a fractional or negative search distance (gdal.FillNodata takes a double); the engine's GDAL algorithm reads a whole number of pixels from 0 and refuses any other value"
         }
         for cid in ("fillnodata_fractional_distance", "fillnodata_negative_distance")
+    },
+    **{
+        cid: {
+            "L1": "the JVM fill leaves the source's own mask band as it was, so a pixel it filled stays masked; the engine makes a filled pixel valid"
+        }
+        for cid in ("fillnodata_masked_filled_valid", "fillnodata_masked_short_search")
     },
     "fillnodata_negative_smoothing": {
         "L1": "the JVM fill refuses a negative smoothing_iter with an error tile ('requirement failed'), where the contract raises"
@@ -3987,6 +3994,39 @@ def _check_json_ref(case: Case, out, args) -> Optional[str]:
     return None if why is None else f"{case.cid}: {why}"
 
 
+def _check_fill_mask(case: Case, out, args) -> Optional[str]:
+    """The result of a fill over a tile whose validity is its own mask band: its mask is ``input valid OR filled by GDAL``.
+    What GDAL fills is found with rasterio's own `FillNodata` call (an entry point apart from the engine's) over a raster of
+    1 where the input is valid and 0 elsewhere: a pixel it reaches comes back 1. The reference must fill some masked pixel and,
+    for `expect` "partial", leave some masked, so the row cannot pass by a fill that did nothing or reached everything.
+    """
+    from rasterio.fill import fillnodata
+
+    raster = _raster_bytes(out)
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    max_dist = args[1] if len(args) > 1 and args[1] is not None else 100.0
+    with _ref_dataset(args) as ds:
+        valid = ds.read_masks(1) != 0
+    ones = valid.astype("uint8")
+    cover = fillnodata(ones, mask=ones, max_search_distance=float(max_dist)) != 0
+    want = valid | cover
+    with _ref_dataset([raster]) as ds:
+        got = ds.read_masks(1) != 0
+    if got.shape != want.shape:
+        return f"{case.cid}: shape {got.shape} vs reference {want.shape}"
+    off = int((got != want).sum())
+    if off:
+        return (
+            f"{case.cid}: the mask differs from input-valid OR filled at {off} pixel(s)"
+        )
+    if case.expect == "partial" and want.all():
+        return f"{case.cid}: the reference leaves no pixel masked, so the row proves nothing"
+    if not (want & ~valid).any():
+        return f"{case.cid}: the reference fills no masked pixel, so the row proves nothing"
+    return None
+
+
 def _check_tile_size(case: Case, out) -> Optional[str]:
     """`out` is a tile whose raster is `case.expect` = (width, height) pixels."""
     raster = _field(out, "raster")
@@ -4119,6 +4159,7 @@ _ARG_CHECKS = {
     "tile_meta": _check_tile_meta,
     "ref": _check_ref,
     "json_ref": _check_json_ref,
+    "fill_mask": _check_fill_mask,
     "geom_srid": _check_geom_srid,
     "isobands": _oracle_check("check_isobands"),
     "contours": _oracle_check("check_contours"),

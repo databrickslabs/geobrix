@@ -197,3 +197,34 @@ def test_a_null_number_is_a_null_result_and_a_wrong_one_raises_naming_it():
             run.run(FILL, [raw], {"max_search_dist": bad, "smoothing_iter": 0})
     with pytest.raises(ParamError, match="smoothing_iter"):
         run.run(FILL, [raw], {"max_search_dist": 5.0, "smoothing_iter": -2})
+
+
+def _masked_tile():
+    """A tile with no NoData whose validity is its own mask band: a gradient warped to a rotated grid, whose corners are masked."""
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    src = oracles._gtiff((10.0 + xx + yy)[np.newaxis], "EPSG:3857", nodata=None)
+    warped = run.run(MAN.functions["gbx_rst_transform"], [src], {"srid": 32632})
+    return warped.raster
+
+
+def _mask_of(raster):
+    with MemoryFile(raster) as mf, mf.open() as ds:
+        return ds.read_masks(1) != 0, ds.read(1), ds.nodata
+
+
+def test_a_pixel_the_fill_reaches_becomes_valid_in_a_tiles_own_mask_and_the_rest_stays_masked(
+    monkeypatch,
+):
+    raw = _masked_tile()
+    valid, _, nodata = _mask_of(raw)
+    assert nodata is None and not valid.all()
+    full = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    mask, data, _ = _mask_of(full.raster)
+    assert mask.all() and np.isfinite(data).all()
+    near = run.run(FILL, [raw], {"max_search_dist": 1.0, "smoothing_iter": 0})
+    short, _, _ = _mask_of(near.raster)
+    assert (valid <= short).all() and short.sum() > valid.sum() and not short.all()
+    # without the mask step GDAL leaves the mask as the input had it: the fill would change no pixel's validity
+    monkeypatch.setattr(run, "_unmask_filled", lambda *a, **k: None)
+    plain = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert np.array_equal(_mask_of(plain.raster)[0], valid)

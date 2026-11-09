@@ -107,6 +107,25 @@ def _fill_undeclared(tmpdir):
     return _tile(_gtiff(z, "EPSG:3857", nodata=None))
 
 
+@builder("fill_masked")
+def _fill_masked(tmpdir):
+    """A Float32 tile whose validity is its own mask band and which declares no NoData: a 64 x 64 gradient with no NoData,
+    reprojected by the engine's warp from EPSG:3857 to UTM 32N (the grid turns, and the corners outside the source's footprint
+    are masked)."""
+    import numpy as np
+
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench.oracles import _gtiff
+    from databricks.labs.gbx.engine import run
+
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    src = _gtiff((10.0 + xx + yy)[np.newaxis], "EPSG:3857", nodata=None)
+    res = run.run(
+        manifest.load().functions["gbx_rst_transform"], [src], {"srid": 32632}
+    )
+    return _tile(res.raster)
+
+
 @builder("fill_all_nodata")
 def _fill_all_nodata(tmpdir):
     import numpy as np
@@ -234,6 +253,23 @@ SPEC_ANALYSIS = (
     Case("fillnodata_smoothed", FND, (DEM, 100.0, 2), "ref", "fillnodata", ONLY),
     Case("fillnodata_null_tile", FND, (None,), "null", None, ONLY),
     Case("fillnodata_null_distance", FND, (DEM, None, 0), "null", None, ONLY),
+    # a tile whose validity is its own mask band: a pixel GDAL fills becomes valid, one the search does not reach stays masked
+    Case(
+        "fillnodata_masked_filled_valid",
+        FND,
+        (Build("fill_masked"), 100.0, 0),
+        "fill_mask",
+        None,
+        ONLY,
+    ),
+    Case(
+        "fillnodata_masked_short_search",
+        FND,
+        (Build("fill_masked"), 1.0, 0),
+        "fill_mask",
+        None,
+        ONLY,
+    ),
     Case("fillnodata_null_smoothing", FND, (DEM, 100.0, None), "null", None, ONLY),
     # every band is filled, each by its own mask
     Case(

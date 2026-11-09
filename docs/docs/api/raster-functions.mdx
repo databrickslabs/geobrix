@@ -6018,7 +6018,8 @@ Each band is filled by its own mask.
 A pixel with no valid pixel in range stays NoData: the function adds no value beyond GDAL's interpolation.
 `smoothing_iter` adds 3×3 smoothing passes over the filled pixels.
 Both numbers must be whole, from 0 to 2147483647. A fraction or a negative number raises and names the value.
-A tile that declares no NoData value comes back as it is.
+A tile that declares no NoData value and has no mask band comes back as it is.
+A tile whose validity is its own mask band keeps it. The filled pixels become valid, and the pixels the search did not reach stay masked.
 
 <FunctionExamples
   name="rst_fillnodata"

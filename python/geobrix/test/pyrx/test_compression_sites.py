@@ -192,14 +192,6 @@ def _site_chm(tp):
     return chm(lzw_src(), lzw_src())
 
 
-def _site_color_relief(tp):
-    from databricks.labs.gbx.pyrx.core import terrain
-
-    table = tp / "colors.txt"
-    table.write_text("0 0 0 0\n300 255 255 255\n")
-    return _on_lzw(lambda ds: terrain.color_relief(ds, str(table)))
-
-
 def _site_getsubdataset(tp):
     from types import SimpleNamespace
 
@@ -270,7 +262,6 @@ _CANONICAL_SITES = [
     ("terrain.slope", _site_slope, "float32"),
     ("features.rasterize_geom", _site_rasterize_geom, "float64"),
     ("chm.chm", _site_chm, "float32"),
-    ("terrain.color_relief", _site_color_relief, "uint8"),
     ("accessors.getsubdataset", _site_getsubdataset, "float32"),
     ("features.fill_nodata", _site_fill_nodata, "float32"),
     ("binning.bin_points", _site_bin_points, "float32"),

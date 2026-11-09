@@ -17,7 +17,6 @@ import itertools
 import json
 import math
 import os
-import re
 import threading
 import warnings
 from typing import Optional
@@ -69,7 +68,7 @@ from databricks.labs.gbx.pyrx.core import land_cover as land_cover_core
 from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops as ops_core
-from databricks.labs.gbx.pyrx.core import resample, stretch, terrain
+from databricks.labs.gbx.pyrx.core import resample, stretch
 from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
@@ -4048,46 +4047,6 @@ class _RstCustomTessellateUDTF:
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_Custom_Tessellate: {e}")
             return
-
-
-# --- Tier 1f: color relief (the other terrain functions run on the GDAL spec engine) ---------
-def _color_relief_bytes(tile, color_table_path):
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _open_op(tile) as ds:
-        return terrain.color_relief(ds, str(color_table_path))
-
-
-def _check_color_relief(*, color_table_path, **_):
-    from databricks.labs.gbx.ds._listing import to_local_path
-
-    path = to_local_path(str(color_table_path))
-    # a remote path (a URI scheme) or a GDAL virtual one (/vsi...) is GDAL's to open, so only a local file is checked
-    if re.match(r"^(/vsi|[A-Za-z][A-Za-z0-9+.-]*:)", path):
-        return
-    if not os.path.isfile(path):
-        raise FileNotFoundError(
-            f"rst_color_relief: the colour table {color_table_path!r} does not exist"
-        )
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("color_table_path", check=_check_color_relief)
-def _color_relief_udf(tile, color_table_path):
-    new_bytes = _color_relief_bytes(tile, color_table_path)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("color_table_path", check=_check_color_relief)
-def _color_relief_v2_udf(
-    tile, color_table_path, virtualize_dir, virtualize_prefix, materialize
-):
-    new_bytes = _color_relief_bytes(tile, color_table_path)
-    return _shaped_result_row(
-        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
-    )
 
 
 # --- Accessors and statistics ----------------------------------------

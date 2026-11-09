@@ -118,7 +118,7 @@ def _encode_single_band_tile(
     """
     from rasterio.io import MemoryFile
 
-    arr = _netcdf.array_2d(ds, var, sel=sel if sel else None)
+    arr = _netcdf.fill_kept(_netcdf.array_2d(ds, var, sel=sel if sel else None), nodata)
 
     if sel:
         suffix = ",".join(f"{k}={v}" for k, v in sorted(sel.items()))
@@ -177,7 +177,9 @@ def _encode_multiband_tile(
     from rasterio.io import MemoryFile
 
     # Decode the first slice to learn shape/dtype; write it to band 1.
-    first_arr = _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0})
+    first_arr = _netcdf.fill_kept(
+        _netcdf.array_2d(ds, var, sel={**sel, band_dim: 0}), nodata
+    )
     h, w = first_arr.shape[-2], first_arr.shape[-1]
     dtype = str(first_arr.dtype)
 
@@ -230,7 +232,9 @@ def _encode_multiband_tile(
             out.write(first_arr.astype(dtype), 1)
             del first_arr
             for k in range(1, n_bands):
-                arr_k = _netcdf.array_2d(ds, var, sel={**sel, band_dim: k})
+                arr_k = _netcdf.fill_kept(
+                    _netcdf.array_2d(ds, var, sel={**sel, band_dim: k}), nodata
+                )
                 out.write(arr_k.astype(dtype), k + 1)
                 del arr_k
             out.descriptions = tuple(f"{band_dim}={c}" for c in band_coords)

@@ -326,6 +326,21 @@ def nodata_of(ds, variable: str) -> Optional[float]:
     return float(enc) if enc is not None else None
 
 
+def fill_kept(arr, nodata: Optional[float]):
+    """*arr* with the cells that xarray decoded from the variable's fill value (NaN in a float variable) set back to
+    that fill value, so the tile's pixels and its NoData agree and equal what GDAL reads from the file. A variable
+    with no fill value, an integer one (no NaN) and a fill value that is itself NaN come back unchanged.
+    """
+    import numpy as np
+
+    if nodata is None or arr.dtype.kind != "f" or np.isnan(nodata):
+        return arr
+    gaps = np.isnan(arr)
+    if not gaps.any():
+        return arr
+    return np.where(gaps, arr.dtype.type(nodata), arr)
+
+
 def point_arrays(
     ds, variables: List[str]
 ) -> Tuple["object", "object", Dict[str, "object"], str]:

@@ -348,3 +348,22 @@ def test_register_exposes_netcdf_gbx(spark, tmp_path):
     gbx_manager.register_sources(spark, only=["netcdf"])
     df = spark.read.format("netcdf_gbx").option("variable", "ch4").load(str(f))
     assert df.count() == 1
+
+
+def test_a_fill_value_cell_stays_the_fill_value_and_is_the_tiles_nodata(
+    spark, tmp_path
+):
+    """xarray decodes the fill value to NaN; the tile keeps it, so its pixels and its NoData agree (as GDAL reads the
+    file): the cell is -9999 and the band's NoData is -9999, not a NaN beside a NoData no cell holds.
+    """
+    src = tmp_path / "fill.nc"
+    _write_regular_grid(str(src))
+    with Dataset(str(src), "a") as ds:
+        ds.variables["ch4"][1, 2] = np.ma.masked
+    spark.dataSource.register(NetcdfGbxDataSource)
+    row = spark.read.format("netcdf_gbx").load(str(src)).collect()[0]
+    with MemoryFile(bytes(row["tile"]["raster"])) as mf, mf.open() as r:
+        assert r.nodata == -9999.0
+        data = r.read(1)
+    assert data[1, 2] == -9999.0 and not np.isnan(data).any()
+    assert data[0, 0] == 0.0

@@ -101,6 +101,9 @@ The output is the standard `(source, tile)` schema — see
 (CF `grid_mapping`) grids are accepted in raster mode; a curvilinear/swath
 variable raises an error steering you to `mode=vector`.
 
+A cell that holds the variable's fill value stays that fill value in the tile, and the tile's NoData is the same value.
+This matches what GDAL reads from the file.
+
 ### Multi-dimensional variables (time / level)
 
 Climate reanalysis, forecast, and model-output files commonly have a

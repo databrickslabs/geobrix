@@ -36,12 +36,10 @@ def assert_tile_is(
     tol: Optional[float] = None,
     crs: bool = True,
     nodata: bool = True,
-    fill_to_nan: bool = False,
 ) -> None:
     """Open ``tile`` the way a GeoBrix function does and hold it to ``ref`` (a ``_raster.Reference``): band count,
     size, data type, every pixel, NoData, georeferencing and CRS. ``tol`` is a mean absolute pixel error allowed
-    (a lossy format); None is exact. ``fill_to_nan``: the reader decodes the fill value to NaN (xarray's reading of a
-    netCDF variable), so GDAL's fill-value cells are NaN in the expected pixels."""
+    (a lossy format); None is exact."""
     from databricks.labs.gbx.pyrx.core import open_tile as ot
 
     with ot._open(tile) as ds:
@@ -52,10 +50,8 @@ def assert_tile_is(
         got = ds.read()
         for i, want in enumerate(ref.arrays):
             assert (
-                fill_to_nan or got[i].dtype.name == ref.dtypes[i]
+                got[i].dtype.name == ref.dtypes[i]
             ), f"{what}: band {i + 1} is {got[i].dtype.name}, GDAL reads {ref.dtypes[i]}"
-            if fill_to_nan and ref.nodata[i] is not None:
-                want = np.where(want == ref.nodata[i], np.nan, want)
             if tol is None:
                 assert np.array_equal(
                     got[i], want, equal_nan=got[i].dtype.kind == "f"

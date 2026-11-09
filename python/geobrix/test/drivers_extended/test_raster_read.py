@@ -44,12 +44,7 @@ def test_the_reader_returns_the_file_as_gdal_reads_it(spark, samples, reader, ca
     path, ref = samples[case.id]
     rows = spark.read.format(reader).load(path).collect()
     assert len(rows) == 1, f"{reader}: {len(rows)} tiles"
-    assert_tile_is(
-        tile_dict(rows[0]["tile"]),
-        ref,
-        f"{reader} {case.driver}",
-        fill_to_nan=reader == "netcdf_gbx",
-    )
+    assert_tile_is(tile_dict(rows[0]["tile"]), ref, f"{reader} {case.driver}")
 
 
 @pytest.mark.parametrize("case", _FROMFILE)

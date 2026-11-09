@@ -210,7 +210,8 @@ echo -e "${CYAN}Release flow (after this PR merges to main):${NC}"
 echo -e "  git tag -a v${NEW_VER} <merge-sha> && git push origin v${NEW_VER}"
 echo -e "  gh release create v${NEW_VER} --latest --title \"GeoBrix v${NEW_VER} (Beta)\" --notes \"...\""
 echo -e "  gh workflow run \"package geobrix artifacts\" -f ref=v${NEW_VER} -f attach_to_tag=v${NEW_VER}"
-echo -e "  (7 assets; docs deploy auto-triggers on the docs-touching merge to main)."
+echo -e "  (attaches the JAR, docs zip and DCS Dockerfile; docs deploy auto-triggers on the docs-touching merge to main)."
+echo -e "  Then build and attach the env wheels (+env5, +env6): see 'Release' in scripts/commands/gbx-build-wheel.md."
 show_separator
 
 if [ "$DRY_RUN" -eq 0 ] && [ ${#CHANGED_FILES[@]} -gt 0 ]; then

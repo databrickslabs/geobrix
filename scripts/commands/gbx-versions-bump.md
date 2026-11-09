@@ -65,7 +65,7 @@ gh release create v<NEW> --latest --title "GeoBrix v<NEW> (Beta)" --notes "..."
 gh workflow run "package geobrix artifacts" -f ref=v<NEW> -f attach_to_tag=v<NEW>
 ```
 
-Builds and attaches four assets: the JAR, the wheel, the docs zip, and the DCS Dockerfile. Docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
+Builds and attaches three assets: the JAR, the docs zip, and the DCS Dockerfile. The env wheels users install (`+env5`, `+env6`) are built and attached by the release owner, not by the workflow: see "Release: building and attaching the env wheels" in `gbx-build-wheel.md`. Docs deploy auto-triggers on the docs-touching merge to `main`. Run as `mjohns-databricks` (`gh auth switch --user mjohns-databricks`).
 
 ## Notes
 

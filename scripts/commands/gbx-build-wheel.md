@@ -102,6 +102,29 @@ The core.txt wheelhouse for that architecture (with `base.txt` as constraints) i
 
 The report is `build/env-wheel/env<N>/verify-<arch>.txt`; the last line is `ENV_WHEEL_VERIFIED env=<N> arch=<arch> ...`, and the command exits 1 on any failed check.
 
+## Release: building and attaching the env wheels
+
+The env wheels are the wheels users install (`docs/docs/installation.mdx` tells them to download `+env6` from the GitHub release). They are not built by the `package geobrix artifacts` workflow: an env wheel carries both architectures' native payload, CI builds the native stack on x86_64 only (`build-gdal-native.yml`), and the wheel build and `--verify both` run in each architecture's toolchain image (aarch64 natively). So the release owner builds and attaches them from an Apple Silicon machine, after that workflow ran with `attach_to_tag` set. The plain wheel (`python/geobrix/pyproject.toml`) is the development loop's editable install and is not a release asset.
+
+```bash
+gh auth switch --user mjohns-databricks
+git checkout v<version>                                   # a clean tree: the wheel records GIT_SHA
+bash scripts/commands/gbx-build-native.sh --arch both --target stage-native
+bash scripts/commands/gbx-build-native.sh --arch both --target bindings
+gh run download <run id> -n geobrix-release-artifacts -D /tmp/gbx-release   # the JAR the workflow built
+bash scripts/commands/gbx-build-wheel.sh --env 5 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
+bash scripts/commands/gbx-build-wheel.sh --env 6 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
+bash scripts/commands/gbx-build-wheel.sh --env 5 --verify both
+bash scripts/commands/gbx-build-wheel.sh --env 6 --verify both
+gh release upload v<version> \
+    dist/env5/geobrix-<version>+env5-py3-none-any.whl \
+    dist/env6/geobrix-<version>+env6-py3-none-any.whl
+```
+
+If the release ships the Rust module `_gbxrs`, run `bash scripts/commands/gbx-build-rs.sh --arch both` first and add `--extra-payload build/rs/payload` to both build commands (the `--verify` runs need no flag).
+
+The two native builds are skipped when `build/native/out/<arch>/` already holds trees built from the release commit's native inputs (`python3 scripts/native/native_inputs.py check-stamp` is the quick test; `gbx:native:verify-arches` also checks the trees and wheels are one build).
+
 ## Examples
 
 ```bash

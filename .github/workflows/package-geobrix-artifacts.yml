@@ -1,22 +1,44 @@
 name: package geobrix artifacts
-# One-stop release packaging: builds the JAR + Python wheel inline, builds the docs zip, and
-# attaches every release artifact (JAR, wheel, DCS image Dockerfile, docs zip) to an existing
-# tag via `gh release upload --clobber`.
+# Release packaging: builds the JAR inline and the docs zip, and attaches every release artifact this workflow
+# can build (JAR, DCS image Dockerfile, docs zip) to an existing tag via `gh release upload --clobber`.
+#
+# THE ENV WHEELS ARE NOT BUILT HERE. The wheels users install are geobrix-<version>+env5-py3-none-any.whl and
+# geobrix-<version>+env6-py3-none-any.whl (docs/docs/installation.mdx tells users to download +env6 from the GitHub
+# release). Each carries BOTH architectures' native payload (gdal-native and the five bindings, aarch64 and x86_64),
+# and this repository's CI builds the native stack on x86_64 only (build-gdal-native.yml, a cache and a 1-day artifact
+# for the CI JVMs): no workflow produces the aarch64 payload. The wheel build also runs auditwheel and the install check
+# in each architecture's toolchain image, the aarch64 one natively. So the release owner builds and attaches the env
+# wheels from an Apple Silicon machine (both architectures' trees from gbx:build:native), after this workflow ran.
+# The plain wheel (python/geobrix/pyproject.toml) is the development loop's editable install, not a release asset, so
+# this workflow neither builds nor attaches it.
 #
 # Manual-only: Actions -> "package geobrix artifacts" -> Run workflow.
 #
 # Inputs:
 #   ref           - git ref to build from (branch / tag / SHA). Empty = the
 #                   ref the workflow was launched on.
-#   attach_to_tag - tag (e.g. v0.3.0) to attach all four files to. Empty =
+#   attach_to_tag - tag (e.g. v0.3.0) to attach all three files to. Empty =
 #                   produce workflow artifacts only, no tag mutation.
 #
 # Always uploaded as workflow artifacts (downloadable from the run page):
 #   1. geobrix-<version>-jar-with-dependencies.jar              (built inline)
-#   2. geobrix-<version>-py3-none-any.whl                       (built inline)
-#   3. geobrix-docs-<version>.zip                               (built inline from docs/)
-#   4. scripts/docker/dcs/Dockerfile                            (committed; the DCS image recipe;
+#   2. geobrix-docs-<version>.zip                               (built inline from docs/)
+#   3. scripts/docker/dcs/Dockerfile                            (committed; the DCS image recipe;
 #                                                                attached to the tag as geobrix-<version>-dcs.Dockerfile)
+#
+# The release owner's steps for the env wheels, after this workflow ran with attach_to_tag set
+# (`gh auth switch --user mjohns-databricks` first; gbx:build:native --arch both has built both architectures'
+# stage-native and bindings trees from the release commit; scripts/commands/gbx-build-wheel.md has the details):
+#   git checkout v<version>                                     # a clean tree: the wheel records GIT_SHA
+#   (a release that ships the Rust module: gbx-build-rs.sh --arch both first, and --extra-payload build/rs/payload below)
+#   gh run download <run id> -n geobrix-release-artifacts -D /tmp/gbx-release   # the JAR built by this run
+#   bash scripts/commands/gbx-build-wheel.sh --env 5 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
+#   bash scripts/commands/gbx-build-wheel.sh --env 6 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
+#   bash scripts/commands/gbx-build-wheel.sh --env 5 --verify both
+#   bash scripts/commands/gbx-build-wheel.sh --env 6 --verify both
+#   gh release upload v<version> \
+#       dist/env5/geobrix-<version>+env5-py3-none-any.whl \
+#       dist/env6/geobrix-<version>+env6-py3-none-any.whl
 #
 # Security: every workflow_dispatch input is surfaced as env: before any
 # run: block. Direct ${{ ... }} interpolation of user inputs into shell is
@@ -33,7 +55,7 @@ on:
         type: string
         default: ""
       attach_to_tag:
-        description: "Tag to attach the four files to (e.g. v0.3.0). Empty = workflow artifacts only."
+        description: "Tag to attach the three files to (e.g. v0.3.0). Empty = workflow artifacts only."
         required: false
         type: string
         default: ""
@@ -65,30 +87,6 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.ref }}
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
-
-      - name: verify python/geobrix/requirements-build.txt is committed
-        shell: bash
-        run: |
-          if [ ! -f python/geobrix/requirements-build.txt ]; then
-              echo
-              echo "============================================================"
-              echo "python/geobrix/requirements-build.txt is missing."
-              echo
-              echo "It's the hash-pinned lockfile this workflow installs from"
-              echo "via 'pip install --require-hashes'. It's generated from"
-              echo "python/geobrix/requirements-build.in and must be committed"
-              echo "alongside it on the branch being released."
-              echo
-              echo "Regenerate with:"
-              echo "  cd python/geobrix"
-              echo "  uv pip compile --generate-hashes --python-version 3.12 \\"
-              echo "      --output-file requirements-build.txt requirements-build.in"
-              echo
-              echo "Then commit to the branch being released and re-trigger"
-              echo "this workflow."
-              echo "============================================================"
-              exit 1
-          fi
 
       - name: Configure JDK
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5.2.0
@@ -147,24 +145,6 @@ jobs:
           ./mvnw -C -q clean package -DskipTests -Dscoverage.skip -Dscalastyle.fail=false
           ls -lh target/geobrix-*-jar-with-dependencies.jar
           python3 scripts/ci/check_jar_packaging.py target/geobrix-*-jar-with-dependencies.jar
-
-      # Hash-pinned minimal build set: just build / setuptools / wheel. See
-      # python/geobrix/requirements-build.in for the source list; the .txt
-      # lockfile must be regenerated via `uv pip compile --generate-hashes`
-      # when bumping any of those. Slimmer than requirements-ci.txt (which
-      # pulls pytest, black, scientific stack) by ~30s of pip resolve time.
-      - name: install Python build deps (hash-pinned)
-        shell: bash
-        run: |
-          pip install --upgrade pip==25.0.1
-          pip install --require-hashes -r python/geobrix/requirements-build.txt
-
-      - name: build Python wheel
-        shell: bash
-        run: |
-          cd python/geobrix
-          python -m build
-          ls -lh dist/*.whl
 
       # ---- docs ----------------------------------------------------------
       # Docusaurus static-zip build, version-named from the JAR we just
@@ -233,7 +213,6 @@ jobs:
           echo "=== files to publish ==="
           ls -lh \
               "target/geobrix-${GBX_VERSION}-jar-with-dependencies.jar" \
-              "python/geobrix/dist/"*.whl \
               scripts/docker/dcs/Dockerfile \
               "${GBX_DOCS_ZIP}"
 
@@ -243,7 +222,6 @@ jobs:
           name: geobrix-release-artifacts
           path: |
             target/geobrix-*-jar-with-dependencies.jar
-            python/geobrix/dist/*.whl
             scripts/docker/dcs/Dockerfile
             dist/geobrix-docs-*.zip
           if-no-files-found: error
@@ -265,7 +243,6 @@ jobs:
           esac
 
           JAR=$(ls target/geobrix-*-jar-with-dependencies.jar | head -1)
-          WHL=$(ls python/geobrix/dist/*.whl | head -1)
 
           VERSION=$(basename "$JAR" | sed -nE 's/^geobrix-(.+)-jar-with-dependencies\.jar$/\1/p')
           if [ -z "$VERSION" ]; then
@@ -276,13 +253,11 @@ jobs:
 
           gh release upload "$INPUT_ATTACH_TO_TAG" \
               "$JAR" \
-              "$WHL" \
               "dist/geobrix-${VERSION}-dcs.Dockerfile" \
               "${GBX_DOCS_ZIP}" \
               --clobber
 
           echo "Attached to tag $INPUT_ATTACH_TO_TAG:"
           echo "  $(basename "$JAR")"
-          echo "  $(basename "$WHL")"
           echo "  geobrix-${VERSION}-dcs.Dockerfile"
           echo "  $(basename "${GBX_DOCS_ZIP}")"

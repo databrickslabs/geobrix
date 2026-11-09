@@ -3266,16 +3266,12 @@ def _ref_viewshed_wall(args):
     return out, np.zeros(out.shape, bool)
 
 
-def _ref_color_relief(alpha: bool):
-    """rst_color_relief of the DEM args[0] through the table of oracle_refs.COLOR_STOPS (oracle_refs.color_relief)."""
+def _ref_color_relief(args):
+    """rst_color_relief of the DEM args[0] through the table text args[1] (oracle_refs.color_relief)."""
+    from databricks.labs.gbx.bench import oracle_refs
 
-    def ref(args):
-        from databricks.labs.gbx.bench import oracle_refs
-
-        z, nodata, _, _ = _dem_band(args)
-        return oracle_refs.color_relief(z, nodata, alpha)
-
-    return ref
+    z, nodata, _, _ = _dem_band(args)
+    return oracle_refs.color_relief(z, nodata, args[1])
 
 
 def _members_of(group):
@@ -3385,8 +3381,7 @@ _REFS = {
     "agg_derived_sum": _ref_agg_derived_sum,
     "agg_frombands": _ref_agg_frombands,
     "viewshed_wall": _ref_viewshed_wall,
-    "color_relief_rgb": _ref_color_relief(False),
-    "color_relief_rgba": _ref_color_relief(True),
+    "color_relief": _ref_color_relief,
     "combine_avg": _ref_combine("avg"),
     "combine_count": _ref_combine("count"),
     "combine_max": _ref_combine("max"),
@@ -3455,8 +3450,7 @@ _REF_ATOL = {
     "percentile_stretch_bands": 1.0,
     "hillshade": 1.0,
     "aspect": 0.01,
-    "color_relief_rgb": 1.0,  # GDAL rounds the interpolated channel to a Byte
-    "color_relief_rgba": 1.0,
+    "color_relief": 1.0,  # GDAL rounds the interpolated channel to a Byte
     "proximity_geo": 15.0,
     "proximity_pixel": 1.5,
 }  # GDAL computes aspect in float32

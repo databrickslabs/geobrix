@@ -158,6 +158,7 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_tri",
             "gbx_rst_tpi",
             "gbx_rst_roughness",
+            "gbx_rst_color_relief",
         )
     },
     # the band-math functions, each over replicated 512 px four-band tiles with its two light UDFs and a floor

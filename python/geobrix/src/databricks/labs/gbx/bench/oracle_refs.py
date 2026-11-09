@@ -266,30 +266,73 @@ def combine(stat: str, members):
     return res.filled(0.0).astype("float64"), np.ma.getmaskarray(res)
 
 
-# The colour table of the color_relief rows: elevation, then red, green, blue, alpha (the alpha column is only written
-# for the RGBA table); `nv` colours the NoData pixels. The DEM `dem_3857` runs from about 90 to 160.
-COLOR_STOPS = (
-    (90.0, (255, 0, 0, 255)),
-    (120.0, (0, 255, 0, 128)),
-    (160.0, (0, 0, 255, 0)),
-)
-COLOR_NV = (10, 20, 30, 77)
+# The color names gdaldem reads in place of R G B (case-insensitive).
+_COLOR_NAMES = {
+    "white": (255, 255, 255),
+    "black": (0, 0, 0),
+    "red": (255, 0, 0),
+    "green": (0, 255, 0),
+    "blue": (0, 0, 255),
+    "yellow": (255, 255, 0),
+    "magenta": (255, 0, 255),
+    "cyan": (0, 255, 255),
+    "grey": (191, 191, 191),
+    "gray": (191, 191, 191),
+    "orange": (255, 127, 0),
+    "purple": (127, 0, 255),
+    "brown": (191, 127, 63),
+}
 
 
-def color_relief(z, nodata, alpha: bool):
-    """gdaldem colour-relief written from its definition: each channel is linear between the stops (clamped to the
-    first and last colour outside them) and the NoData pixels take the `nv` colour. Returns ``(bands float64 (n, h, w),
-    mask)`` with no NoData in the output."""
-    n = 4 if alpha else 3
-    elev = [s[0] for s in COLOR_STOPS]
-    valid = z != nodata
-    bands = [
-        np.where(
-            valid,
-            np.interp(z, elev, [s[1][ch] for s in COLOR_STOPS]),
-            COLOR_NV[ch],
+def color_relief(z, nodata, table_text: str):
+    """gdaldem colour-relief written from its definition. Each line of `table_text` is ``value R G B [A]``, ``value
+    <name>`` or the NoData colour ``nv ...`` (blank lines and ``#`` comments skipped, commas as spaces); ``N%`` is a
+    share of the range of the valid pixels. Each channel is linear between the entries sorted by value and clamped
+    to the first and last colour outside them. A NoData pixel takes the ``nv`` colour, else it is transparent (a
+    table with an alpha column) or black. The table is RGBA when any entry has an alpha column, and an entry without
+    one is opaque. Returns ``(bands float64 (n, h, w), mask)``: the output declares no NoData, and the mask of an RGBA output is its
+    transparent pixels."""
+    import re
+
+    entries, nv = [], None
+    for line in table_text.splitlines():
+        parts = [p for p in re.split(r"[\s,]+", line.strip()) if p]
+        if not parts or parts[0].startswith("#"):
+            continue
+        key, rest = parts[0].lower(), parts[1:]
+        color = (
+            list(_COLOR_NAMES[rest[0].lower()])
+            if len(rest) == 1
+            else [int(c) for c in rest]
         )
-        for ch in range(n)
-    ]
-    out = np.stack(bands).astype("float64")
-    return out, np.zeros(out.shape, bool)
+        if key in ("nv", "nodata"):
+            nv = color
+        else:
+            entries.append((key, color))
+    alpha = any(len(c) == 4 for _, c in entries + ([("nv", nv)] if nv else []))
+    n = 4 if alpha else 3
+    bad = ~np.isfinite(z) if nodata is None else (z == nodata) | ~np.isfinite(z)
+    lo, hi = (
+        (float(z[~bad].min()), float(z[~bad].max())) if (~bad).any() else (0.0, 1.0)
+    )
+    stops = sorted(
+        (
+            lo + float(k[:-1]) / 100.0 * (hi - lo) if k.endswith("%") else float(k),
+            c + [255] * (n - len(c)),
+        )
+        for k, c in entries
+    )
+    elev = [e for e, _ in stops]
+    fill = (nv + [255] * (n - len(nv))) if nv is not None else [0] * n
+    out = np.stack(
+        [
+            np.where(bad, fill[ch], np.interp(z, elev, [c[ch] for _, c in stops]))
+            for ch in range(n)
+        ]
+    ).astype("float64")
+    # a transparent pixel (alpha 0) is masked in the colour bands when the output is read (the alpha band is the
+    # dataset's mask); the alpha band itself is never masked
+    mask = np.zeros(out.shape, bool)
+    if n == 4:
+        mask[:3] = np.rint(out[3]) == 0
+    return out, mask

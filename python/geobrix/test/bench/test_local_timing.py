@@ -126,6 +126,7 @@ _SE_DEM_SETS = tuple(
         "evi",
         "index",
         "threshold",
+        "color_relief",
     )
 )
 

@@ -1281,7 +1281,7 @@ def rst_cog_convert(
 
 def rst_color_relief(
     tile: ColLike,
-    color_table_path: ColLike,
+    color_table: ColLike,
     virtualize_dir: Optional[str] = None,
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
@@ -1290,19 +1290,22 @@ def rst_color_relief(
 
     Args:
         tile: The single-band DEM tile.
-        color_table_path: The path of a `gdaldem` colour file: one `elevation R G B [A]`
-            line per stop, with `nv` for NoData and `N%` for a share of the value range. The
-            file must exist.
+        color_table: The color table as text, in the `gdaldem` color-file format: one
+            `value R G B [A]` line per entry, a color name such as `red` in place of `R G
+            B`, `nv` for NoData, and `N%` for a share of the value range. Pass the text, not
+            a file path.
         virtualize_dir: Python only: write the result under this directory and return a virtual tile.
         virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        A Byte tile of 3 bands (RGB), or 4 (RGBA) when a stop has an alpha column. A
-        NULL tile or path gives NULL; an error tile comes out as itself; a tile that
-        cannot be read gives an error tile.
+        A Byte tile of 3 bands (RGB), or 4 (RGBA) when an entry has an alpha column.
+        NoData pixels take the `nv` color; without an `nv` line they are transparent
+        (RGBA) or black (RGB). A NULL tile or table gives NULL; an error tile comes out
+        as itself; a table that is not a color table raises; a tile that cannot be read
+        gives an error tile.
 
-    SQL: ``gbx_rst_color_relief(tile, color_table_path)``
+    SQL: ``gbx_rst_color_relief(tile, color_table)``
     """
     if _api.forced(virtualize_dir, virtualize_prefix, materialize):
         return _api.force_output(
@@ -1311,12 +1314,12 @@ def rst_color_relief(
             virtualize_prefix,
             materialize,
             tile,
-            color_table_path,
+            color_table,
         )
     return _api.call(
         "gbx_rst_color_relief",
         tile,
-        color_table_path,
+        color_table,
     )
 
 

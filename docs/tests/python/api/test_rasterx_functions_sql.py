@@ -689,23 +689,19 @@ def test_spectral_indices_sql_example(spark, rasters_view, example_attr, fallbac
     assert result[0][out_col] is not None
 
 
-def test_rst_color_relief_sql_example(spark, rasters_view, tmp_path):
-    """color_relief example exists and executes against a tempfile color table.
+def test_rst_color_relief_sql_example(spark, rasters_view):
+    """color_relief example exists and executes with the color table as text.
 
-    The docs example references a sample-data path that may not be present in
-    every env; this test exercises the function via a tempfile color table so
-    we still cover the actual SQL invocation.
+    The docs example reads a `dem_rasters` view that may not be present in
+    every env; this test runs the example's own SQL against the shared
+    `rasters` view so the actual SQL invocation is covered.
     """
-    ct = tmp_path / "elevation.clr"
-    ct.write_text("0 0 0 255\n100 0 255 0\n255 255 0 0\n")
-    # Verify the doc example string exists & has the right shape.
     sql_template = rasterx_functions_sql.rst_color_relief_sql_example()
     assert "gbx_rst_color_relief" in sql_template
-    # Run a substitute SQL using our tempfile.
-    sql = f"SELECT gbx_rst_color_relief(tile, '{ct}') AS rgba FROM rasters"
+    sql = sql_template.replace("dem_rasters", "rasters")
     result = spark.sql(sql).collect()
     assert len(result) >= 1
-    assert result[0]["rgba"] is not None
+    assert result[0]["rgb"] is not None
 
 
 # ============================================================================

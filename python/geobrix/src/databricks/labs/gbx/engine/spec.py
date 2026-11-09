@@ -28,6 +28,9 @@ ENGINE_ARGS = frozenset(
 )
 # The algorithms that take --num-threads (the engine sets it to 1: a Spark task is one core).
 THREADED = frozenset({"raster reproject"})
+# Binders whose value is a file the engine writes under the call's prefix: the one way a deny-listed file argument
+# (color-map) may appear, and only with the engine's placeholder (``<text0>``, ...) as its value.
+ENGINE_FILE_BINDERS = frozenset({"text_vsimem"})
 # Output formats the engine writes: GTiff for rasters, MEM for features. Never VRT or GDALG (both can reference
 # other files or run a stored pipeline when opened).
 OUTPUT_FORMATS = frozenset({"GTiff", "MEM"})
@@ -79,7 +82,9 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
             raise SpecError(f"{name}: the input '{param}' is not a parameter")
     by_arg = {a.arg: a for a in block.args}
     for a in block.args:
-        if a.arg in section.deny or a.arg in ENGINE_ARGS:
+        if a.arg in ENGINE_ARGS or (
+            a.arg in section.deny and a.type not in ENGINE_FILE_BINDERS
+        ):
             raise SpecError(f"{name}: the argument '{a.arg}' is deny-listed")
         if a.arg not in allowed:
             raise SpecError(
@@ -116,16 +121,24 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
                 )
 
 
-def guard_tokens(section: GdalSection, alg: str, tokens: Sequence[str]) -> None:
+def guard_tokens(
+    section: GdalSection,
+    alg: str,
+    tokens: Sequence[str],
+    engine_files: frozenset = frozenset(),
+) -> None:
     """The engine core's check of the argv a spec produced (the engine's own tokens are added after it): every
-    token is `--name=value` or a bare `--name`, the name on the algorithm's allowlist and off the deny list.
+    token is `--name=value` or a bare `--name`, the name on the algorithm's allowlist and off the deny list. A
+    deny-listed name passes only when it is in `engine_files` (an argument bound through ``ENGINE_FILE_BINDERS``) and
+    its value is the engine's placeholder for a file it wrote.
     """
     allowed = _alg_args(section, alg, alg)
     for t in tokens:
         if not t.startswith("--"):
             raise SpecError(f"{alg}: the token '{t}' is not a long argument")
-        name = t[2:].split("=", 1)[0]
-        if name in section.deny or name in ENGINE_ARGS:
+        name, _, value = t[2:].partition("=")
+        engine_file = name in engine_files and value.startswith("<text")
+        if name in ENGINE_ARGS or (name in section.deny and not engine_file):
             raise SpecError(f"{alg}: the argument '{name}' is deny-listed")
         if name not in allowed:
             raise SpecError(f"{alg}: the argument '{name}' is not on the allowlist")

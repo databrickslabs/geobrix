@@ -129,6 +129,7 @@ These changes affect callers that pass keywords or named arguments.
 - **`rst_mapalgebra`: `json_spec` is now `expression`.**
 - **`rst_transformcrs`: `crs` is now `target_crs`.**
 - **`rst_align_to(tile, reference_tile)`** replaces `(tile, reference)`.
+- **`rst_color_relief(tile, color_table)`** replaces `(tile, color_table_path)`. Pass the color table's text, not a file path. A path now raises, and so does any text that is not a color table. The error names the first bad line and carries a `Fix:`. To use a table file, read its text first and pass that.
 - **`rst_land_cover(tile, method, n_clusters, smooth)`** replaces the keyword-only form. The `classes` argument always raised and is gone.
 - **`rst_bng_rasterize_agg` takes twelve required arguments:** `cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad`. `out_crs` is an optional last argument.
 - **`rst_custom_rasterize_agg(cellid, value, grid, ...)`** replaces `(cellid, grid, value, ...)`.
@@ -138,7 +139,7 @@ These changes affect callers that pass keywords or named arguments.
 - **`rst_histogram` takes an integer literal or a column for `n_buckets`.** `rst_sample` takes a literal for `crs`.
 - **`rst_fillnodata` uses the SQL defaults:** 100.0 and 0.
 - **`rst_hillshade` takes optional `xscale` and `yscale` in SQL.** `rst_slope` and `rst_hillshade` refuse one without the other, with a `Fix:`.
-- **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table_path`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `out_crs`, `attr_field`, `statistic`, `mode`, and the BNG `resolution` and the TIN `split_point_finder` and `grid_origin`.
+- **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `out_crs`, `attr_field`, `statistic`, `mode`, and the BNG `resolution` and the TIN `split_point_finder` and `grid_origin`.
   - A column can no longer supply those arguments row by row.
 - **The `rst_fromfile` Python default is a virtual tile.** Pass `materialize=True` for a materialized tile. The SQL function `gbx_rst_fromfile` materializes.
 - **`rst_merge_agg(tile, materialize=False)` returns the unforced BINARY form.** Only `materialize=True` or a directory and prefix force a tile.
@@ -850,8 +851,7 @@ Every raster function follows the same order of checks on both implementations.
   - `gbx_rst_aspect(..., trigonometric => true)` is 0 to 360. `gbx_rst_threshold` with an unknown operator raises, and `op` and `value` default to `'>'` and 0.0. Passing pixels keep their value and others become NoData.
   - `rst_tilexyz` of a one-band raster is an RGBA PNG or RGB JPEG. A NULL `z`, `x` or `y` gives NULL.
   - `rst_cog_convert` writes any block size that is a multiple of 16, and `'AUTO'` is ZSTD. `rst_color_relief` writes RGBA when a stop has an alpha column.
-  - `gbx_rst_color_relief` and `gbx_rst_cog_convert` accept a colour table at a remote or `/vsi` path.
-  - `gbx_rst_color_relief` runs the lightweight form, which reads a color table on a Volume.
+  - `gbx_rst_color_relief` takes the color table as text and runs GDAL's own color-map algorithm. NoData pixels take the `nv` color. Without an `nv` line they are transparent in an RGBA result and black in an RGB one.
   - `gbx_rst_polygonize` defaults band 1 and connectedness 4. It raises for another connectedness or a band the tile lacks.
   - `gbx_rst_tooverlappingtiles` raises for a window below one pixel and for an overlap outside 0 to 99 percent.
   - `gbx_rst_viewshed_towers` fails the query when the DSM tile of a tower cannot be read, on every level.

@@ -205,6 +205,8 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # The DEM functions, from the 16x cluster rows (dedicated, DBR 19, medians of 3, best of c0 and c1): TRI and roughness take
 # the row-wise form (c0); aspect and TPI take the batch form (c1, the default, so no entry). Hillshade keeps its local
 # pick (c0: 3.4 s against 4.9 s, 1024 px tiles, 384 tiles).
+# Color relief took the row-wise form in the local pass (1024 px tiles, a four-stop ramp, median of 3 runs, c0 against c1
+# at 24, 96 and 384 tiles): 0.4 / 1.4 / 5.8 s against 1.5 / 2.4 / 7.3 s, 1.26x at 384.
 # The band-math functions took the row-wise form in the local pass (512 px four-band tiles, median of 3 runs, 384 tiles,
 # c0 against c1): NDVI 3.5 s against 5.2, NDWI 3.4 against 4.7, NBR 3.8 against 5.4, SAVI 4.2 against 5.7, EVI 3.9
 # against 5.0, rst_index 3.6 against 5.0, threshold 7.5 against 9.1.
@@ -223,6 +225,7 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "evi",
             "index",
             "threshold",
+            "color_relief",
         )
     },
 }

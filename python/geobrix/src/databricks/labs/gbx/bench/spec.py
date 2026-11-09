@@ -153,10 +153,8 @@ _SAMPLE_POINT_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 # unused at runtime and kept only for the col_fn signature.
 _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
-# rst_color_relief (timing-only): the function reads a gdaldem color-table FILE, so it needs a real file path on the
-# executor, which the static args map cannot synthesize. It has no heavyweight level. The runner does not invoke
-# color_relief's core_fn for fingerprinting (it is fingerprint=False); the path below is a documented placeholder for the
-# args dict and is created on demand by the core_fn.
+# rst_color_relief (timing-only): the color table is a text argument, a gdaldem ramp. It has no heavyweight level. The
+# runner does not invoke color_relief's core_fn for fingerprinting (it is fingerprint=False).
 _COLOR_RAMP_TEXT = "nv 0 0 0\n0% 0 0 255\n50% 0 255 0\n100% 255 0 0\n"
 
 
@@ -244,22 +242,6 @@ def _tile_extent_size_srid(ds) -> tuple:
         int(ds.height),
         int(epsg) if epsg is not None else 0,
     )
-
-
-def _color_table_path() -> str:
-    """Write the synthetic gdaldem color ramp to a temp file and return its path.
-
-    color_relief is timing-only (see ``_COLOR_RAMP_TEXT``); this only needs to
-    exist so the timing call succeeds.
-    """
-    import tempfile
-
-    f = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".txt", prefix="bench_color_", delete=False
-    )
-    f.write(_COLOR_RAMP_TEXT)
-    f.close()
-    return f.name
 
 
 @dataclass(frozen=True)
@@ -1655,8 +1637,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # function in the constant's comment above:
     #   clip, sample, viewshed -- need an in-extent geometry; no single literal
     #                             is in-extent across the multi-CRS corpus
-    #   color_relief           -- needs a color-table file; GDAL DEMProcessing
-    #                             interpolation vs pyrx np.interp diverge
+    #   color_relief           -- the engine's GDAL color-map rounds each channel to a Byte; no JVM form to compare
     # --- band-index (indices.py): full comparison ---
     "rst_evi": FnSpec(
         "rst_evi",
@@ -1818,16 +1799,18 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=False,
     ),
-    # --- color relief (terrain.py): timing-only ---
-    # Needs a color-table file path (synthesized on demand), so it is not compared.
+    # --- color relief (the GDAL spec engine): timing-only ---
+    # Takes the color table as text; the ramp is a timing placeholder, so it is not compared.
     "rst_color_relief": FnSpec(
         "rst_color_relief",
         "gbx_rst_color_relief",
         "terrain",
         ("pure-core",),
         {},
-        core_fn=lambda ds, a: terrain.color_relief(ds, _color_table_path()),
-        col_fn=lambda t, a: rx.rst_color_relief(t, _color_table_path()),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_color_relief", {"color_table": _COLOR_RAMP_TEXT}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_color_relief(t, _COLOR_RAMP_TEXT),
         sources=_TERRAIN_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,

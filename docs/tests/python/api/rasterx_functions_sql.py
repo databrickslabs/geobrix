@@ -17,14 +17,12 @@ from _fixtures import (
     multiband_path as _multiband_path,
     dem_path as _dem_path,
     netcdf_path as _netcdf_path,
-    color_table_path as _color_table_path,
 )
 
 SAMPLE_RASTER_PATH = str(_single_band_path())
 MULTIBAND_RASTER_PATH = str(_multiband_path())
 DEM_RASTER_PATH = str(_dem_path())
 NETCDF_RASTER_PATH = str(_netcdf_path())
-COLOR_TABLE_PATH = str(_color_table_path())
 
 # Common setup: create the temp views the SQL examples read from. Point the
 # paths at your own rasters — GTIFF_SAMPLE_DIR (single-band) is the default;
@@ -2320,24 +2318,24 @@ rst_roughness_sql_example_output = """
 def rst_color_relief_sql_example():
     """Apply a color relief mapping to a DEM tile.
 
-    The color table file is a plain-text gdaldem color file: each line
-    ``elevation R G B [A]``. Special values ``nv``, ``default``, ``0%`` and
-    ``100%`` are accepted.
+    The color table is text in the gdaldem color-file format: each line is
+    ``elevation R G B [A]`` or ``elevation name``. A line ``nv R G B`` colors
+    NoData, and ``N%`` is a share of the value range.
     """
-    return f"""
--- Map elevation values to RGBA colors via a gdaldem color table.
-SELECT gbx_rst_color_relief(tile, '{COLOR_TABLE_PATH}') AS rgba
+    return """
+-- Map elevation values to RGB colors with a color table given as text (\\n is a new line).
+SELECT gbx_rst_color_relief(tile, '0 34 139 34\\n100 144 238 144\\n200 255 255 0\\n311 255 255 255\\nnv 0 0 0') AS rgb
 FROM dem_rasters;
 """
 
 
 rst_color_relief_sql_example_output = """
 +-----------------------------------------------------------+
-|rgba                                                       |
+|rgb                                                        |
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(4-band RGBA tile mapped via gdaldem color table)
+(3-band RGB tile mapped through the color table)
 """
 
 

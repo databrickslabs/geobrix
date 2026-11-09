@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from databricks.labs.gbx import manifest
 from databricks.labs.gbx.engine.spec import (
+    ENGINE_FILE_BINDERS,
     PLACEHOLDER,
     THREADED,
     DataError,
@@ -224,6 +225,130 @@ def canonical_crs(text: str) -> str:
         return f"{name}:{code}" if name and code else sr.ExportToWkt()
 
 
+_TEXT_MAX = 64 * 1024
+# The color names GDAL's color-relief reads in place of R G B (case-insensitive); any other name it turns into a
+# transparent color without an error, so the engine refuses it here.
+COLOR_NAMES = (
+    "white",
+    "black",
+    "red",
+    "green",
+    "blue",
+    "yellow",
+    "magenta",
+    "cyan",
+    "grey",
+    "gray",
+    "orange",
+    "purple",
+    "brown",
+)
+_NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?%?$")
+_CHANNEL = re.compile(r"^\d{1,3}$")
+_FILE_LIKE = re.compile(r"[/\\]|\.(txt|clr|csv)$", re.I)
+COLOR_TABLE_FIX = (
+    "Fix: pass the table's text, one 'value R G B [A]' line per entry (a color name may replace R G B, "
+    "'nv R G B' colors NoData, 'N%' is a share of the value range), not a file path; read a file's text first"
+)
+
+
+def _color_error(sql_name: str, param: str, why: str) -> ParamError:
+    return ParamError(f"{sql_name}: {param} {why}. {COLOR_TABLE_FIX}")
+
+
+@functools.lru_cache(maxsize=256)
+def _color_table(sql_name: str, param: str, text: str) -> Tuple[str, bool]:
+    """(the table in the canonical form GDAL reads, whether its entries carry an alpha column).
+
+    Every line is checked: ``value R G B [A]`` (``value`` a number or ``N%``), ``value <color name>``, or the NoData
+    color ``nv R G B [A]``; blank lines and ``#`` comments are skipped, commas count as spaces. A table with no
+    ``nv`` line gets one that is transparent (RGBA) or black (RGB), because GDAL otherwise colors a NoData pixel like
+    the lowest value. Raises ParamError, naming the first bad line, with a Fix.
+    """
+    if len(text) > _TEXT_MAX or "\x00" in text:
+        raise _color_error(
+            sql_name, param, f"must be a color table of at most {_TEXT_MAX} characters"
+        )
+    if not text.strip():
+        raise _color_error(
+            sql_name, param, "is empty: it needs at least one color entry"
+        )
+    if (
+        "\n" not in text.strip()
+        and _FILE_LIKE.search(text.strip())
+        and " " not in text.strip()
+    ):
+        raise _color_error(
+            sql_name,
+            param,
+            f"is a file path ('{text.strip()[:60]}'), not the table's text",
+        )
+    out: List[str] = []
+    has_nv = has_alpha = False
+    entries = 0
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [t for t in re.split(r"[\s,]+", line) if t]
+        key, rest = parts[0], parts[1:]
+
+        def bad(why: str, n=n, line=line):
+            return _color_error(
+                sql_name,
+                param,
+                f"has a line that is not a color entry (line {n}: '{line[:60]}'): {why}",
+            )
+
+        nv = key.lower() in ("nv", "nodata")
+        if not nv and not _NUMBER.match(key):
+            raise bad("it must start with a number, a percent such as 50%, or nv")
+        if len(rest) == 1 and not rest[0].isdigit():
+            if rest[0].lower() not in COLOR_NAMES:
+                raise bad(
+                    f"'{rest[0]}' is not a color name GDAL knows ({', '.join(COLOR_NAMES)})"
+                )
+            color = rest[0].lower()
+        elif len(rest) in (3, 4) and all(
+            _CHANNEL.match(t) and int(t) <= 255 for t in rest
+        ):
+            color = " ".join(str(int(t)) for t in rest)
+            has_alpha = has_alpha or len(rest) == 4
+        else:
+            raise bad(
+                "after the value it needs R G B, R G B A (each 0 to 255), or one color name"
+            )
+        if nv:
+            has_nv = True
+            out.append(f"nv {color}")
+        else:
+            entries += 1
+            out.append(f"{key} {color}")
+    if entries == 0:
+        raise _color_error(
+            sql_name, param, "has no color entries (only nv, comments or blank lines)"
+        )
+    if not has_nv:
+        out.append("nv 0 0 0 0" if has_alpha else "nv 0 0 0")
+    return "\n".join(out) + "\n", has_alpha
+
+
+def check_color_table(sql_name: str, param: str, text) -> str:
+    """The color table's text in the canonical form, or a ParamError naming the first bad line, with a Fix."""
+    return _color_table(sql_name, param, str(text))[0]
+
+
+def text_values(fn, values: Mapping[str, Any]) -> List[str]:
+    """The texts the call's ``text_vsimem`` arguments write, in template order (the engine writes each to a file under
+    the call's prefix and names it in ``build(..., texts=)``). A NULL value is not written: the result is NULL.
+    """
+    return [
+        check_color_table(fn.sql_name, a.source, values.get(a.source))
+        for a in fn.gdal.args
+        if a.type == "text_vsimem" and not _is_null(values.get(a.source))
+    ]
+
+
 def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
     """The map-algebra envelope -> GDAL `raster calc`'s muparser expression and one `--input=V=` per variable.
 
@@ -389,6 +514,7 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
     by_arg = {a.arg: a for a in block.args}
     calc: Optional[_Calc] = None
     tokens: List[str] = []
+    n_texts = 0
     for a in block.args:
         if a.source is None:
             if a.const == "input" and a.arg in ("output-data-type", "nodata"):
@@ -431,12 +557,26 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             calc = _calc_binding(fn, a, v, inputs)
             tokens += [f"--{a.arg}={calc.expr}", "--dialect=muparser"]
             continue
+        if a.type == "text_vsimem":
+            check_color_table(fn.sql_name, a.source, v)
+            tokens.append(f"--{a.arg}=<text{n_texts}>")
+            n_texts += 1
+            continue
+        if a.type == "table_alpha":
+            if _color_table(fn.sql_name, a.source, str(v))[1]:
+                tokens.append(f"--{a.arg}")
+            continue
         if a.type not in ("crs",):
             check_value(fn.sql_name, a.source, v)
         text = _bind_value(fn, a, v)
         if text is not None:
             tokens.append(f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}")
-    guard_tokens(section, block.alg, tokens)
+    guard_tokens(
+        section,
+        block.alg,
+        tokens,
+        frozenset(a.arg for a in block.args if a.type in ENGINE_FILE_BINDERS),
+    )
     if calc is not None:
         ins = [f"--input={v}={names[i]}" for v, i in calc.variables]
     else:
@@ -467,13 +607,15 @@ def build(
     names: Optional[Sequence[str]] = None,
     output: str = "<output>",
     section=None,
+    texts: Optional[Sequence[str]] = None,
 ) -> Optional[List[str]]:
     """The argv for one call of `fn`, or None when a NULL value makes the result NULL.
 
     `values` maps the function's params to this call's values; `inputs` are the input rasters' header props;
     `names` the inputs' `/vsimem` names (default the placeholders ``<input>``, or ``<input0>``, ``<input1>``,
     ... for an array of rasters, the form ``last_command`` shows). `section` is the manifest's `gdal` section (the
-    allowlist), by default the manifest's own. Raises ParamError (raise) or DataError (an error tile) when a binder
+    allowlist), by default the manifest's own. `texts` are the names of the files the engine wrote for the call's
+    ``text_vsimem`` arguments (``text_values``), in order: they fill ``<text0>``, ``<text1>``, ... Raises ParamError (raise) or DataError (an error tile) when a binder
     refuses a value.
     """
     section = section if section is not None else manifest.load().gdal
@@ -493,7 +635,7 @@ def build(
                 _templates[key] = cached
                 while len(_templates) > _TEMPLATE_CACHE_SIZE:
                     _templates.popitem(last=False)
-    if cached is None or (names is None and output == "<output>"):
+    if cached is None or (names is None and output == "<output>" and texts is None):
         return None if cached is None else list(cached)
     in_kind = fn.gdal.inputs[0][1]
     placeholders = (
@@ -507,6 +649,9 @@ def build(
         if tok.startswith(("--input=", "--output=")):
             head, _, ph = tok.rpartition("=")
             return f"{head}={real.get(ph, ph)}"
+        if texts is not None and "=<text" in tok:
+            head, _, ph = tok.rpartition("=")
+            return f"{head}={texts[int(ph[len('<text'):-1])]}"
         return tok
 
     return [fill(tok) for tok in cached]

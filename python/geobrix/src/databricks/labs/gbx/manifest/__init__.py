@@ -115,6 +115,7 @@ GDAL_BINDERS = frozenset(
         "calc_formula",
         "calc_named",
         "text_vsimem",
+        "table_alpha",
         "observer_xy",
         "size_from_factor",
     }

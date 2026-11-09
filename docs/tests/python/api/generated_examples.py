@@ -482,7 +482,7 @@ EXAMPLES = {
     "gbx_rst_color_relief": (
         "SPEC_DEM",
         "color_relief_rgb",
-        "SELECT gbx_rst_color_relief(c0, c1) AS out FROM gbx_example",
+        "SELECT gbx_rst_color_relief(c0, '90 255 0 0\n120 0 255 0\n160 0 0 255\nnv 10 20 30') AS out FROM gbx_example",
     ),
     "gbx_rst_combineavg": (
         "RASTER_ARRAY_OP",

@@ -2217,7 +2217,7 @@ FORMS["SE"] += [
 ]
 
 
-# The other DEM functions (aspect, hillshade, TRI, TPI, roughness) on the same input as slope's local pass: the replicated
+# The other DEM functions (aspect, hillshade, TRI, TPI, roughness, color relief) on the same input as slope's local pass: the replicated
 # 1024 px tiles, each with the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor, with the
 # value fingerprint. Each function's light form is the one of the two that measures faster.
 _SE_DEM_CALLS = {
@@ -2226,6 +2226,8 @@ _SE_DEM_CALLS = {
     "gbx_rst_tri": "{fn}(tile)",
     "gbx_rst_tpi": "{fn}(tile)",
     "gbx_rst_roughness": "{fn}(tile)",
+    # a four-stop ramp over the tiles' 100 to 930 range, its NoData color last
+    "gbx_rst_color_relief": "{fn}(tile, '100 0 0 255\\n300 0 255 0\\n600 255 255 0\\n900 255 0 0\\nnv 0 0 0')",
 }
 SE_DEM_FUNCTIONS = tuple(_SE_DEM_CALLS)
 for _fn, _call in _SE_DEM_CALLS.items():

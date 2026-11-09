@@ -5445,24 +5445,24 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 
 | Surface | Call | Returns |
 |---|---|---|
-| SQL (session) | `gbx_rst_color_relief(tile, color_table_path)` | `TILE` |
-| Python | `rasterx.functions.rst_color_relief(tile, color_table_path, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+| SQL (session) | `gbx_rst_color_relief(tile, color_table)` | `TILE` |
+| Python | `rasterx.functions.rst_color_relief(tile, color_table, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `tile` | `TILE` |  | The single-band DEM tile. |
-| `color_table_path` | `STRING` |  | The path of a `gdaldem` colour file: one `elevation R G B [A]` line per stop, with `nv` for NoData and `N%` for a share of the value range. The file must exist. |
+| `color_table` | `STRING` |  | The color table as text, in the `gdaldem` color-file format: one `value R G B [A]` line per entry, a color name such as `red` in place of `R G B`, `nv` for NoData, and `N%` for a share of the value range. Pass the text, not a file path. |
 {/* END GENERATED gbx_rst_color_relief */}
 
-:::note Output can differ from `gdaldem`
-Color relief is a NumPy implementation with per-channel `np.interp`. Its pixel values are close to `gdaldem` but not identical. It does **not** support the `gdaldem` `default` color keyword, which it skips. It clamps out-of-range elevations to the nearest color stop. Boundary and edge interpolation may differ slightly. The result is an RGB or RGBA Byte tile (RGBA when any color-table entry carries an alpha column). The function has no JVM form.
+:::note Color table and NoData
+The color table is text, not a path. Read a table file first and pass its text. The text is checked line by line: a line that is not a color entry raises, naming the line. A NoData pixel takes the `nv` color. Without an `nv` line it is transparent in an RGBA result and black in an RGB one. Values outside the entries take the nearest entry's color. The result is an RGB or RGBA Byte tile, RGBA when any entry has an alpha column. The function has no JVM form.
 :::
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored. The `default` keyword is not (see the note above).
+Apply a `gdaldem` color table, given as text, to produce an RGB(A) visualization tile. Each line is `value R G B [A]`, or `value name` with a color name such as `red`. A line `nv R G B [A]` colors NoData. A value such as `50%` is a share of the range of the valid pixels. Entries need not be sorted, and `#` comments and commas are accepted.
 
 <FunctionExamples
   name="rst_color_relief"

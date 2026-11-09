@@ -312,8 +312,8 @@
       "since": "0.4.0"
     },
     "gbx_rst_color_relief": {
-      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(c0, c1) AS out FROM gbx_example;",
-      "usage_args": "tile, color_table_path",
+      "examples": "Examples:\n      > SELECT gbx_rst_color_relief(tile, '0 34 139 34\\n100 144 238 144\\n200 255 255 0\\n311 255 255 255\\nnv 0 0 0') AS rgb FROM dem_rasters;",
+      "usage_args": "tile, color_table",
       "description": "Colour a DEM through a `gdaldem` colour table.",
       "surfaces": [
         "session",

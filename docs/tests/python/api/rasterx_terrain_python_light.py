@@ -141,15 +141,20 @@ def rst_color_relief_python_example(spark):
     """Apply a color relief mapping (elevation → RGBA) from a DEM tile."""
     from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx_api
-    from pyspark.sql import functions as f
-    from _fixtures import color_table_path
 
     gbx.register(spark)
     df = dem_tile_df(spark)
-    clr_path = str(color_table_path())
-    result = df.select(
-        rx_api.rst_color_relief("tile", f.lit(clr_path)).alias("tile")
-    ).first()
+    # The color table is text: "elevation R G B A" per line, "nv" for the NoData color.
+    color_table = "\n".join(
+        [
+            "0 34 139 34 255",
+            "100 144 238 144 255",
+            "200 255 255 0 255",
+            "311 255 255 255 128",
+            "nv 0 0 0 0",
+        ]
+    )
+    result = df.select(rx_api.rst_color_relief("tile", color_table).alias("tile")).first()
     return result["tile"]
 
 

@@ -21,7 +21,6 @@ MULTIBAND     rgb_nir_small.tif — 3 bands (red/NIR/green), 8x8 pixels, EPSG:43
                per-band metadata tags. Regenerate with make_multiband_fixture().
 DEM           dem_small.tif — 64x64 Float32, EPSG:32618, real elevation
                variation (~0-311m). Regenerate with make_dem_fixture().
-COLOR_TABLE   elevation.clr — gdaldem color ramp for rst_color_relief.
 NETCDF        prAdjust_day_HadGEM2-CC_*.nc — two subdatasets (time_bnds,
                prAdjust); used by rst_subdatasets / rst_getsubdataset.
 """
@@ -40,7 +39,6 @@ from databricks.labs.gbx.gridx.quadbin import functions as qx
 # Repo-root-relative paths for committed fixtures
 MULTIBAND = "src/test/resources/binary/geotiff-small/rgb_nir_small.tif"
 DEM = "src/test/resources/binary/elevation/dem_small.tif"
-COLOR_TABLE = "src/test/resources/binary/elevation/elevation.clr"
 SINGLE_BAND = "src/test/resources/binary/geotiff-small/nyc_sentinel2_red_small.tif"
 
 # Long filename committed under netcdf-CMIP5/
@@ -80,12 +78,6 @@ def dem_path() -> Path:
     """Absolute path to the committed DEM GeoTIFF."""
     repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
     return repo_root / DEM
-
-
-def color_table_path() -> Path:
-    """Absolute path to the committed gdaldem color table."""
-    repo_root = Path(__file__).parents[4]  # docs/tests/python/api/ → 4 levels up
-    return repo_root / COLOR_TABLE
 
 
 def multiband_path() -> Path:
@@ -397,31 +389,6 @@ def make_dem_fixture(path: "str | Path | None" = None) -> Path:
     }
     with rasterio.open(dest, "w", **profile) as ds:
         ds.write(dem, 1)
-    return dest
-
-
-def make_color_table(path: "str | Path | None" = None) -> Path:
-    """(Re)generate the committed gdaldem color table (elevation.clr).
-
-    An elevation ramp spanning the DEM fixture's 0-311 m range, consumed by
-    rst_color_relief. gdaldem format: ``elevation R G B`` per line, ``nv`` for
-    the NoData color.
-    """
-    repo_root = Path(__file__).parents[4]
-    dest = Path(path) if path else repo_root / COLOR_TABLE
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    ramp = (
-        "0 34 139 34\n"
-        "50 50 205 50\n"
-        "100 34 139 34\n"
-        "150 144 238 144\n"
-        "200 255 255 0\n"
-        "250 255 200 0\n"
-        "300 210 105 30\n"
-        "311 255 255 255\n"
-        "nv 0 0 0"
-    )
-    dest.write_text(ramp)
     return dest
 
 

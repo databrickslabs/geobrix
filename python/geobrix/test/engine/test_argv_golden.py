@@ -118,6 +118,43 @@ def test_only_the_binders_values_reach_a_formula():
             argv.build(fn, {"op": op, "value": 1.0}, props)
 
 
+def test_a_color_table_is_written_to_a_file_of_its_own_in_a_canonical_form():
+    """The table's text is checked line by line and handed to GDAL as the canonical lines: commas, tabs, comments and
+    case are normalized. A table with no `nv` line gets one (transparent for RGBA, black for RGB), because GDAL
+    colors a NoData pixel like the lowest value otherwise; the file name fills the placeholder of the argv.
+    """
+    fn = MAN.functions["gbx_rst_color_relief"]
+    table = "# ramp\n100,0,0,255\n\n 150\t0 255 0 \r\n50% RED"
+    assert argv.text_values(fn, {"color_table": table}) == [
+        "100 0 0 255\n150 0 255 0\n50% red\nnv 0 0 0\n"
+    ]
+    assert argv.text_values(fn, {"color_table": "1 0 0 0 255\nnv 9 9 9"}) == [
+        "1 0 0 0 255\nnv 9 9 9\n"
+    ]
+    assert argv.text_values(fn, {"color_table": "1 0 0 0 255"}) == [
+        "1 0 0 0 255\nnv 0 0 0 0\n"
+    ]
+    assert argv.text_values(fn, {"color_table": None}) == []
+    props = [argv.RasterProps(64, 48, 1, "Float32")]
+    got = argv.build(
+        fn,
+        {"color_table": table},
+        props,
+        ["/vsimem/r/in0.tif"],
+        "/vsimem/r/out.tif",
+        texts=["/vsimem/r/arg_0.txt"],
+    )
+    assert "--color-map=/vsimem/r/arg_0.txt" in got
+    assert argv.build(fn, {"color_table": None}, props) is None
+
+
+def test_a_malformed_color_table_names_its_first_bad_line_and_carries_a_fix():
+    fn = MAN.functions["gbx_rst_color_relief"]
+    with pytest.raises(spec.ParamError) as exc:
+        argv.text_values(fn, {"color_table": "100 0 0 255\n# c\n150 0 255"})
+    assert "line 3: '150 0 255'" in str(exc.value) and "Fix:" in str(exc.value)
+
+
 @pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
 def test_the_level_knob_reads_as_the_size_ladder_defines_it(case, monkeypatch):
     """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder."""

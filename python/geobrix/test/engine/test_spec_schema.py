@@ -399,3 +399,31 @@ def test_the_engine_core_refuses_tokens_the_spec_did_not_make(tokens, named):
         spec.guard_tokens(MAN.gdal, "raster slope", tokens)
     with pytest.raises(spec.SpecError, match="raster tile"):
         spec.guard_tokens(MAN.gdal, "raster tile", ["--unit=degree"])
+
+
+def test_a_file_argument_is_allowed_only_as_a_file_the_engine_writes():
+    """color-map is on the deny list (a path GDAL would read); a spec may bind it only through text_vsimem, and the
+    engine's check lets it through only with the placeholder of a file the engine wrote.
+    """
+    import dataclasses
+
+    fn = MAN.functions["gbx_rst_color_relief"]
+    bad = dataclasses.replace(
+        fn.gdal,
+        args=tuple(
+            dataclasses.replace(a, type="choice") if a.arg == "color-map" else a
+            for a in fn.gdal.args
+        ),
+    )
+    with pytest.raises(spec.SpecError, match="color-map"):
+        spec.validate(fn, MAN.gdal, bad)
+    spec.validate(fn, MAN.gdal)  # the shipped row binds it through text_vsimem
+    files = frozenset({"color-map"})
+    spec.guard_tokens(MAN.gdal, "raster color-map", ["--color-map=<text0>"], files)
+    for token in ("--color-map=/Volumes/c/s/v/colors.txt", "--color-map=<text0>"):
+        with pytest.raises(spec.SpecError, match="color-map"):
+            spec.guard_tokens(MAN.gdal, "raster color-map", [token])
+    with pytest.raises(spec.SpecError, match="color-map"):
+        spec.guard_tokens(
+            MAN.gdal, "raster color-map", ["--color-map=/etc/passwd"], files
+        )

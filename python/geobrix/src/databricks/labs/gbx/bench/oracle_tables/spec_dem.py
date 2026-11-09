@@ -96,38 +96,18 @@ def _file(tmpdir):
     return _tile(None, path, {"col_off": 0, "row_off": 0, "width": 64, "height": 64})
 
 
-def _colour_table(tmpdir, name, alpha):
-    """A gdaldem colour file of oracle_refs.COLOR_STOPS (and its `nv` line), RGB or RGBA."""
-    from databricks.labs.gbx.bench import oracle_refs
-
-    n = 4 if alpha else 3
-    lines = [
-        f"{e:g} " + " ".join(str(c) for c in col[:n])
-        for e, col in oracle_refs.COLOR_STOPS
-    ]
-    lines.append("nv " + " ".join(str(c) for c in oracle_refs.COLOR_NV[:n]))
-    path = os.path.join(tmpdir, name)
-    with open(path, "w") as fh:
-        fh.write("\n".join(lines) + "\n")
-    return path
-
-
-@builder("cr_table")
-def _cr_table(tmpdir):
-    return _colour_table(tmpdir, "oracle_colors.txt", False)
-
-
-@builder("cr_table_alpha")
-def _cr_table_alpha(tmpdir):
-    return _colour_table(tmpdir, "oracle_colors_alpha.txt", True)
-
-
-@builder("cr_table_missing")
-def _cr_table_missing(tmpdir):
-    return os.path.join(tmpdir, "no_such_colors.txt")
-
-
-TABLE, TABLE_A = Build("cr_table"), Build("cr_table_alpha")
+# The color tables of the color_relief rows (the function takes the table's text). `dem_3857` runs from about 90 to 160.
+_RGB = "90 255 0 0\n120 0 255 0\n160 0 0 255\nnv 10 20 30"
+_RGBA = "90 255 0 0 255\n120 0 255 0 128\n160 0 0 255 0\nnv 10 20 30 77"
+_RGB_NO_NV = "90 255 0 0\n120 0 255 0\n160 0 0 255"
+_RGBA_NO_NV = "90 255 0 0 255\n120 0 255 0 128\n160 0 0 255 0"
+# Stops that stop inside the DEM's range, so both ends clamp.
+_NARROW = "100 255 0 0\n140 0 0 255\nnv 1 2 3"
+# A share of the valid pixels' range, entries out of order, a name for each color, and a loose layout.
+_PERCENT = "0% 0 0 255\n50% 0 255 0\n100% 255 0 0\nnv 0 0 0"
+_UNSORTED = "160 0 0 255\n90 255 0 0\n120 0 255 0\nnv 0 0 0"
+_NAMED = "90 red\n120 Green\n160 blue\nnv white"
+_LOOSE = "# a ramp\n90,255,0,0\n\n  160\t0 0 255  \r\n"
 _session_dem_rows = (
     # slope: the engine's own rows (SPEC_SE) hold its edge cases; this one is the docs example.
     Case("slope_example", SL, (DEM, "degrees"), "ref", "slope", ONLY),
@@ -206,23 +186,73 @@ _session_dem_rows = (
     Case("tri_error_tile", TRI, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("tpi", TPI, (DEM,), "ref", "tpi", ONLY),
     Case("roughness", RGH, (DEM,), "ref", "roughness", ONLY),
-    # color_relief: stops, clamping outside them and the nv colour against numpy; a table with an alpha column is RGBA
-    Case("color_relief_rgb", CR, (DEM, TABLE), "ref", "color_relief_rgb", ONLY),
-    Case("color_relief_rgba", CR, (DEM, TABLE_A), "ref", "color_relief_rgba", ONLY),
-    Case("color_relief_virtual", CR, (VIRT, TABLE), "ref", "color_relief_rgb", ONLY),
-    Case("color_relief_null_tile", CR, (None, TABLE), "null", None, ONLY),
+    # color_relief: the table is text. Stops, clamping outside them and the nv color against numpy; a table with an
+    # alpha column is RGBA; a NoData pixel takes the nv color, and without one it is transparent (RGBA) or black
+    Case("color_relief_rgb", CR, (DEM, _RGB), "ref", "color_relief", ONLY),
+    Case("color_relief_rgba", CR, (DEM, _RGBA), "ref", "color_relief", ONLY),
+    Case("color_relief_clamped", CR, (DEM, _NARROW), "ref", "color_relief", ONLY),
+    Case("color_relief_named", CR, (DEM, _NAMED), "ref", "color_relief", ONLY),
+    Case("color_relief_percent", CR, (DEM, _PERCENT), "ref", "color_relief", ONLY),
+    Case("color_relief_unsorted", CR, (DEM, _UNSORTED), "ref", "color_relief", ONLY),
+    Case("color_relief_loose_layout", CR, (DEM, _LOOSE), "ref", "color_relief", ONLY),
+    Case("color_relief_hole_black", CR, (DEM, _RGB_NO_NV), "ref", "color_relief", ONLY),
+    Case(
+        "color_relief_hole_transparent",
+        CR,
+        (DEM, _RGBA_NO_NV),
+        "ref",
+        "color_relief",
+        ONLY,
+    ),
+    Case("color_relief_int16", CR, (INT16, _RGB), "ref", "color_relief", ONLY),
+    Case("color_relief_multiband", CR, (MULTI, _RGB), "ref", "color_relief", ONLY),
+    Case("color_relief_virtual", CR, (VIRT, _RGB), "ref", "color_relief", ONLY),
+    Case("color_relief_null_tile", CR, (None, _RGB), "null", None, ONLY),
     Case("color_relief_null_table", CR, (DEM, None), "null", None, ONLY),
     Case(
-        "color_relief_error_tile", CR, (ERR, TABLE), "error_tile", UPSTREAM_ERROR, ONLY
+        "color_relief_error_tile", CR, (ERR, _RGB), "error_tile", UPSTREAM_ERROR, ONLY
     ),
-    Case("color_relief_corrupt", CR, (CORRUPT, TABLE), "error_tile", None, ONLY),
-    # a colour file that does not exist raises and names the path
+    Case("color_relief_corrupt", CR, (CORRUPT, _RGB), "error_tile", None, ONLY),
+    # a table that is not a color table raises, naming the bad line (or the file path that was passed in its place)
     Case(
-        "color_relief_missing_table",
+        "color_relief_path",
         CR,
-        (DEM, Build("cr_table_missing")),
+        (DEM, "/Volumes/c/s/v/colors.txt"),
         "raises",
-        "no_such_colors",
+        "file path",
+        ONLY,
+    ),
+    Case("color_relief_empty", CR, (DEM, ""), "raises", "is empty", ONLY),
+    Case(
+        "color_relief_only_nv",
+        CR,
+        (DEM, "nv 0 0 0"),
+        "raises",
+        "no color entries",
+        ONLY,
+    ),
+    Case(
+        "color_relief_bad_line",
+        CR,
+        (DEM, "90 255 0 0\n120 0 255"),
+        "raises",
+        "line 2",
+        ONLY,
+    ),
+    Case(
+        "color_relief_unknown_name",
+        CR,
+        (DEM, "90 red\n120 pink"),
+        "raises",
+        "pink",
+        ONLY,
+    ),
+    Case(
+        "color_relief_channel_over_255",
+        CR,
+        (DEM, "90 255 0 256"),
+        "raises",
+        "line 1",
         ONLY,
     ),
 )

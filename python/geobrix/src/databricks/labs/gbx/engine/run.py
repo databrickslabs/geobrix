@@ -7,7 +7,8 @@
    ``bytes_refused_light`` class: a VRT, a label format) is named from the bytes and refused with a Fix before
    anything is opened, and any other allowed driver reads them. They are judged by the cap and budget from their
    header, and only then translated to ``in<i>.tif`` (GTiff, no other option); the source goes before the run.
-2. The argv is bound (``argv.build``) and checked; the algorithm is instantiated (single use), parsed, run and
+2. The text arguments (a color table) are checked and written to ``arg_<k>.txt`` under the call's prefix; the argv is
+   bound (``argv.build``) and checked; the algorithm is instantiated (single use), parsed, run and
    finalized; the output is read from ``/vsimem``.
 3. Every file under the call's prefix is removed, whatever happened.
 
@@ -490,7 +491,15 @@ def run(
                 )
             for i, src in sources.items():
                 _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
-            tokens = argv_mod.build(fn, values, props, names, out, section)
+            # the texts of the call's text arguments (a color table) are files of their own under the prefix
+            texts = argv_mod.text_values(fn, values)
+            text_names = [f"{prefix}/arg_{k}.txt" for k in range(len(texts))]
+            for k, (name, text) in enumerate(zip(text_names, texts)):
+                gdal.FileFromMemBuffer(name, text.encode("utf-8"))
+                shown[name] = f"<text{k}>"
+            tokens = argv_mod.build(
+                fn, values, props, names, out, section, texts=text_names
+            )
             if tokens is None:
                 return None
             command = _shown(" ".join([block.alg] + tokens), shown)

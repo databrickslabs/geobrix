@@ -185,9 +185,11 @@ These changes affect callers that pass keywords or named arguments.
   - The light extras `light_env5`, `light_env6`, `light_dbr17`, `light_dbr18`, `light_dbr19` and their `_all` forms.
   - The GPU extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all`.
   - See [Installation](./installation#whl-only).
-- **`[overture]` and `[earthdata]` are not on the env wheels.** Each changes further preinstalled packages. Install these as a separate step after the wheel:
+- **`[models]`, `[photogrammetry]`, `[overture]` and `[earthdata]` are not extras in 0.6.0.** Install their packages as a separate step after the env wheel. See [Installation](./installation#whl-only).
   - `overturemaps` (raises `click` and `tqdm`).
   - `earthaccess` (raises `fsspec`).
+  - `pycolmap`, or `pycolmap-cuda12` on the GPU runtime.
+  - `torch`, `torchvision`, `segment-geospatial` and `opencv-python-headless` for GeoSAM.
 - **`[vizx]` no longer installs a second GDAL.** It no longer installs PyPI's `rasterio`, `pyogrio`, `pyproj` and `shapely` (about 265 MB). It no longer moves `click` (Graviton, DBR 19) or `psutil` (DBR 17.3 / 18, environment 5).
 - **`requests` on Serverless environment 5 and DBR 17.3 / 18.** These runtimes ship `requests` 2.32.3, which can send `~/.netrc` credentials to another host (CVE-2024-47081).
   - The env5 wheel's `[stac]` and `[vizx]` require 2.32.4 or later, below 2.33. Installing either upgrades `requests`.
@@ -1055,7 +1057,7 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
   - GeoBrix reads cloud storage with `obstore` and adds no `fsspec`, `s3fs` or `gcsfs`.
   - See [Zarr Stores](./api/zarr-stores#what-you-need).
 - **LiDAR stack.** The lightweight tier takes `laspy` 2.7 with `lazrs` 0.8 (bumped together).
-- **Newer minimums.** `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and the `overture` extra `overturemaps` 1.0.2 or later. None is preinstalled on a supported runtime. The `overture` extra still raises `click` and `tqdm` on install.
+- **Newer minimums.** `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and and `overturemaps` 1.0.2 or later (a separate install). None is preinstalled on a supported runtime. `overturemaps` still raises `click` and `tqdm` on install.
 - **`rio-tiler` imports on Serverless environment 5 and DBR 17.3 / 18 (fix).** `rio-tiler` 9.x needs `typing_extensions` 4.13 or later. Those runtimes ship 4.12.2, so `import rio_tiler` failed with a `TypeError`.
   - The lightweight `rst_tilexyz` and `rst_xyzpyramid` fell back to the rasterio renderer.
   - `pmtiles_gbx` with `source="raster"` could not render tiles.
@@ -1068,13 +1070,12 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
   - Databricks may show its one-time "a core package changed" notice.
   - A `%pip` install restarts Python on Databricks, so the new versions are in effect afterwards.
   - See [Installation](./installation).
-- **Photogrammetry extras.** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
+- **Photogrammetry packages.** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The env 5 and 6 wheels ship GDAL's own Python bindings.** `xarray-spatial`, `numba` and `rio-cogeo` are no longer installed.
   - `osgeo` and `osgeo_utils` are built from the same GDAL as the wheel's `rasterio`. `from osgeo import gdal` and `rasterio` share one GDAL in a process.
   - `osgeo_utils` comes without `gdal_merge` and `gdal2tiles`, which carry code under other licences.
   - GDAL's viewshed and COG driver replace `xarray-spatial` and `rio-cogeo`. `rst_cog_convert` takes the same profile names.
   - GeoBrix now installs `xarray` itself.
-  - The `photogrammetry` extras no longer list `rio-cogeo`, `folium`, `pymbtiles` or `mercantile`. Nothing in them used these.
 - **JAR contents.** The GeoBrix JAR no longer bundles the Scala standard library (Databricks Runtime provides it) or `proj4j` (unused). It bundles `h3` 3.7.3, the version DBR 17.3, 18 and 19 ship. Nothing changes for users.
 
 ## Examples {#examples}

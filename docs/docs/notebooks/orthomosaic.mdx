@@ -55,7 +55,7 @@ present (dense if `01b` ran, else sparse).
 
 **`03_segment` (optional) turns the published COG into objects AND a land-cover map.** It
 installs its own dependencies: `geobrix[vizx]` on the env6 wheel, then the GeoSAM GPU packages as a separate step.
-It does not use `photogrammetry`, because its **instance-objects** section needs GeoSAM's
+It does not need `pycolmap`, because its **instance-objects** section needs GeoSAM's
 `torch`/`segment-geospatial`, not `pycolmap`. That section runs on the **Serverless GPU AI Runtime**
 (environment 6). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and
 needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any time after
@@ -357,7 +357,7 @@ dense pass, not bespoke notebook code — it lives in `databricks.labs.gbx.raste
 tested library module. The module imports with **no optional
 dependency** at all. `pycolmap` is imported lazily, inside `run_sfm`'s master-DB-assembly
 and mapping stage only. It raises a clear `ImportError` there if missing. Install the
-`photogrammetry` extra to run reconstruction.
+`pycolmap` package, as a separate `%pip` step after the env wheel, to run reconstruction.
 
 ### `run_sfm` — distributed sparse SfM for one group of images
 
@@ -472,8 +472,8 @@ called with `gps_tf=None`) is plain NumPy and imports with no optional dependenc
 orchestration functions that actually drive a dense reconstruction
 (`place_clusters_shared_enu`, `dense_clusters_to_products`, `dense_reconstruct_clusters`,
 `dense_orthomosaic`) import `pycolmap` lazily, directly or through the primitives they
-call. They raise a clear `ImportError` when it is missing. Install the `photogrammetry`
-extra to use them.
+call. They raise a clear `ImportError` when it is missing. Install `pycolmap`
+as a separate `%pip` step after the env wheel to use them.
 
 ### `dense_orthomosaic` — dense orthomosaic in one call
 
@@ -517,7 +517,7 @@ keeps fused point clouds local under `work_root` with no Volume copy. `force=Tru
 the checkpoint. It raises `RuntimeError` when every cluster's reconstruction failed (no
 points to place) rather than calling `dense_clusters_to_products` with nothing. Returns
 `(used_cids, path_to_dense_merged_laz)` — the same shape as `dense_clusters_to_products`.
-Requires the `photogrammetry` extra (`pycolmap`).
+Requires `pycolmap`, installed as a separate `%pip` step.
 
 ### `dense_reconstruct_clusters` — reconstruction only
 
@@ -586,8 +586,8 @@ It returns the list of cluster ids that produced usable points and the path to t
 LAZ. If the merge step is skipped because the cloud exceeds the merge memory budget,
 it returns the directory of sharded parts instead. The `lidar_gbx` reader can still read
 that directory of parts. `spark` is an explicit parameter, not a notebook global, so the
-function can be called from any context holding a session. Requires the `photogrammetry`
-extra (`pycolmap`).
+function can be called from any context holding a session. Requires `pycolmap`, installed
+as a separate `%pip` step.
 
 ### `place_clusters_shared_enu` — shared-frame alignment
 

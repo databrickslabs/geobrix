@@ -82,9 +82,9 @@ that works there:
 `geobrix[stac]@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>+env6-py3-none-any.whl`.
 
 On env 6 the STAC extra upgrades `requests` from the image's 2.32.5 to 2.34.2 or later. The
-sample-data downloaders and the other opt-in extras (`[overture]`, `[earthdata]`,
-`[photogrammetry]` and `[models]`) are not in the image either. They install the same way, with the
-extra's name in place of `stac`.
+sample-data downloaders and their packages are not in the image either. These are `overturemaps`,
+`earthaccess`, `pycolmap` and, for GeoSAM, `segment-geospatial`. They are not extras of the wheel. Install each as a
+separate `%pip` step after the wheel, as the [Installation](../installation#whl-only) page describes.
 
 The Dockerfile that builds each release's image is attached to the
 [GitHub release](https://github.com/databrickslabs/geobrix/releases) as

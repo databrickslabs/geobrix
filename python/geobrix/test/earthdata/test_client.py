@@ -156,6 +156,8 @@ def test_missing_earthaccess_names_the_package_and_separate_step(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     from databricks.labs.gbx.earthdata.client import EarthdataClient
 
-    with pytest.raises(ImportError, match=r"separate step.*pip install 'earthaccess") as exc:
+    with pytest.raises(
+        ImportError, match=r"separate step.*pip install 'earthaccess"
+    ) as exc:
         EarthdataClient()._ea()  # accessor that imports earthaccess
     assert "geobrix[earthdata]" not in str(exc.value)  # the extra no longer exists

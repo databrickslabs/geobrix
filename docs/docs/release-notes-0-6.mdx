@@ -256,6 +256,7 @@ These changes affect callers that pass keywords or named arguments.
 
 - **Lightweight CRS lookups work on the driver of a standard-access cluster (fix).** On DBR 19, functions that resolve a CRS on the driver, such as `gbx_zarr_sample`, failed with `Cannot find proj.db`. GeoBrix now uses its bundled PROJ data when the `PROJ_DATA` that is set holds no readable `proj.db`.
 - **Raster CRS transforms work after `register_proj_grids` (fix).** GeoBrix points `PROJ_DATA` at one directory that combines the PROJ data and the registered grids. See [Registering custom grid files](./api/coordinate-reference-systems#registering-custom-grid-files).
+- **The JVM engine takes a `PROJ_DATA` of several directories (fix).** GDAL read a colon-separated `spark.gdal.PROJ_DATA` as one directory, so EPSG codes did not resolve. Grids registered while queries ran could also make `gbx_rst_srid` NULL on some rows.
 - **British National Grid transforms use OSTN15 (behavior change).** The env wheels ship Ordnance Survey's OSTN15 grid. Transforms between EPSG:27700 and WGS 84 or ETRS89 use it instead of PROJ's Helmert approximation.
   - Results are within millimetres of Ordnance Survey's test points.
   - Results differ from earlier values by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.

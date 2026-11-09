@@ -18,6 +18,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.{Files, Paths}
 import java.util.UUID
+import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
 /** End-to-end functional proof that a registered custom PROJ grid is actually
@@ -211,14 +212,13 @@ class RegisteredProjGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         // (ProjGridRegistry.set -> ExpressionConfig.apply fold -> configureGDAL prepend). Assert
         // the grid dir landed on PROJ_DATA/PROJ_LIB, ahead of the stock dir — Task 8's prepend,
         // verified end-to-end in a live session (not just the unit-level GDALManagerProjGridsSpec).
-        val projData = gdal.GetConfigOption("PROJ_DATA")
+        val path = Option(org.gdal.osr.osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)
         // the stock dir is the loaded GDAL's: the payload's share/proj (its JNI, or /usr/lib/libgdalalljni.so linked
         // into a payload, as in the dev container), else the system PROJ's /usr/share/proj
         val stock = GDALManager.ensureJniLoaded(None).projData.getOrElse("/usr/share/proj")
-        projData should include(gridDir)
-        projData should include(stock)
-        projData.indexOf(gridDir) should be < projData.indexOf(stock)
-        gdal.GetConfigOption("PROJ_LIB") should include(gridDir)
+        path should contain(gridDir)
+        path should contain(stock)
+        path.indexOf(gridDir) should be < path.indexOf(stock)
     }
 
     test("heavy vector ST_TransformCrs applies the grid — cross-tier parity with light", RequiresProjIsolation) {

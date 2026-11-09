@@ -8,6 +8,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.{Files, Paths}
+import java.util.concurrent.atomic.AtomicBoolean
+import scala.jdk.CollectionConverters._
 import scala.util.Try
 
 class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
@@ -16,28 +18,38 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
     // linked into a payload, as in the dev container), else the system PROJ's /usr/share/proj.
     private def baseProjDir: String = GDALManager.ensureJniLoaded(None).projData.getOrElse("/usr/share/proj")
 
+    /** The search path GDAL hands each thread's PROJ context. */
+    private def searchPath(): Seq[String] = Option(osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)
+
+    /** ImportFromEPSG's result for `code` on a new thread: a new PROJ context, which opens proj.db at its first use. */
+    private def epsgOnNewThread(code: Int): Int = {
+        var out = -1
+        val t = new Thread(() => {
+            val sr = new SpatialReference()
+            try out = Try(sr.ImportFromEPSG(code)).getOrElse(-99) finally sr.delete()
+        })
+        t.start()
+        t.join()
+        out
+    }
+
     override def beforeAll(): Unit = {
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp")
         gdal.AllRegister()
     }
 
-    test("configureGDAL prepends PROJ_GRID_DIRS to PROJ_DATA and PROJ_LIB when key is present") {
+    test("configureGDAL prepends PROJ_GRID_DIRS to the PROJ search path when key is present") {
         val config = ExpressionConfig(
           Map("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> "/Volumes/a:/Volumes/b"),
           null
         )
         try {
             GDALManager.configureGDAL(config)
-            val projData = gdal.GetConfigOption("PROJ_DATA")
-            projData should include("/Volumes/a")
-            projData should include("/Volumes/b")
-            // The GDAL's own PROJ dir must still be present
-            projData should include(baseProjDir)
-            // User dirs must appear before it
-            projData.indexOf("/Volumes/a") should be < projData.indexOf(baseProjDir)
-            // PROJ_LIB (legacy alias) must also carry the prepended value
-            gdal.GetConfigOption("PROJ_LIB") should include("/Volumes/a")
+            // the user dirs, then the GDAL's own PROJ dir
+            searchPath() shouldBe Seq("/Volumes/a", "/Volumes/b", baseProjDir)
+            // PROJ_DATA and PROJ_LIB (legacy alias) name the one dir with proj.db: GDAL makes either one search-path entry
+            Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) shouldBe baseProjDir)
         } finally {
             gdal.SetConfigOption("PROJ_DATA", null)
             GDALManager.configureGDAL("/tmp", "/tmp")
@@ -94,7 +106,44 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
         ct.get.TransformPoint(0.0, 51.5)(1) shouldBe (51.5 + 30.0 / 3600.0 +- 1e-6)
         // a base reset keeps the applied grid dirs on the search path
         GDALManager.configureGDAL("/tmp", "/tmp")
-        Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) should include(dir.toString))
+        searchPath() should contain(dir.toString)
+    }
+
+    test("re-applying a PROJ path of several directories never leaves a new thread without PROJ's database") {
+        // GDAL makes a PROJ_DATA or PROJ_LIB config option ONE search-path entry: a colon-joined value set while other
+        // threads run is a path on which a new PROJ context finds no proj.db (an EPSG code does not resolve)
+        val grid = Files.createTempDirectory("gbx_path_grids").toString
+        GDALManager.init(ExpressionConfig(Map("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> grid), null))
+        val stop = new AtomicBoolean(false)
+        // a recovery on another thread, as a Spark task whose PROJ context lost its database runs one
+        val writer = new Thread(() => while (!stop.get()) GDALManager.recoverProjData())
+        writer.start()
+        val failed =
+            try (1 to 300).map(_ => epsgOnNewThread(27700)).count(_ != 0)
+            finally { stop.set(true); writer.join() }
+        failed shouldBe 0
+        searchPath() should contain inOrder (grid, baseProjDir)
+        Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) shouldBe baseProjDir)
+    }
+
+    test("a user's PROJ_DATA of several directories is a search path, not one directory") {
+        val user = Files.createTempDirectory("gbx_user_proj").toString
+        try {
+            GDALManager.configureGDAL(ExpressionConfig(Map("spark.gdal.PROJ_DATA" -> s"$user:$baseProjDir"), null))
+            searchPath() shouldBe Seq(user, baseProjDir)
+            epsgOnNewThread(2154) shouldBe 0
+        } finally GDALManager.configureGDAL("/tmp", "/tmp")
+        searchPath() should not contain user
+    }
+
+    test("a search-path directory that is gone does not keep PROJ from its database") {
+        val gone = Files.createTempDirectory("gbx_gone_dir")
+        Files.delete(gone)
+        val before = searchPath()
+        try {
+            osr.SetPROJSearchPaths(new java.util.Vector[String](Seq(gone.toString, baseProjDir).asJava))
+            epsgOnNewThread(3857) shouldBe 0
+        } finally osr.SetPROJSearchPaths(new java.util.Vector[String](before.asJava))
     }
 
 }

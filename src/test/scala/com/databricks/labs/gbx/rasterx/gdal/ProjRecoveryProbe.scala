@@ -7,17 +7,18 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
-import org.gdal.osr.SpatialReference
+import org.gdal.osr.{SpatialReference, osr}
 
 import java.io.File
 import java.nio.file.{Files, Paths}
 import java.util.concurrent.{Callable, Executors, TimeUnit}
+import scala.jdk.CollectionConverters._
 
 /** A child JVM of [[GDALManagerStaleNativeDirTest]]: loads GDAL in place from the native directory `args(0)` with the
   * user's `spark.gdal.PROJ_DATA` naming `args(2)` before the payload's PROJ data, names the byte-identical payload
   * `args(1)`, then removes the first payload's `share/proj` and reads an EPSG:27700 GeoTIFF's srid on a new thread
-  * through [[ProjDatabase.guarded]], as `gbx_rst_srid` does. Prints `PRE=`, `GONE=`, `SRID=`, `PROJ_DATA=`, `LOADED=`
-  * (the loaded choice's PROJ data) and `DONE`.
+  * through [[ProjDatabase.guarded]], as `gbx_rst_srid` does. Prints `PRE=`, `GONE=`, `SRID=`, `PROJ_DATA=`, `PATH=`
+  * (PROJ's search path), `LOADED=` (the loaded choice's PROJ data) and `DONE`.
   */
 object ProjRecoveryProbe {
 
@@ -58,6 +59,7 @@ object ProjRecoveryProbe {
         println(s"GONE=${!Files.exists(Paths.get(firstProj, "proj.db"))}")
         println(s"SRID=${onNewThread(ProjDatabase.guarded(() => srid(path))(_ == 0).toString)}")
         println(s"PROJ_DATA=${Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("<unset>")}")
+        println(s"PATH=${Option(osr.GetPROJSearchPaths()).map(_.asScala.mkString(":")).getOrElse("<unset>")}")
         println(s"LOADED=${GDALManager.ensureJniLoaded(None).projData.getOrElse("<none>")}")
         println("DONE")
     }

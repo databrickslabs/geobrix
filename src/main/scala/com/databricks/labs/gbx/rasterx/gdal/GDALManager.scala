@@ -80,6 +80,9 @@ object GDALManager extends Logging {
     @volatile private var sameAsLoaded: Set[String] = Set.empty
     // PROJ grid directories already on the PROJ search path, in the order applied (a union: none is dropped)
     @volatile private var appliedGridDirs: Seq[String] = Nil
+    // the PROJ search path this JVM applied with OSRSetPROJSearchPaths, in order (Nil: none since the last reset, and
+    // PROJ_DATA names the one directory PROJ searches)
+    @volatile private var projPath: Seq[String] = Nil
     private val lock = new Object
 
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
@@ -259,7 +262,7 @@ object GDALManager extends Logging {
             } else {
                 val fresh = gridDirs(config).filterNot(appliedGridDirs.contains)
                 if (fresh.nonEmpty) {
-                    val current = Option(gdal.GetConfigOption("PROJ_DATA")).map(_.split(":").toSeq).getOrElse(Seq(baseProjData))
+                    val current = Some(projSearchPath()).filter(_.nonEmpty).getOrElse(Seq(baseProjData))
                     setProjSearchPath((fresh ++ appliedGridDirs ++ current).distinct)
                     appliedGridDirs = appliedGridDirs ++ fresh
                     logInfo(s"PROJ grid directories added to the search path: ${fresh.mkString(", ")}")
@@ -280,7 +283,7 @@ object GDALManager extends Logging {
       * reopens it. When the loaded payload's `proj.db` is gone (an executor outlives the Python environment it loaded
       * GDAL from) and another directory this JVM has seen holds the same JNI and a `proj.db`, its data directories
       * replace the removed ones, as [[laterNative]] does when the loaded JNI itself is gone. Any other directory
-      * PROJ_DATA names (a user's `spark.gdal.PROJ_DATA`) stays on the path, after the grid directories.
+      * on the search path (a user's `spark.gdal.PROJ_DATA`) stays on it, after the grid directories.
       */
     def recoverProjData(): Seq[String] =
         lock.synchronized {
@@ -300,21 +303,42 @@ object GDALManager extends Logging {
             dirs
         }
 
-    /** The PROJ search path to apply again: the grid directories, then every other directory PROJ_DATA names now (a
+    /** The PROJ search path to apply again: the grid directories, then every other directory on the path now (a
       * user's `spark.gdal.PROJ_DATA`) except `replaced` (a payload's PROJ data this JVM no longer uses), then the base. */
     private def projPathKeeping(replaced: Option[String]): Seq[String] = {
-        val current = Option(gdal.GetConfigOption("PROJ_DATA")).toSeq.flatMap(_.split(":")).map(_.trim).filter(_.nonEmpty)
-        val others = current.filterNot(d => appliedGridDirs.contains(d) || replaced.contains(d) || d == baseProjData)
+        val others = projSearchPath().filterNot(d => appliedGridDirs.contains(d) || replaced.contains(d) || d == baseProjData)
         (appliedGridDirs ++ others :+ baseProjData).distinct
     }
 
-    /** PROJ_DATA/PROJ_LIB for GDAL, and OSRSetPROJSearchPaths, which reaches PROJ contexts that already exist. */
+    /** The directories PROJ searches as this JVM set them: the path applied by [[setProjSearchPath]], else the
+      * directory PROJ_DATA names. */
+    private def projSearchPath(): Seq[String] =
+        if (projPath.nonEmpty) projPath else splitDirs(Option(gdal.GetConfigOption("PROJ_DATA")))
+
+    private def splitDirs(value: Option[String]): Seq[String] =
+        value.toSeq.flatMap(_.split(":")).map(_.trim).filter(_.nonEmpty)
+
+    /**
+      * PROJ's search path, `dirs` in order: OSRSetPROJSearchPaths, which every thread's PROJ context takes at its next
+      * use. PROJ_DATA and PROJ_LIB name ONE directory, the first of `dirs` that holds `proj.db`: GDAL turns either
+      * config option, when set, into a one-entry search path, so a colon-joined value is one directory to PROJ, with no
+      * `proj.db` in it. Set while other threads run (an init that brings grid directories, a recovery), it left every
+      * PROJ context that opened its database in that moment without one: an EPSG code did not resolve and a GeoTIFF's
+      * CRS lost its authority (a NULL srid). The options change only when that directory does, before the path, so a
+      * thread that takes the path in between gets a directory that holds `proj.db`. A directory that is gone stays on
+      * the path: PROJ skips it, and a grid directory on a Volume may be back by the next lookup.
+      */
     private def setProjSearchPath(dirs: Seq[String]): Unit = {
-        gdal.SetConfigOption("PROJ_DATA", dirs.mkString(":"))
-        gdal.SetConfigOption("PROJ_LIB", dirs.mkString(":")) // legacy alias PROJ still honors
-        org.gdal.osr.osr.SetPROJSearchPaths(new java.util.Vector[String](dirs.asJava))
-        // a thread's cached "PROJ reads its database" no longer holds for the new path
-        com.databricks.labs.gbx.operations.ProjDatabase.invalidate()
+        val path = dirs.map(_.trim).filter(_.nonEmpty).distinct
+        if (path.nonEmpty) {
+            val db = path.find(d => Files.isReadable(Paths.get(d, "proj.db"))).getOrElse(path.last)
+            // PROJ_LIB is the legacy alias PROJ still honors
+            Seq("PROJ_DATA", "PROJ_LIB").foreach(k => if (gdal.GetConfigOption(k) != db) gdal.SetConfigOption(k, db))
+            org.gdal.osr.osr.SetPROJSearchPaths(new java.util.Vector[String](path.asJava))
+            projPath = path
+            // a thread's cached "PROJ reads its database" no longer holds for the new path
+            com.databricks.labs.gbx.operations.ProjDatabase.invalidate()
+        }
     }
 
     /**
@@ -379,31 +403,34 @@ object GDALManager extends Logging {
       * [[com.databricks.labs.gbx.expressions.ExpressionConfig.apply]] from
       * [[com.databricks.labs.gbx.operations.ProjGridRegistry]]) is handled separately:
       * it is EXCLUDED from the generic SetConfigOption loop (which would produce a bogus
-      * `PROJ_GRID_DIRS` GDAL option) and instead used to PREPEND to `PROJ_DATA`/`PROJ_LIB`
-      * so the in-JVM GDAL PROJ search path is extended.
+      * `PROJ_GRID_DIRS` GDAL option) and instead PREPENDED to the in-JVM PROJ search path.
+      * A user's `PROJ_DATA` / `PROJ_LIB` (colon-separated directories) is applied as that
+      * search path too, never as the raw option ([[setProjSearchPath]] says why).
       *
       * `gdal.Warp()` in [[com.databricks.labs.gbx.rasterx.operator.GDALWarp]] is the in-JVM
-      * GDAL Java API — not a subprocess — so SetConfigOption("PROJ_DATA", …) reaches it
-      * directly; no child-process environment patching is needed for the warp/transform path.
+      * GDAL Java API — not a subprocess — so the search path reaches it directly; no
+      * child-process environment patching is needed for the warp/transform path.
       */
     def configureGDAL(config: ExpressionConfig): Unit = {
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")
         configureGDAL(CPL_TMPDIR, GDAL_PAM_PROXY_DIR)
-        // Apply GDAL config options; skip PROJ_GRID_DIRS (synthetic GeoBrix key, handled below).
-        config.getGDALConfig.foreach { case (key, value) =>
-            val gdalKey = key
-                .stripPrefix("spark.databricks.labs.gbx.gdal.")
-                .stripPrefix("spark.gdal.")
-            if (gdalKey != "PROJ_GRID_DIRS") gdal.SetConfigOption(gdalKey, value)
+        val gdalConf = config.getGDALConfig.map { case (key, value) =>
+            key.stripPrefix("spark.databricks.labs.gbx.gdal.").stripPrefix("spark.gdal.") -> value
+        }
+        // Apply GDAL config options; skip PROJ_GRID_DIRS (synthetic GeoBrix key) and the PROJ data directories, which
+        // become the search path below.
+        gdalConf.foreach { case (gdalKey, value) =>
+            if (gdalKey != "PROJ_GRID_DIRS" && !ProjDirKeys.contains(gdalKey)) gdal.SetConfigOption(gdalKey, value)
         }
         // The policy's settings win over the spark.gdal.* conf just applied, unless the documented switch is off.
         applyDriverPolicy()
-        // Prepend user-supplied PROJ grid dirs to the in-JVM PROJ search path.
+        // User-supplied PROJ grid dirs go ahead of the user's PROJ data directories, else of the GDAL's own.
         val dirs = gridDirs(config)
-        if (dirs.nonEmpty) {
-            val existing = Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("/usr/share/proj")
-            setProjSearchPath((dirs ++ existing.split(":")).distinct)
+        val user = ProjDirKeys.iterator.map(k => splitDirs(gdalConf.collectFirst { case (`k`, v) => v })).find(_.nonEmpty)
+        if (dirs.nonEmpty || user.isDefined) {
+            val rest = user.orElse(Some(projSearchPath()).filter(_.nonEmpty)).getOrElse(Seq("/usr/share/proj"))
+            setProjSearchPath((dirs ++ rest).distinct)
         }
         // The payload's curl has no compiled-in CA path: GDAL gets the system store, unless the user named a bundle
         // (GDAL reads these three as config options or environment variables, in this order). This is _rules.py's
@@ -417,6 +444,9 @@ object GDALManager extends Logging {
         }
     }
 
+    // PROJ's data directories as GDAL config options (PROJ_LIB is the legacy alias), in the order a user's value is read
+    private val ProjDirKeys = Seq("PROJ_DATA", "PROJ_LIB")
+
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
                       logCPL: Boolean = false): Unit = {
         // Must be set BEFORE gdal.AllRegister() in init; skipped drivers are never registered. Refused drivers are
@@ -424,6 +454,7 @@ object GDALManager extends Logging {
         applyDriverPolicy()
         // PROJ and GDAL data: the loaded payload's, else the system PROJ's data dir (the system GDAL finds GDAL_DATA).
         val choice = loaded.getOrElse(NativeChoice(LegacyJni, None, None))
+        projPath = Nil // the options below are the path again
         if (choice.projData.isEmpty) gdal.SetConfigOption("PROJ_LIB", "/usr/share/proj")
         applyNativeData(choice)
         // a reset keeps the PROJ grid directories already applied in this JVM (a union: none is dropped)
@@ -751,7 +782,7 @@ object GDALManager extends Logging {
       * ones. GDAL fixes its GDAL_DATA directory at its first file lookup, so the option alone would not move it:
       * clearing the finder makes the next lookup read the option again. PROJ is set once and last (the grid directories
       * included), so that no PROJ context is created in between with the base directory alone. `replaced` is the PROJ
-      * data directory `c` replaces; any other directory PROJ_DATA names stays. */
+      * data directory `c` replaces; any other directory on the search path stays. */
     private def adoptNativeData(c: NativeChoice, replaced: Option[String]): Unit = {
         c.gdalData.foreach(gdal.SetConfigOption("GDAL_DATA", _))
         gdal.FinderClean()

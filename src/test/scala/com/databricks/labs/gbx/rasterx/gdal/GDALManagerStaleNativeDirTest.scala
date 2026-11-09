@@ -105,10 +105,12 @@ class GDALManagerStaleNativeDirTest extends AnyFunSuite {
         assert(out("PRE") == "27700", s"srid before the delete: ${out("PRE")}")
         assert(out("GONE") == "true", "the first payload's proj.db is still there")
         assert(out("SRID") == "27700", s"srid after the first payload's proj.db is gone: ${out("SRID")}")
-        val dirs = out("PROJ_DATA").split(":").toSeq
-        assert(dirs.contains(user.toString), s"the user's PROJ_DATA directory was dropped: ${out("PROJ_DATA")}")
-        assert(dirs.contains(s"$second/../share/proj"), s"PROJ_DATA did not move to the later payload: ${out("PROJ_DATA")}")
-        assert(!dirs.contains(s"$first/../share/proj"), s"PROJ_DATA still names the removed data: ${out("PROJ_DATA")}")
+        // the search path PROJ reads; PROJ_DATA names its one directory with proj.db
+        val dirs = out("PATH").split(":").toSeq
+        assert(dirs.contains(user.toString), s"the user's PROJ_DATA directory was dropped: ${out("PATH")}")
+        assert(dirs.contains(s"$second/../share/proj"), s"PROJ did not move to the later payload: ${out("PATH")}")
+        assert(!dirs.contains(s"$first/../share/proj"), s"PROJ still names the removed data: ${out("PATH")}")
+        assert(out("PROJ_DATA") == s"$second/../share/proj", s"PROJ_DATA: ${out("PROJ_DATA")}")
         assert(out("LOADED") == s"$second/../share/proj", s"the loaded choice did not move: ${out("LOADED")}")
     }
 

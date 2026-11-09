@@ -6,6 +6,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.concurrent.{Callable, Executors, TimeUnit}
 import scala.io.Source
@@ -103,6 +104,54 @@ class NativeCopyTest extends AnyFunSuite {
         val Left(gone) = NativeCopy.stabilize(c, empty, id, sha)
         assert(gone.contains("changed or was removed") && gone.contains("Fix:"), gone)
         assert(entries(empty) == Set(".gbx-copy.lock"), "a refused copy left a directory")
+    }
+
+    test("a done copy with a planted or altered library, or a payload that changed, is made again") {
+        val (_, dir, c) = payload()
+        val root = Files.createTempDirectory("gbx_copies")
+        val id = sha(Paths.get(c.jni))
+        val Right(copy) = NativeCopy.stabilize(c, root, id, sha)
+        val lib = Paths.get(copy.jni).getParent
+        // a library planted next to the JNI, where its RUNPATH would find it
+        Files.write(lib.resolve("libevil.so.1"), "evil".getBytes(StandardCharsets.UTF_8))
+        assert(NativeCopy.stabilize(c, root, id, sha) == Right(copy))
+        assert(!Files.exists(lib.resolve("libevil.so.1")), "a planted library was kept")
+        // a library of the copy altered in place, its size kept
+        Files.write(lib.resolve("libgdal-0000.so.39"), "evil".getBytes(StandardCharsets.UTF_8))
+        assert(NativeCopy.stabilize(c, root, id, sha) == Right(copy))
+        assert(new String(Files.readAllBytes(lib.resolve("libgdal-0000.so.39")), StandardCharsets.UTF_8) == "gdal")
+        // the payload's data changed while the copy stood: the copy takes the new bytes
+        Files.write(dir.resolve("../share/proj/proj.db"), "db2".getBytes(StandardCharsets.UTF_8))
+        assert(NativeCopy.stabilize(c, root, id, sha) == Right(copy))
+        assert(new String(Files.readAllBytes(Paths.get(copy.projData.get, "proj.db")), StandardCharsets.UTF_8) == "db2")
+        // a link in the copy (none is made: the copy follows the payload's links)
+        Files.createSymbolicLink(lib.resolve("liblink.so"), Paths.get("/etc/hostname"))
+        assert(NativeCopy.stabilize(c, root, id, sha) == Right(copy))
+        assert(!Files.exists(lib.resolve("liblink.so"), java.nio.file.LinkOption.NOFOLLOW_LINKS))
+        assert(entries(root) == Set(NativeCopy.keyFor(id).get, ".gbx-copy.lock"))
+    }
+
+    test("a root another user could write is refused, so the JVM loads in place; a new root is owner-only") {
+        val (_, _, c) = payload()
+        val id = sha(Paths.get(c.jni))
+        val open = Files.createTempDirectory("gbx_copies")
+        Files.setPosixFilePermissions(open, PosixFilePermissions.fromString("rwxrwx---"))
+        val e = intercept[NativeCopy.UnsafeCopyRoot](NativeCopy.stabilize(c, open, id, sha))
+        assert(e.getMessage.contains("writable by its group or other users"), e.getMessage)
+        assert(entries(open).isEmpty, "a refused root was written")
+        // the caller (GDALManager) loads in place on any IOException
+        assert(e.isInstanceOf[java.io.IOException])
+        // a root under a directory other users can write (not sticky) is refused before it is made
+        Files.setPosixFilePermissions(open, PosixFilePermissions.fromString("rwxrwxrwx"))
+        intercept[NativeCopy.UnsafeCopyRoot](NativeCopy.stabilize(c, open.resolve("copies"), id, sha))
+        assert(!Files.exists(open.resolve("copies")))
+        // a root made here is 0700, and so is each copy
+        val made = Files.createTempDirectory("gbx_copies").resolve("a/b")
+        val Right(copy) = NativeCopy.stabilize(c, made, id, sha)
+        assert(PosixFilePermissions.toString(Files.getPosixFilePermissions(made)) == "rwx------")
+        val key = made.resolve(NativeCopy.keyFor(id).get)
+        assert(PosixFilePermissions.toString(Files.getPosixFilePermissions(key)) == "rwx------")
+        assert(copy.jni.startsWith(key.toString))
     }
 
     test("concurrent initialisers, threads and JVMs, make one copy") {

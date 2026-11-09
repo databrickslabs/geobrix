@@ -59,6 +59,17 @@ class GDALManagerNodeCopyTest extends AnyFunSuite {
         Seq("proj", "gdal").foreach(n => copyTree(staged.get.resolve(s"share/$n"), wheel.resolve(s"_native/share/$n")))
         val copies = Files.createTempDirectory("gbx_copies")
         try {
+            // the copy and its reuse on this payload, timed: a reuse checks every file's sha256 (the probe reuses it)
+            val c = GDALManager.NativeChoice(s"$dir/lib/$Jni", Some(s"$dir/../share/proj"), Some(s"$dir/../share/gdal"))
+            val id = NativeCopy.sha256(Paths.get(c.jni))
+            val t0 = System.nanoTime()
+            assert(NativeCopy.stabilize(c, copies, id, NativeCopy.sha256).isRight)
+            val t1 = System.nanoTime()
+            assert(NativeCopy.stabilize(c, copies, id, NativeCopy.sha256).isRight)
+            val t2 = System.nanoTime()
+            val timing = f"NODE_COPY copy ${(t1 - t0) / 1e6}%.0f ms, reuse (verify) ${(t2 - t1) / 1e6}%.0f ms"
+            println(timing)
+            info(timing)
             val java = new File(System.getProperty("java.home"), "bin/java").getPath
             // a library path with no GDAL JNI (the system's would be another GDAL): GDAL's Java classes bind the JNI the
             // manager loads, from the copy

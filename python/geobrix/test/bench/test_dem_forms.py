@@ -1,4 +1,4 @@
-"""The DEM forms: each terrain function with a JVM companion against its light form, on one input, with equal output
+"""The DEM forms: the terrain function with a JVM companion (TRI) against its light form, on one input, with equal output
 checked by decoded pixels and the JVM form's error tiles counted by their `last_error` text.
 """
 
@@ -14,26 +14,32 @@ def _of(fn):
     return [f for f in lf.FORMS["DEM"] if f.fn == fn and f.input == "dem_1024_mem"]
 
 
-def test_the_set_is_the_five_companions():
-    assert FNS == (
-        "gbx_rst_aspect",
-        "gbx_rst_tri",
-        "gbx_rst_tpi",
-        "gbx_rst_roughness",
-        "gbx_rst_color_relief",
-    )
+def test_the_set_is_the_one_kept_companion():
+    assert FNS == ("gbx_rst_tri",)
     from databricks.labs.gbx import manifest
 
     fns = manifest.load().functions
     for fn in FNS:
         assert fns[fn].levels["L1"]["companion"] == lf._DEM_COMPANION[fn]
+    # the culled terrain functions have no JVM level left to measure
+    for fn in (
+        "gbx_rst_aspect",
+        "gbx_rst_tpi",
+        "gbx_rst_roughness",
+        "gbx_rst_color_relief",
+        "gbx_rst_hillshade",
+    ):
+        assert "L1" not in fns[fn].levels
 
 
 @pytest.mark.parametrize("fn", FNS)
 def test_each_function_has_its_jvm_form_a_light_form_and_a_floor_on_one_input(fn):
     got = {(f.level, f.variant) for f in _of(fn)}
-    light = "c0@mem" if fn == "gbx_rst_color_relief" else "engine-c0@mem"
-    assert {("L1", "today@mem"), ("L3", light), ("L3", "floor-c0@mem")} <= got
+    assert {
+        ("L1", "today@mem"),
+        ("L3", "engine-c0@mem"),
+        ("L3", "floor-c0@mem"),
+    } <= got
     assert len({f.variant for f in _of(fn)}) == len(_of(fn))
 
 
@@ -66,26 +72,6 @@ def test_the_jvm_form_reports_its_error_tiles_by_text(fn):
     assert l1.nullsql.format(src="t", uc="")
     assert lf.dem_l1_name(fn) in l1.nullsql
     assert not [f for f in _of(fn) if f.level == "L3" and f.nullsql]
-
-
-def test_colour_relief_reads_its_table_from_a_column_of_the_input():
-    for f in _of("gbx_rst_color_relief"):
-        if not f.variant.startswith("floor"):
-            assert "(tile, ct)" in f.sql
-
-
-def test_the_colour_table_goes_to_the_local_disk_and_is_named_in_the_input(
-    monkeypatch, tmp_path
-):
-    """A file just written to a Volume was not seen by the executors' JVMs: the table is written to the node's temp dir."""
-    import tempfile
-
-    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
-    got = lf._dem_color_table("/Volumes/c/s/v/bench-corpus")
-    assert got == {"ct": str(tmp_path / "gbx_bench" / "dem_colors.txt")}
-    with open(got["ct"]) as fh:
-        assert fh.read() == lf.DEM_COLOR_TABLE
-    assert lf._dem_color_table("") == got  # again: the same file, left as it is
 
 
 def test_the_probe_forms_run_only_when_named_and_report_nulls():

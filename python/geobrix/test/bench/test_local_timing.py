@@ -130,13 +130,7 @@ _SE_DEM_SETS = tuple(
 )
 
 
-_DEM_SETS = (
-    "DEM",
-    "DEM-tri",
-    "DEM-tpi",
-    "DEM-roughness",
-    "DEM-color_relief",
-)
+_DEM_SETS = ("DEM",)
 
 
 def test_every_form_of_the_dem_sets_exists_for_its_function():
@@ -152,7 +146,8 @@ def test_every_form_of_the_dem_sets_exists_for_its_function():
                 f for f in lf.FORMS["DEM"] if f.variant == variant and f.fn == spec.fn
             ]
             assert len(picked) == 1, (name, variant)
-    assert lt.SETS["DEM"].fn == "gbx_rst_aspect"
+    assert lt.SETS["DEM"].fn == "gbx_rst_tri"
+    assert not [n for n in lt.SETS if n.startswith("DEM-")]
 
 
 def test_every_form_of_the_se_set_exists_for_its_function():
@@ -190,6 +185,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         *_DEM_SETS,
     } - {
         "raster-vectorize-contour",
+        "raster-file-op",  # no function of the family has a JVM level left (it times cog_convert's light forms)
     } == {
         f.family
         for f in __import__("databricks.labs.gbx.manifest", fromlist=["x"])

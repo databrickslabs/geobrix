@@ -1873,15 +1873,12 @@ def _se_dems_replicated(
     tile_of=None,
     label: str = "dem",
     parts: int = 8,
-    literals=None,
     content: bool = False,
 ):
     """`size` px tiles (DEMs, or what `tile_of(size, seed)` builds), n rows: four distinct tiles built once on the client
     and replicated on the executors, then cached (the rows are not rebuilt by each timed query, and no client cap applies
     to n). The cache lasts one rung: `release_cached_inputs` frees it. The rows are spread over `parts` partitions.
-    `literals(corpus)` names string columns every row carries beside `tile` (`{column: value}`): it runs on each build,
-    so a value that needs a file written first (a colour table) has it. With `content`, the one column is `content`: the
-    bytes of each tile (a GTiff), not the tile struct.
+    With `content`, the one column is `content`: the bytes of each tile (a GTiff), not the tile struct.
     """
     tile_of = tile_of or _se_dem_tile
 
@@ -1891,7 +1888,6 @@ def _se_dems_replicated(
         from databricks.labs.gbx.manifest import TILE_SQL
 
         name = f"mvp_in_se_{label}{size}_mem_v{RECIPE_VERSION}_{n}"
-        extra = literals(corpus) if literals else {}
         if schema is None and spark.catalog.tableExists(name):
             return name
         four = client_dataframe(
@@ -1909,10 +1905,7 @@ def _se_dems_replicated(
                 spark.range(n)
                 .select((F.col("id") % 4).cast("int").alias("idx"))
                 .join(F.broadcast(four), "idx")
-                .select(
-                    "content" if content else "tile",
-                    *[F.lit(v).alias(k) for k, v in extra.items()],
-                )
+                .select("content" if content else "tile")
                 .repartition(parts)
             )
             if schema is None:
@@ -2318,86 +2311,16 @@ for _fn, _call in _SE_CALC_CALLS.items():
 
 # --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
 #
-# The five companions (aspect, TRI, TPI, roughness, colour relief) on the JVM beside their light form: the engine's
-# row-wise UDF (c0) and its batch UDF (c1) for the four engine functions, the colour-table UDF for colour relief, and
-# the engine's floor. One input for all of them: 1024 px DEM tiles replicated on the executors (128 at 1x, 512 at 4x,
-# 2048 at 16x), spread over 32 partitions, each row also carrying the path of a colour table. Every form is compared by
-# the decoded pixels it returns, and a JVM form (which can return an error tile under load) reports the distinct
-# `last_error` texts it returned with their counts.
-DEM_FUNCTIONS = (
-    "gbx_rst_aspect",
-    "gbx_rst_tri",
-    "gbx_rst_tpi",
-    "gbx_rst_roughness",
-    "gbx_rst_color_relief",
-)
+# The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF
+# (c1), and the engine's floor. One input: 1024 px DEM tiles replicated on the executors (128 at 1x, 512 at 4x, 2048 at
+# 16x), spread over 32 partitions. Every form is compared by the decoded pixels it returns, and the JVM form (which can
+# return an error tile under load) reports the distinct `last_error` texts it returned with their counts.
+DEM_FUNCTIONS = ("gbx_rst_tri",)
 _DEM_PKG = "com.databricks.labs.gbx.rasterx.expressions.dem."
-_DEM_COMPANION = {fn: _DEM_PKG + "RST_" + c for fn, c in zip(
-    DEM_FUNCTIONS, ("Aspect", "TRI", "TPI", "Roughness", "ColorRelief"))}  # fmt: skip
-# the SQL arguments after the tile; aspect at its defaults (azimuth, flat areas keep their value)
-_DEM_ARGS = {
-    "gbx_rst_aspect": "false, false",
-    "gbx_rst_tri": "",
-    "gbx_rst_tpi": "",
-    "gbx_rst_roughness": "",
-    "gbx_rst_color_relief": "ct",
-}
-DEM_COLOR_TABLE = "0% 49 54 149\n25% 69 117 180\n50% 255 255 191\n75% 244 109 67\n100% 165 0 38\nnv 0 0 0\n"
+_DEM_COMPANION = {fn: _DEM_PKG + "RST_" + c for fn, c in zip(DEM_FUNCTIONS, ("TRI",))}
 BASE_ROWS["dem_1024_mem"] = 128
 BASE_ROWS["dem_bytes_1024_mem"] = 128
-
-
-def _dem_color_table(corpus) -> Dict[str, str]:
-    """Put the colour table on the local disk of every node and name it in column `ct`. A file just written to a Volume was
-    missing for the executors' JVMs (the heavy colour-relief form raised FileNotFoundException for it, minutes after the
-    write, where the light form read it), so the table goes to `/tmp` on each node: tasks write it where they run, and the
-    wait returns once every task of a wide job sees it."""
-    import tempfile
-    import time
-
-    path = os.path.join(tempfile.gettempdir(), "gbx_bench", "dem_colors.txt")
-    from pyspark.sql import SparkSession
-
-    spark = SparkSession.getActiveSession()
-    if spark is None:  # a test without a session: write it here
-        _write_color_table(path)
-        return {"ct": path}
-
-    def seen(batches):
-        import pandas as pd
-
-        for pdf in batches:
-            _write_color_table(path)
-            yield pd.DataFrame({"ok": [os.path.isfile(path)] * len(pdf)})
-
-    for _ in range(30):
-        missing = (
-            spark.range(256)
-            .repartition(64)
-            .mapInPandas(seen, "ok boolean")
-            .filter("NOT ok")
-            .count()
-        )
-        if missing == 0:
-            return {"ct": path}
-        time.sleep(2)
-    raise RuntimeError(f"the colour table {path} is not visible to every task")
-
-
-def _write_color_table(path: str) -> None:
-    """Write the colour table at `path` unless it is there already."""
-    if os.path.isfile(path) and open(path).read() == DEM_COLOR_TABLE:
-        return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = f"{path}.{os.getpid()}"
-    with open(tmp, "w") as fh:
-        fh.write(DEM_COLOR_TABLE)
-    os.replace(tmp, path)  # atomic: a task on this node never reads a half file
-
-
-INPUTS["dem_1024_mem"] = _se_dems_replicated(
-    1024, label="dem32", parts=32, literals=_dem_color_table
-)
+INPUTS["dem_1024_mem"] = _se_dems_replicated(1024, label="dem32", parts=32)
 INPUTS["dem_bytes_1024_mem"] = _se_dems_replicated(
     1024, label="bytes32", parts=32, content=True
 )
@@ -2409,7 +2332,7 @@ def dem_l1_name(fn: str) -> str:
 
 
 def setup_dem_l1(spark):
-    """Install the five companions under their private names (dedicated compute; a Connect session refuses)."""
+    """Install the companion under its private name (dedicated compute; a Connect session refuses)."""
     from databricks.labs.gbx.manager import jvm
 
     for fn, fqn in _DEM_COMPANION.items():
@@ -2419,14 +2342,13 @@ def setup_dem_l1(spark):
 
 
 def _dem_call(name: str, fn: str) -> str:
-    args = _DEM_ARGS[fn]
-    return f"{name}(tile{', ' + args if args else ''})"
+    return f"{name}(tile)"
 
 
 # the pixels of the four distinct tiles (the input cycles four), through the function
 _DEM_VFP = (
     "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
-    "FROM (SELECT {call} AS t FROM (SELECT first(tile) AS tile, first(ct) AS ct FROM {{src}} "
+    "FROM (SELECT {call} AS t FROM (SELECT first(tile) AS tile FROM {{src}} "
     "GROUP BY xxhash64(tile.raster)))"
 )
 # the NULL outputs of a tile function by the `last_error` text of the error tile: how many, a digest of the texts, and the
@@ -2446,7 +2368,7 @@ def _dem(fn, level, variant, inp, sql, **kw):
 
 FORMS["DEM"] = []
 for _fn in DEM_FUNCTIONS:
-    _l3 = "c0" if _fn == "gbx_rst_color_relief" else "engine-c0"
+    _l3 = "engine-c0"
     _calls = {
         "l1": _dem_call(dem_l1_name(_fn), _fn),
         "l3": _dem_call(_fn, _fn),
@@ -2475,19 +2397,16 @@ for _fn in DEM_FUNCTIONS:
             vsql=_DEM_VFP.format(call=_calls["l3"]),
         ),
     ]
-    if (
-        _fn != "gbx_rst_color_relief"
-    ):  # the batch UDF behind the wrapper: recorded, not a peer
-        FORMS["DEM"].append(
-            _dem(
-                _fn,
-                "L3",
-                "engine-c1@mem",
-                "dem_1024_mem",
-                _SE_FP.format(call=_calls["l3"]),
-                vsql=_DEM_VFP.format(call=_calls["l3"]),
-            )
+    FORMS["DEM"].append(  # the batch UDF behind the wrapper: recorded, not a peer
+        _dem(
+            _fn,
+            "L3",
+            "engine-c1@mem",
+            "dem_1024_mem",
+            _SE_FP.format(call=_calls["l3"]),
+            vsql=_DEM_VFP.format(call=_calls["l3"]),
         )
+    )
     FORMS["DEM"].append(
         _dem(
             _fn,

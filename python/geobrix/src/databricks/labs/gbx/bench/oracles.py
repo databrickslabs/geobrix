@@ -133,9 +133,6 @@ _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); t
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
 # The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
 _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
-# With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
-# divergence, which the GDAL spec engine keeps).
-_ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
 # H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
 # is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
 # read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
@@ -151,10 +148,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "derivedband_unknown_function",
             "derivedband_syntax_error",
         )
-    },
-    **{
-        cid: {"L1": _ASPECT_ZERO_L1}
-        for cid in ("aspect_flat_zero", "aspect_zero_for_flat_hole")
     },
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
     **{

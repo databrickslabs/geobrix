@@ -183,30 +183,17 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_threshold",
         )
     },
-    # the terrain functions with a JVM companion: the companion (`today`), the engine's two light UDFs (colour relief has
-    # the colour-table UDF alone) and a floor, over 1024 px DEM tiles replicated in memory. `DEM` is aspect, the set's
-    # first function; the companion is what the pass measures, so it is not a peer of the light forms.
-    **{
-        ("DEM" if fn == "gbx_rst_aspect" else "DEM-" + fn[len("gbx_rst_") :]): SetSpec(
-            mvp="DEM",
-            forms=(
-                ("today@mem", "c0@mem", "floor-c0@mem")
-                if fn == "gbx_rst_color_relief"
-                else ("today@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem")
-            ),
-            reference="c0@mem" if fn == "gbx_rst_color_relief" else "engine-c0@mem",
-            ns=(24, 96, 384),
-            fn=fn,
-            peer_exempt=("today@mem", "engine-c1@mem"),
-        )
-        for fn in (
-            "gbx_rst_aspect",
-            "gbx_rst_tri",
-            "gbx_rst_tpi",
-            "gbx_rst_roughness",
-            "gbx_rst_color_relief",
-        )
-    },
+    # TRI, the terrain function that keeps a JVM companion: the companion (`today`), the engine's two light UDFs and a floor,
+    # over 1024 px DEM tiles replicated in memory. The companion is what the pass measures, so it is not a peer of the light
+    # forms.
+    "DEM": SetSpec(
+        mvp="DEM",
+        forms=("today@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_tri",
+        peer_exempt=("today@mem", "engine-c1@mem"),
+    ),
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(

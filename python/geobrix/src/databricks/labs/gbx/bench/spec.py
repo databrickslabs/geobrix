@@ -153,14 +153,10 @@ _SAMPLE_POINT_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 # unused at runtime and kept only for the col_fn signature.
 _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 
-# rst_color_relief (timing-only): heavy reads a gdaldem color-table FILE and runs
-# GDAL DEMProcessing color-relief (its own interpolation), while pyrx parses the
-# same file and interpolates with np.interp — different interpolation engines, so
-# the RGB(A) bytes are not value-identical. It also needs a real file path on the
-# executor, which the static args map cannot synthesize per-engine. Timing-only.
-# The runner does not invoke color_relief's core_fn for fingerprinting (it is
-# fingerprint=False); the path below is a documented placeholder for the args dict
-# and is created on demand by the core_fn.
+# rst_color_relief (timing-only): the function reads a gdaldem color-table FILE, so it needs a real file path on the
+# executor, which the static args map cannot synthesize. It has no heavyweight level. The runner does not invoke
+# color_relief's core_fn for fingerprinting (it is fingerprint=False); the path below is a documented placeholder for the
+# args dict and is created on demand by the core_fn.
 _COLOR_RAMP_TEXT = "nv 0 0 0\n0% 0 0 255\n50% 0 255 0\n100% 255 0 0\n"
 
 
@@ -900,7 +896,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"trigonometric": False, "zero_for_flat": False},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Aspect.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: terrain.aspect(
             ds, a["trigonometric"], a["zero_for_flat"]
@@ -913,7 +910,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"azimuth": 315.0, "altitude": 45.0, "z_factor": 1.0},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Hillshade.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: terrain.hillshade(
             ds, a["azimuth"], a["altitude"], a["z_factor"]
@@ -939,7 +937,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TPI.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: terrain.tpi(ds),
         col_fn=lambda t, a: rx.rst_tpi(t),
@@ -950,7 +949,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Roughness.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: terrain.roughness(ds),
         col_fn=lambda t, a: rx.rst_roughness(t),
@@ -1819,8 +1819,7 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint=False,
     ),
     # --- color relief (terrain.py): timing-only ---
-    # Needs a color-table file path (synthesized on demand) and the heavy GDAL
-    # DEMProcessing interpolation diverges from pyrx np.interp, so not compared.
+    # Needs a color-table file path (synthesized on demand), so it is not compared.
     "rst_color_relief": FnSpec(
         "rst_color_relief",
         "gbx_rst_color_relief",
@@ -1829,7 +1828,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: terrain.color_relief(ds, _color_table_path()),
         col_fn=lambda t, a: rx.rst_color_relief(t, _color_table_path()),
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_ColorRelief.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),

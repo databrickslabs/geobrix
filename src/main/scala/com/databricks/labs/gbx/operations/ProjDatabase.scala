@@ -92,17 +92,46 @@ object ProjDatabase extends Logging {
 
     /** `read()`; when `suspect` holds for its answer (one a context without PROJ's database would give) and the database
       * cannot be read, [[recoverOrFail]] and `read()` once more. A suspect answer with the database readable is the
-      * data's own (a CRS with no authority code) and is returned as it is. */
-    def guarded[T](read: () => T)(suspect: T => Boolean): T =
-        guardedWith(read, suspect, () => reachableCached(), () => GDALManager.recoverProjData())
+      * data's own (a CRS with no authority code) when this thread had confirmed the database on the same search path
+      * before the read; else it is read once more, and that answer stands. The database may have become readable
+      * between the read and the check: another thread's [[recoverOrFail]] re-points every thread's PROJ, and this
+      * thread's suspect answer then came from the path that was replaced (it gave a NULL srid with no error). */
+    def guarded[T](read: () => T)(suspect: T => Boolean): T = {
+        val g = generation.get()
+        val confirmed = confirmedAt.get() == g
+        guardedWith(read, suspect, () => reachableCached(), () => GDALManager.recoverProjData(),
+          () => confirmed && generation.get() == g)
+    }
 
-    private[gbx] def guardedWith[T](read: () => T, suspect: T => Boolean, isReachable: () => Boolean, recover: () => Seq[String]): T = {
+    private[gbx] def guardedWith[T](
+        read: () => T,
+        suspect: T => Boolean,
+        isReachable: () => Boolean,
+        recover: () => Seq[String],
+        confirmedBefore: () => Boolean = () => false
+    ): T = {
         val first = read()
-        if (!suspect(first) || isReachable()) first
+        if (!suspect(first)) first
+        else if (isReachable()) { if (confirmedBefore()) first else read() }
         else {
             recoverOrFail(isReachable, recover, null)
             read()
         }
     }
+
+    /** `attempt()`; when it fails with a `refusal` (what a context without PROJ's database raises, as an EPSG code
+      * that does not resolve) it runs once more, after [[recoverOrFail]] when the database cannot be read now. With the
+      * database readable now it runs again as it is: another thread may have re-pointed PROJ after the attempt. */
+    def retried[T](attempt: () => T)(refusal: Throwable => Boolean): T =
+        retriedWith(attempt, refusal, () => reachable(), () => GDALManager.recoverProjData())
+
+    private[gbx] def retriedWith[T](attempt: () => T, refusal: Throwable => Boolean, isReachable: () => Boolean,
+                                    recover: () => Seq[String]): T =
+        try attempt()
+        catch {
+            case e: Throwable if refusal(e) =>
+                if (!isReachable()) recoverOrFail(isReachable, recover, e)
+                attempt()
+        }
 
 }

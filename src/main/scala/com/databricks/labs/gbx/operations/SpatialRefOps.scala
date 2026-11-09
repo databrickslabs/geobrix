@@ -97,15 +97,14 @@ object SpatialRefOps {
       *     URN / `WGS84`), parsed by `SetFromUserInput` with file and network access off.
       * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS, or names a file or URL.
       *
-      * A thread whose PROJ context cannot read PROJ's database resolves no EPSG code: on a failure with the database
-      * unreadable, PROJ is pointed at this JVM's PROJ data again and the value resolved once more
-      * ([[ProjDatabase.recoverOrFail]]), else a [[ProjDatabaseException]], never the "not a valid code" refusal. */
+      * A thread whose PROJ context cannot read PROJ's database resolves no EPSG code: a failure is resolved once more
+      * ([[ProjDatabase.retried]]), after PROJ is pointed at this JVM's PROJ data again when the database is unreadable
+      * (else a [[ProjDatabaseException]], never the "not a valid code" refusal), and as it is when the database reads
+      * now (another thread re-pointed PROJ after the first try). */
     def resolveCrs(value: String): SpatialReference =
-        try resolveCrsOnce(value)
-        catch {
-            case e: IllegalArgumentException if value != null && value.trim.nonEmpty && !ProjDatabase.reachable() =>
-                ProjDatabase.recoverOrFail(e)
-                resolveCrsOnce(value)
+        ProjDatabase.retried(() => resolveCrsOnce(value)) {
+            case _: IllegalArgumentException => value != null && value.trim.nonEmpty
+            case _                           => false
         }
 
     private def resolveCrsOnce(value: String): SpatialReference = {

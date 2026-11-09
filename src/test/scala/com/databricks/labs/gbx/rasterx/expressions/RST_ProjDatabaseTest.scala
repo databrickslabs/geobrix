@@ -51,16 +51,19 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
     }
 
     /** Run `body` with PROJ pointed at a copy of its data directory that is then deleted: a thread that creates its
-      * PROJ context afterwards finds no proj.db (as an executor whose payload directory went away). */
+      * PROJ context afterwards finds no proj.db (as an executor whose payload directory went away). The search path
+      * is restored whole after (grid directories an earlier suite applied included). */
     private def withProjDatabaseGone[T](body: => T): T = {
         val dir = projDir()
+        val before = Option(osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)
         val copy = Files.createTempDirectory("gbx_proj_gone")
         Files.list(dir).iterator().asScala.filter(Files.isRegularFile(_)).foreach(p => Files.copy(p, copy.resolve(p.getFileName)))
         osr.SetPROJSearchPaths(new java.util.Vector[String](java.util.List.of(copy.toString)))
         Files.list(copy).iterator().asScala.foreach(Files.delete(_))
         try body
         finally {
-            osr.SetPROJSearchPaths(new java.util.Vector[String](java.util.List.of(dir.toString)))
+            val restore = if (before.exists(d => Files.isReadable(Paths.get(d, "proj.db")))) before else Seq(dir.toString)
+            osr.SetPROJSearchPaths(new java.util.Vector[String](restore.asJava))
             Files.deleteIfExists(copy)
         }
     }
@@ -126,5 +129,33 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         recovered shouldBe false
         // an answer that is not suspect is never checked
         ProjDatabase.guardedWith[Int](() => 27700, _ == 0, () => fail("checked"), () => fail("recovered")) shouldBe 27700
+    }
+
+    test("a suspect answer read before another thread pointed PROJ at its data again is read again") {
+        // the read ran while this thread's PROJ context had no database; by the check another thread's recovery had
+        // fixed the path, so the database reads: the first answer is not the data's own
+        val answers = Iterator(0, 27700)
+        ProjDatabase.guardedWith[Int](() => answers.next(), _ == 0, () => true, () => fail("recovered")) shouldBe 27700
+        // a thread that had confirmed the database on the same path before the read keeps its answer, with one read
+        var reads = 0
+        ProjDatabase.guardedWith[Int](() => { reads += 1; 0 }, _ == 0, () => true, () => fail("recovered"), () => true) shouldBe 0
+        reads shouldBe 1
+    }
+
+    test("a refusal raised before another thread pointed PROJ at its data again is tried again") {
+        val attempts = Iterator[() => Int](() => throw new IllegalArgumentException("27700 is not a valid EPSG code"), () => 27700)
+        ProjDatabase.retriedWith[Int](() => attempts.next()(), _.isInstanceOf[IllegalArgumentException], () => true,
+          () => fail("recovered")) shouldBe 27700
+        // an unreadable database: recovered first, then tried again
+        var recovered = false
+        val again = Iterator[() => Int](() => throw new IllegalArgumentException("no"), () => 4326)
+        var reachable = false
+        ProjDatabase.retriedWith[Int](() => again.next()(), _.isInstanceOf[IllegalArgumentException], () => reachable,
+          () => { recovered = true; reachable = true; Seq("/proj") }) shouldBe 4326
+        recovered shouldBe true
+        // a refusal that stays is the refusal
+        intercept[IllegalArgumentException] {
+            ProjDatabase.retriedWith[Int](() => throw new IllegalArgumentException("bad"), _ => true, () => true, () => Nil)
+        }
     }
 }

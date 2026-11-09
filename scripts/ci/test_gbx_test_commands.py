@@ -235,6 +235,31 @@ def test_partial_skips_are_not_reported_as_did_not_run(sandbox):
     assert "did NOT RUN" in res.output
 
 
+def test_skips_an_oracle_table_selection_leaves_out_are_not_a_gate_miss(sandbox):
+    # With GBX_ORACLE_TABLES set the family harness skips the tables it leaves out, with the reason
+    # "GBX_ORACLE_TABLES leaves out <table>". pytest folds equal reasons into one "SKIPPED [n]" line,
+    # so the gate sums the bracketed counts and subtracts them from the "N skipped" total; any other
+    # skip still counts. The command string is the real one (the fake docker runs it on a written report).
+    _parity_sandbox(sandbox, TEST_ROOT)
+    path = ("--path", "python/geobrix/test/manager/test_family_cross_tier.py")
+    report = sandbox.root / "target" / "parity-test_family_cross_tier.txt"
+    report.parent.mkdir()
+
+    def run(skips, summary):
+        report.write_text("=== short test summary info ===\n" + "".join(f"SKIPPED [{n}] x.py:1: {why}\n" for n, why in skips) + f"{summary}\n")
+        return sandbox.run("gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_RUN_MATCHING="tail -6")
+
+    # 5 + 2 skips are the selection's: 12 passed and nothing else missing is a pass
+    res = run([(5, "GBX_ORACLE_TABLES leaves out MVP_H"), (2, "GBX_ORACLE_TABLES leaves out MVP_G")], "=== 12 passed, 7 skipped in 1.00s ===")
+    assert res.returncode == 0, res.output
+    assert "12 test(s) actually ran" in res.output
+
+    # one skip of another reason beside the selection's still fails the gate, and names the remainder
+    res = run([(5, "GBX_ORACLE_TABLES leaves out MVP_H"), (1, "no aarch64 build")], "=== 12 passed, 6 skipped in 1.00s ===")
+    assert res.returncode == 1
+    assert "12 passed, 1 skipped" in res.output
+
+
 # --------------------------------------------------- python-docs: single-file isolation
 
 

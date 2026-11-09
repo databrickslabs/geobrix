@@ -2777,18 +2777,6 @@ def _proximity_v2_udf(
     )
 
 
-# rst_contour: tile + levels (ARRAY<DOUBLE>) + interval/base/attr_field ->
-# ARRAY<struct(geom_wkb BINARY, value DOUBLE)> (mirrors _polygonize_udf shape).
-_CONTOUR_SCHEMA = ArrayType(
-    StructType(
-        [
-            StructField("geom_wkb", BinaryType(), nullable=True),
-            StructField("value", DoubleType(), nullable=True),
-        ]
-    )
-)
-
-
 def _path_is_unreachable(tile) -> bool:
     """True for a path-backed tile whose local file is not there (a UC Volume path that has not caught up). Like
     the non-GDAL ``OSError`` that :func:`_open_op` lets through, it is not a tile whose bytes GDAL cannot read.
@@ -2827,23 +2815,6 @@ def _open_or_none(tile):
         yield ds
     finally:
         cm.__exit__(None, None, None)
-
-
-@f.udf(_CONTOUR_SCHEMA)
-def _contour_udf(
-    tile, levels, interval=0.0, base=0.0, attr_field="elev"
-):  # the row's defaults: no SQL wrapper
-    if _tile_is_empty(tile):
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    lvls = [] if levels is None else [float(v) for v in levels if v is not None]
-    iv = 0.0 if interval is None else float(interval)
-    bs = 0.0 if base is None else float(base)
-    attr = "elev" if attr_field is None else str(attr_field)
-    with _open_or_none(tile) as ds:
-        return None if ds is None else analysis_core.contour(ds, lvls, iv, bs, attr)
 
 
 # rst_isoband: tile + breaks (ARRAY<DOUBLE>) ->

@@ -85,8 +85,9 @@ def driver_row(
     drv, shipped: Optional[frozenset] = None, kind: Optional[str] = None
 ) -> Dict[str, Any]:
     """One driver of GDAL's registry as the row of ``gbx_drivers`` (a dict by column). ``kind`` is the filter the
-    listing was asked for: ``tested`` and ``tested_with`` then describe that kind only (a driver tested as a vector
-    driver is not tested as a raster one); with None they cover every kind the driver is tested as.
+    listing was asked for: ``tested``, ``tested_with``, ``guidance`` and ``docs`` then describe that kind only (a driver tested as a vector
+    driver is not tested as a raster one, and a note on its vector reader is not one for its raster side); with None
+    they cover every kind the driver is tested as.
     """
     md = drv.GetMetadata() or {}
     name = drv.ShortName
@@ -110,8 +111,8 @@ def driver_row(
         "tested_with": _tested.tested_with(name, kind),
         "help_url": help_url(md.get("DMD_HELPTOPIC")),
     }
-    row["guidance"] = _guidance.guidance(row)
-    row["docs"] = _guidance.docs(name)
+    row["guidance"] = _guidance.guidance(row, kind)
+    row["docs"] = _guidance.docs(name, kind)
     return row
 
 

@@ -54,8 +54,8 @@ def drivers(
         `guidance` says what GeoBrix offers for the format, `docs` links the pages that
         cover it, and `help_url` links GDAL's page. `tested` says whether GeoBrix's
         driver tests cover the driver, and `tested_with` names the reader or writer.
-        Both describe the release, not the environment; with a kind, they cover that
-        kind only.
+        Both describe the release, not the environment. With a kind, they, `guidance`
+        and `docs` cover that kind only.
 
     SQL: ``gbx_drivers([kind])``
     """

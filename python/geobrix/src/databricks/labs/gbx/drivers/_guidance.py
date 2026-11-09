@@ -17,13 +17,19 @@ The lead says how GeoBrix relates to the driver:
 - ``redirect``: the product's own reader does the job (CSV).
 - ``none``: GeoBrix has no reader or writer for it (an in-process dataset, a driver of neither kind).
 
-Entry keys: ``kind`` (one of the above; ``unnamed`` when absent), ``reader`` and ``what`` (``wrapped``), ``use``
+A listing filtered by kind (``gbx_drivers('raster')``) gets the note of that kind only: ``note``, ``guidance``, ``links``
+and ``docs`` take the kind. A ``wrapped`` entry whose reader serves one kind (``reader_kinds``) gives the other kind the
+note of a driver with no named reader (the registry's status for that kind), and a link to a page about the other kind
+is left out.
+
+Entry keys: ``kind`` (one of the above; ``unnamed`` when absent), ``reader`` and ``what`` (``wrapped``), ``reader_kinds``
+(``wrapped``: the kinds the reader serves, every kind when absent), ``use``
 (``own``), ``caveat`` (a sentence or two, GeoBrix names in backticks) and ``links`` (a list of ``(label, docs page)``
 pairs, the pages under ``docs/docs`` without the extension, or an absolute https URL to a page of the Databricks docs).
 """
 
 import re
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.drivers._tested import TESTED_DRIVERS
 
@@ -47,6 +53,7 @@ GUIDANCE: Dict[str, Dict[str, object]] = {
         "kind": "wrapped",
         "reader": "gpkg_gbx",
         "what": "GeoPackage vector layers",
+        "reader_kinds": ("vector",),
         "caveat": "`raster_gbx` reads GeoPackage raster tiles, and `gbx_rst_asformat` does not write them yet.",
         "links": (
             ("GeoPackage reader", "readers/geopackage"),
@@ -57,6 +64,7 @@ GUIDANCE: Dict[str, Dict[str, object]] = {
         "kind": "wrapped",
         "reader": "file_gdb_gbx",
         "what": "File Geodatabase feature classes",
+        "reader_kinds": ("vector",),
         "caveat": "It is vector only. Raster data in a geodatabase is not tested with GeoBrix.",
         "links": (
             ("GeoDatabase reader", "readers/filegdb"),
@@ -271,6 +279,17 @@ def _entries(text: str) -> str:
     return " or ".join(f"`{e}`" for e in text.split(", "))
 
 
+def _kinds(row: Dict[str, object], kind: Optional[str]) -> List[str]:
+    """The kinds a note covers: the driver's kinds, or the one the listing was filtered to."""
+    return [k for k in ("raster", "vector") if row.get(k) and kind in (None, k)]
+
+
+def _serves(entry: Dict[str, object], kind: Optional[str]) -> bool:
+    """Whether the entry's named reader (or own reader) serves ``kind`` (None: any kind)."""
+    served = entry.get("reader_kinds")
+    return kind is None or served is None or kind in served  # type: ignore[operator]
+
+
 def _lead(entry: Dict[str, object], row: Dict[str, object]) -> str:
     kind = str(entry.get("kind", "unnamed"))
     if kind == "wrapped":
@@ -290,12 +309,13 @@ def _lead(entry: Dict[str, object], row: Dict[str, object]) -> str:
     return ""
 
 
-def _unnamed(row: Dict[str, object]) -> str:
+def _unnamed(row: Dict[str, object], kind: Optional[str] = None) -> str:
     """The note of a driver with no named reader or writer, from the tested registry: for each kind that passed, what
     ``raster_gbx`` or ``vector_gbx`` does with it ("reads", and "writes" only when a write test passed), then that it has
-    no named reader or writer, then each kind that is not tested."""
+    no named reader or writer, then each kind that is not tested. With ``kind``, only that kind is covered.
+    """
     name = str(row["driver"])
-    kinds = [k for k in ("raster", "vector") if row.get(k)]
+    kinds = _kinds(row, kind)
     e = TESTED_DRIVERS.get(name) or {}
     use = {"raster": "`raster_gbx`", "vector": "`vector_gbx`"}
     tested = [k for k in kinds if k in e]
@@ -326,34 +346,41 @@ def _unnamed(row: Dict[str, object]) -> str:
     return " ".join(parts)
 
 
-def generic(row: Dict[str, object]) -> str:
-    """The note of a driver with no entry in ``GUIDANCE``, from the tested registry and the driver's kinds."""
-    kinds = [k for k in ("raster", "vector") if row.get(k)]
+def generic(row: Dict[str, object], kind: Optional[str] = None) -> str:
+    """The note of a driver with no entry in ``GUIDANCE``, from the tested registry and the driver's kinds (or the
+    one ``kind`` the listing was filtered to)."""
+    kinds = _kinds(row, kind)
     if not kinds:
         return f"GeoBrix has no reader or writer for it. Open it with {_DIRECT}."
     if not (row.get("allowed") and row.get("available")):
         return "GeoBrix does not use this driver: it needs a service, program or plugin this runtime lacks."
-    return _unnamed(row)
+    return _unnamed(row, kind)
 
 
-def note(row: Dict[str, object]) -> str:
+def note(row: Dict[str, object], kind: Optional[str] = None) -> str:
     """The guidance text for a driver row (a dict with ``driver``, ``raster``, ``vector``, ``allowed``, ``available``),
     with GeoBrix names in backticks: the lead phrase, the registry's status for a driver with no named reader or writer,
     then the driver's caveat. A driver GeoBrix has its own reader for, or none, also says its GDAL driver is not tested.
+    With ``kind``, the note covers that kind only (see the module doc).
     """
     entry = GUIDANCE.get(str(row["driver"]))
     if not entry:
-        return generic(row)
-    kind = str(entry.get("kind", "unnamed"))
-    parts = [_lead(entry, row)]
-    if kind == "unnamed":
+        return generic(row, kind)
+    kind_of_entry = str(entry.get("kind", "unnamed"))
+    if kind_of_entry == "wrapped" and not _serves(entry, kind):
+        # the named reader is for the other kind: this kind has the registry's status, then the entry's caveat
+        kind_of_entry = "unnamed"
+        parts = []
+    else:
+        parts = [_lead(entry, row)]
+    if kind_of_entry == "unnamed":
         # generic() says "no reader or writer" for a driver of neither kind and "does not use this driver" where the
         # runtime lacks it, before any word on what the tests passed
-        parts.append(generic(row))
+        parts.append(generic(row, kind))
     caveat = entry.get("caveat")
     if caveat:
         parts.append(str(caveat))
-    if kind in ("own", "none") and row["driver"] not in TESTED_DRIVERS:
+    if kind_of_entry in ("own", "none") and row["driver"] not in TESTED_DRIVERS:
         parts.append("The GDAL driver itself is not tested with GeoBrix.")
     return " ".join(p for p in parts if p)
 
@@ -366,43 +393,66 @@ _PAGES = {
 }
 
 
-def links(driver: str) -> Tuple[Tuple[str, str], ...]:
+# The kind a docs page is about, for the pages that are about one (the others are about every kind).
+_PAGE_KIND = {
+    "readers/raster": "raster",
+    "api/raster-functions": "raster",
+    "readers/vector": "vector",
+    "writers/vector": "vector",
+}
+
+
+def links(driver: str, kind: Optional[str] = None) -> Tuple[Tuple[str, str], ...]:
     """The ``(label, docs page)`` links of a driver's note. A driver with no named reader or writer gets the pages of
     what its tests passed (the reader page of a kind it reads; the writer page only for a kind it writes), then the
-    links of its entry; any other driver gets those of its entry."""
+    links of its entry; any other driver gets those of its entry. With ``kind``, only that kind's pages: a page about
+    the other kind is left out, and an entry whose reader is for the other kind is treated as one with none.
+    """
     entry = GUIDANCE.get(driver)
     own = tuple(entry["links"]) if entry else ()
-    if entry and str(entry.get("kind", "unnamed")) != "unnamed":
+    if kind is not None:
+        own = tuple(lk for lk in own if _PAGE_KIND.get(lk[1], kind) == kind)
+    other_reader = (
+        bool(entry) and entry.get("kind") == "wrapped" and not _serves(entry, kind)
+    )
+    if other_reader:
+        own = ()  # the pages of a reader for the other kind
+    elif entry and str(entry.get("kind", "unnamed")) != "unnamed":
         return own
     out: List[Tuple[str, str]] = []
-    for kind, e in (TESTED_DRIVERS.get(driver) or {}).items():
-        out.append(_PAGES[f"reader:{kind}"])
+    for k, e in (TESTED_DRIVERS.get(driver) or {}).items():
+        if kind is not None and k != kind:
+            continue
+        out.append(_PAGES[f"reader:{k}"])
         if e["write"]:
-            out.append(_PAGES[f"writer:{kind}"])
+            out.append(_PAGES[f"writer:{k}"])
     for link in own:
         if link[1] not in {p for _, p in out}:
             out.append(link)
     return tuple(out)
 
 
-def guidance(row: Dict[str, object]) -> str:
-    """The ``guidance`` column of ``gbx_drivers``: the note as plain text."""
-    return note(row).replace("`", "")
+def guidance(row: Dict[str, object], kind: Optional[str] = None) -> str:
+    """The ``guidance`` column of ``gbx_drivers``: the note as plain text (of ``kind`` when the listing is filtered)."""
+    return note(row, kind).replace("`", "")
 
 
-def docs(driver: str) -> List[str]:
-    """The ``docs`` column of ``gbx_drivers``: the absolute URLs of the pages of a driver's note."""
-    return [_href(page, DOCS_BASE) for _, page in links(driver)]
+def docs(driver: str, kind: Optional[str] = None) -> List[str]:
+    """The ``docs`` column of ``gbx_drivers``: the absolute URLs of the pages of a driver's note (of ``kind`` when the
+    listing is filtered)."""
+    return [_href(page, DOCS_BASE) for _, page in links(driver, kind)]
 
 
 def _href(page: str, prefix: str) -> str:
     return page if page.startswith("https://") else prefix + page
 
 
-def guidance_markdown(row: Dict[str, object], prefix: str = "./") -> str:
-    """The note for the docs page: names in code, then the pages that cover them, inline."""
-    text = note(row)
-    ls = links(str(row["driver"]))
+def guidance_markdown(
+    row: Dict[str, object], prefix: str = "./", kind: Optional[str] = None
+) -> str:
+    """The note for the docs page: names in code, then the pages that cover them, inline. ``kind`` is the page's kind."""
+    text = note(row, kind)
+    ls = links(str(row["driver"]), kind)
     if ls:
         text += " " + " · ".join(
             f"[{label}]({_href(page, prefix)})" for label, page in ls

@@ -726,7 +726,7 @@ def _guidance_cell(d: dict, kind: str, prefix: str = "./") -> str:
 
     if d["driver"] not in _guidance.GUIDANCE and not tested_in(d["driver"], kind):
         return ""
-    return _mdx_cell_keep_code(_guidance.guidance_markdown(d, prefix))
+    return _mdx_cell_keep_code(_guidance.guidance_markdown(d, prefix, kind))
 
 
 def _mdx_cell_keep_code(text: str) -> str:
@@ -753,6 +753,14 @@ def _driver_groups(snapshot: dict, kind: str):
     tested = [d for d in usable if tested_in(d["driver"], kind)]
     rest = [d for d in usable if not tested_in(d["driver"], kind)]
     return tested, rest, down
+
+
+def _can(d: dict, kind: str) -> str:
+    """The "Can" cell of a driver row: read, write, and (raster page) tile bytes, from the snapshot's flags."""
+    can = [w for w, on in (("read", d["read"]), ("write", d["write"])) if on]
+    if kind == "raster" and d["tile_bytes"]:
+        can.append("tile bytes")
+    return " · ".join(can)
 
 
 def _other_drivers(snapshot: dict) -> list:
@@ -810,12 +818,11 @@ def render_drivers_page(snapshot: dict) -> str:
             f"{len(tested)} tested with GeoBrix, {len(rest)} available and not tested, {len(down)} unavailable."
         )
     other = _other_drivers(snapshot)
-    if other:
-        path, title = DRIVER_SUBPAGES["other"]
-        index.append(
-            f"- [{title}](./{path}): {len(other)} drivers that handle neither rasters nor vectors, "
-            "and the drivers that are off by default."
-        )
+    path, title = DRIVER_SUBPAGES["other"]  # always listed: the page also holds the opt-in drivers
+    index.append(
+        f"- [{title}](./{path}): {len(other)} drivers that handle neither rasters nor vectors, "
+        "and the drivers that are off by default."
+    )
     out += index
     return "\n".join(out).rstrip("\n") + "\n"
 
@@ -828,17 +835,21 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
     out: List[str] = []
     if kind == "other":
         out += ["## Other drivers", ""]
-        out += _table(
-            ["Driver", "Description", "Can"],
-            [
+        others = _other_drivers(snapshot)
+        if others:
+            out += _table(
+                ["Driver", "Description", "Can"],
                 [
-                    f"`{d['driver']}`",
-                    _mdx_cell(d["description"]),
-                    " · ".join(w for w, on in (("read", d["read"]), ("write", d["write"])) if on),
-                ]
-                for d in _other_drivers(snapshot)
-            ],
-        )
+                    [
+                        f"`{d['driver']}`",
+                        _mdx_cell(d["description"]),
+                        _can(d, kind),
+                    ]
+                    for d in others
+                ],
+            )
+        else:
+            out += ["None."]
         out += _opt_in_section(snapshot.get("opt_in", []))
         return "\n".join(out).rstrip("\n") + "\n"
 
@@ -846,13 +857,10 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
 
     def row_cells(d, head, with_tested):
         name = d["driver"]
-        can = [w for w, on in (("read", d["read"]), ("write", d["write"])) if on]
-        if kind == "raster" and d["tile_bytes"]:
-            can.append("tile bytes")
         cell = [
             f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
             _mdx_cell(d["description"]),
-            " · ".join(can),
+            _can(d, kind),
         ]
         req = _mdx_cell(d["requires"])
         if d[other]:  # a driver of both kinds links to its row on the other page
@@ -943,7 +951,7 @@ def _opt_in_section(opt_in: list) -> List[str]:
         "",
     ]
     if not opt_in:
-        return out
+        return out + ["None.", ""]
     rows = []
     for r in opt_in:
         kind = " and ".join(k for k in ("raster", "vector") if r[k]) or "none"

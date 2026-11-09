@@ -190,6 +190,48 @@ def test_the_kind_filter_keeps_one_kind_and_the_rows_are_sorted_once_each():
     ]
 
 
+def test_guidance_and_docs_follow_the_kind_filter_for_a_dual_kind_driver():
+    """A driver of both kinds gets the note and the docs links of the kind the listing was asked for, as ``tested`` and
+    ``tested_with`` do: the vector note of GPKG does not hold for its raster side, and the other way round.
+    """
+    gdal = FakeGdal(
+        FakeDriver("GPKG", DCAP_RASTER="YES", DCAP_VECTOR="YES", DCAP_OPEN="YES"),
+        FakeDriver("MBTiles", DCAP_RASTER="YES", DCAP_VECTOR="YES", DCAP_OPEN="YES"),
+        FakeDriver("PCIDSK", DCAP_RASTER="YES", DCAP_VECTOR="YES", DCAP_OPEN="YES"),
+    )
+    by = {
+        k: {r["driver"]: r for r in listing.driver_rows(gdal, k)}
+        for k in (None, "raster", "vector")
+    }
+    gpkg = {k: by[k]["GPKG"] for k in by}
+    assert gpkg["vector"]["guidance"].startswith(
+        "gpkg_gbx reads and writes GeoPackage vector layers, on this driver."
+    )
+    assert gpkg["raster"]["guidance"].startswith(
+        "raster_gbx reads GPKG; the format is detected from the file."
+    )
+    assert "gpkg_gbx reads" not in gpkg["raster"]["guidance"]
+    assert gpkg["raster"]["docs"] == [
+        "https://databrickslabs.github.io/geobrix/docs/readers/raster"
+    ]
+    assert gpkg["vector"]["docs"][0].endswith("/readers/geopackage")
+    # MBTiles (no entry link of the other kind is kept): each kind lists its own reader page only
+    assert by["raster"]["MBTiles"]["guidance"].count("_gbx reads") == 1
+    assert by["vector"]["MBTiles"]["guidance"].count("_gbx reads") == 1
+    assert not any(
+        u.endswith("readers/vector") for u in by["raster"]["MBTiles"]["docs"]
+    )
+    assert not any(
+        u.endswith("readers/raster") for u in by["vector"]["MBTiles"]["docs"]
+    )
+    # an untested driver: one kind's "not tested" sentence, not both
+    assert by["raster"]["PCIDSK"]["guidance"].startswith("Not tested with GeoBrix:")
+    assert "vector_gbx" not in by["raster"]["PCIDSK"]["guidance"]
+    # the unfiltered listing is unchanged: every kind
+    assert "Not tested as a raster driver" in by[None]["PCIDSK"]["guidance"]
+    assert "Not tested as a vector driver" in by[None]["PCIDSK"]["guidance"]
+
+
 def test_a_kind_that_is_neither_raises_with_a_fix():
     with pytest.raises(ValueError, match="Fix:"):
         listing.check_kind("table")
@@ -453,3 +495,238 @@ def test_the_docs_pages_link_every_driver_row_and_every_built_in_anchor():
         if d["vector"] and d["raster"]:
             assert f"(./raster#raster-{name})" in vector, d["driver"]
             assert f"(./vector#vector-{name})" in raster, d["driver"]
+
+
+# --- the generated driver pages: counts, Can cells and empty sections ----------------------------------------------
+
+
+def _surfaces():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[4] / "scripts/manifest/surfaces.py"
+    spec = importlib.util.spec_from_file_location("gbx_surfaces_for_drivers_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _cells(line: str) -> list:
+    import re
+
+    return re.split(r"(?<!\\) \| ", line.strip()[2:-2])
+
+
+def _driver_rows(page: str) -> list:
+    """The table rows of a driver page (a row starts with its anchor), as cell lists."""
+    return [
+        _cells(line) for line in page.splitlines() if line.startswith('| <Link id="')
+    ]
+
+
+def test_the_parent_index_counts_equal_the_rows_of_the_subpages():
+    """gdal-drivers.mdx says how many drivers each page lists, how many are tested, untested and unavailable: those are
+    the numbers of rows in the sections of the subpage, counted from the generated text and not from the snapshot.
+    """
+    import re
+    from pathlib import Path
+
+    docs = Path(__file__).resolve().parents[4] / "docs/docs"
+    parent = (docs / "gdal-drivers.mdx").read_text()
+    for kind in ("vector", "raster"):
+        page = (docs / f"gdal-drivers/{kind}.mdx").read_text()
+        sections = re.split(r"^## ", page, flags=re.M)
+        count = {}
+        for sec in sections:
+            for key in (
+                "tested with GeoBrix",
+                "not tested with GeoBrix",
+                "Unavailable",
+            ):
+                head = sec.split("\n", 1)[0]
+                if key == "tested with GeoBrix" and head.startswith(
+                    f"Available {kind} drivers: tested"
+                ):
+                    count["tested"] = len(_driver_rows(sec))
+                elif key == "not tested with GeoBrix" and head.startswith(
+                    f"Available {kind} drivers: not tested"
+                ):
+                    count["rest"] = len(_driver_rows(sec))
+                elif key == "Unavailable" and head.startswith(
+                    f"Unavailable {kind} drivers"
+                ):
+                    count["down"] = len(_driver_rows(sec))
+        assert set(count) == {"tested", "rest", "down"}, (kind, count)
+        m = re.search(
+            rf"^- \[[^\]]+\]\(\./gdal-drivers/{kind}\): (\d+) drivers, (\d+) tested with GeoBrix, "
+            r"(\d+) available and not tested, (\d+) unavailable\.$",
+            parent,
+            re.M,
+        )
+        assert m, f"no index line for the {kind} page"
+        total, tested, rest, down = map(int, m.groups())
+        assert (tested, rest, down) == (
+            count["tested"],
+            count["rest"],
+            count["down"],
+        ), kind
+        assert total == tested + rest + down == len(_driver_rows(page)), kind
+    other = (docs / "gdal-drivers/other.mdx").read_text()
+    section = other.split("## Other drivers", 1)[1].split("\n## ", 1)[0]
+    n = len(re.findall(r"^\| `", section, re.M))
+    m = re.search(
+        r"\(\./gdal-drivers/other\): (\d+) drivers that handle neither", parent
+    )
+    assert m and int(m.group(1)) == n
+
+
+def test_each_can_cell_of_the_driver_pages_is_the_snapshot_flags():
+    """The Can cell of a row is read, write and (raster page) tile bytes, as the snapshot's flags say."""
+    import re
+    from pathlib import Path
+
+    docs = Path(__file__).resolve().parents[4] / "docs/docs"
+    snap = {d["driver"]: d for d in json.loads(listing.SNAPSHOT.read_text())["drivers"]}
+
+    def want(d, kind):
+        can = [w for w in ("read", "write") if d[w]]
+        if kind == "raster" and d["tile_bytes"]:
+            can.append("tile bytes")
+        return " · ".join(can)
+
+    seen = set()
+    for kind in ("vector", "raster", "other"):
+        page = (docs / f"gdal-drivers/{kind}.mdx").read_text()
+        page = page.split("## GeoBrix Opt-In Drivers", 1)[0]
+        if kind == "other":
+            rows = [
+                _cells(line)
+                for line in page.splitlines()
+                if re.match(r"^\| `[^`]+` \|", line)
+            ]
+            pairs = [(r[0].strip("`"), r[2]) for r in rows]
+        else:
+            pairs = [
+                (re.search(r"</Link>`([^`]+)`", r[0]).group(1), r[2])
+                for r in _driver_rows(page)
+            ]
+        for name, can in pairs:
+            assert can == want(snap[name], "other" if kind == "other" else kind), (
+                kind,
+                name,
+            )
+            seen.add((kind, name))
+    assert seen  # the cells were read
+    for name, d in snap.items():
+        for kind in ("vector", "raster"):
+            if d[kind]:
+                assert (kind, name) in seen, (kind, name)
+
+
+def _snapshot(*drivers, opt_in=()):
+    base = dict(
+        description="d",
+        raster=False,
+        vector=False,
+        read=True,
+        write=False,
+        allowed=True,
+        tile_bytes=False,
+        available=True,
+        requires=None,
+        extensions=[],
+    )
+    return {"drivers": [{**base, **d} for d in drivers], "opt_in": list(opt_in)}
+
+
+def test_the_other_index_entry_is_always_listed_and_an_empty_section_says_none():
+    s = _surfaces()
+    only_vector = _snapshot({"driver": "V", "vector": True})
+    parent = s.render_drivers_page(only_vector)
+    assert "(./gdal-drivers/other): 0 drivers that handle neither" in parent
+    other = s.render_drivers_subpage(only_vector, "other")
+    assert "## Other drivers\n\nNone.\n" in other
+    assert "| Driver | Description | Can |" not in other  # no header-only table
+    assert "## GeoBrix Opt-In Drivers" in other
+    assert other.rstrip().endswith(
+        "None."
+    )  # no opt-in rows: no header-only table either
+    with_other = _snapshot({"driver": "M"}, {"driver": "V", "vector": True})
+    other = s.render_drivers_subpage(with_other, "other")
+    assert "| Driver | Description | Can |" in other and "None.\n\n## " not in other
+    # an empty group of a vector page says so
+    vec = s.render_drivers_subpage(only_vector, "vector")
+    assert (
+        "## Unavailable vector drivers\n\nNo vector driver is unavailable in the env wheel."
+        in vec
+    )
+    assert "## Available vector drivers: tested with GeoBrix\n\nNone.\n" in vec
+
+
+# --- opt_in_rows and the snapshot document --------------------------------------------------------------------------
+
+
+class _ByNameGdal:
+    """A gdal module with only ``GetDriverByName``: the names given are registered, any other is not."""
+
+    def __init__(self, **drivers):
+        self._d = drivers
+
+    def GetDriverByName(self, name):
+        return self._d.get(name)
+
+
+def test_opt_in_rows_for_a_driver_the_build_lacks_has_no_description_and_no_kinds(
+    monkeypatch,
+):
+    monkeypatch.setattr(policy, "refused_names", lambda: ["WMS", "ZZ_PRESENT"])
+    monkeypatch.setattr(
+        policy,
+        "REFUSED_WHY",
+        {
+            "WMS": ("network", "It reaches a web service."),
+            "ZZ_PRESENT": ("pipeline", "It runs a stored pipeline."),
+        },
+    )
+    present = FakeDriver(
+        "ZZ_PRESENT", DCAP_RASTER="YES", DCAP_VECTOR="YES", DMD_LONGNAME="Present one"
+    )
+    rows = listing.opt_in_rows(_ByNameGdal(ZZ_PRESENT=present))
+    assert rows == [
+        {
+            "driver": "WMS",
+            "description": None,  # not in this build: no metadata to read
+            "raster": False,
+            "vector": False,
+            "in_build": False,
+            "class": "network",
+            "why": "It reaches a web service.",
+        },
+        {
+            "driver": "ZZ_PRESENT",
+            "description": "Present one",
+            "raster": True,
+            "vector": True,
+            "in_build": True,
+            "class": "pipeline",
+            "why": "It runs a stored pipeline.",
+        },
+    ]
+
+
+def test_opt_in_rows_for_a_driver_without_a_long_name_has_no_description(monkeypatch):
+    monkeypatch.setattr(policy, "refused_names", lambda: ["NOLONG"])
+    monkeypatch.setattr(policy, "REFUSED_WHY", {"NOLONG": ("network", "Why.")})
+    rows = listing.opt_in_rows(
+        _ByNameGdal(NOLONG=FakeDriver("NOLONG", DCAP_VECTOR="YES"))
+    )
+    assert rows[0]["description"] is None and rows[0]["in_build"] is True
+    assert (rows[0]["raster"], rows[0]["vector"]) == (False, True)
+
+
+def test_the_snapshot_document_with_no_opt_in_driver_has_an_empty_list():
+    row = {c: None for c in listing.SNAPSHOT_COLUMNS}
+    row.update(driver="X", extensions=[], docs=[])
+    for opt_in in (None, []):
+        doc = json.loads(listing.snapshot_document("3.x", [row], opt_in))
+        assert doc["opt_in"] == [] and [d["driver"] for d in doc["drivers"]] == ["X"]

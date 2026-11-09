@@ -1603,13 +1603,21 @@ def test_prune_predicate_stands_down_when_a_row_could_name_any_shard():
 
 
 def _tasks_of(spark, group):
-    """The tasks of the stages of every job run under ``group``."""
+    """The tasks that RAN in the stages of every job under ``group``.
+
+    A skipped stage ran nothing, so its ``numTasks`` is not counted: ``numCompletedTasks``
+    is. The status tracker keeps a bounded set of stages (``spark.ui.retainedStages``, raised
+    for this session by ``delta_session``), and a stage it has dropped would silently count
+    as zero in a long shared session, so a missing stage fails here rather than shrinking
+    the count.
+    """
     tracker = spark.sparkContext.statusTracker()
     total = 0
     for job in tracker.getJobIdsForGroup(group):
         for sid in tracker.getJobInfo(job).stageIds:
             info = tracker.getStageInfo(sid)
-            total += info.numTasks if info else 0
+            assert info is not None, f"stage {sid} of job {job} left the status tracker"
+            total += info.numCompletedTasks
     return total
 
 

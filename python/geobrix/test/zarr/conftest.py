@@ -78,6 +78,11 @@ def delta_session(warehouse_dir):
             .config("spark.databricks.delta.snapshotPartitions", "2")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .config("spark.ui.enabled", "false")
+            # the status tracker evicts the oldest stages past this many (default 1000); a
+            # shared session runs thousands, and a test that counts a commit's tasks would
+            # lose some of them
+            .config("spark.ui.retainedStages", "100000")
+            .config("spark.ui.retainedJobs", "100000")
             .config("spark.sql.adaptive.enabled", "false")
             .config("spark.sql.codegen.wholeStage", "false")
             .config("spark.sql.codegen.factoryMode", "NO_CODEGEN")

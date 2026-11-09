@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pyspark.sql.functions import udtf
 
 from databricks.labs.gbx import _gdal_policy, _osgeo
+from databricks.labs.gbx.drivers import _guidance, _tested
 from databricks.labs.gbx.drivers._builtin import BUILT_IN
 
 KINDS = ("raster", "vector")
@@ -40,6 +41,10 @@ COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("requires", "STRING"),
     ("shipped", "BOOLEAN"),
     ("built_in", "STRING"),
+    ("tested", "BOOLEAN"),
+    ("tested_with", "STRING"),
+    ("guidance", "STRING"),
+    ("docs", "ARRAY<STRING>"),
     ("help_url", "STRING"),
 )
 # The columns the snapshot holds: every one but `shipped` (which is read from it).
@@ -85,7 +90,7 @@ def driver_row(drv, shipped: Optional[frozenset] = None) -> Dict[str, Any]:
     raster, vector = _yes(md, "DCAP_RASTER"), _yes(md, "DCAP_VECTOR")
     allowed, tile_bytes = _gdal_policy.driver_verdict(name, raster)
     requires, usable = _gdal_policy.driver_requires(name, md)
-    return {
+    row = {
         "driver": name,
         "description": md.get("DMD_LONGNAME") or name,
         "raster": raster,
@@ -99,8 +104,13 @@ def driver_row(drv, shipped: Optional[frozenset] = None) -> Dict[str, Any]:
         "requires": requires,
         "shipped": None if shipped is None else name in shipped,
         "built_in": BUILT_IN.get(name),
+        "tested": _tested.is_tested(name),
+        "tested_with": _tested.tested_with(name),
         "help_url": help_url(md.get("DMD_HELPTOPIC")),
     }
+    row["guidance"] = _guidance.guidance(row)
+    row["docs"] = _guidance.docs(name)
+    return row
 
 
 def driver_rows(

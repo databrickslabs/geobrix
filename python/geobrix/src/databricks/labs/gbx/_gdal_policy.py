@@ -1159,6 +1159,13 @@ BYTES_CLASS_REQUIRES = (
     "its bytes alone are not a tile"
 )
 
+# Raster drivers whose dataset lives in the process, not in bytes or in files (MEM is a pointer to memory, NUMPY wraps an
+# array): they can be neither held as tile bytes nor named by a file, so the other-files note does not describe them.
+IN_PROCESS_RASTER = ("MEM", "NUMPY")
+IN_PROCESS_REQUIRES = (
+    "an in-process dataset that lives in memory: it cannot be held as tile bytes"
+)
+
 # Vector drivers that read a set of files or a folder. GDAL's driver metadata does not say so, so this small map is
 # the one hand-kept list (a test holds every name to a driver of the build). The raster side needs none: its class
 # is the manifest's ``bytes_refused_light``.
@@ -1179,6 +1186,8 @@ def driver_requires(name: str, md) -> tuple:
       is the text.
     - A driver opened by a connection string (``DMD_CONNECTION_PREFIX``) talks to a service or runs a program that
       the runtime does not provide: unusable.
+    - A raster driver that lives in the process (``IN_PROCESS_RASTER``) is usable, with the note that it cannot be held
+      as tile bytes.
     - A raster driver of the ``bytes_refused_light`` class reads other files beside the data: usable, with the note.
     - A vector driver in ``VECTOR_MULTI_FILE`` reads a set of files: usable, with the note.
     """
@@ -1194,6 +1203,8 @@ def driver_requires(name: str, md) -> tuple:
             f"that starts with '{prefix}')",
             False,
         )
+    if enabled() and "DCAP_RASTER" in md and name in IN_PROCESS_RASTER:
+        return IN_PROCESS_REQUIRES, True
     if enabled() and "DCAP_RASTER" in md and name in bytes_refused_light_names():
         return BYTES_CLASS_REQUIRES, True
     if name in VECTOR_MULTI_FILE:

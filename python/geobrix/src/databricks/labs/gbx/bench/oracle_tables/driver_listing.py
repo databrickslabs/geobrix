@@ -40,6 +40,26 @@ _RASTER = {
         "tile_bytes": True,
         "shipped": True,
         "built_in": None,
+        # covered by the extended driver tests, through the named reader, the generic one and rst_asformat
+        "tested": True,
+        "tested_with": "gtiff_gbx, raster_gbx (read), gbx_rst_asformat (write)",
+        "guidance": "gtiff_gbx reads and writes GeoTIFFs. Prefer it to this driver.",
+        "docs": [
+            "https://databrickslabs.github.io/geobrix/docs/readers/geotiff",
+            "https://databrickslabs.github.io/geobrix/docs/writers/geotiff",
+        ],
+    },
+    # registered, never tried with GeoBrix
+    "HDF5": {
+        "tested": False,
+        "tested_with": None,
+        "guidance": "Not tested with GeoBrix: raster_gbx may read it; plain GDAL may suit it better.",
+        "docs": [],
+    },
+    # an in-process dataset: no files, and no tile bytes
+    "MEM": {
+        "tile_bytes": False,
+        "requires": "an in-process dataset that lives in memory: it cannot be held as tile bytes",
     },
     # GeoBrix's own Zarr reader and writer use the zarr package
     "Zarr": {
@@ -47,7 +67,13 @@ _RASTER = {
         "built_in": "The Zarr readers and writers use the zarr package, not this driver.",
     },
     # a driver that reads a header file beside the data: allowed, but not a tile's bytes
-    "ENVI": {"allowed": True, "tile_bytes": False, "available": True},
+    "ENVI": {
+        "allowed": True,
+        "tile_bytes": False,
+        "available": True,
+        "tested": True,
+        "tested_with": "raster_gbx (read)",
+    },
     # write only
     "COG": {"read": False, "write": True},
 }
@@ -74,6 +100,8 @@ _VECTOR = {
         "allowed": True,
         "available": False,
         "requires": "a service or program this runtime does not provide (it opens a connection string that starts with 'ES:')",
+        "tested": False,
+        "guidance": "GeoBrix does not use this driver: it needs a service, program or plugin this runtime lacks.",
     },
 }
 # the drivers the policy refuses are deregistered, so they are not listed

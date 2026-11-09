@@ -684,11 +684,29 @@ def check_mvt_layer(case, out, args) -> Optional[str]:
     return None if got == want else f"{case.cid}: features {got}, want {want}"
 
 
+def _check_driver_notes(case, name, r) -> Optional[str]:
+    """The tested, guidance and docs columns of one ``gbx_drivers`` row."""
+    if _field(r, "tested") != (_field(r, "tested_with") is not None):
+        return f"{case.cid}: {name!r} is `tested` only with `tested_with` set"
+    if not _field(r, "guidance"):
+        return f"{case.cid}: {name!r} has no guidance"
+    for link in _field(r, "docs") or ():
+        if not link.startswith(
+            (
+                "https://databrickslabs.github.io/geobrix/docs/",
+                "https://docs.databricks.com/",
+            )
+        ):
+            return f"{case.cid}: {name!r} links {link!r}, not a docs page"
+    return None
+
+
 def check_drivers(case, rows, args) -> Optional[str]:
     """`drivers`: the rows of ``gbx_drivers`` for one filter. `expect` is {"kind": the filter the call used
     (None: every driver), "present": {driver: {column: value}}, "absent": [driver]}. Beyond the named rows: each
     driver once; the filter holds for every row; ``tile_bytes`` implies a raster driver GeoBrix allows; ``available``
-    implies ``allowed``; a driver that is not available says why in ``requires``; the raster names are rasterio's own
+    implies ``allowed``; a driver that is not available says why in ``requires``; ``tested`` goes with ``tested_with``, every
+    driver has guidance, and its docs links are pages of the docs site; the raster names are rasterio's own
     registry's (an independent read of the same libgdal).
     """
     want = case.expect
@@ -719,6 +737,9 @@ def check_drivers(case, rows, args) -> Optional[str]:
         url = _field(r, "help_url")
         if url is not None and not url.startswith("https://gdal.org/"):
             return f"{case.cid}: {name!r} has the help URL {url!r}"
+        bad = _check_driver_notes(case, name, r)
+        if bad:
+            return bad
     for name, cols in want.get("present", {}).items():
         if name not in got:
             return f"{case.cid}: {name!r} is not listed"

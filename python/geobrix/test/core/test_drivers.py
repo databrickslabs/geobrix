@@ -78,6 +78,10 @@ def test_a_raster_driver_row_carries_gdals_flags_and_the_policy():
         "requires": None,
         "shipped": True,
         "built_in": None,
+        "tested": True,
+        "tested_with": "raster_gbx (read), gbx_rst_asformat (write)",
+        "guidance": "Tested with GeoBrix: read it with raster_gbx and write it with gbx_rst_asformat.",
+        "docs": [],
         "help_url": "https://gdal.org/drivers/raster/aaigrid.html",
     }
 
@@ -137,6 +141,19 @@ def test_the_policy_columns_follow_the_manifest_classes():
     )  # vector: no tile bytes
     # a raster driver the manifest does not classify is not allowed
     assert policy.driver_verdict("NotAGdalDriver", True) == (False, False)
+
+
+def test_an_in_process_driver_says_it_lives_in_memory_not_that_it_needs_files():
+    """MEM and NUMPY hold their dataset in the process: no file is missing, and the bytes cannot be a tile."""
+    for name in ("MEM", "NUMPY"):
+        requires, usable = policy.driver_requires(name, {"DCAP_RASTER": "YES"})
+        assert usable
+        assert requires == policy.IN_PROCESS_REQUIRES
+        assert "in-process" in requires and "tile bytes" in requires
+        assert "file" not in requires and "sidecar" not in requires
+    # the others of the class keep the note about other files
+    requires, _ = policy.driver_requires("ENVI", {"DCAP_RASTER": "YES"})
+    assert requires == policy.BYTES_CLASS_REQUIRES
 
 
 def test_a_sidecar_class_raster_driver_names_what_it_needs():
@@ -381,9 +398,11 @@ def test_the_docs_page_links_every_driver_row_and_every_built_in_anchor():
         page.index(h)
         for h in (
             "## Formats GeoBrix handles without a GDAL driver",
-            "### Available vector drivers",
+            "### Available vector drivers: tested with GeoBrix",
+            "### Available vector drivers: not tested with GeoBrix",
             "### Unavailable vector drivers",
-            "### Available raster drivers",
+            "### Available raster drivers: tested with GeoBrix",
+            "### Available raster drivers: not tested with GeoBrix",
             "### Unavailable raster drivers",
         )
     ]

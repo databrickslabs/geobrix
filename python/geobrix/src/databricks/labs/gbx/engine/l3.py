@@ -236,10 +236,15 @@ def _virtual_raster(
         ) from None
 
 
+# resampling words only a warp applies: a decimated read refuses them
+_WARP_ONLY_WORDS = frozenset({"max", "min", "med", "q1", "q3", "sum"})
+
+
 def _decimation(fn, values):
     """``(factor, rasterio resampling)`` when a virtual tile of this row is read at its target size: the row reads a
-    factor (``in_read: "factor"``) below 1 and a resampling word that names one. None otherwise; a wrong factor or
-    word is left to the argument check, which raises."""
+    factor (``in_read: "factor"``) below 1 and a resampling word that a read applies (not max, min, med, q1 or q3).
+    None otherwise; a wrong factor or word is left to the argument check, which raises.
+    """
     if values is None or fn.gdal.in_read != "factor":
         return None
     size_arg = next((a for a in fn.gdal.args if a.type == "size_from_factor"), None)
@@ -256,6 +261,8 @@ def _decimation(fn, values):
         resampling = resampling_enum(str(word))
     except (TypeError, ValueError):
         return None
+    if resampling.name in _WARP_ONLY_WORDS:
+        return None  # the reproject applies it; a decimated read cannot (rasterio refuses it on a read)
     return (factor, resampling) if 0.0 < factor < 1.0 and word is not None else None
 
 
@@ -309,9 +316,11 @@ def _read_virtual(
 
     with run.engine_settings():
         if decimate is not None and sizes_out is not None:
+            # vt.path is the local path the FILE reference resolved to (`_virtual_raster`), so a tile that arrives with a
+            # FILE reference is still a plain window of a file here
             got = ot.with_plain_window(
                 vt,
-                file_ref,
+                None,
                 lambda src, window: _decimated_window(
                     fn, src, window, decimate, read_cap
                 ),

@@ -4581,6 +4581,8 @@ def _verdict(case: Case, outs, rows) -> Optional[str]:
     if case.kind == "exact_rows":
         return check(case, outs, rows[0])
     if case.kind == "per_row":
+        if len(outs) != len(case.expect):
+            return f"{case.cid}: {len(outs)} output rows for {len(case.expect)} expectations"
         for i, (out, row, kind) in enumerate(zip(outs, rows, case.expect)):
             name, _, want = kind.partition(":")
             one = replace(case, cid=f"{case.cid}[{i}]", kind=name, expect=want or None)

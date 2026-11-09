@@ -83,6 +83,12 @@ def test_a_word_gdal_has_but_the_functions_do_not_take_is_refused(word):
         _build(RS, {"factor": 0.5, "algorithm": word})
 
 
+def test_an_infinite_size_is_refused_by_name_not_as_an_overflow():
+    with pytest.raises(spec.ParamError) as e:
+        _build(RSZ, {"width_px": float("inf"), "height_px": 2, "algorithm": "near"})
+    assert "width_px" in str(e.value)
+
+
 def test_a_size_from_a_factor_rounds_half_to_even_and_is_at_least_one():
     half = _build(
         RS,
@@ -127,6 +133,14 @@ def test_a_virtual_tile_is_read_at_its_target_size_only_below_one_with_a_word_th
     assert l3._decimation(M[RS], {"factor": 1.0, "algorithm": "average"}) is None
     assert l3._decimation(M[RS], {"factor": 2.0, "algorithm": "average"}) is None
     assert l3._decimation(M[RS], {"factor": 0.5, "algorithm": "sinc"}) is None
+    for word in (
+        "max",
+        "min",
+        "med",
+        "q1",
+        "q3",
+    ):  # a warp applies these, a read cannot
+        assert l3._decimation(M[RS], {"factor": 0.5, "algorithm": word}) is None
     assert l3._decimation(M[RS], {"factor": 0.5, "algorithm": None}) is None
     assert l3._decimation(M[RS], {"factor": -1.0, "algorithm": "near"}) is None
     assert l3._decimation(M[RS], None) is None
@@ -220,6 +234,18 @@ def test_a_virtual_tile_with_an_overview_is_read_at_its_target_size(engine, tmp_
     res = engine.run(M[RS], rasters, values, src_sizes=sizes)
     with rasterio.MemoryFile(res.raster) as mf, mf.open() as ds:
         assert (ds.width, ds.height) == (32, 32)
+
+    # a tile that arrives with a FILE reference is read at its target size as well
+
+    class _Ref:
+        def as_local_file(self):
+            return path
+
+    sizes = []
+    rasters, _, _ = l3._inputs(M[RS], tile, None, _Ref(), sizes, values)
+    assert sizes == [(64, 64)]
+    with rasterio.MemoryFile(rasters[0]) as mf, mf.open() as ds:
+        assert (ds.width, ds.height) == (32, 32)
     # a factor of 1 or more reads the whole window
     sizes = []
     rasters, _, _ = l3._inputs(
@@ -228,6 +254,14 @@ def test_a_virtual_tile_with_an_overview_is_read_at_its_target_size(engine, tmp_
     assert sizes == [None]
     with rasterio.MemoryFile(rasters[0]) as mf, mf.open() as ds:
         assert (ds.width, ds.height) == (64, 64)
+    # a word only a warp applies reads the whole window; the reproject applies it
+    sizes = []
+    rasters, _, _ = l3._inputs(
+        M[RS], tile, None, None, sizes, {"factor": 0.5, "algorithm": "max"}
+    )
+    assert sizes == [None]
+    res = engine.run(M[RS], rasters, {"factor": 0.5, "algorithm": "max"})
+    assert res.error is None, res.error
 
 
 # --- a pixel no source pixel reaches is masked, never a valid 0 ----------------------------------------------------------
@@ -336,3 +370,40 @@ def test_a_source_own_mask_and_the_footprint_are_both_masked(engine, tmp_path):
         masks = ds.read_masks(1)
         assert (masks == 0).sum() > 4  # the 2 x 2 source pixels and the corners outside
         assert (ds.read(1, masked=True).compressed() > 0).all()
+
+
+def _gcp_tile(tmp_path):
+    """A one-band tile with no NoData georeferenced by ground control points only (no geotransform)."""
+    from osgeo import gdal, osr
+
+    path = str(tmp_path / "gcp.tif")
+    ds = gdal.GetDriverByName("GTiff").Create(path, 20, 15, 1, gdal.GDT_Float32)
+    ds.GetRasterBand(1).WriteArray(np.arange(1, 301, dtype="float32").reshape(15, 20))
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    ds.SetGCPs(
+        [
+            gdal.GCP(0.0, 60.0, 0, 0, 0),
+            gdal.GCP(20.0, 60.0, 0, 20, 0),
+            gdal.GCP(0.0, 45.0, 0, 0, 15),
+            gdal.GCP(20.0, 45.0, 0, 20, 15),
+        ],
+        srs.ExportToWkt(),
+    )
+    ds = None
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def test_a_gcp_georeferenced_tile_with_no_nodata_is_warped_with_its_footprint_masked(
+    engine, tmp_path
+):
+    mf, ds = _open_result(engine.run(M[TR], [_gcp_tile(tmp_path)], {"srid": 3035}))
+    with mf, ds:
+        assert ds.crs is not None and ds.crs.to_epsg() == 3035
+        masks = ds.read_masks(1)
+        assert (masks == 0).any() and (masks != 0).any()
+        assert (
+            ds.read(1, masked=True).compressed() >= 1
+        ).all()  # every 0 is a fill, under the mask

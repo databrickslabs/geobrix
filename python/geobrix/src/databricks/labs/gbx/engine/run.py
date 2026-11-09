@@ -432,8 +432,12 @@ def _carry_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> None:
         if inverted and not coverage.any():
             return
         mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
-        mem.SetGeoTransform(ds.GetGeoTransform())
-        mem.SetProjection(ds.GetProjection())
+        if ds.GetGCPCount():
+            # a tile georeferenced by ground control points: the mask warps on the same points, not on a default grid
+            mem.SetGCPs(ds.GetGCPs(), ds.GetGCPSpatialRef())
+        else:
+            mem.SetGeoTransform(ds.GetGeoTransform())
+            mem.SetProjection(ds.GetProjection())
         mem.GetRasterBand(1).WriteRaster(0, 0, w, h, coverage.astype("u1").tobytes())
         gdal.GetDriverByName("GTiff").CreateCopy(f"{prefix}/mask_in.tif", mem)
         mem = None

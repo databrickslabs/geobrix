@@ -605,7 +605,7 @@ def _positive(fn, arg, name: str, v, whole: bool):
     """`v` (the value of param `name`) as a number above 0 and finite, else a refusal naming the param and the value."""
     try:
         x = int(v) if whole else float(v)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # int(inf) is an OverflowError
         x = math.nan
     if not (0 < x < math.inf):
         raise _fail(fn, arg, f"{name} must be positive and finite; got {v}")

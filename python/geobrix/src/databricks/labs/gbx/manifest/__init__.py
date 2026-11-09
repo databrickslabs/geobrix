@@ -198,6 +198,8 @@ class Param:
     uc_crs: bool = False
     doc: str = ""
     py: str = "col"  # a key of PY_MODES
+    # The values a text parameter takes (compared without case): the Python API refuses any other before it calls SQL.
+    choices: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -914,6 +916,7 @@ def parse(raw: Mapping) -> Manifest:
                 bool(p.get("uc_crs")),
                 p.get("doc", ""),
                 p.get("py", "col"),
+                tuple(p.get("choices", ())),
             )
             for p in r["params"]
         )

@@ -194,10 +194,11 @@ def test_table_gives_a_skipped_optional_its_default_before_a_later_one(
     df = _Df([])
     _api.table(df, base.sql_name, "g", 1000, None, False)
     text = df.sparkSession.calls[0][0]
-    assert "(gbx_in.`g`, 1000, CAST(false AS BOOLEAN), FALSE)" in text
+    assert "(gbx_in.`g`, :a0, CAST(false AS BOOLEAN), :a1)" in text
+    assert df.sparkSession.calls[0][1]["args"] == {"a0": 1000, "a1": False}
     df2 = _Df([])
     _api.table(df2, base.sql_name, "g", 1000, None, None)
-    assert "(gbx_in.`g`, 1000)" in df2.sparkSession.calls[0][0]
+    assert "(gbx_in.`g`, :a0)" in df2.sparkSession.calls[0][0]
 
 
 def test_a_table_call_with_the_first_optional_left_out_sends_its_default_not_a_shifted_value(
@@ -207,8 +208,9 @@ def test_a_table_call_with_the_first_optional_left_out_sends_its_default_not_a_s
     and `coverage` must stay in its own place."""
     df = _Df([])
     _api.table(df, "gbx_bng_geomkringexplode", "g", 3, 1, None, "polyfill")
-    ((text, _),) = df.sparkSession.calls
-    assert "CAST('boundary-out' AS STRING), 'polyfill'" in text, text
+    ((text, kw),) = df.sparkSession.calls
+    assert "CAST('boundary-out' AS STRING), :a2" in text, text
+    assert kw["args"] == {"a0": 3, "a1": 1, "a2": "polyfill"}
 
 
 def test_a_jar_companion_a_test_installs_stays_over_a_later_ensure(monkeypatch):
@@ -469,3 +471,108 @@ def test_register_family_only_reads_a_camel_case_name_as_its_sql_name():
     with pytest.raises(ValueError) as err:
         manager.register_family(None, ("gbx_bng_",), only=["BNG_Polifyll"], level="L3")
     assert "gbx_bng_polifyll" in str(err.value)
+
+
+# --- a value is a parameter of the statement, never part of its text -------------------------------------------------
+
+INJECTION = [
+    "x\\') UNION SELECT 'pwn' AS out --",
+    "'); DROP TABLE t; --",
+    "a\\",
+    "{braces} and `ticks` and 'quotes'",
+]
+
+
+def test_a_bound_value_is_a_marker_and_the_value_travels_as_an_argument():
+    bound = _api._Bound("gbx_x")
+    texts = [bound.bind(v, Param("s", ("STRING",), "")) for v in INJECTION]
+    assert texts == [":a0", ":a1", ":a2", ":a3"]
+    assert bound.args == {f"a{i}": v for i, v in enumerate(INJECTION)}
+
+
+def test_a_null_and_a_numpy_scalar_bind_as_their_values():
+    import numpy as np
+
+    bound = _api._Bound("gbx_x")
+    assert bound.bind(None, P_INT) == "CAST(NULL AS INT)"
+    assert bound.bind(np.int64(5), P_INT) == ":a0"
+    assert bound.args == {"a0": 5} and type(bound.args["a0"]) is int
+    with pytest.raises(TypeError, match="object is not a SQL literal"):
+        bound.bind(object(), P_INT)
+
+
+def test_the_display_literal_escapes_a_backslash_too():
+    assert _api._sql_literal("a\\", P_INT) == "'a\\\\'"
+
+
+def _echo_function(monkeypatch, spark, *, py="col", choices=()):
+    """A table function `gbx_echo_test(s)` that returns its argument, standing in for any manifest row."""
+    import types
+
+    from pyspark.sql.functions import udtf
+
+    @udtf(returnType="out: string")
+    class Echo:
+        def eval(self, s):
+            yield (s,)
+
+    spark.udtf.register("gbx_echo_test", Echo)
+    fn = types.SimpleNamespace(
+        sql_name="gbx_echo_test",
+        params=(Param("s", ("STRING",), "", None, False, "", py, tuple(choices)),),
+        min_args=1,
+        max_args=1,
+        columns=(("out", "STRING"),),
+        table_input=None,
+    )
+    monkeypatch.setattr(_api, "_fn", lambda n: fn)
+    monkeypatch.setattr(_api, "ensure", lambda sp, n: None)
+    monkeypatch.setattr(_api, "_active", lambda: spark)
+
+
+@pytest.mark.parametrize("payload", INJECTION)
+def test_source_passes_an_injection_string_as_one_literal_value(
+    spark, monkeypatch, payload
+):
+    _echo_function(monkeypatch, spark)
+    rows = _api.source("gbx_echo_test", payload).collect()
+    assert [r["out"] for r in rows] == [payload]
+
+
+@pytest.mark.parametrize("payload", INJECTION)
+def test_table_passes_an_injection_string_as_one_literal_value(
+    spark, monkeypatch, payload
+):
+    _echo_function(monkeypatch, spark, py="lit")
+    df = spark.createDataFrame([(1,), (2,)], "id int")
+    rows = _api.table(df, "gbx_echo_test", payload).orderBy("id").collect()
+    assert [(r["id"], r["out"]) for r in rows] == [(1, payload), (2, payload)]
+
+
+@pytest.mark.parametrize("payload", INJECTION)
+def test_a_choice_parameter_refuses_anything_else_before_any_sql_runs(
+    spark, monkeypatch, payload
+):
+    _echo_function(monkeypatch, spark, choices=("raster", "vector"))
+    monkeypatch.setattr(
+        _api, "_active", lambda: pytest.fail("the statement ran before the check")
+    )
+    with pytest.raises(ValueError, match="Fix:"):
+        _api.source("gbx_echo_test", payload)
+
+
+def test_the_drivers_entry_refuses_a_kind_it_does_not_know_client_side(monkeypatch):
+    monkeypatch.setattr(
+        _api, "_active", lambda: pytest.fail("the statement ran before the check")
+    )
+    for kind in ("table", "raster') UNION SELECT 1 --"):
+        with pytest.raises(ValueError, match="gbx_drivers: kind .* is not one of"):
+            _api.source("gbx_drivers", kind)
+
+
+def test_source_binds_its_values_on_spark_connect(spark_connect_local, monkeypatch):
+    """Named parameters also work through Spark Connect (Serverless, standard clusters). Run alone: a classic
+    session in the same process makes this skip."""
+    _echo_function(monkeypatch, spark_connect_local)
+    rows = _api.source("gbx_echo_test", INJECTION[0]).collect()
+    assert [r["out"] for r in rows] == [INJECTION[0]]

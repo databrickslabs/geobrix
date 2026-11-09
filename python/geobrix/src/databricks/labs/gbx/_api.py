@@ -183,6 +183,9 @@ def extra_call(sql_name: str, extras, *values):
 
 
 def _sql_literal(value: Any, param) -> str:
+    """``value`` as SQL text, for DISPLAY only (the doc examples). Nothing the Python API runs is built with it: a
+    call binds its values as named parameters (``_Bound``), so a value is never part of the statement's text.
+    """
     from databricks.labs.gbx.manifest import sql_type
 
     if type(value).__module__ == "numpy" and hasattr(value, "item"):
@@ -200,8 +203,61 @@ def _sql_literal(value: Any, param) -> str:
     if isinstance(value, (bytes, bytearray)):
         return "X'" + bytes(value).hex() + "'"
     if isinstance(value, str):
-        return "'" + value.replace("'", "''") + "'"
+        return "'" + value.replace("\\", "\\\\").replace("'", "''") + "'"
     raise TypeError(f"{param.name}: a {type(value).__name__} is not a SQL literal")
+
+
+def _check_choice(sql_name: str, param, value: Any) -> None:
+    """A text parameter that declares ``choices`` takes one of them (any case) or NULL; anything else is refused here,
+    before any SQL runs."""
+    if not param.choices or value is None:
+        return
+    if not isinstance(value, str) or value.strip().lower() not in param.choices:
+        wanted = ", ".join(repr(c) for c in param.choices)
+        raise ValueError(
+            f"{sql_name}: {param.name} {value!r} is not one of {wanted}. "
+            f"Fix: pass one of them, or None for the default."
+        )
+
+
+class _Bound:
+    """The named parameters of one statement: ``bind`` gives the marker (``:a0``) for a value and keeps the value for
+    ``spark.sql(..., args=...)``, so no value is ever spelled into the statement. Only the manifest's own text (a
+    function name, a default expression, a type) and a column name quoted by ``quote`` are in the statement.
+    """
+
+    def __init__(self, sql_name: str):
+        self.sql_name = sql_name
+        self.values: Dict[str, Any] = {}
+
+    def bind(self, value: Any, param) -> str:
+        from databricks.labs.gbx.manifest import sql_type
+
+        if type(value).__module__ == "numpy" and hasattr(value, "item"):
+            value = value.item()  # a numpy scalar is its Python value (a 0-d array too)
+        if value is None:
+            if param.py == "col_null":
+                return "NULL"
+            return f"CAST(NULL AS {sql_type(param.session[0])})"
+        _check_choice(self.sql_name, param, value)
+        if isinstance(value, bytearray):
+            value = bytes(value)
+        if not isinstance(value, (bool, int, float, str, bytes)):
+            raise TypeError(
+                f"{param.name}: a {type(value).__name__} is not a SQL literal"
+            )
+        key = f"a{len(self.values)}"
+        self.values[key] = value
+        return f":{key}"
+
+    @property
+    def args(self):
+        return self.values or None
+
+
+def quote(name: str) -> str:
+    """A column name as a quoted identifier."""
+    return "`" + name.replace("`", "``") + "`"
 
 
 def table(df, sql_name: str, *values):
@@ -227,7 +283,7 @@ def table(df, sql_name: str, *values):
     vals = list(values) + [None] * (fn.max_args - len(values))
     set_at = [i for i, v in enumerate(vals) if v is not None]
     last = max(set_at + [fn.min_args - 1])
-    args = []
+    args, bound = [], _Bound(sql_name)
     for i in range(last + 1):
         p, v = fn.params[i], vals[i]
         if isinstance(v, Column):
@@ -239,15 +295,16 @@ def table(df, sql_name: str, *values):
             # an optional left out before one that is set takes its SQL default, never a shifted value
             args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
         elif isinstance(v, str) and p.py != "lit":
-            args.append("gbx_in.`" + v.replace("`", "``") + "`")
+            args.append("gbx_in." + quote(v))
         else:
-            args.append(_sql_literal(v, p))
+            args.append(bound.bind(v, p))
     spark = df.sparkSession
     ensure(spark, sql_name)
-    # spark.sql formats the text with str.format, so braces in an argument are escaped
+    # spark.sql formats the text with str.format, so braces in a column name are escaped
     call_args = ", ".join(args).replace("{", "{{").replace("}", "}}")
     return spark.sql(
         f"SELECT gbx_in.*, gbx_out.* FROM {{gbx_in}} AS gbx_in, LATERAL {sql_name}({call_args}) AS gbx_out",
+        args=bound.args,
         gbx_in=df,
     )
 
@@ -268,16 +325,16 @@ def source(sql_name: str, *values):
     vals = list(values) + [None] * (fn.max_args - len(values))
     set_at = [i for i, v in enumerate(vals) if v is not None]
     last = max(set_at + [fn.min_args - 1])
-    args = []
+    args, bound = [], _Bound(sql_name)
     for i in range(last + 1):
         p, v = fn.params[i], vals[i]
         if v is None and i >= fn.min_args:
             args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
         else:
-            args.append(_sql_literal(v, p))
+            args.append(bound.bind(v, p))
     spark = _active()
     ensure(spark, sql_name)
-    return spark.sql(f"SELECT * FROM {sql_name}({', '.join(args)})")
+    return spark.sql(f"SELECT * FROM {sql_name}({', '.join(args)})", args=bound.args)
 
 
 def table_by(df, sql_name: str, *values):
@@ -303,15 +360,14 @@ def table_by(df, sql_name: str, *values):
         raise TypeError(
             f"{sql_name} needs {fn.min_args - 1} arguments after the DataFrame ({len(values)} given)"
         )
-    args = []
+    args, bound = [], _Bound(sql_name)
     for p, v in zip(constants, values):
         if isinstance(v, Column):
             raise TypeError(
                 f"{sql_name}: {p.name!r} is a constant of the call, not a column. "
                 f"Fix: pass a Python value for {p.name!r}."
             )
-        args.append(_sql_literal(v, p))
-    quote = lambda c: "`" + c.replace("`", "``") + "`"  # noqa: E731
+        args.append(bound.bind(v, p))
     # each column as the type the function declares (a key of INT reaches a `key string` as a string); a TILE
     # column is a struct the function reads as it is
     cols = ", ".join(
@@ -324,5 +380,6 @@ def table_by(df, sql_name: str, *values):
     call_args = "".join(", " + a for a in args).replace("{", "{{").replace("}", "}}")
     return spark.sql(
         f"SELECT * FROM {sql_name}(TABLE(SELECT {cols} FROM {{gbx_in}}) PARTITION BY ({keys}){call_args})",
+        args=bound.args,
         gbx_in=df,
     )

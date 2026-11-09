@@ -488,6 +488,15 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - This applies to the `clipPolygons` option of the raster readers and to the bounding-box download of STAC assets.
   - An aligned raster is cut as before.
 
+### GDAL driver listing: `gbx_drivers` (new) {#gbx-drivers}
+
+- **`gbx_drivers()` lists the GDAL drivers that the current environment can run.** In Python, call `drivers()` from `databricks.labs.gbx.drivers.functions`. Pass `'raster'` or `'vector'` to keep one kind.
+  - Each row says whether the driver is raster or vector, reads, writes and is allowed by GeoBrix.
+  - It also says whether a raster can be held as tile bytes, whether the driver works as shipped, and what it `requires`.
+  - It runs on Serverless and standard clusters. It needs the env wheel's GDAL bindings, and raises an error that names the env wheel without them.
+- **The rows reflect the environment as it runs now.** Adding or removing packages changes them. The `shipped` column marks the drivers of the env wheel's own build, which [GDAL drivers as provided](./gdal-drivers) lists.
+- See the [General Function Reference](./api/general-functions#drivers).
+
 ## Vector {#vector}
 
 ### Lightweight vector readers: large layers and coded-value domains {#vector-large-layers}

@@ -9,6 +9,14 @@ GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial 
 They are pure Python and need no JAR, so one set serves every compute. They scale by
 partitioning work across the cluster rather than reading or writing on a single node.
 
+:::tip Which formats can this runtime read and write?
+Call [`gbx_drivers()`](./api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. Pass `'raster'` or `'vector'` to keep one kind. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](./gdal-drivers) for the shipped list.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers() WHERE write AND allowed
+```
+:::
+
 ## Readers
 
 Load geospatial files into a distributed DataFrame. The raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**

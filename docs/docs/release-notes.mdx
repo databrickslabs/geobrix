@@ -28,6 +28,7 @@ v0.6.0 is under development and not yet released.
 - **New:** [Unity Catalog functions](./release-notes-0-6#unity-catalog-functions) for SQL warehouses, installed with `gbx.uc.install`, and [`gbx.stage_jar`](./release-notes-0-6#stage-jar) to stage the JAR the env wheel carries.
 - **New:** [Unity Catalog SQL examples](./examples/uc-functions): twelve files of ready-made queries, one per category, to try the Unity Catalog functions in the SQL editor.
 - **New:** incremental ingestion with [`read_paths` and `declare_ingest`](./release-notes-0-6#read-paths), [bad records set aside with `on_error`](./release-notes-0-6#on-error), and a [multi-format Lakeflow connector](./release-notes-0-6#lakeflow-connector).
+- **New:** [`gbx_drivers()`](./release-notes-0-6#gbx-drivers) lists the GDAL drivers of the current environment, raster and vector, with what each reads, writes and needs.
 - **New:** [transactional, versioned Zarr stores](./release-notes-0-6#zarr-stores) with [direct storage access](./release-notes-0-6#zarr-direct).
 - **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) for dedicated clusters, and [GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](./release-notes-0-6#native-stack) in the env wheel.
 - **Changed:** [raster tessellation](./release-notes-0-6#tessellation-parity) matches across tiers and scales to scene-sized tiles, with one rule for [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask).

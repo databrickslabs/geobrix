@@ -19,10 +19,14 @@ It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
 The reader reads any [OGR/GDAL vector driver](https://gdal.org/drivers/vector/index.html), including:
 
 - **ESRI Shapefile** (.shp), **GeoJSON** (.geojson, .json), **GeoPackage** (.gpkg), **File Geodatabase** (.gdb)
-- **KML** (.kml), **GML** (.gml), **CSV** with geometry (.csv), **PostgreSQL/PostGIS**, and 80+ more.
+- **KML** (.kml), **GML** (.gml), **CSV** with geometry (.csv), and more. The `gbx_drivers('vector')` call below lists the ones in your environment.
 
-:::note Format availability
-Driver coverage varies by environment — some formats need extra GDAL drivers/packages installed.
+:::tip Which formats can this runtime read and write?
+Call [`gbx_drivers()`](../api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the vector drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. The `driverName` option takes a name from the `driver` column. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](../gdal-drivers) for the shipped list.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers('vector') WHERE write AND allowed
+```
 :::
 
 ## Options

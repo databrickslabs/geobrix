@@ -65,7 +65,7 @@ GUIDANCE: Dict[str, Dict[str, object]] = {
         "reader": "file_gdb_gbx",
         "what": "File Geodatabase feature classes",
         "reader_kinds": ("vector",),
-        "caveat": "It is vector only. Raster data in a geodatabase is not tested with GeoBrix.",
+        "caveat": "Its named reader and writer are vector only. Raster data in a geodatabase is not tested with GeoBrix.",
         "links": (
             ("GeoDatabase reader", "readers/filegdb"),
             ("GeoDatabase writer", "writers/filegdb"),

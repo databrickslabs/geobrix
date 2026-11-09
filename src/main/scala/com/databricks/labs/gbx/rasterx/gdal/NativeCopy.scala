@@ -80,22 +80,46 @@ private[gdal] object NativeCopy extends Logging {
         else None
     }
 
-    /** Make `root` (0700) when missing; an [[UnsafeCopyRoot]] when another user could write it or a directory above it. */
-    private[gdal] def secureRoot(root: Path): Unit = {
+    /**
+      * The real path of `root`, made when missing, once no other user can write it or a directory above it; else an
+      * [[UnsafeCopyRoot]]. Each missing directory is made by itself (0700, never through an existing one unchecked). An
+      * existing one is checked before anything is made in it: a link must be this uid's or root's, and its target is
+      * checked as a directory. Once made, every directory from the root's real path up to `/` is checked again: each
+      * above it this uid's or root's, writable by no other user unless sticky; the root this uid's and 0700.
+      */
+    private[gdal] def secureRoot(root: Path): Path = {
         val unsafe = (why: String) =>
             new UnsafeCopyRoot(s"geobrix: the native copy root $root is not safe to load libraries from: $why")
+        val nf = LinkOption.NOFOLLOW_LINKS
+        val check = (d: Path, own: Boolean) => writableByOthers(d, own).foreach(w => throw unsafe(w))
         try {
-            val existing = Iterator.iterate(root)(_.getParent).takeWhile(_ != null).find(Files.exists(_)).getOrElse(root.getRoot)
-            val real = existing.toRealPath()
-            Iterator.iterate(real)(_.getParent).takeWhile(_ != null).foreach { d =>
-                writableByOthers(d, own = d == real && existing == root).foreach(w => throw unsafe(w))
+            val abs = root.toAbsolutePath.normalize()
+            val names = abs.iterator().asScala.toList
+            names.indices.foldLeft(abs.getRoot) { (parent, i) =>
+                val d = parent.resolve(names(i).toString)
+                val isRoot = i == names.size - 1
+                if (!Files.exists(d, nf)) {
+                    try Files.createDirectory(d, OwnerOnly)
+                    catch { case _: FileAlreadyExistsException => () } // made meanwhile: checked below as an existing one
+                }
+                if (Files.isSymbolicLink(d)) {
+                    val uid = uidOf(d)
+                    if (uid != myUid && uid != 0) throw unsafe(s"$d is a link owned by uid $uid")
+                }
+                if (!Files.isDirectory(d)) throw unsafe(s"$d is not a directory")
+                check(d.toRealPath(), isRoot)
+                d
             }
-            if (existing != root) Files.createDirectories(root, OwnerOnly)
-            writableByOthers(root.toRealPath(), own = true).foreach(w => throw unsafe(w))
+            val real = abs.toRealPath()
+            Iterator.iterate(real.getParent)(_.getParent).takeWhile(_ != null).foreach(check(_, false))
+            check(real, true)
+            val mode = modeOf(real)
+            if ((mode & 0x3f) != 0) throw unsafe(f"$real is not owner-only (mode ${mode & 0xfff}%o, not 700)")
+            real
         } catch {
-            case e: UnsafeCopyRoot                                    => throw e
-            case e: UnsupportedOperationException                     => throw unsafe(s"its owner cannot be read ($e)")
-            case e: IllegalArgumentException                          => throw unsafe(s"its owner cannot be read ($e)")
+            case e: UnsafeCopyRoot                => throw e
+            case e: UnsupportedOperationException => throw unsafe(s"its owner cannot be read ($e)")
+            case e: IllegalArgumentException      => throw unsafe(s"its owner cannot be read ($e)")
         }
     }
 
@@ -140,17 +164,15 @@ private[gdal] object NativeCopy extends Logging {
 
     /**
       * The node-local copy of `c` (a payload: `<dir>/lib/libgdalalljni.so`, data `<dir>/../share/{proj,gdal}`) under
-      * `root`, made now unless a done copy with the JNI `identity` (its sha256) is there. `sha` gives a file's sha256.
+      * `requested` (by its real path, once [[secureRoot]] has checked it), made now unless a done copy with the JNI `identity` (its sha256) is there. `sha` gives a file's sha256.
       *
       * Left: the refusal, when the payload is gone or changes while it is copied. An IOException for any other failure
       * (the root cannot be written): the caller loads in place.
       */
-    def stabilize(c: NativeChoice, root: Path, identity: String, sha: Path => String): Either[String, NativeChoice] = {
+    def stabilize(c: NativeChoice, requested: Path, identity: String, sha: Path => String): Either[String, NativeChoice] = {
         val key = keyFor(identity).getOrElse(throw new IOException(s"the JNI at ${c.jni} could not be hashed"))
         val src = Paths.get(c.jni).getParent.getParent
         val arch = src.getFileName.toString
-        val dest = root.resolve(key)
-        val choice = copyChoice(dest, arch)
         // a copied file's source: `<arch>/...` under the payload's directory, `share/{proj,gdal}/...` under its data
         val sourceOf = (rel: String) => rel.split("/", 3) match {
             case Array(`arch`, sub, rest)  => Some(src.resolve(sub).resolve(rest))
@@ -159,7 +181,10 @@ private[gdal] object NativeCopy extends Logging {
             case _                         => None
         }
         jvmLock.synchronized {
-            secureRoot(root)
+            // every later path (lock, copy, temp directory, rename, marker, the JNI loaded) is under the checked real root
+            val root = secureRoot(requested)
+            val dest = root.resolve(key)
+            val choice = copyChoice(dest, arch)
             withNodeLock(root) {
                 if (isDone(dest, arch, identity, sha, sourceOf)) {
                     logInfo(s"GDAL native payload: reusing the node-local copy $dest")

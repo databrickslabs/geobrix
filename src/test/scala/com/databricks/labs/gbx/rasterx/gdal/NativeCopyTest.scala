@@ -145,6 +145,15 @@ class NativeCopyTest extends AnyFunSuite {
         Files.setPosixFilePermissions(open, PosixFilePermissions.fromString("rwxrwxrwx"))
         intercept[NativeCopy.UnsafeCopyRoot](NativeCopy.stabilize(c, open.resolve("copies"), id, sha))
         assert(!Files.exists(open.resolve("copies")))
+        // a parent replaced by a link to a directory other users can write: refused before anything is made there
+        val base = Files.createTempDirectory("gbx_copies")
+        Files.createSymbolicLink(base.resolve("parent"), open)
+        intercept[NativeCopy.UnsafeCopyRoot](NativeCopy.stabilize(c, base.resolve("parent/copies"), id, sha))
+        assert(!Files.exists(open.resolve("copies")), "a directory was made through the link")
+        // a root that is this uid's but not owner-only is refused too
+        val wide = Files.createTempDirectory("gbx_copies")
+        Files.setPosixFilePermissions(wide, PosixFilePermissions.fromString("rwxr-xr-x"))
+        intercept[NativeCopy.UnsafeCopyRoot](NativeCopy.stabilize(c, wide, id, sha))
         // a root made here is 0700, and so is each copy
         val made = Files.createTempDirectory("gbx_copies").resolve("a/b")
         val Right(copy) = NativeCopy.stabilize(c, made, id, sha)

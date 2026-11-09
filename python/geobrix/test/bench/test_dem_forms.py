@@ -74,12 +74,18 @@ def test_colour_relief_reads_its_table_from_a_column_of_the_input():
             assert "(tile, ct)" in f.sql
 
 
-def test_the_colour_table_is_written_once_and_named_in_the_input(tmp_path):
-    got = lf._dem_color_table(str(tmp_path / "corpus"))
-    assert set(got) == {"ct"}
+def test_the_colour_table_goes_to_the_local_disk_and_is_named_in_the_input(
+    monkeypatch, tmp_path
+):
+    """A file just written to a Volume was not seen by the executors' JVMs: the table is written to the node's temp dir."""
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
+    got = lf._dem_color_table("/Volumes/c/s/v/bench-corpus")
+    assert got == {"ct": str(tmp_path / "gbx_bench" / "dem_colors.txt")}
     with open(got["ct"]) as fh:
         assert fh.read() == lf.DEM_COLOR_TABLE
-    assert lf._dem_color_table(str(tmp_path / "corpus")) == got
+    assert lf._dem_color_table("") == got  # again: the same file, left as it is
 
 
 def test_the_probe_forms_run_only_when_named_and_report_nulls():

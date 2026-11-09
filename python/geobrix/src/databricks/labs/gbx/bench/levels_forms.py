@@ -2348,48 +2348,51 @@ BASE_ROWS["dem_bytes_1024_mem"] = 128
 
 
 def _dem_color_table(corpus) -> Dict[str, str]:
-    """Write the colour table beside the run's scratch (a Volume the workers read, or the temp directory locally) and name
-    it in column `ct`."""
-    scratch = _io_scratch(corpus or "")
-    os.makedirs(scratch, exist_ok=True)
-    path = scratch + "/gbx_bench_dem_colors.txt"
-    if not os.path.isfile(path) or open(path).read() != DEM_COLOR_TABLE:
-        with open(path, "w") as fh:
-            fh.write(DEM_COLOR_TABLE)
-    _wait_visible(path)
-    return {"ct": path}
-
-
-def _wait_visible(path: str, tries: int = 30) -> None:
-    """Return when every task of the session sees `path` as a file. A file just written to a Volume was missing for the
-    executors' JVMs on a cluster (the first heavy colour-relief form raised FileNotFoundException for it). No session, no
-    wait."""
+    """Put the colour table on the local disk of every node and name it in column `ct`. A file just written to a Volume was
+    missing for the executors' JVMs (the heavy colour-relief form raised FileNotFoundException for it, minutes after the
+    write, where the light form read it), so the table goes to `/tmp` on each node: tasks write it where they run, and the
+    wait returns once every task of a wide job sees it."""
+    import tempfile
     import time
 
+    path = os.path.join(tempfile.gettempdir(), "gbx_bench", "dem_colors.txt")
     from pyspark.sql import SparkSession
 
     spark = SparkSession.getActiveSession()
-    if spark is None:
-        return
+    if spark is None:  # a test without a session: write it here
+        _write_color_table(path)
+        return {"ct": path}
 
     def seen(batches):
         import pandas as pd
 
         for pdf in batches:
+            _write_color_table(path)
             yield pd.DataFrame({"ok": [os.path.isfile(path)] * len(pdf)})
 
-    for _ in range(tries):
+    for _ in range(30):
         missing = (
-            spark.range(64)
-            .repartition(32)
+            spark.range(256)
+            .repartition(64)
             .mapInPandas(seen, "ok boolean")
             .filter("NOT ok")
             .count()
         )
         if missing == 0:
-            return
+            return {"ct": path}
         time.sleep(2)
     raise RuntimeError(f"the colour table {path} is not visible to every task")
+
+
+def _write_color_table(path: str) -> None:
+    """Write the colour table at `path` unless it is there already."""
+    if os.path.isfile(path) and open(path).read() == DEM_COLOR_TABLE:
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f"{path}.{os.getpid()}"
+    with open(tmp, "w") as fh:
+        fh.write(DEM_COLOR_TABLE)
+    os.replace(tmp, path)  # atomic: a task on this node never reads a half file
 
 
 INPUTS["dem_1024_mem"] = _se_dems_replicated(

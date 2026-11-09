@@ -175,6 +175,76 @@ def test_a_color_table_over_the_size_bound_or_with_a_nul_byte_is_refused(table):
         argv.text_values(fn, {"color_table": table})
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/Volumes/main/my schema/ramp.txt",
+        "ramp.clr",
+        "C:\\color maps\\ramp.txt",
+        "/a/b",
+    ],
+)
+def test_a_file_path_is_refused_with_the_hint_even_when_it_has_a_space(path):
+    fn = MAN.functions["gbx_rst_color_relief"]
+    with pytest.raises(spec.ParamError, match="is a file path"):
+        argv.text_values(fn, {"color_table": path})
+
+
+def test_a_slash_in_a_comment_or_a_table_line_is_not_taken_for_a_file_path():
+    fn = MAN.functions["gbx_rst_color_relief"]
+    # a comment line may name a path
+    table = "# from /Volumes/main/colors/ramp.txt\n0 255 0 0\n10 0 255 0"
+    assert argv.text_values(fn, {"color_table": table})[0].startswith("0 255 0 0\n")
+    # a one-line text that is only a comment has no entries; that is its error, not a path hint
+    with pytest.raises(spec.ParamError, match="has no color entries"):
+        argv.text_values(fn, {"color_table": "# see /Volumes/main/colors/ramp.txt"})
+    # a one-line table whose entry reads a slash is judged as a table line
+    with pytest.raises(spec.ParamError, match="line 1"):
+        argv.text_values(fn, {"color_table": "0 255 0 0 /x"})
+
+
+def test_the_texts_written_are_the_files_the_argv_names_and_never_drift(monkeypatch):
+    """`text_values` and the template's ``<text{k}>`` names read one list of arguments (``argv._text_args``): a text
+    argument that writes no file (here, one a list replaces through ``when_empty``) is neither written nor named.
+    """
+    import dataclasses
+
+    fn = MAN.functions["gbx_rst_color_relief"]
+    props = [argv.RasterProps(64, 48, 1, "Float32")]
+    table = "100 0 0 255\n150 0 255 0"
+    texts = argv.text_values(fn, {"color_table": table})
+    got = argv.build(fn, {"color_table": table}, props, ["i"], "o", texts=["T0"])
+    named = [t for t in got if t.startswith("--color-map=")]
+    assert len(texts) == 1 and named == ["--color-map=T0"]
+    # the same argument, replaced by a list that has items: no file and no name
+    block = fn.gdal
+    arg = next(a for a in block.args if a.type == "text_vsimem")
+    replaced = dataclasses.replace(
+        fn,
+        gdal=dataclasses.replace(
+            block,
+            args=tuple(
+                (
+                    dataclasses.replace(a, when_empty="color_table_levels")
+                    if a is arg
+                    else a
+                )
+                for a in block.args
+            ),
+        ),
+    )
+    monkeypatch.setitem(
+        _KEEP, "fn", replaced
+    )  # the template cache keys on the row's id: keep it alive
+    values = {"color_table": table, "color_table_levels": [1.0]}
+    assert argv.text_values(replaced, values) == []
+    skipped = argv.build(replaced, values, props)
+    assert not [t for t in skipped if t.startswith("--color-map=")]
+
+
+_KEEP: dict = {}
+
+
 @pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
 def test_the_level_knob_reads_as_the_size_ladder_defines_it(case, monkeypatch):
     """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder."""

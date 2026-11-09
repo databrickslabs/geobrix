@@ -15,7 +15,7 @@ import re
 import string
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -79,6 +79,9 @@ class RasterProps:
     src_height: int = 0
     px_x: float = 0.0
     px_y: float = 0.0
+    # True when a reprojection of this input carries a mask band (``run._mask_to_carry``): the output estimate then holds
+    # the mask's working memory. Not part of the template cache key.
+    mask: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -265,6 +268,17 @@ def _color_error(sql_name: str, param: str, why: str) -> ParamError:
     return ParamError(f"{sql_name}: {param} {why}. {COLOR_TABLE_FIX}")
 
 
+def _names_a_file(text: str) -> bool:
+    """True when the whole `text` (stripped) is one line that names a file: a path (with a slash, or with spaces in it) or
+    a file name (``.txt``, ``.clr``, ``.csv``), not a table. A line that starts with a number, a percent or ``nv`` is a
+    table entry, and a line that starts with ``#`` is a comment: neither is judged by its slashes.
+    """
+    if "\n" in text or text.startswith("#") or not _FILE_LIKE.search(text):
+        return False
+    first = re.split(r"[\s,]+", text)[0]
+    return not (_NUMBER.match(first) or first.lower() in ("nv", "nodata"))
+
+
 @functools.lru_cache(maxsize=256)
 def _color_table(sql_name: str, param: str, text: str) -> Tuple[str, bool]:
     """(the table in the canonical form GDAL reads, whether its entries carry an alpha column).
@@ -282,11 +296,7 @@ def _color_table(sql_name: str, param: str, text: str) -> Tuple[str, bool]:
         raise _color_error(
             sql_name, param, "is empty: it needs at least one color entry"
         )
-    if (
-        "\n" not in text.strip()
-        and _FILE_LIKE.search(text.strip())
-        and " " not in text.strip()
-    ):
+    if _names_a_file(text.strip()):
         raise _color_error(
             sql_name,
             param,
@@ -347,14 +357,26 @@ def check_color_table(sql_name: str, param: str, text) -> str:
     return _color_table(sql_name, param, str(text))[0]
 
 
+def _text_args(fn, values: Mapping[str, Any]) -> list:
+    """The ``text_vsimem`` arguments that write a file for this call, in template order: the one list ``text_values`` and
+    the template's ``<text{k}>`` names both read. An argument with a NULL value writes none, and neither does one that
+    ``when_empty`` replaces."""
+    return [
+        a
+        for a in fn.gdal.args
+        if a.type == "text_vsimem"
+        and not _is_null(values.get(a.source))
+        and not (a.when_empty is not None and _has_items(values.get(a.when_empty)))
+    ]
+
+
 def text_values(fn, values: Mapping[str, Any]) -> List[str]:
     """The texts the call's ``text_vsimem`` arguments write, in template order (the engine writes each to a file under
     the call's prefix and names it in ``build(..., texts=)``). A NULL value is not written: the result is NULL.
     """
     return [
         check_color_table(fn.sql_name, a.source, values.get(a.source))
-        for a in fn.gdal.args
-        if a.type == "text_vsimem" and not _is_null(values.get(a.source))
+        for a in _text_args(fn, values)
     ]
 
 
@@ -602,11 +624,16 @@ _SIZED = ("size_from_factor", "int_pair", "double_pair")
 
 
 def _positive(fn, arg, name: str, v, whole: bool):
-    """`v` (the value of param `name`) as a number above 0 and finite, else a refusal naming the param and the value."""
+    """`v` (the value of param `name`) as a number above 0 and finite, else a refusal naming the param and the value. A
+    `whole` number is a count of pixels: a fractional value is refused, never cut to its integer part.
+    """
     try:
         x = int(v) if whole else float(v)
+        fractional = whole and float(v) != x
     except (TypeError, ValueError, OverflowError):  # int(inf) is an OverflowError
-        x = math.nan
+        x, fractional = math.nan, False
+    if fractional:
+        raise _fail(fn, arg, f"{name} must be a whole number of pixels; got {v}")
     if not (0 < x < math.inf):
         raise _fail(fn, arg, f"{name} must be positive and finite; got {v}")
     return x
@@ -629,23 +656,88 @@ def _sized_token(fn, a, values, first: "RasterProps") -> str:
     )
 
 
-def estimate_output(fn, tokens: Sequence[str], props: Sequence["RasterProps"]) -> int:
-    """The decoded bytes the call's output will hold (the output's size from ``--size`` or ``--resolution``, else the
-    inputs' own decoded size), for the per-call budget: the inputs plus this must fit.
+# The bands of a result by algorithm, where they are not the input's: a terrain algorithm and a map-algebra expression
+# write one band, a color relief up to four (RGB and an alpha band). A reprojection keeps the input's bands.
+_OUT_BANDS = {
+    "raster slope": 1,
+    "raster aspect": 1,
+    "raster hillshade": 1,
+    "raster tri": 1,
+    "raster tpi": 1,
+    "raster roughness": 1,
+    "raster calc": 1,
+    "raster color-map": 4,
+}
+
+
+@dataclass(frozen=True)
+class WarpGrid:
+    """The grid GDAL's reprojection would pick for an input before any size or resolution is set
+    (``run._warp_grid``): its size in pixels and its pixel size in the output CRS's units.
+    """
+
+    width: int
+    height: int
+    px_x: float
+    px_y: float
+
+
+def _token_value(tokens: Sequence[str], name: str) -> Optional[str]:
+    return next(
+        (t.split("=", 1)[1] for t in tokens if t.startswith(f"--{name}=")), None
+    )
+
+
+def _output_pixels(tokens: Sequence[str], first: "RasterProps", grid) -> int:
+    """The pixels of the output grid: from ``--size``, else ``--resolution`` over the extent, else the grid GDAL picks
+    (``grid``; without it the input's own size, with the extent taken from its north-up pixel size).
+    """
+    size = _token_value(tokens, "size")
+    if size is not None:
+        w, h = (int(v) for v in size.split(","))
+        return w * h
+    res = _token_value(tokens, "resolution")
+    if res is not None:
+        rx, ry = (float(v) for v in res.split(","))
+        if grid is not None:
+            ex, ey = grid.width * grid.px_x, grid.height * grid.px_y
+        elif first.px_x and first.px_y:
+            ex, ey = first.width * abs(first.px_x), first.height * abs(first.px_y)
+        else:
+            return first.width * first.height
+        return math.ceil(ex / rx) * math.ceil(ey / ry)
+    return grid.width * grid.height if grid is not None else first.width * first.height
+
+
+def estimate_output(
+    fn,
+    tokens: Sequence[str],
+    props: Sequence["RasterProps"],
+    grid: Optional[WarpGrid] = None,
+) -> int:
+    """The decoded bytes the call's output will hold, for the per-call budget: the inputs plus this must fit.
+
+    The pixels come from ``--size``, else ``--resolution`` over the extent, else the grid GDAL picks for a reprojection
+    (``grid``, which accounts for a rotated or GCP-georeferenced tile and for a target CRS that changes the pixel
+    count), else the input's own size. The type is the argv's ``--output-data-type`` when it has one, else the row's
+    output type; the bands are the algorithm's (``_OUT_BANDS``), else the input's. A reprojection that carries a mask
+    (``RasterProps.mask``) also holds the mask's working arrays: a byte per input pixel in four copies and a byte per
+    output pixel in three.
     """
     first = props[0]
-    dtype = first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
+    dtype = _token_value(tokens, "output-data-type") or (
+        first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
+    )
     item = _ITEMSIZE.get(dtype, 8)
-    for t in tokens:
-        if t.startswith("--size="):
-            w, h = (int(v) for v in t.split("=", 1)[1].split(","))
-            return w * h * first.bands * item
-        if t.startswith("--resolution=") and first.px_x and first.px_y:
-            rx, ry = (float(v) for v in t.split("=", 1)[1].split(","))
-            w = math.ceil(first.width * abs(first.px_x) / rx)
-            h = math.ceil(first.height * abs(first.px_y) / ry)
-            return w * h * first.bands * item
-    return sum(p.width * p.height * p.bands * _ITEMSIZE.get(p.dtype, 8) for p in props)
+    bands = _OUT_BANDS.get(fn.gdal.alg, first.bands)
+    # inputs that are not warped share one grid: the largest bounds what the algorithm writes
+    pixels = _output_pixels(tokens, first, grid)
+    if fn.gdal.alg != "raster reproject":
+        pixels = max(pixels, *(p.width * p.height for p in props))
+    out = pixels * bands * item
+    if fn.gdal.alg == "raster reproject" and first.mask:
+        out += first.width * first.height * 4 + pixels * 3
+    return out
 
 
 def _const_token(a, inputs: Sequence[RasterProps]) -> Optional[str]:
@@ -801,7 +893,7 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
         return None
     calc: Optional[_Calc] = None
     tokens: List[str] = []
-    n_texts = 0
+    text_index = {id(a): k for k, a in enumerate(_text_args(fn, values))}
     for a in block.args:
         if a.source is None:
             tok = _const_token(a, inputs)
@@ -835,10 +927,9 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             if a.null == "omit":
                 continue
             return None
-        toks, bound = _bound_tokens(fn, a, v, values, inputs, n_texts)
+        toks, bound = _bound_tokens(fn, a, v, values, inputs, text_index.get(id(a), 0))
         tokens += toks
         calc = bound or calc
-        n_texts += a.type == "text_vsimem"
     guard_tokens(
         section,
         block.alg,

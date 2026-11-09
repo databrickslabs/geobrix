@@ -214,9 +214,9 @@ def virtual_source(sql_name: str, path: str) -> None:
         ds = None
 
 
-def _props(
-    gdal, sql_name: str, name: str, needs_crs: bool, drivers: Sequence[str] = ("GTiff",)
-) -> argv_mod.RasterProps:
+def _open_source(gdal, sql_name: str, name: str, drivers: Sequence[str]):
+    """The input `name` opened read-only with the `drivers` the call allows (its header is read from this handle), else
+    a DataError carrying GDAL's reason."""
     gdal.ErrorReset()
     ds = gdal.OpenEx(
         name, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=list(drivers)
@@ -226,6 +226,13 @@ def _props(
             gdal.GetLastErrorMsg()
             or f"{sql_name}: the input is not a raster GeoBrix reads"
         )
+    return ds
+
+
+def _props(
+    gdal, sql_name: str, name: str, needs_crs: bool, drivers: Sequence[str] = ("GTiff",)
+) -> argv_mod.RasterProps:
+    ds = _open_source(gdal, sql_name, name, drivers)
     try:
         # a tile georeferenced by ground control points has a CRS: its GCP projection
         if (
@@ -247,6 +254,7 @@ def _props(
             band.GetNoDataValue(),
             px_x=abs(gt[1]),
             px_y=abs(gt[5]),
+            mask=_carries_mask(gdal, ds),
         )
     finally:
         ds = None
@@ -366,8 +374,9 @@ def _open_geotiff(gdal, name: str, update: bool = False):
 
 def _keeps_input(gdal, fn, tokens, name: str) -> bool:
     """True when the row keeps a tile already in the CRS it asks for (``same_crs: "keep"``) and the input `name` is in
-    that CRS: the result is the input as it is, not a warp of it. Both CRSs are compared in the one canonical form the
-    argv carries (``argv.canonical_crs``): an authority code, else WKT. A tile whose CRS has no such form is warped.
+    that CRS: the result is the input as it is, not a warp of it. The CRSs are compared as CRSs (``core.crs.crs_equal``),
+    so a source whose WKT carries no authority node, or spells the CRS differently, is still the target. A tile with no
+    CRS is warped.
     """
     if fn.gdal.same_crs != "keep":
         return False
@@ -379,34 +388,84 @@ def _keeps_input(gdal, fn, tokens, name: str) -> bool:
         have = ds.GetSpatialRef() if ds is not None else None
         if target is None or have is None:
             return False
-        try:
-            return argv_mod.canonical_crs(have.ExportToWkt()) == target
-        except ValueError:
-            return False
+        from databricks.labs.gbx.core.crs import crs_equal
+
+        return crs_equal(have.ExportToWkt(), target)
     finally:
         ds = None
 
 
-def _mask_to_carry(gdal, ds):
-    """What a warp of the open source `ds` must carry as a mask, as ``(valid, inverted)``, else None.
-
-    The source's own mask band (not an alpha band: JPEG-compressed imagery often has one) is carried: ``valid`` is its
-    255/0 bytes. A source that declares no NoData in any band and has no alpha band gets its footprint as a mask: GDAL's
-    warp fills the pixels no source pixel reaches with 0, which reads as a valid value, and GeoBrix never makes a value
-    where data is missing. ``valid`` is then all 255, and ``inverted`` is False: a pixel the warp does not reach is
-    masked. With a NoData value (or an alpha band) the pixels outside the footprint are already NoData (or transparent),
-    so only a source's own mask is carried, ``inverted``: a pixel no source pixel reaches stays as the warp left it.
+def _warp_grid(gdal, sql_name: str, name: str, tokens, drivers=("GTiff",)):
+    """The grid GDAL's reprojection picks for the input `name` before any ``--size`` or ``--resolution`` is applied
+    (``gdal.SuggestedWarpOutput``, the call the algorithm makes): a ``WarpGrid`` in the units of the target CRS
+    (``--output-crs``, else the input's), or None where GDAL gives none. Only the header is read. It accounts for a
+    rotated or GCP-georeferenced tile and for a target CRS that changes the pixel count, which the input's own size and
+    north-up pixel size do not.
     """
-    import numpy as np
+    target = next(
+        (t.split("=", 1)[1] for t in tokens if t.startswith("--output-crs=")), None
+    )
+    ds = _open_source(gdal, sql_name, name, drivers)
+    try:
+        try:
+            got = gdal.SuggestedWarpOutput(
+                ds, [] if target is None else [f"DST_SRS={target}"]
+            )
+        except (
+            Exception
+        ):  # noqa: BLE001 - no grid GDAL can suggest: the estimate falls back to the input's size
+            return None
+        if got is None:
+            return None
+        gt = got.geotransform
+        return argv_mod.WarpGrid(
+            int(got.width), int(got.height), abs(gt[1]), abs(gt[5])
+        )
+    finally:
+        ds = None
 
-    w, h = ds.RasterXSize, ds.RasterYSize
+
+def _mask_flags(gdal, ds) -> tuple:
+    """``(own, declared)`` of the open GeoTIFF `ds`: whether it has a mask band of its own (not an alpha band: JPEG-compressed
+    imagery often has one), and whether it declares NoData or has an alpha band. Neither reads a pixel.
+
+    A GeoTIFF has one mask for the whole dataset (its internal mask supports only ``GMF_PER_DATASET``) and one NoData
+    value for all its bands (the TIFF tag holds a single value), so band 1 speaks for every band: a source whose bands
+    differ cannot reach the engine in a GeoTIFF, and the translation to GeoTIFF of one that has them (a per-band mask in
+    another driver) keeps band 1's.
+    """
     bands = [ds.GetRasterBand(i + 1) for i in range(ds.RasterCount)]
     own = bands[0].GetMaskFlags() == gdal.GMF_PER_DATASET
     declared = any(b.GetNoDataValue() is not None for b in bands) or any(
         b.GetColorInterpretation() == gdal.GCI_AlphaBand for b in bands
     )
+    return own, declared
+
+
+def _carries_mask(gdal, ds) -> bool:
+    """Whether a warp of `ds` carries a mask band (see ``_mask_to_carry``)."""
+    own, declared = _mask_flags(gdal, ds)
+    return own or not declared
+
+
+def _mask_to_carry(gdal, ds):
+    """What a warp of the open source `ds` must carry as a mask, as ``(valid, inverted)``, else None.
+
+    The source's own mask band is carried: ``valid`` is its 255/0 bytes (the dataset's mask, see ``_mask_flags``). A source
+    that declares no NoData in any band and has no alpha band gets its footprint as a mask: GDAL's warp fills the pixels
+    no source pixel reaches with 0, which reads as a valid value, and GeoBrix never makes a value where data is missing.
+    ``valid`` is then all 255, and ``inverted`` is False: a pixel the warp does not reach is masked. With a NoData value
+    (or an alpha band) the pixels outside the footprint are already NoData (or transparent), so only a source's own mask
+    is carried, ``inverted``: a pixel no source pixel reaches stays as the warp left it.
+    """
+    import numpy as np
+
+    w, h = ds.RasterXSize, ds.RasterYSize
+    own, declared = _mask_flags(gdal, ds)
     if own:
-        valid = np.frombuffer(bands[0].GetMaskBand().ReadRaster(0, 0, w, h), "u1")
+        valid = np.frombuffer(
+            ds.GetRasterBand(1).GetMaskBand().ReadRaster(0, 0, w, h), "u1"
+        )
     elif declared:
         return None
     else:
@@ -624,6 +683,64 @@ def _check_expression(gdal, fn, tokens, props, names, prefix, shown) -> None:
         )
 
 
+def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple:
+    """``(sources, drivers, props)`` of the call's inputs, written under its prefix. A raster with the GeoTIFF magic is
+    written as ``in<i>.tif``. Any other is read under the light bytes rule (a driver that can name other files is
+    refused) as ``src<i>.bin``, and translated to GeoTIFF once the budget holds (its props are its header's):
+    `sources` maps its index to that name. `src_sizes` marks a raster that is a decimated read of its window.
+    """
+    block = fn.gdal
+    sources, payloads = {}, {}
+    for i, raster in enumerate(rasters):
+        data = bytes(raster)
+        if data[:4] in _TIFF_MAGIC:
+            gdal.FileFromMemBuffer(names[i], data)
+        else:
+            sources[i] = f"{prefix}/src{i}.bin"
+            shown[sources[i]] = shown.get(names[i], f"<input{i}>")
+            gdal.FileFromMemBuffer(sources[i], data)
+            payloads[i] = data
+    drivers = _open_drivers(section or manifest.load().gdal)
+    for i, src in sources.items():
+        _bytes_source(gdal, fn.sql_name, i, src, payloads[i], drivers)
+    props = [
+        (
+            _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)
+            if i in sources
+            else _props(gdal, fn.sql_name, n, block.needs_crs)
+        )
+        for i, n in enumerate(names)
+    ]
+    if src_sizes:
+        props = [
+            (dataclasses.replace(p, src_width=ss[0], src_height=ss[1]) if ss else p)
+            for p, ss in zip(props, src_sizes)
+        ]
+    return sources, drivers, props
+
+
+def _judge_budget(
+    gdal, fn, tokens, props, names, sources, drivers, decoded, budget
+) -> None:
+    """DataError (with a Fix) unless the call's inputs and its estimated output fit the decoded budget at once (spec
+    4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header.
+    """
+    grid = None
+    if fn.gdal.alg == "raster reproject":
+        grid = (
+            _warp_grid(gdal, fn.sql_name, sources[0], tokens, drivers)
+            if 0 in sources
+            else _warp_grid(gdal, fn.sql_name, names[0], tokens)
+        )
+    need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
+    if budget and need > budget:
+        raise DataError(
+            f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
+            f"compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile), or ask for a "
+            "smaller output"
+        )
+
+
 def run(
     fn, rasters: Sequence[bytes], values: Mapping, section=None, src_sizes=None
 ) -> Optional[Result]:
@@ -647,39 +764,9 @@ def run(
     command = None
     with engine_settings(), _gdal_status() as gdal:
         try:
-            # A raster without the GeoTIFF magic is read under the light bytes rule (a driver that can name other
-            # files is refused), and translated to GeoTIFF once the budget below holds (its props are its header's).
-            sources = {}
-            payloads = {}
-            for i, raster in enumerate(rasters):
-                data = bytes(raster)
-                if data[:4] in _TIFF_MAGIC:
-                    gdal.FileFromMemBuffer(names[i], data)
-                else:
-                    sources[i] = f"{prefix}/src{i}.bin"
-                    shown[sources[i]] = shown.get(names[i], f"<input{i}>")
-                    gdal.FileFromMemBuffer(sources[i], data)
-                    payloads[i] = data
-            drivers = _open_drivers(section or manifest.load().gdal)
-            for i, src in sources.items():
-                _bytes_source(gdal, fn.sql_name, i, src, payloads[i], drivers)
-            props = [
-                (
-                    _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)
-                    if i in sources
-                    else _props(gdal, fn.sql_name, n, block.needs_crs)
-                )
-                for i, n in enumerate(names)
-            ]
-            if src_sizes:
-                props = [
-                    (
-                        dataclasses.replace(p, src_width=ss[0], src_height=ss[1])
-                        if ss
-                        else p
-                    )
-                    for p, ss in zip(props, src_sizes)
-                ]
+            sources, drivers, props = _stage(
+                gdal, fn, rasters, names, prefix, shown, section, src_sizes
+            )
             sizes = [
                 p.width * p.height * p.bands * argv_mod._ITEMSIZE.get(p.dtype, 8)
                 for p in props
@@ -707,16 +794,6 @@ def run(
             )
             if tokens is None:
                 return None
-            # the call holds its inputs and its estimated output at once (spec 4.1)
-            need = decoded + argv_mod.estimate_output(fn, tokens, props)
-            if budget and need > budget:
-                raise DataError(
-                    f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
-                    f"compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile), or ask for a "
-                    "smaller output"
-                )
-            for i, src in sources.items():
-                _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
             command = _shown(" ".join([block.alg] + tokens), shown)
             fmt = next(
                 t.split("=", 1)[1] for t in tokens if t.startswith("--output-format=")
@@ -730,7 +807,17 @@ def run(
             def refused(msg):
                 return (DataError if data else ParamError)(f"{fn.sql_name}: {msg}")
 
-            if _keeps_input(gdal, fn, tokens, names[0]):
+            # A tile that is already in the CRS the row asks for comes back as its own bytes, before the budget is judged
+            # (nothing is decoded or written) and before a translation. A tile read in another driver is judged after it
+            # is translated: the bytes returned are the GeoTIFF's.
+            if 0 not in sources and _keeps_input(gdal, fn, tokens, names[0]):
+                return Result(_read(gdal, names[0]), None, command)
+            _judge_budget(
+                gdal, fn, tokens, props, names, sources, drivers, decoded, budget
+            )
+            for i, src in sources.items():
+                _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
+            if 0 in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
             if block.alg == "raster calc":
                 _check_expression(gdal, fn, tokens, props, names, prefix, shown)

@@ -5,6 +5,8 @@ the target CRS, a virtual tile read at its target size, the per-call budget) ski
 GDAL; the oracle rows of ``SPEC_WARP`` hold the rest.
 """
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -125,6 +127,52 @@ def test_the_estimate_of_a_resolution_is_the_extent_over_it():
 def test_the_estimate_without_a_size_is_the_inputs_decoded_size():
     tokens = _build(TR, {"srid": 3857})
     assert argv.estimate_output(M[TR], tokens, [PROPS]) == 64 * 48 * 4
+
+
+def test_the_estimate_is_in_the_output_type_when_there_is_no_size():
+    int16 = argv.RasterProps(64, 48, 1, "Int16")
+    slope = M["gbx_rst_slope"]
+    tokens = argv.build(
+        slope, {"unit": "degrees", "xscale": None, "yscale": None}, [int16]
+    )
+    assert (
+        argv.estimate_output(slope, tokens, [int16]) == 64 * 48 * 4
+    )  # Float32, not the input's Int16
+
+
+def test_a_one_band_algorithm_and_a_color_relief_have_the_bands_they_write():
+    three = argv.RasterProps(64, 48, 3, "Float32")
+    algebra = M["gbx_rst_mapalgebra"]
+    assert argv.estimate_output(algebra, [], [three, three]) == 64 * 48 * 1 * 4
+    relief = M["gbx_rst_color_relief"]
+    assert argv.estimate_output(relief, [], [three]) == 64 * 48 * 4 * 1  # RGBA bytes
+
+
+def test_a_reprojection_estimate_uses_the_grid_gdal_picks_and_the_masks_working_memory():
+    tokens = _build(TR, {"srid": 3035})
+    grid = argv.WarpGrid(22, 30, 79000.0, 79000.0)
+    assert argv.estimate_output(M[TR], tokens, [PROPS], grid) == 22 * 30 * 4
+    masked = dataclasses.replace(PROPS, mask=True)
+    assert argv.estimate_output(M[TR], tokens, [masked], grid) == (
+        22 * 30 * 4 + 64 * 48 * 4 + 22 * 30 * 3
+    )
+    res = _build(RSR, {"x_res": 2.0, "y_res": 2.0, "algorithm": "near"})
+    grid = argv.WarpGrid(
+        24, 18, 1.0, 1.0
+    )  # a 24 x 18 grid of 1-unit pixels, halved to 2-unit pixels
+    assert argv.estimate_output(M[RSR], res, [PROPS], grid) == 12 * 9 * 4
+
+
+@pytest.mark.parametrize("value", [2.7, 0.4, 1e-3])
+def test_a_fractional_size_is_refused_not_cut_to_its_whole_part(value):
+    with pytest.raises(spec.ParamError, match="width_px must be a whole number"):
+        _build(RSZ, {"width_px": value, "height_px": 2, "algorithm": "near"})
+
+
+def test_a_whole_size_in_any_numeric_type_is_accepted():
+    for width in (3, 3.0, np.int32(3)):
+        got = _build(RSZ, {"width_px": width, "height_px": 2, "algorithm": "near"})
+        assert _token(got, "size") == "3,2"
 
 
 # --- the read at the target size ---------------------------------------------------------------------------------------
@@ -407,3 +455,265 @@ def test_a_gcp_georeferenced_tile_with_no_nodata_is_warped_with_its_footprint_ma
         assert (
             ds.read(1, masked=True).compressed() >= 1
         ).all()  # every 0 is a fill, under the mask
+
+
+# --- the identity passthrough, the CRS comparison, the budget estimate --------------------------------------------------
+def _osgeo_tile(
+    bands=1,
+    srs="EPSG:4326",
+    gt=(0.0, 1.0, 0.0, 15.0, 0.0, -1.0),
+    nodata=None,
+    w=20,
+    h=15,
+):
+    """A GeoTIFF of `bands` ramps 1..w*h on `gt`, written by osgeo; `srs` is an EPSG code or a PROJ string; `nodata`
+    is declared on band 1 only (a GeoTIFF has one NoData value for all its bands)."""
+    from osgeo import gdal, osr
+
+    ds = gdal.GetDriverByName("GTiff").Create(
+        "/vsimem/gbx-test-tile.tif", w, h, bands, gdal.GDT_Float32
+    )
+    sr = osr.SpatialReference()
+    sr.SetFromUserInput(srs)
+    ds.SetProjection(sr.ExportToWkt())
+    ds.SetGeoTransform(gt)
+    for b in range(bands):
+        ds.GetRasterBand(b + 1).WriteArray(
+            np.arange(1, w * h + 1, dtype="float32").reshape(h, w)
+        )
+    if nodata is not None:
+        ds.GetRasterBand(1).SetNoDataValue(nodata)
+    ds = None
+    try:
+        return _read_vsimem("/vsimem/gbx-test-tile.tif")
+    finally:
+        gdal.Unlink("/vsimem/gbx-test-tile.tif")
+
+
+def _read_vsimem(name):
+    from osgeo import gdal
+
+    fh = gdal.VSIFOpenL(name, "rb")
+    try:
+        return bytes(gdal.VSIFReadL(1, gdal.VSIStatL(name).size, fh))
+    finally:
+        gdal.VSIFCloseL(fh)
+
+
+AEA = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+
+
+def test_a_source_with_no_authority_in_the_target_crs_comes_back_as_its_own_bytes(
+    engine,
+):
+    # the source's WKT has no authority node and spells the CRS its own way; the target is the PROJ string
+    raw = _osgeo_tile(srs=AEA, gt=(0.0, 100.0, 0.0, 1500.0, 0.0, -100.0))
+    res = engine.run(M[TR], [raw], {"srid": AEA})
+    assert res.error is None and bytes(res.raster) == raw
+
+
+def test_a_tile_in_the_target_crs_is_returned_before_the_budget_is_judged(
+    engine, monkeypatch
+):
+    raw = _gtiff(epsg="EPSG:3857")
+    monkeypatch.setattr(run, "decoded_budget", lambda: 100)  # far below the tile
+    res = engine.run(M[TR], [raw], {"srid": 3857})
+    assert res.error is None and bytes(res.raster) == raw
+    res = engine.run(M[TR], [_gtiff()], {"srid": 3857})  # a warp is over this budget
+    assert res.raster is None and "Fix:" in res.error
+
+
+def test_a_non_geotiff_tile_in_the_target_crs_is_judged_by_the_budget_before_it_is_translated(
+    engine, monkeypatch
+):
+    from osgeo import gdal
+
+    gdal.FileFromMemBuffer("/vsimem/gbx-test-src.tif", _gtiff(epsg="EPSG:3857"))
+    try:
+        gdal.Translate(
+            "/vsimem/gbx-test-hfa.img", "/vsimem/gbx-test-src.tif", format="HFA"
+        )
+        hfa = _read_vsimem("/vsimem/gbx-test-hfa.img")
+    finally:
+        gdal.Unlink("/vsimem/gbx-test-hfa.img")
+        gdal.Unlink("/vsimem/gbx-test-src.tif")
+    monkeypatch.setattr(run, "decoded_budget", lambda: 100)
+    res = engine.run(M[TR], [hfa], {"srid": 3857})
+    assert res.raster is None and "Fix:" in res.error
+    monkeypatch.undo()
+    ok = engine.run(M[TR], [hfa], {"srid": 3857})
+    assert ok.error is None and bytes(ok.raster)[:2] in (
+        b"II",
+        b"MM",
+    )  # the GeoTIFF it translated to
+
+
+def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_budget_refuses_it(
+    engine, monkeypatch
+):
+    from osgeo import gdal
+
+    from databricks.labs.gbx.engine.run import _gdal_status
+
+    raw = _osgeo_tile(gt=(0.0, 1.0, 0.5, 60.0, 0.3, -1.0))
+    gdal.FileFromMemBuffer("/vsimem/gbx-rot.tif", raw)
+    try:
+        with _gdal_status() as g:
+            grid = run._warp_grid(
+                g, "x", "/vsimem/gbx-rot.tif", ["--output-crs=EPSG:3035"]
+            )
+    finally:
+        gdal.Unlink("/vsimem/gbx-rot.tif")
+    res = engine.run(M[TR], [raw], {"srid": 3035})
+    mf, ds = _open_result(res)
+    with mf, ds:
+        assert (grid.width, grid.height) == (ds.width, ds.height)
+    # the input is 1200 bytes and the old estimate (the input's size) fits 2 x 1200 + 100; the real output does not
+    monkeypatch.setattr(run, "decoded_budget", lambda: 2 * 20 * 15 * 4 + 100)
+    res = engine.run(M[TR], [raw], {"srid": 3035})
+    assert res.raster is None and "Fix:" in res.error
+
+
+def test_a_gcp_tiles_resolution_estimate_comes_from_its_own_footprint(engine, tmp_path):
+    from osgeo import gdal
+
+    from databricks.labs.gbx.engine.run import _gdal_status
+
+    gdal.FileFromMemBuffer("/vsimem/gbx-gcp.tif", _gcp_tile(tmp_path))
+    try:
+        with _gdal_status() as g:
+            grid = run._warp_grid(g, "x", "/vsimem/gbx-gcp.tif", [])
+    finally:
+        gdal.Unlink("/vsimem/gbx-gcp.tif")
+    assert (grid.width, grid.height) == (20, 15)
+    assert (grid.px_x, grid.px_y) == (
+        1.0,
+        1.0,
+    )  # a GCP tile has no geotransform to read it from
+
+
+def test_a_two_band_source_with_nodata_on_one_band_has_it_on_both(engine):
+    # a GeoTIFF has one NoData value for all its bands, so a source whose bands differ cannot reach the engine
+    raw = _osgeo_tile(bands=2, nodata=-9999.0)
+    mf, ds = _open_result(engine.run(M[TR], [raw], {"srid": 3035}))
+    with mf, ds:
+        assert ds.nodatavals == (-9999.0, -9999.0)
+        assert (ds.read(2) == -9999.0).any() and ds.mask_flag_enums[1][
+            0
+        ].name == "nodata"
+
+
+def test_one_internal_mask_covers_every_band_of_the_result(engine, tmp_path):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    path = tmp_path / "two_band_mask.tif"
+    z = (np.arange(300) % 250 + 1).astype("uint8").reshape(1, 15, 20).repeat(2, axis=0)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=20,
+        height=15,
+        count=2,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 60.0, 1.0, 1.0),
+    ) as dst:
+        dst.write(z)
+        m = np.full((15, 20), 255, "u1")
+        m[:2, :2] = 0
+        dst.write_mask(m)
+    mf, ds = _open_result(engine.run(M[TR], [path.read_bytes()], {"srid": 3035}))
+    with mf, ds:
+        assert (ds.read_masks(1) == 0).any()
+        assert (ds.read_masks(1) == ds.read_masks(2)).all()
+
+
+def test_a_mask_that_does_not_warp_onto_the_output_grid_is_a_data_error(engine):
+    from osgeo import gdal
+
+    from databricks.labs.gbx.engine.run import _gdal_status
+
+    prefix = "/vsimem/gbx-test-carry"
+    gdal.FileFromMemBuffer(f"{prefix}/in0.tif", _ramp())
+    gdal.GetDriverByName("GTiff").Create(f"{prefix}/out.tif", 3, 3, 1, gdal.GDT_Float32)
+    props = [argv.RasterProps(20, 15, 1, "Float32")]
+    tokens = argv.build(
+        M[TR], {"srid": 3035}, props, [f"{prefix}/in0.tif"], f"{prefix}/out.tif"
+    )
+    try:
+        with (
+            _gdal_status() as g,
+            pytest.raises(spec.DataError, match="does not warp onto the output grid"),
+        ):
+            run._carry_mask(
+                g, tokens, f"{prefix}/in0.tif", f"{prefix}/out.tif", prefix, {}
+            )
+    finally:
+        with _gdal_status() as g:
+            run._remove(g, prefix)
+
+
+# --- a virtual tile read at its target size: the own-mask fallback and the read cap -------------------------------------
+def _virtual_file(tmp_path, mask=False):
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_origin
+
+    path = str(tmp_path / ("masked.tif" if mask else "plain.tif"))
+    z = (np.arange(64 * 64, dtype="float32") % 251 + 1).reshape(1, 64, 64)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 64.0, 1.0, 1.0),
+        tiled=True,
+        blockxsize=32,
+        blockysize=32,
+    ) as dst:
+        dst.write(z)
+        if mask:
+            m = np.full((64, 64), 255, "u1")
+            m[:8, :8] = 0
+            dst.write_mask(m)
+    with rasterio.open(path, "r+") as dst:
+        dst.build_overviews([2], Resampling.average)
+    return {"cellid": 1, "raster": None, "path": path, "window": None, "metadata": {}}
+
+
+def test_a_virtual_file_with_its_own_mask_is_read_whole_not_decimated(engine, tmp_path):
+    import rasterio
+
+    values = {"factor": 0.5, "algorithm": "average"}
+    sizes = []
+    rasters, _, _ = l3._inputs(
+        M[RS], _virtual_file(tmp_path, mask=True), None, None, sizes, values
+    )
+    assert sizes == [None]  # a decimated read would drop the file's mask band
+    with rasterio.MemoryFile(rasters[0]) as mf, mf.open() as ds:
+        assert (ds.width, ds.height) == (64, 64)
+        assert (ds.read_masks(1) == 0).any()
+    sizes = []
+    l3._inputs(M[RS], _virtual_file(tmp_path), None, None, sizes, values)
+    assert sizes == [(64, 64)]
+
+
+def test_the_read_cap_is_judged_on_the_decimated_size_and_on_the_whole_window(
+    engine, tmp_path
+):
+    tile = _virtual_file(tmp_path)
+    shrink = {
+        "factor": 0.5,
+        "algorithm": "average",
+    }  # 32 x 32 x 4 = 4096 bytes decimated, 16384 whole
+    with pytest.raises(run.DataError, match="at its target size"):
+        l3._inputs(M[RS], tile, 1000, None, [], shrink)
+    l3._inputs(M[RS], tile, 5000, None, [], shrink)  # the decimated read fits
+    with pytest.raises(run.DataError, match="decoded, over this compute's read cap"):
+        l3._inputs(M[RS], tile, 5000, None, [], {"factor": 2.0, "algorithm": "average"})

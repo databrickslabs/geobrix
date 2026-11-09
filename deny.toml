@@ -9,7 +9,10 @@ all-features = false
 
 [advisories]
 yanked = "deny"
-ignore = []
+# Time-boxed, one advisory at a time: each entry names why it is not reachable and when to look again.
+ignore = [
+    { id = "RUSTSEC-2026-0459", reason = "CVE-2026-119375, SQLite before 3.54.0 in the bundled source of libsqlite3-sys. Not reachable here: libsqlite3-sys comes only through proj-sys 0.27.0 (proj 0.31.0), which caps it at <0.36, so the patched 0.39 cannot be taken until proj-sys moves. The [[bans.features]] below deny every bundled feature of libsqlite3-sys, so no SQLite source is compiled; PROJ links the payload's own libsqlite3. The only crate that resolves it is rust/gbxrs-native-probe, which is not shipped (publish = false, in no wheel or JAR) and opens only the payload's proj.db, never an untrusted database or -wal file. Revisit 2026-12-09, or when proj-sys allows libsqlite3-sys >=0.39." },
+]
 
 [licenses]
 # Permissive licences only, consistent with the licence-clean native stack.

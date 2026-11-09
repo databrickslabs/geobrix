@@ -18,7 +18,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
-import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
 import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
@@ -144,8 +143,6 @@ object BenchDispatch {
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
     // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
     "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
-    // bucket B, group B-vec: vector-out fns (polygonize POLYGONS)
-    "rst_polygonize" -> VECTOR,
     // LiDAR function: isoband is geometry/vector.
     "rst_isoband" -> VECTOR,
     // bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness). The 4
@@ -550,15 +547,6 @@ object BenchDispatch {
         if (resDs != null) RasterDriver.releaseDataset(resDs)
       }
       BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // bucket B, group B-vec: vector-out fns. RST_Polygonize returns an ArrayData
-    // of struct(geom_wkb BINARY, value DOUBLE); fpVector decodes the WKB -> JTS and
-    // fingerprints (feature count + total measure [polygon area] + agg over the
-    // per-feature value). The heavy runner passes an EMPTY args map, so the
-    // defaults here ARE the cross-engine-compared values and MUST match the pyrx
-    // spec: polygonize band 1, connectedness 4.
-    case "rst_polygonize" =>
-      fpVector(RST_Polygonize.execute(
-        ds, argI(a, "band", 1), argI(a, "connectedness", 4)))
     // rst_isoband: reclassify into half-open bins and return one polygon per
     // contiguous same-bin region. Defaults match the pyrx FnSpec. Output struct
     // is (geom_wkb, band, lower, upper); fingerprint over geoms and band indices.
@@ -567,20 +555,6 @@ object BenchDispatch {
         ds, argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))))
     case other            => throw new IllegalArgumentException(s"unknown bench fn: $other")
     }
-  }
-
-  /** Decode a vector-feature ArrayData (struct(geom_wkb BINARY, value DOUBLE))
-    * into (JTS Geometry, attr) pairs and fingerprint via ofVector (feature count
-    * + total measure [line length / polygon area] + agg over the attrs). The
-    * WKB -> JTS parse mirrors the light side's shapely.wkb.loads. */
-  private def fpVector(arr: ArrayData): String = {
-    val features = (0 until arr.numElements()).map { i =>
-      val row = arr.getStruct(i, 2)
-      val wkb = row.getBinary(0)
-      val v = row.getDouble(1)
-      (JTS.fromWKB(wkb), v)
-    }
-    BenchFingerprint.ofVector(features)
   }
 
   /** Decode isoband output (struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE))
@@ -892,12 +866,6 @@ object BenchDispatch {
       case "rst_h3_tessellate_centroid"    =>
         rst_h3_tessellate(tile, argI(a, "resolution", 7), "centroid", "complete")
       case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
-      // bucket B, group B-vec: vector-out fns -> ARRAY<struct> column (spark-path
-      // is timing-only, not fingerprint-compared, so the args only need to be
-      // valid). polygonize rides band 1 + connectedness 4.
-      case "rst_polygonize" =>
-        org.apache.spark.sql.functions.call_function("gbx_rst_polygonize", tile, org.apache.spark.sql.functions.lit(argI(a, "band", 1)),
-          org.apache.spark.sql.functions.lit(argI(a, "connectedness", 4)))
       // rst_isoband: vector-out fn. Defaults match the pyrx FnSpec.
       case "rst_isoband" =>
         val breaks = argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))

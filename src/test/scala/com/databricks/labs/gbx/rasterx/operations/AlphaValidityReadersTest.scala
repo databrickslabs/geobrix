@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.operations
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Summary
-import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
+import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -234,7 +234,7 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // convolution, polygonize, isoband: a transparent pixel is skipped like NoData, at any band count
+    // convolution, isoband: a transparent pixel is skipped like NoData, at any band count
     // ------------------------------------------------------------------------------------------------
 
     /** 6 x 6: 5 over rows 0-1 and 4-5, 99 over rows 2-3, which are transparent (alpha 0; the others 255). */
@@ -260,12 +260,9 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
             }
         }
 
-        test(s"polygonize and isoband of ${l.name} leave out the transparent pixels") {
+        test(s"isoband of ${l.name} leaves out the transparent pixels") {
             val ds = striped(l)
             try {
-                val polys = RST_Polygonize.execute(ds, 1, 4)
-                val values = (0 until polys.numElements()).map(i => polys.getStruct(i, 2).getDouble(1)).toSet
-                assert(values == Set(5.0), values.toString)
                 val bands = RST_Isoband.execute(ds, Array(0.0, 10.0, 200.0), 1)
                 val idx = (0 until bands.numElements()).map(i => bands.getStruct(i, 4).getInt(1)).toSet
                 assert(idx == Set(0), idx.toString)

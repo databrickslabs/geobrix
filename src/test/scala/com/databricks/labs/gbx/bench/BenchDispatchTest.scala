@@ -30,7 +30,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   separatebands/xyzpyramid -> raster_collection fingerprint)
     // + 11 bucket-B B-grid (DGGS: h3_tessellate + 10 {h3,quadbin}
     //   rastertogrid{avg,count,max,median,min} -> dggs_grid fingerprint)
-    // + 2 bucket-B B-vec (contour, polygonize -> vector fingerprint)
+    // + 2 bucket-B B-vec (contour, polygonize -> vector fingerprint; both have left since)
     // + 3 bucket-D geometry-in (rasterize/gridfrompoints/dtmfromgeoms -> raster fp)
     // + 7 bucket-A aggregators (the 7 *_agg, Spark groupBy aggregate harness)
     // + 1 H3 rasterize aggregator (rst_h3_rasterize_agg, grid_aggregate kind)
@@ -66,7 +66,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_contour (it runs the lightweight level only) left with their companions: 81 - 10 = 71.
     // rst_aspect, tpi, roughness and color_relief (measured under 1.2x of light) and the orphan rst_hillshade left with
     // their companions: 71 - 5 = 66.
-    assert(BenchDispatch.all.size == 66)
+    // rst_polygonize left with its companion (its light level is the GDAL spec engine's table function): 66 - 1 = 65.
+    assert(BenchDispatch.all.size == 65)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -98,7 +99,6 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
     assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
     assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
-    assert(BenchDispatch.category("rst_polygonize") == "vector")
     assert(BenchDispatch.category("rst_xyzpyramid") == "format")
     assert(BenchDispatch.category("rst_separatebands") == "format")
     assert(BenchDispatch.minBands("rst_band") == 2)

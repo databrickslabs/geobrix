@@ -2965,8 +2965,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # ContourGenerateEx FIXED_LEVELS path), so the bench uses explicit fixed
     # levels [0.2, 0.4, 0.6, 0.8] -- the float32 corpus band is ~[0, 1], so
     # these span its value range and trace a handful of contour LineStrings.
-    # polygonize rides band 1 + connectedness 4 (the heavy RST_Polygonize
-    # builder's defaults: case 1 => Literal(1), Literal(4)). The contour
+    # polygonize rides band 1 + connectedness 4 (its defaults). The contour
     # `interval`/`base`/`attr_field` ride the binding defaults (0.0/0.0/"elev");
     # with non-empty levels `interval`/`base` are ignored on both engines.
     "rst_contour": FnSpec(
@@ -3009,14 +3008,18 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         _BOTH,
         {"band": 1, "connectedness": 4},
-        core_fn=lambda ds, a: features.polygonize(ds, a["band"], a["connectedness"]),
+        core_fn=lambda ds, a: _engine_features(
+            "gbx_rst_polygonize",
+            {"band": a["band"], "connectedness": a["connectedness"]},
+        )(ds),
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         # Reads every pixel to vectorize and emits geometry rows, not an output tile:
         # the disposition sampler finds no tile-struct column, so we pin it explicitly.
         virtual_disposition="materialized",
         fingerprint_kind="vector",
-        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Polygonize.scala",),
+        sources=_FEATURES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- bucket D: geometry-in constructors (3) -------------------------------

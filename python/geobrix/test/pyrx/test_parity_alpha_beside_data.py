@@ -5,7 +5,7 @@ Every reader and operation below judges each band alone: a pixel is valid for a 
 mask says so (NoData, the raster's own mask band) and, for a raster with an alpha band, its alpha is above
 0, at any band count. Both tiers must aggregate, count, vectorise and convolve the same pixels:
 the band statistics, the histogram, convolution,
-polygonize and isoband, the derived band and the tessellation chips.
+isoband, the derived band and the tessellation chips.
 
 The helpers (Spark session with the JAR, the two tiers' row collectors) are those of
 ``test_parity_bng_quadbin_raster_grid.py``.
@@ -266,7 +266,7 @@ def test_tessellate_alpha_and_own_mask_parity(spark_with_jar, name, assignment, 
 
 # ---------------------------------------------------------------------------
 # Readers and operations that judge each band alone: histogram, statistics of a masked raster,
-# convolution, polygonize, isoband, derived band
+# convolution, isoband, derived band
 # ---------------------------------------------------------------------------
 # A pixel that is transparent (an alpha band beside data bands, at any band count) or hidden by the
 # raster's own mask band is valid for no band: both tiers leave it out.
@@ -357,30 +357,22 @@ def test_convolve_parity_skips_transparent_and_masked_neighbours(spark_with_jar,
 
 
 def _vector_rows(spark, raster, tier, kind):
-    """``(area, value)`` per polygon of polygonize / isoband of band 1 in one tier."""
+    """``(area, value)`` per polygon of isoband of band 1 in one tier."""
     import shapely.wkb
 
-    if kind == "polygonize" and tier == "light":
-        sql = "SELECT t.geom_wkb AS g, t.value AS v FROM _alpha_t, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
-    elif kind == "polygonize":
-        sql = (
-            "SELECT p.geom_wkb AS g, p.value AS v FROM "
-            "(SELECT explode(gbx_rst_polygonize(tile, 1, 4)) AS p FROM _alpha_t)"
-        )
-    else:
-        sql = (
-            "SELECT p.geom_wkb AS g, p.band AS v FROM "
-            "(SELECT explode(gbx_rst_isoband(tile, array(0.0D, 10.0D, 200.0D))) AS p FROM _alpha_t)"
-        )
+    sql = (
+        "SELECT p.geom_wkb AS g, p.band AS v FROM "
+        "(SELECT explode(gbx_rst_isoband(tile, array(0.0D, 10.0D, 200.0D))) AS p FROM _alpha_t)"
+    )
     rows = _sql_rows(spark, raster, tier, sql)
     return sorted(
         (round(shapely.wkb.loads(bytes(r["g"])).area, 6), float(r["v"])) for r in rows
     )
 
 
-@pytest.mark.parametrize("kind", ["polygonize", "isoband"])
+@pytest.mark.parametrize("kind", ["isoband"])
 @pytest.mark.parametrize("name", _STRIPED)
-def test_polygonize_and_isoband_parity_leave_out_transparent_and_masked_pixels(
+def test_isoband_parity_leave_out_transparent_and_masked_pixels(
     spark_with_jar, name, kind
 ):
     raster = _striped(name)

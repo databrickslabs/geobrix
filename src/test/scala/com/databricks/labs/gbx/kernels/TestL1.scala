@@ -63,7 +63,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_ToWebMercator",
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ",
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_XYZPyramid",
-        "com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize",
         "com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband",
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI",
         "com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample",

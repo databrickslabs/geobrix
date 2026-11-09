@@ -130,10 +130,6 @@ SCALA_SITES = {
         "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
     ): CONST_CRS,
     (
-        "rasterx/expressions/vector/RST_Polygonize.scala",
-        "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
-    ): CONST_CRS,
-    (
         "rasterx/expressions/web/RST_TileXYZ.scala",
         'command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"',
     ): WARP_CONST,

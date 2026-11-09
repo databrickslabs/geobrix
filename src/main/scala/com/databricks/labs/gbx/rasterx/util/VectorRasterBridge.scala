@@ -11,7 +11,7 @@ import org.gdal.ogr.ogrConstants.{OFTReal, wkbUnknown}
 import java.util.UUID
 
 /** Shared helpers for the vector↔raster bridge expressions
- *  (`RST_RasterizeAgg` and `RST_Polygonize`).
+ *  (`RST_RasterizeAgg`).
  *
  *  These wrap GDAL's `Memory` OGR driver, `MEM` raster driver, and GTiff
  *  serialization in three single-purpose methods so the two expressions can

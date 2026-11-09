@@ -1075,8 +1075,7 @@ def _main(_stack) -> int:
     # --grid-custom-only: ONLY run the custom grid benchmark, skip all fn benchmarks.
     benchmark_grid_custom = "--benchmark-grid-custom" in sys.argv
     grid_custom_only = "--grid-custom-only" in sys.argv
-    # --benchmark-fanout: also run the fan-out UDTF benchmark (rst_polygonize +
-    #   rst_h3_rastertogridcount), light pyrx LATERAL vs heavy rasterx explode.
+    # --benchmark-fanout: also run the fan-out UDTF benchmark (rst_xyzpyramid, rst_h3_tessellate and the tilers), light pyrx LATERAL vs heavy rasterx explode.
     # --fanout-only: ONLY run the fanout benchmark, skip all fn benchmarks.
     benchmark_fanout = "--benchmark-fanout" in sys.argv
     fanout_only = "--fanout-only" in sys.argv

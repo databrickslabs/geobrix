@@ -11,7 +11,6 @@
 # suite under src/test/scala is either matched by an entry or excluded here, and that every entry
 # matches a suite.
 #
-# excluded: com.databricks.labs.gbx.rasterx.expressions.vector.RST_PolygonizeTest
 # excluded: com.databricks.labs.gbx.rasterx.gdal.DirectReaderTest
 # excluded: com.databricks.labs.gbx.rasterx.operations.GDALRasterizeTest
 # excluded: com.databricks.labs.gbx.vectorx.mvt.MvtPyramidBuilderTest

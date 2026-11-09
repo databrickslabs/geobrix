@@ -7152,7 +7152,6 @@ def _make_synthetic_geotiff(
 
 # Fan-out functions covered by run_fanout_udtf.  Order is stable for parity loops.
 FANOUT_FUNCTIONS = [
-    "rst_polygonize",
     "rst_xyzpyramid",
     "rst_h3_tessellate",
     "rst_tooverlappingtiles",
@@ -7167,7 +7166,6 @@ FANOUT_FUNCTIONS = [
 # Each entry returns (tile_kwargs, light_lateral, heavy_lateral) where the LATERAL
 # fragments are the part AFTER "LATERAL" in the SQL, and ``heavy_lateral`` already
 # flattens the heavy tier to the SAME granularity as the light flat UDTF rows:
-#   * polygonize  -> heavy ARRAY<struct>           -> explode  (single)
 #   * 3 tilers    -> heavy CollectionGenerator     -> LATERAL VIEW gbx_.. (no explode)
 #   * xyzpyramid  -> heavy CollectionGenerator emits flat rows -> LATERAL VIEW (no explode)
 
@@ -7180,19 +7178,6 @@ def _fanout_spec(fn: str, scale: float):
     two row counts are directly comparable (the flatten-both parity gate).
     """
     s = max(0.1, float(scale))
-
-    if fn == "rst_polygonize":
-        # Many connected components -> large polygon fan-out.
-        cb = max(2, int(round(16 * (s**0.5))))
-        size = max(64, int(round(256 * (s**0.5))))
-        tile_kwargs = dict(size=size, checkerboard=cb)
-        light = "SELECT t.* FROM _fanout_bench_ras, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
-        # Heavy returns ARRAY<struct> -> single explode.
-        heavy = (
-            "SELECT p.* FROM _fanout_bench_ras "
-            "LATERAL VIEW explode(gbx_rst_polygonize(tile, 1, 4)) e AS p"
-        )
-        return tile_kwargs, light, heavy
 
     if fn == "rst_xyzpyramid":
         # Deep zoom range over a multi-degree extent -> thousands of tiles.
@@ -8070,7 +8055,6 @@ def run_fanout_udtf(
     output row counts are directly comparable (flatten-both parity):
         * light = streaming UDTF via ``LATERAL gbx_<fn>(...)`` -> already flat.
         * heavy = its Scala counterpart, flattened to match:
-            - ARRAY<struct>        (polygonize)  -> single ``explode``
             - ARRAY<ARRAY<struct>> (gridcount)   -> double ``explode``
             - CollectionGenerator  (5 tilers)    -> ``LATERAL VIEW gbx_.. (no explode)``
             - CollectionGenerator emitting flat rows (xyzpyramid) -> ``LATERAL VIEW``

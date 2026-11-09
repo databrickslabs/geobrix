@@ -240,6 +240,30 @@ def test_the_texts_written_are_the_files_the_argv_names_and_never_drift(monkeypa
     assert argv.text_values(replaced, values) == []
     skipped = argv.build(replaced, values, props)
     assert not [t for t in skipped if t.startswith("--color-map=")]
+    # two text arguments, the first replaced by a list: the second is the first file written and is named `T0`
+    second = dataclasses.replace(arg, source="color_table2")
+    both = dataclasses.replace(
+        replaced,
+        gdal=dataclasses.replace(replaced.gdal, args=replaced.gdal.args + (second,)),
+        params=replaced.params
+        + (
+            dataclasses.replace(
+                next(p for p in fn.params if p.name == "color_table"),
+                name="color_table2",
+            ),
+        ),
+    )
+    monkeypatch.setitem(_KEEP, "both", both)
+    values2 = {**values, "color_table2": table}
+    assert argv.text_values(both, values2) == [
+        argv.text_values(fn, {"color_table": table})[0]
+    ]
+    named2 = [
+        t
+        for t in argv.build(both, values2, props, ["i"], "o", texts=["T0"])
+        if t.startswith("--color-map")
+    ]
+    assert named2 == ["--color-map=T0"]
 
 
 _KEEP: dict = {}

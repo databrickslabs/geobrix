@@ -143,9 +143,30 @@ def test_the_estimate_is_in_the_output_type_when_there_is_no_size():
 def test_a_one_band_algorithm_and_a_color_relief_have_the_bands_they_write():
     three = argv.RasterProps(64, 48, 3, "Float32")
     algebra = M["gbx_rst_mapalgebra"]
-    assert argv.estimate_output(algebra, [], [three, three]) == 64 * 48 * 1 * 4
+    atokens = argv.build(algebra, {"expression": "A + B"}, [three, three])
+    assert argv.estimate_output(algebra, atokens, [three, three]) == 64 * 48 * 1 * 4
     relief = M["gbx_rst_color_relief"]
     assert argv.estimate_output(relief, [], [three]) == 64 * 48 * 4 * 1  # RGBA bytes
+
+
+def test_a_calc_without_band_indexes_writes_every_band_and_one_with_them_writes_one():
+    # threshold's expression is a bare A, which GDAL's raster calc applies to every band; an index's is A[n]: one band
+    int16x3 = argv.RasterProps(64, 48, 3, "Int16")
+    threshold = M["gbx_rst_threshold"]
+    ttokens = argv.build(threshold, {"op": ">", "value": 1.0}, [int16x3])
+    assert argv.estimate_output(threshold, ttokens, [int16x3]) == 64 * 48 * 3 * 2
+    ndvi = M["gbx_rst_ndvi"]
+    ntokens = argv.build(ndvi, {"red_idx": 1, "nir_idx": 2}, [int16x3])
+    assert argv.estimate_output(ndvi, ntokens, [int16x3]) == 64 * 48 * 1 * 4
+
+
+def test_the_estimate_of_inputs_that_are_not_warped_is_the_largest_input():
+    small = argv.RasterProps(32, 24, 1, "Float32")
+    large = argv.RasterProps(64, 48, 1, "Float32")
+    algebra = M["gbx_rst_mapalgebra"]
+    tokens = argv.build(algebra, {"expression": "A + B"}, [small, large])
+    assert argv.estimate_output(algebra, tokens, [small, large]) == 64 * 48 * 4
+    assert argv.estimate_output(algebra, tokens, [large, small]) == 64 * 48 * 4
 
 
 def test_a_reprojection_estimate_uses_the_grid_gdal_picks_and_the_masks_working_memory():
@@ -555,7 +576,8 @@ def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_budge
 
     from databricks.labs.gbx.engine.run import _gdal_status
 
-    raw = _osgeo_tile(gt=(0.0, 1.0, 0.5, 60.0, 0.3, -1.0))
+    # NoData declared: the tile carries no mask, so only the output grid (not the mask's working arrays) can refuse it
+    raw = _osgeo_tile(gt=(0.0, 1.0, 0.5, 60.0, 0.3, -1.0), nodata=-9999.0)
     gdal.FileFromMemBuffer("/vsimem/gbx-rot.tif", raw)
     try:
         with _gdal_status() as g:
@@ -568,10 +590,15 @@ def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_budge
     mf, ds = _open_result(res)
     with mf, ds:
         assert (grid.width, grid.height) == (ds.width, ds.height)
-    # the input is 1200 bytes and the old estimate (the input's size) fits 2 x 1200 + 100; the real output does not
-    monkeypatch.setattr(run, "decoded_budget", lambda: 2 * 20 * 15 * 4 + 100)
+    # the input is 1200 bytes decoded; the old estimate (the input's size) is 1200 more, the grid's is larger: a budget
+    # one byte short of the grid's need refuses the call, and one that holds it admits it
+    assert grid.width * grid.height > 20 * 15
+    need = 20 * 15 * 4 + grid.width * grid.height * 4
+    monkeypatch.setattr(run, "decoded_budget", lambda: need - 1)
     res = engine.run(M[TR], [raw], {"srid": 3035})
     assert res.raster is None and "Fix:" in res.error
+    monkeypatch.setattr(run, "decoded_budget", lambda: need)
+    assert engine.run(M[TR], [raw], {"srid": 3035}).error is None
 
 
 def test_a_gcp_tiles_resolution_estimate_comes_from_its_own_footprint(engine, tmp_path):

@@ -656,8 +656,8 @@ def _sized_token(fn, a, values, first: "RasterProps") -> str:
     )
 
 
-# The bands of a result by algorithm, where they are not the input's: a terrain algorithm and a map-algebra expression
-# write one band, a color relief up to four (RGB and an alpha band). A reprojection keeps the input's bands.
+# The bands of a result by algorithm, where they are not the input's: a terrain algorithm writes one band, a color
+# relief up to four (RGB and an alpha band). A reprojection keeps the input's bands; a calc's come from its expression.
 _OUT_BANDS = {
     "raster slope": 1,
     "raster aspect": 1,
@@ -665,7 +665,6 @@ _OUT_BANDS = {
     "raster tri": 1,
     "raster tpi": 1,
     "raster roughness": 1,
-    "raster calc": 1,
     "raster color-map": 4,
 }
 
@@ -730,6 +729,8 @@ def estimate_output(
     )
     item = _ITEMSIZE.get(dtype, 8)
     bands = _OUT_BANDS.get(fn.gdal.alg, first.bands)
+    if fn.gdal.alg == "raster calc" and "[" in (_token_value(tokens, "calc") or ""):
+        bands = 1  # a band-indexed expression (A[1], the map algebra's V[b]) writes one band; a bare A writes every band
     # inputs that are not warped share one grid: the largest bounds what the algorithm writes
     pixels = _output_pixels(tokens, first, grid)
     if fn.gdal.alg != "raster reproject":

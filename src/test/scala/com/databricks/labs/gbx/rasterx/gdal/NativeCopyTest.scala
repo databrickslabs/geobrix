@@ -58,6 +58,12 @@ class NativeCopyTest extends AnyFunSuite {
         assert(NativeCopy.rootsFrom(None, Some(Paths.get("/local_disk0")), tmp) ==
             Seq(Paths.get("/local_disk0/geobrix/native"), Paths.get("/tmp/geobrix/native")))
         assert(NativeCopy.rootsFrom(Some(""), None, tmp) == Seq(Paths.get("/tmp/geobrix/native")))
+        // java.io.tmpdir under the local disk (Databricks): /tmp is a third candidate; a base that repeats one is left out
+        assert(NativeCopy.rootsFrom(None, Some(Paths.get("/local_disk0")), Paths.get("/local_disk0/tmp")) ==
+            Seq("/local_disk0", "/local_disk0/tmp", "/tmp").map(b => Paths.get(b, "geobrix/native")))
+        val real = Files.createTempDirectory("gbx_base")
+        val link = Files.createSymbolicLink(Files.createTempDirectory("gbx_base").resolve("again"), real)
+        assert(NativeCopy.rootsFrom(None, None, real, link) == Seq(real.resolve("geobrix/native")))
         assert(NativeCopy.keyFor("a" * 64, "0.6.0").contains("0.6.0-aaaaaaaaaaaaaaaa"))
         assert(NativeCopy.keyFor("/path/when/unreadable").isEmpty)
     }
@@ -184,6 +190,24 @@ class NativeCopyTest extends AnyFunSuite {
         // when every candidate is refused, the message names each with its reason
         val all = intercept[java.io.IOException](NativeCopy.stabilizeFirst(c, Seq(unsafe, unsafe.resolve("x")), id, sha))
         assert(all.getMessage.contains(unsafe.toString) && all.getMessage.contains(unsafe.resolve("x").toString), all.getMessage)
+    }
+
+    test("unsafe local-disk and tmpdir candidates fall through to the system /tmp") {
+        val (_, _, c) = payload()
+        val id = sha(Paths.get(c.jni))
+        // a base another user could write, not sticky: its candidate is refused before anything is made under it
+        def unsafeBase() = {
+            val d = Files.createTempDirectory("gbx_base")
+            Files.setPosixFilePermissions(d, PosixFilePermissions.fromString("rwxrwxrwx"))
+            d
+        }
+        val (localDisk, javaTmp) = (unsafeBase(), unsafeBase())
+        val systemTmp = Files.createTempDirectory("gbx_base")
+        val roots = NativeCopy.rootsFrom(None, Some(localDisk), javaTmp, systemTmp)
+        assert(roots.size == 3)
+        val Right(copy) = NativeCopy.stabilizeFirst(c, roots, id, sha)
+        assert(copy.jni.startsWith(systemTmp.toRealPath().resolve("geobrix/native").toString), copy.jni)
+        assert(entries(localDisk).isEmpty && entries(javaTmp).isEmpty, "a refused base was written")
     }
 
     test("a candidate with less than 3x the payload free is skipped") {

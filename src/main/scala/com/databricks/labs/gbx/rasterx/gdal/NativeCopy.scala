@@ -33,8 +33,9 @@ import scala.util.Try
   * The JVM loads native code from the copy, so no other user may be able to write it. The root and each copy are made
   * owner-only (0700). A root that another user owns or can write, or that sits under a directory another user can
   * write (one that is not sticky, as `/tmp` is), is refused ([[UnsafeCopyRoot]]). With no root set, the JVM tries
-  * `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`, and uses the first that passes (on Databricks
-  * Runtime 19, `/local_disk0` belongs to another uid, so the copy lands in `/tmp`); a root that is set is the only
+  * `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`, then `/tmp/geobrix/native`, and uses the first
+  * that passes (on Databricks Runtime 19, `/local_disk0` and so `java.io.tmpdir` belong to another uid, so the copy
+  * lands in `/tmp`); a root that is set is the only
   * candidate. A candidate whose filesystem has less than 3 times the payload's size free is skipped too. When none
   * passes, the JVM loads in place. The done marker holds a manifest, the sha256 of every copied file. A JVM reuses a copy only when its files are exactly the
   * manifest's, each with its sha256, and each source file that is still there has the same sha256. Any other copy is
@@ -52,6 +53,8 @@ private[gdal] object NativeCopy extends Logging {
     /** A candidate needs this many times the payload's size free on its filesystem. */
     val FreeSpaceFactor = 3L
     val DefaultSubdir = "geobrix/native"
+    /** The last candidate's base: root-owned and sticky on Linux, whatever `java.io.tmpdir` is. */
+    val SystemTmp = "/tmp"
     private val Off = Set("off", "none", "false")
 
     // the JVM's own guard: a file lock is held per JVM, so two threads of one JVM must not both take it
@@ -144,13 +147,18 @@ private[gdal] object NativeCopy extends Logging {
 
     /** The roots a JVM tries to copy into, in order: `value` (the conf or environment setting) when set, alone, so a root
       * that is set and refused is not replaced by another; `off` for none; else `<local disk>/geobrix/native` when the
-      * node has a writable [[DatabricksLocalDisk]], then `<tmpDir>/geobrix/native`. */
-    def rootsFrom(value: Option[String], localDisk: Option[Path], tmpDir: Path): Seq[Path] =
+      * node has a writable [[DatabricksLocalDisk]], then `<tmpDir>/geobrix/native`, then `<systemTmp>/geobrix/native`.
+      * On Databricks `java.io.tmpdir` is under `/local_disk0`, so `/tmp` (root-owned and sticky) is its own candidate. A
+      * base directory with the same real path as an earlier one is left out. */
+    def rootsFrom(value: Option[String], localDisk: Option[Path], tmpDir: Path, systemTmp: Path = Paths.get(SystemTmp)): Seq[Path] =
         value.map(_.trim).filter(_.nonEmpty) match {
             case Some(v) if Off.contains(v.toLowerCase) => Nil
             case Some(v)                                => Seq(Paths.get(v).toAbsolutePath.normalize())
             case None                                   =>
-                (localDisk.toSeq ++ Seq(tmpDir)).map(_.resolve(DefaultSubdir).toAbsolutePath.normalize()).distinct
+                val bases = (localDisk.toSeq ++ Seq(tmpDir, systemTmp)).map(_.toAbsolutePath.normalize())
+                val seen = scala.collection.mutable.LinkedHashMap.empty[Path, Path]
+                bases.foreach(b => seen.getOrElseUpdate(Try(b.toRealPath()).getOrElse(b), b))
+                seen.values.toSeq.map(_.resolve(DefaultSubdir))
         }
 
     /** The JVM's temporary directory (`java.io.tmpdir`, usually `/tmp`). */

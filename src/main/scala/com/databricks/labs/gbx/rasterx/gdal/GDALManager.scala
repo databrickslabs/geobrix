@@ -53,7 +53,7 @@ object GDALManager extends Logging {
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"
 
     /** Where each node copies the payload before its JVM loads it ([[NativeCopy]]): a directory, or `off` to load in
-      * place. Unset: `/local_disk0/geobrix/native` on a node with that disk (Databricks), else `<java.io.tmpdir>/geobrix/native`,
+      * place. Unset: `/local_disk0/geobrix/native` on a node with that disk (Databricks), else `<java.io.tmpdir>/geobrix/native`, then `/tmp/geobrix/native`,
       * the first that passes the safety checks and has the space; else in place. A directory that is set is the only try. Read at the
       * JVM's first GDAL load from the caller's config, the session's conf, the cluster's conf, then [[NativeCopyDirEnv]]. */
     val NativeCopyDirKey = "spark.databricks.labs.gbx.native.copy.dir"
@@ -670,7 +670,7 @@ object GDALManager extends Logging {
 
     /**
       * `c` copied to the first copy root that passes ([[NativeCopy.stabilizeFirst]]: [[NativeCopyDirKey]] alone when set,
-      * else `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`), else `c` itself: [[NativeCopyDirKey]]
+      * else `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`, then `/tmp/geobrix/native`), else `c` itself: [[NativeCopyDirKey]]
       * `off`, a JNI on the JVM's library path (GDAL's Java classes load that one
       * by name, so a copy would map a second JNI), or a copy that cannot be written (logged). Throws the refusal when the
       * payload is gone or changes while it is copied.

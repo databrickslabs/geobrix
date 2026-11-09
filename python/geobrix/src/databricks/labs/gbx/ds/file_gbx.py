@@ -1677,6 +1677,8 @@ class _OpenerContext:
                 else:
                     del self._staged_temps[id(ds)]
                     self._unlinked_sizes[id(ds)] = size
+                    # the sidecars staged beside it (an .aux.xml, an .hdr) were read at open; they leave with the file
+                    remove_staged(local_path)
         return ds
 
     def close(self, src) -> None:

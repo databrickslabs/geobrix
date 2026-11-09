@@ -510,3 +510,23 @@ def test_no_netcdf_copy_is_left_after_the_task_boundary(tmp_path, in_one_task, s
     assert (
         os.listdir(staged) == []
     )  # the netCDF copy closed with task 1; the GTiff unlinked
+
+
+_PAM = "<PAMDataset></PAMDataset>"
+
+
+@pytest.mark.parametrize("unlink", [True, False])
+def test_the_sidecars_of_a_staged_copy_leave_with_it(tmp_path, staged, unlink):
+    """A copy staged with its .aux.xml leaves no file on disk after close, whether the copy is unlinked at open or kept
+    until the handle closes."""
+    from databricks.labs.gbx.ds.file_gbx import _OpenerContext
+
+    path = _write(tmp_path / "s.tif", np.ones((1, 16, 16), "float32"), block=16)
+    (tmp_path / "s.tif.aux.xml").write_text(_PAM)
+    ctx = _OpenerContext(unlink_staged=unlink)
+    ds = ctx.open(path)
+    try:
+        assert len(os.listdir(staged)) == (0 if unlink else 2)
+    finally:
+        ctx.close(ds)
+    assert os.listdir(staged) == []

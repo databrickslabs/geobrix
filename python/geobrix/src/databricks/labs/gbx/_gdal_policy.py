@@ -1137,6 +1137,17 @@ REFUSED_WHY = {
 }
 
 
+# Raster drivers whose bytes cannot be held as a tile, each for a reason of its own (not the other-files class): GDAL
+# identifies the file by its name, which a tile's bytes do not have, or the Python binding opens it with no band. A
+# raster of one of them is read by path (``raster_gbx``, ``gbx_rst_fromfile``).
+BYTES_UNSUPPORTED = {
+    "BAG": "its bytes open as a dataset with no band",
+    "GTX": "GDAL identifies its file by the .gtx extension, which tile bytes do not have",
+    "SRTMHGT": "GDAL identifies its file by the tile name, such as N50E010.hgt, which tile bytes do not have",
+    "MBTiles": "GDAL identifies its file by the .mbtiles extension, which tile bytes do not have",
+}
+
+
 def driver_verdict(name: str, raster: bool) -> tuple:
     """``(allowed, tile_bytes)`` of a GDAL driver that is registered here, under this process's policy.
 
@@ -1149,7 +1160,12 @@ def driver_verdict(name: str, raster: bool) -> tuple:
     if not enabled():
         return True, bool(raster)
     allowed = name not in refused_names() and (not raster or name in allowed_names())
-    tile_bytes = bool(raster) and allowed and name not in bytes_refused_light_names()
+    tile_bytes = (
+        bool(raster)
+        and allowed
+        and name not in bytes_refused_light_names()
+        and name not in BYTES_UNSUPPORTED
+    )
     return allowed, tile_bytes
 
 
@@ -1189,6 +1205,8 @@ def driver_requires(name: str, md) -> tuple:
     - A raster driver that lives in the process (``IN_PROCESS_RASTER``) is usable, with the note that it cannot be held
       as tile bytes.
     - A raster driver of the ``bytes_refused_light`` class reads other files beside the data: usable, with the note.
+    - A raster driver in ``BYTES_UNSUPPORTED`` cannot be held as tile bytes for a reason of its own: usable by path,
+      with the note.
     - A vector driver in ``VECTOR_MULTI_FILE`` reads a set of files: usable, with the note.
     """
     # Conservative reading (accepted): the presence of the key means the plugin is not loaded. Whether GDAL keeps the
@@ -1207,6 +1225,8 @@ def driver_requires(name: str, md) -> tuple:
         return IN_PROCESS_REQUIRES, True
     if enabled() and "DCAP_RASTER" in md and name in bytes_refused_light_names():
         return BYTES_CLASS_REQUIRES, True
+    if enabled() and "DCAP_RASTER" in md and name in BYTES_UNSUPPORTED:
+        return f"as a raster, it is read by path: {BYTES_UNSUPPORTED[name]}", True
     if name in VECTOR_MULTI_FILE:
         return VECTOR_MULTI_FILE[name], True
     return None, True
@@ -1306,8 +1326,17 @@ def _bytes_drivers(memfile, explicit, mode: str):
     return [name for name in allowed_names() if name not in refused]
 
 
-# How an HDF5 file (so a NetCDF-4 file) starts.
+# How an HDF5 file (so a NetCDF-4 file) starts, and the name of the root group of a BAG file (HDF5 too).
 _HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+_BAG_ROOT = b"BAG_root"
+
+
+def _bytes_unsupported(name: str) -> DriverPolicyError:
+    """The refusal of the bytes of a raster driver in ``BYTES_UNSUPPORTED``."""
+    return DriverPolicyError(
+        f"the raster bytes: are a {name} raster, and {BYTES_UNSUPPORTED[name]}, "
+        "so they are not held as a tile. Fix: read the file by path with raster_gbx or gbx_rst_fromfile."
+    )
 
 
 def open_bytes(data, **kwargs):
@@ -1326,6 +1355,15 @@ def open_bytes(data, **kwargs):
     owned = not isinstance(data, rio_io.MemoryFile)
     memfile = rio_io.MemoryFile(data) if owned else data
     try:
+        head = _head(memfile, None)
+        if (
+            kwargs.get("driver") is None
+            and head.startswith(_HDF5_SIGNATURE)
+            and _BAG_ROOT in head
+            and activate()["mode"] != "off"
+        ):
+            # a BAG file is HDF5: from memory the netCDF driver would open it with no band, so it is refused by name
+            raise _bytes_unsupported("BAG")
         if (
             kwargs.get("driver") is None
             and "netCDF" in allowed_names()
@@ -1370,6 +1408,10 @@ def open_bytes(data, **kwargs):
                 name = ds.driver
                 ds.close()
                 raise _bytes_refusal("the raster bytes", name)
+            if ds.driver in BYTES_UNSUPPORTED:
+                name = ds.driver
+                ds.close()
+                raise _bytes_unsupported(name)
     except BaseException:
         if owned:
             memfile.close()

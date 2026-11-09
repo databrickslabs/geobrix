@@ -1311,6 +1311,16 @@ SPEC_SE: Tuple[Case, ...] = (
         "EPSG:3857",
         ("session",),
     ),
+    # transformcrs is the same reprojection as transform (SPEC_WARP, whose rows run for the warp functions): a source with
+    # no NoData declared has the pixels outside the reprojected footprint masked, not a valid 0
+    Case(
+        "se_tcrs_undeclared_masked",
+        T,
+        (Build("warp_ramp_geo"), "EPSG:3035"),
+        "warp_masked",
+        "EPSG:3035",
+        ("session",),
+    ),
     Case(
         "se_tcrs_vrt_bytes",
         T,

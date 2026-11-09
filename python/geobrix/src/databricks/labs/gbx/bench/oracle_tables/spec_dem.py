@@ -473,6 +473,10 @@ _session_dem_rows += (
         "gbx_missing_tile",
         ONLY,
     ),
+    # The DEM's hole is -9999 (the NoData sentinel), and the surface's lowest data value is 99.5: the level 90 lies
+    # between them, so a line at 90 would be drawn around the hole if it were data. This row holds that on its own, where
+    # `contour_dem_hole` holds the levels against the reference (which would agree with a leak that is in both).
+    Case("contour_dem_hole_no_line", CT, (DEM, [90.0]), "contours", {}, ONLY),
     # The lines against GDAL's older `gdal.ContourGenerateEx` (an entry point apart from `raster contour`), which draws
     # the same lines: exact. The earlier scikit-image lines, still the Unity Catalog kernel's, are equivalent to them:
     # the same levels and line counts, within half a pixel, each up to a pixel shorter (see check_features_ref).

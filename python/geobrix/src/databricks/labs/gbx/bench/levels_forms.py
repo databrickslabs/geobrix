@@ -2356,7 +2356,40 @@ def _dem_color_table(corpus) -> Dict[str, str]:
     if not os.path.isfile(path) or open(path).read() != DEM_COLOR_TABLE:
         with open(path, "w") as fh:
             fh.write(DEM_COLOR_TABLE)
+    _wait_visible(path)
     return {"ct": path}
+
+
+def _wait_visible(path: str, tries: int = 30) -> None:
+    """Return when every task of the session sees `path` as a file. A file just written to a Volume was missing for the
+    executors' JVMs on a cluster (the first heavy colour-relief form raised FileNotFoundException for it). No session, no
+    wait."""
+    import time
+
+    from pyspark.sql import SparkSession
+
+    spark = SparkSession.getActiveSession()
+    if spark is None:
+        return
+
+    def seen(batches):
+        import pandas as pd
+
+        for pdf in batches:
+            yield pd.DataFrame({"ok": [os.path.isfile(path)] * len(pdf)})
+
+    for _ in range(tries):
+        missing = (
+            spark.range(64)
+            .repartition(32)
+            .mapInPandas(seen, "ok boolean")
+            .filter("NOT ok")
+            .count()
+        )
+        if missing == 0:
+            return
+        time.sleep(2)
+    raise RuntimeError(f"the colour table {path} is not visible to every task")
 
 
 INPUTS["dem_1024_mem"] = _se_dems_replicated(

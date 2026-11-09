@@ -385,7 +385,7 @@ def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_sourc
 def test_the_docs_pages_link_every_driver_row_and_every_built_in_anchor():
     """gdal-drivers.mdx and its three subpages (generated from the snapshot): each link into one of the four pages has
     its target anchor there, the available drivers come before the unavailable ones, and a driver of both kinds is
-    in both tables, each row linking to the other page.
+    in both tables, each row linking to the other page; the parent's built-in rows link to rows of the subpages.
     """
     import posixpath
     import re
@@ -446,5 +446,3 @@ def test_the_docs_pages_link_every_driver_row_and_every_built_in_anchor():
         if d["vector"] and d["raster"]:
             assert f"(./raster#raster-{name})" in vector, d["driver"]
             assert f"(./vector#vector-{name})" in raster, d["driver"]
-    built_in = re.findall(r"\(\.\./gdal-drivers#(builtin-[^)]+)\)", vector + raster)
-    assert built_in and set(built_in) <= anchors["gdal-drivers"]

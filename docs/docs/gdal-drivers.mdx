@@ -29,11 +29,9 @@ SELECT driver, description, requires FROM gbx_drivers() WHERE NOT available
 
 ## How to read the tables
 
-- **Read** and **Write** are GDAL's flags: it can open a dataset, and it can create or copy one.
-- **Tile bytes** is set when a raster of this driver can be held as the bytes of a tile.
+- **Can** lists what the driver does: `read` when GDAL can open a dataset, `write` when it can create or copy one, and, for a raster, `tile bytes` when a raster of the driver can be held as the bytes of a tile.
 - **Requires** names what the driver needs besides the data file. A format with sidecar files names them here.
 - **Why** names what an unavailable driver needs: a service, a program or a plugin that this runtime lacks.
-- **GeoBrix built-in** links to the built-in formats table on this page, when a GeoBrix reader or writer handles the format without this driver.
 - **Tested with GeoBrix** lists the GeoBrix reader, writer or function that the tests used. A tested row has a green tint and the label <span className="gbx-tested">Tested</span>, so colour is not the only cue.
 - **GeoBrix guidance** names the built-in reader, writer or function to use for the format, and what it covers. It links the pages that explain it. `gbx_drivers()` returns the same note in `guidance`, and the links in `docs`.
 - The vector and the raster page each have three groups: available and tested, available and not tested, and unavailable.

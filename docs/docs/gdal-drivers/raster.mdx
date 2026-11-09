@@ -14,140 +14,148 @@ These are the raster drivers of the env wheel's GDAL build, with what each can d
 
 GeoBrix's extended driver tests cover these raster drivers in this release.
 
-| Driver | Description | Read | Write | Tile bytes | Requires | GeoBrix built-in | Tested with GeoBrix | GeoBrix guidance |
-|---|---|---|---|---|---|---|---|---|
-| <Link id="raster-aaigrid"></Link>`AAIGrid` | Arc/Info ASCII Grid | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` AAIGrid; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-bag"></Link>`BAG` | Bathymetry Attributed Grid | ✓ | ✓ |  | as a raster, it is read by path: its bytes open as a dataset with no band Also a vector driver: [see the vector page](./vector#vector-bag). |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads BAG; the format is detected from the file. It has no named reader or writer. Not tested as a vector driver: `vector_gbx` may read it; plain GDAL may suit it better. Its bytes do not load as a tile, and `gbx_rst_asformat` does not write BAG. [Raster reader](../readers/raster) |
-| <Link id="raster-cog"></Link>`COG` | Cloud optimized GeoTIFF generator |  | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `cog_gbx` or `raster_gbx` (read), `gbx_rst_asformat` (write) | `cog_gbx` reads and writes Cloud Optimized GeoTIFFs, on this driver. Prefer it to calling the driver directly. [COG reader](../readers/cog) · [COG writer](../writers/cog) |
-| <Link id="raster-ehdr"></Link>`EHdr` | ESRI .hdr Labelled | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads EHdr; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
-| <Link id="raster-envi"></Link>`ENVI` | ENVI .hdr Labelled | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads ENVI; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
-| <Link id="raster-gpkg"></Link>`GPKG` | GeoPackage | ✓ | ✓ | ✓ | Also a vector driver: [see the vector page](./vector#vector-gpkg). |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `gpkg_gbx` reads and writes GeoPackage vector layers, on this driver. Prefer it to calling the driver directly. `raster_gbx` reads GeoPackage raster tiles, and `gbx_rst_asformat` does not write them yet. [GeoPackage reader](../readers/geopackage) · [GeoPackage writer](../writers/geopackage) |
-| <Link id="raster-grib"></Link>`GRIB` | GRIdded Binary (.grb, .grb2) | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` GRIB; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-gsag"></Link>`GSAG` | Golden Software ASCII Grid (.grd) | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` GSAG; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-gtiff"></Link>`GTiff` | GeoTIFF | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `gtiff_gbx` or `raster_gbx` (read), `gbx_rst_asformat` (write) | `gtiff_gbx` reads and writes GeoTIFFs, on this driver. Prefer it to calling the driver directly. [GeoTIFF reader](../readers/geotiff) · [GeoTIFF writer](../writers/geotiff) |
-| <Link id="raster-gtx"></Link>`GTX` | NOAA Vertical Datum .GTX | ✓ | ✓ |  | as a raster, it is read by path: GDAL identifies its file by the .gtx extension, which tile bytes do not have |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads GTX; the format is detected from the file. It has no named reader or writer. GDAL identifies GTX grids by the .gtx extension, so their bytes do not load as a tile, and `gbx_rst_asformat` does not write them. [Raster reader](../readers/raster) |
-| <Link id="raster-hfa"></Link>`HFA` | Erdas Imagine Images (.img) | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads HFA; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
-| <Link id="raster-jp2openjpeg"></Link>`JP2OpenJPEG` | JPEG-2000 driver based on JP2OpenJPEG library | ✓ | ✓ | ✓ | Also a vector driver: [see the vector page](./vector#vector-jp2openjpeg). |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JP2OpenJPEG; the format is detected from the file. It has no named reader or writer. Not tested as a vector driver: `vector_gbx` may read it; plain GDAL may suit it better. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-jpeg"></Link>`JPEG` | JPEG JFIF | ✓ | ✓ | ✓ |  | [EXIF and GPS image metadata](../gdal-drivers#builtin-exif) | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JPEG; the format is detected from the file. It has no named reader or writer. `exif_gbx` reads the EXIF and GPS metadata, which this driver does not. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) · [EXIF reader](../readers/exif) |
-| <Link id="raster-jpegxl"></Link>`JPEGXL` | JPEG-XL | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JPEGXL; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-mbtiles"></Link>`MBTiles` | MBTiles | ✓ | ✓ |  | as a raster, it is read by path: GDAL identifies its file by the .mbtiles extension, which tile bytes do not have Also a vector driver: [see the vector page](./vector#vector-mbtiles). |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads MBTiles; the format is detected from the file. `vector_gbx` reads MBTiles with the `driverName` option. It has no named reader or writer. Raster MBTiles open by path, and their bytes do not load as a tile. `gbx_rst_asformat` does not write MBTiles. For tile pyramids use `pmtiles_gbx`. [Raster reader](../readers/raster) · [Vector reader](../readers/vector) · [PMTiles writer](../writers/pmtiles) |
-| <Link id="raster-nitf"></Link>`NITF` | National Imagery Transmission Format | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads NITF; the format is detected from the file. It has no named reader or writer. `gbx_rst_asformat` does not write it, because NITF needs a creation option to store a CRS. Use plain GDAL to write NITF. [Raster reader](../readers/raster) |
-| <Link id="raster-png"></Link>`PNG` | Portable Network Graphics | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` PNG; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-rmf"></Link>`RMF` | Raster Matrix Format | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` RMF; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-saga"></Link>`SAGA` | SAGA GIS Binary Grid (.sdat, .sg-grd-z) | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads SAGA; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
-| <Link id="raster-srtmhgt"></Link>`SRTMHGT` | SRTMHGT File Format | ✓ | ✓ |  | as a raster, it is read by path: GDAL identifies its file by the tile name, such as N50E010.hgt, which tile bytes do not have |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads SRTMHGT; the format is detected from the file. It has no named reader or writer. GDAL identifies SRTM HGT tiles by the tile name, so their bytes do not load as a tile, and `gbx_rst_asformat` does not write them. [Raster reader](../readers/raster) |
-| <Link id="raster-vrt"></Link>`VRT` | Virtual Raster | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads VRT; the format is detected from the file. It has no named reader or writer. A VRT names other files. `raster_gbx` reads one you write. For GeoBrix's own mosaics, see the VRT mosaic and virtual tile pages. [Raster reader](../readers/raster) · [VRT & Mosaics](../api/vrt-mosaic) · [Virtual Tiles](../api/virtual-tiles) |
-| <Link id="raster-webp"></Link>`WEBP` | WEBP | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` WEBP; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
-| <Link id="raster-xyz"></Link>`XYZ` | ASCII Gridded XYZ | ✓ | ✓ | ✓ |  |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` XYZ; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+<div className="gbx-driver-table">
+
+| Driver | Description | Can | Requires | Tested with GeoBrix | GeoBrix guidance |
+|---|---|---|---|---|---|
+| <Link id="raster-aaigrid"></Link>`AAIGrid` | Arc/Info ASCII Grid | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` AAIGrid; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-bag"></Link>`BAG` | Bathymetry Attributed Grid | read · write | as a raster, it is read by path: its bytes open as a dataset with no band Also a vector driver: [see the vector page](./vector#vector-bag). | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads BAG; the format is detected from the file. It has no named reader or writer. Not tested as a vector driver: `vector_gbx` may read it; plain GDAL may suit it better. Its bytes do not load as a tile, and `gbx_rst_asformat` does not write BAG. [Raster reader](../readers/raster) |
+| <Link id="raster-cog"></Link>`COG` | Cloud optimized GeoTIFF generator | write · tile bytes |  | <span className="gbx-tested">Tested</span> `cog_gbx` or `raster_gbx` (read), `gbx_rst_asformat` (write) | `cog_gbx` reads and writes Cloud Optimized GeoTIFFs, on this driver. Prefer it to calling the driver directly. [COG reader](../readers/cog) · [COG writer](../writers/cog) |
+| <Link id="raster-ehdr"></Link>`EHdr` | ESRI .hdr Labelled | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads EHdr; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
+| <Link id="raster-envi"></Link>`ENVI` | ENVI .hdr Labelled | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads ENVI; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
+| <Link id="raster-gpkg"></Link>`GPKG` | GeoPackage | read · write · tile bytes | Also a vector driver: [see the vector page](./vector#vector-gpkg). | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `gpkg_gbx` reads and writes GeoPackage vector layers, on this driver. Prefer it to calling the driver directly. `raster_gbx` reads GeoPackage raster tiles, and `gbx_rst_asformat` does not write them yet. [GeoPackage reader](../readers/geopackage) · [GeoPackage writer](../writers/geopackage) |
+| <Link id="raster-grib"></Link>`GRIB` | GRIdded Binary (.grb, .grb2) | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` GRIB; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-gsag"></Link>`GSAG` | Golden Software ASCII Grid (.grd) | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` GSAG; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-gtiff"></Link>`GTiff` | GeoTIFF | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `gtiff_gbx` or `raster_gbx` (read), `gbx_rst_asformat` (write) | `gtiff_gbx` reads and writes GeoTIFFs, on this driver. Prefer it to calling the driver directly. [GeoTIFF reader](../readers/geotiff) · [GeoTIFF writer](../writers/geotiff) |
+| <Link id="raster-gtx"></Link>`GTX` | NOAA Vertical Datum .GTX | read · write | as a raster, it is read by path: GDAL identifies its file by the .gtx extension, which tile bytes do not have | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads GTX; the format is detected from the file. It has no named reader or writer. GDAL identifies GTX grids by the .gtx extension, so their bytes do not load as a tile, and `gbx_rst_asformat` does not write them. [Raster reader](../readers/raster) |
+| <Link id="raster-hfa"></Link>`HFA` | Erdas Imagine Images (.img) | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads HFA; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
+| <Link id="raster-jp2openjpeg"></Link>`JP2OpenJPEG` | JPEG-2000 driver based on JP2OpenJPEG library | read · write · tile bytes | Also a vector driver: [see the vector page](./vector#vector-jp2openjpeg). | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JP2OpenJPEG; the format is detected from the file. It has no named reader or writer. Not tested as a vector driver: `vector_gbx` may read it; plain GDAL may suit it better. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-jpeg"></Link>`JPEG` | JPEG JFIF | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JPEG; the format is detected from the file. It has no named reader or writer. `exif_gbx` reads the EXIF and GPS metadata, which this driver does not. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) · [EXIF reader](../readers/exif) |
+| <Link id="raster-jpegxl"></Link>`JPEGXL` | JPEG-XL | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` JPEGXL; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-mbtiles"></Link>`MBTiles` | MBTiles | read · write | as a raster, it is read by path: GDAL identifies its file by the .mbtiles extension, which tile bytes do not have Also a vector driver: [see the vector page](./vector#vector-mbtiles). | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads MBTiles; the format is detected from the file. `vector_gbx` reads MBTiles with the `driverName` option. It has no named reader or writer. Raster MBTiles open by path, and their bytes do not load as a tile. `gbx_rst_asformat` does not write MBTiles. For tile pyramids use `pmtiles_gbx`. [Raster reader](../readers/raster) · [Vector reader](../readers/vector) · [PMTiles writer](../writers/pmtiles) |
+| <Link id="raster-nitf"></Link>`NITF` | National Imagery Transmission Format | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads NITF; the format is detected from the file. It has no named reader or writer. `gbx_rst_asformat` does not write it, because NITF needs a creation option to store a CRS. Use plain GDAL to write NITF. [Raster reader](../readers/raster) |
+| <Link id="raster-png"></Link>`PNG` | Portable Network Graphics | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` PNG; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-rmf"></Link>`RMF` | Raster Matrix Format | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` RMF; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-saga"></Link>`SAGA` | SAGA GIS Binary Grid (.sdat, .sg-grd-z) | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads SAGA; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) |
+| <Link id="raster-srtmhgt"></Link>`SRTMHGT` | SRTMHGT File Format | read · write | as a raster, it is read by path: GDAL identifies its file by the tile name, such as N50E010.hgt, which tile bytes do not have | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads SRTMHGT; the format is detected from the file. It has no named reader or writer. GDAL identifies SRTM HGT tiles by the tile name, so their bytes do not load as a tile, and `gbx_rst_asformat` does not write them. [Raster reader](../readers/raster) |
+| <Link id="raster-vrt"></Link>`VRT` | Virtual Raster | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile | <span className="gbx-tested">Tested</span> `raster_gbx` (read) | `raster_gbx` reads VRT; the format is detected from the file. It has no named reader or writer. A VRT names other files. `raster_gbx` reads one you write. For GeoBrix's own mosaics, see the VRT mosaic and virtual tile pages. [Raster reader](../readers/raster) · [VRT & Mosaics](../api/vrt-mosaic) · [Virtual Tiles](../api/virtual-tiles) |
+| <Link id="raster-webp"></Link>`WEBP` | WEBP | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` WEBP; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+| <Link id="raster-xyz"></Link>`XYZ` | ASCII Gridded XYZ | read · write · tile bytes |  | <span className="gbx-tested">Tested</span> `raster_gbx` (read), `gbx_rst_asformat` (write) | `raster_gbx` reads and writes via `gbx_rst_asformat` XYZ; the format is detected from the file. It has no named reader or writer. [Raster reader](../readers/raster) · [gbx_rst_asformat](../api/raster-functions) |
+
+</div>
 
 ## Available raster drivers: not tested with GeoBrix
 
 These raster drivers are registered, and they may work with GeoBrix, but they are use-at-your-own-risk. `raster_gbx` detects the format from the file, so it takes no driver option. Plain GDAL, `from osgeo import gdal`, may suit them better than GeoBrix's distributed readers and writers.
 
-| Driver | Description | Read | Write | Tile bytes | Requires | GeoBrix built-in | GeoBrix guidance |
-|---|---|---|---|---|---|---|---|
-| <Link id="raster-ace2"></Link>`ACE2` | ACE2 | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-adrg"></Link>`ADRG` | ARC Digitized Raster Graphics | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-aig"></Link>`AIG` | Arc/Info Binary Grid | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-airsar"></Link>`AirSAR` | AirSAR Polarimetric Image | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-biggif"></Link>`BIGGIF` | Graphics Interchange Format (.gif) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-bmp"></Link>`BMP` | MS Windows Device Independent Bitmap | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-bsb"></Link>`BSB` | Maptech BSB Nautical Charts | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-bt"></Link>`BT` | VTP .bt (Binary Terrain) 1.3 Format | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-byn"></Link>`BYN` | Natural Resources Canada's Geoid | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-cad"></Link>`CAD` | AutoCAD Driver | ✓ |  | ✓ | Also a vector driver: [see the vector page](./vector#vector-cad). |  | `vector_gbx` reads CAD with the `driverName` option. It has no named reader or writer. Not tested as a raster driver: `raster_gbx` may read it; plain GDAL may suit it better. It is read-only. Only AutoCAD R2000 (AC1015) drawings are tested. To round-trip drawings, use DXF. [Vector reader](../readers/vector) |
-| <Link id="raster-cals"></Link>`CALS` | CALS (Type 1) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-ceos"></Link>`CEOS` | CEOS Image | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-coasp"></Link>`COASP` | DRDC COASP SAR Processor Raster | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-cosar"></Link>`COSAR` | COSAR Annotated Binary Matrix (TerraSAR-X) | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-cpg"></Link>`CPG` | Convair PolGASP | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-ctg"></Link>`CTG` | USGS LULC Composite Theme Grid | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-derived"></Link>`DERIVED` | Derived datasets using VRT pixel functions | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-dimap"></Link>`DIMAP` | SPOT DIMAP | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-doq1"></Link>`DOQ1` | USGS DOQ (Old Style) | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-doq2"></Link>`DOQ2` | USGS DOQ (New Style) | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-dted"></Link>`DTED` | DTED Elevation Raster | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-e57"></Link>`E57` | ASTM E57 3D file format (image part) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-ecrgtoc"></Link>`ECRGTOC` | ECRG TOC format | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-eir"></Link>`EIR` | Erdas Imagine Raw | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-ers"></Link>`ERS` | ERMapper .ers Labelled | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-esat"></Link>`ESAT` | Envisat Image Format | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-fast"></Link>`FAST` | EOSAT FAST Format | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-genbin"></Link>`GenBin` | Generic Binary (.hdr Labelled) | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-gff"></Link>`GFF` | Ground-based SAR Applications Testbed File Format (.gff) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-gif"></Link>`GIF` | Graphics Interchange Format (.gif) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-grassasciigrid"></Link>`GRASSASCIIGrid` | GRASS ASCII Grid | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-gs7bg"></Link>`GS7BG` | Golden Software 7 Binary Grid (.grd) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-gsbg"></Link>`GSBG` | Golden Software Binary Grid (.grd) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-gsc"></Link>`GSC` | GSC Geogrid | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-gxf"></Link>`GXF` | GeoSoft Grid Exchange Format | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-hdf5"></Link>`HDF5` | Hierarchical Data Format Release 5 | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-hdf5image"></Link>`HDF5Image` | HDF5 Dataset | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-hf2"></Link>`HF2` | HF2/HFZ heightfield raster | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-ilwis"></Link>`ILWIS` | ILWIS Raster Map | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-iris"></Link>`IRIS` | IRIS data (.PPI, .CAPPi etc) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-isce"></Link>`ISCE` | ISCE raster | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-isg"></Link>`ISG` | International Service for the Geoid | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-isis2"></Link>`ISIS2` | USGS Astrogeology ISIS cube (Version 2) | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-isis3"></Link>`ISIS3` | USGS Astrogeology ISIS cube (Version 3) | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-jaxapalsar"></Link>`JAXAPALSAR` | JAXA PALSAR Product Reader (Level 1.1/1.5) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-jdem"></Link>`JDEM` | Japanese DEM (.mem) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-kro"></Link>`KRO` | KOLOR Raw | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-l1b"></Link>`L1B` | NOAA Polar Orbiter Level 1b Data Set | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-lan"></Link>`LAN` | Erdas .LAN/.GIS | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-lcp"></Link>`LCP` | FARSITE v.4 Landscape File (.lcp) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-leveller"></Link>`Leveller` | Leveller heightfield | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-libertiff"></Link>`LIBERTIFF` | GeoTIFF (using LIBERTIFF library) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-loslas"></Link>`LOSLAS` | NADCON .los/.las Datum Grid Shift | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-map"></Link>`MAP` | OziExplorer .MAP | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-mem"></Link>`MEM` | In Memory raster, vector and multidimensional raster | ✓ | ✓ |  | an in-process dataset that lives in memory: it cannot be held as tile bytes Also a vector driver: [see the vector page](./vector#vector-mem). |  | GeoBrix has no reader or writer for it. GDAL's in-process dataset cannot be held as tile bytes or cross tasks. GeoBrix uses it inside functions such as `gbx_rst_contour`, so there is nothing to call directly. The GDAL driver itself is not tested with GeoBrix. [Virtual Tiles](../api/virtual-tiles) |
-| <Link id="raster-mff"></Link>`MFF` | Vexcel MFF Raster | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-mff2"></Link>`MFF2` | Vexcel MFF2 (HKV) Raster | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-miramonraster"></Link>`MiraMonRaster` | MiraMon Raster Images | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-msgn"></Link>`MSGN` | EUMETSAT Archive native (.nat) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-ndf"></Link>`NDF` | NLAPS Data Format | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-netcdf"></Link>`netCDF` | Network Common Data Format | ✓ | ✓ | ✓ | Also a vector driver: [see the vector page](./vector#vector-netcdf). | [netCDF](../gdal-drivers#builtin-netcdf) | GeoBrix has its own reader and writer for this format: use `netcdf_gbx` instead of this GDAL driver. It reads CF grids as rasters and as vector features. The GDAL driver itself is not tested with GeoBrix. [NetCDF reader](../readers/netcdf) · [NetCDF writer](../writers/netcdf) · [Zarr](../readers/zarr) |
-| <Link id="raster-ngsgeoid"></Link>`NGSGEOID` | NOAA NGS Geoid Height Grids | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-noaa-b"></Link>`NOAA_B` | NOAA GEOCON/NADCON5 .b format | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-nsidcbin"></Link>`NSIDCbin` | NSIDC Sea Ice Concentrations binary (.bin) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-ntv2"></Link>`NTv2` | NTv2 Datum Grid Shift | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-numpy"></Link>`NUMPY` | Numeric Python Array | ✓ |  |  | an in-process dataset that lives in memory: it cannot be held as tile bytes |  | GeoBrix has no reader or writer for it. GDAL's in-process array dataset cannot be held as tile bytes or cross tasks. Use plain GDAL (`from osgeo import gdal`). The GDAL driver itself is not tested with GeoBrix. |
-| <Link id="raster-nwt-grc"></Link>`NWT_GRC` | Northwood Classified Grid Format .grc/.tab | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-nwt-grd"></Link>`NWT_GRD` | Northwood Numeric Grid Format .grd/.tab | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-openfilegdb"></Link>`OpenFileGDB` | ESRI FileGeodatabase (using OpenFileGDB) | ✓ | ✓ | ✓ | the whole .gdb folder Also a vector driver: [see the vector page](./vector#vector-openfilegdb). |  | `file_gdb_gbx` reads and writes File Geodatabase feature classes, on this driver. Prefer it to calling the driver directly. It is vector only. Raster data in a geodatabase is not tested with GeoBrix. [GeoDatabase reader](../readers/filegdb) · [GeoDatabase writer](../writers/filegdb) |
-| <Link id="raster-paux"></Link>`PAux` | PCI .aux Labelled | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-pcidsk"></Link>`PCIDSK` | PCIDSK Database File | ✓ | ✓ | ✓ | Also a vector driver: [see the vector page](./vector#vector-pcidsk). |  |  |
-| <Link id="raster-pcraster"></Link>`PCRaster` | PCRaster Raster File | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-pdf"></Link>`PDF` | Geospatial PDF |  | ✓ | ✓ | Also a vector driver: [see the vector page](./vector#vector-pdf). |  |  |
-| <Link id="raster-pds"></Link>`PDS` | NASA Planetary Data System | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-pds4"></Link>`PDS4` | NASA Planetary Data System 4 | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile Also a vector driver: [see the vector page](./vector#vector-pds4). |  |  |
-| <Link id="raster-pnm"></Link>`PNM` | Portable Pixmap Format (netpbm) | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-prf"></Link>`PRF` | Racurs PHOTOMOD PRF | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-rcm"></Link>`RCM` | Radarsat Constellation Mission XML Product | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-rik"></Link>`RIK` | Swedish Grid RIK (.rik) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-roi-pac"></Link>`ROI_PAC` | ROI_PAC raster | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-rpftoc"></Link>`RPFTOC` | Raster Product Format TOC format | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-rraster"></Link>`RRASTER` | R Raster | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-rs2"></Link>`RS2` | RadarSat 2 XML Product | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-rst"></Link>`RST` | Idrisi Raster A.1 | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-s102"></Link>`S102` | S-102 Bathymetric Surface Product | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-s104"></Link>`S104` | S-104 Water Level Information for Surface Navigation Product | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-s111"></Link>`S111` | S-111 Surface Currents Product | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-safe"></Link>`SAFE` | Sentinel-1 SAR SAFE Product | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-sar-ceos"></Link>`SAR_CEOS` | CEOS SAR Image | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-sentinel2"></Link>`SENTINEL2` | Sentinel 2 | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  | Not tested with GeoBrix: `raster_gbx` may read it; plain GDAL may suit it better. It opens Sentinel-2 SAFE products. For cloud-native imagery, search STAC with `StacClient` and read the COG bands with `raster_gbx`. [STAC client](../api/stac) · [COG reader](../readers/cog) |
-| <Link id="raster-sigdem"></Link>`SIGDEM` | Scaled Integer Gridded DEM .sigdem | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-snap-tiff"></Link>`SNAP_TIFF` | Sentinel Application Processing GeoTIFF | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-snodas"></Link>`SNODAS` | Snow Data Assimilation System | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-srp"></Link>`SRP` | Standard Raster Product (ASRP/USRP) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-terragen"></Link>`Terragen` | Terragen heightfield | ✓ | ✓ | ✓ |  |  |  |
-| <Link id="raster-tga"></Link>`TGA` | TGA/TARGA Image File Format | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-til"></Link>`TIL` | EarthWatch .TIL | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-tsx"></Link>`TSX` | TerraSAR-X Product | ✓ |  |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |  |
-| <Link id="raster-usgsdem"></Link>`USGSDEM` | USGS Optional ASCII DEM (and CDED) | ✓ |  | ✓ |  |  |  |
-| <Link id="raster-vicar"></Link>`VICAR` | MIPL VICAR file | ✓ | ✓ |  | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile Also a vector driver: [see the vector page](./vector#vector-vicar). |  |  |
-| <Link id="raster-zarr"></Link>`Zarr` | Zarr | ✓ | ✓ | ✓ |  | [Zarr](../gdal-drivers#builtin-zarr) | GeoBrix has its own reader and writer for this format: use `zarr_gbx` instead of this GDAL driver. `gbx_zarr_read` and `gbx_zarr_write` cover stores and transactions. The GDAL driver itself is not tested with GeoBrix. [Zarr reader](../readers/zarr) · [Zarr writer](../writers/zarr) · [Zarr functions](../api/zarr-functions) |
-| <Link id="raster-zmap"></Link>`ZMap` | ZMap Plus Grid | ✓ | ✓ | ✓ |  |  |  |
+<div className="gbx-driver-table">
+
+| Driver | Description | Can | Requires | GeoBrix guidance |
+|---|---|---|---|---|
+| <Link id="raster-ace2"></Link>`ACE2` | ACE2 | read · tile bytes |  |  |
+| <Link id="raster-adrg"></Link>`ADRG` | ARC Digitized Raster Graphics | read · tile bytes |  |  |
+| <Link id="raster-aig"></Link>`AIG` | Arc/Info Binary Grid | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-airsar"></Link>`AirSAR` | AirSAR Polarimetric Image | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-biggif"></Link>`BIGGIF` | Graphics Interchange Format (.gif) | read · tile bytes |  |  |
+| <Link id="raster-bmp"></Link>`BMP` | MS Windows Device Independent Bitmap | read · write · tile bytes |  |  |
+| <Link id="raster-bsb"></Link>`BSB` | Maptech BSB Nautical Charts | read · tile bytes |  |  |
+| <Link id="raster-bt"></Link>`BT` | VTP .bt (Binary Terrain) 1.3 Format | read · write · tile bytes |  |  |
+| <Link id="raster-byn"></Link>`BYN` | Natural Resources Canada's Geoid | read · tile bytes |  |  |
+| <Link id="raster-cad"></Link>`CAD` | AutoCAD Driver | read · tile bytes | Also a vector driver: [see the vector page](./vector#vector-cad). | `vector_gbx` reads CAD with the `driverName` option. It has no named reader or writer. Not tested as a raster driver: `raster_gbx` may read it; plain GDAL may suit it better. It is read-only. Only AutoCAD R2000 (AC1015) drawings are tested. To round-trip drawings, use DXF. [Vector reader](../readers/vector) |
+| <Link id="raster-cals"></Link>`CALS` | CALS (Type 1) | read · write · tile bytes |  |  |
+| <Link id="raster-ceos"></Link>`CEOS` | CEOS Image | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-coasp"></Link>`COASP` | DRDC COASP SAR Processor Raster | read · tile bytes |  |  |
+| <Link id="raster-cosar"></Link>`COSAR` | COSAR Annotated Binary Matrix (TerraSAR-X) | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-cpg"></Link>`CPG` | Convair PolGASP | read · tile bytes |  |  |
+| <Link id="raster-ctg"></Link>`CTG` | USGS LULC Composite Theme Grid | read · tile bytes |  |  |
+| <Link id="raster-derived"></Link>`DERIVED` | Derived datasets using VRT pixel functions | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-dimap"></Link>`DIMAP` | SPOT DIMAP | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-doq1"></Link>`DOQ1` | USGS DOQ (Old Style) | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-doq2"></Link>`DOQ2` | USGS DOQ (New Style) | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-dted"></Link>`DTED` | DTED Elevation Raster | read · write · tile bytes |  |  |
+| <Link id="raster-e57"></Link>`E57` | ASTM E57 3D file format (image part) | read · tile bytes |  |  |
+| <Link id="raster-ecrgtoc"></Link>`ECRGTOC` | ECRG TOC format | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-eir"></Link>`EIR` | Erdas Imagine Raw | read · tile bytes |  |  |
+| <Link id="raster-ers"></Link>`ERS` | ERMapper .ers Labelled | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-esat"></Link>`ESAT` | Envisat Image Format | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-fast"></Link>`FAST` | EOSAT FAST Format | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-genbin"></Link>`GenBin` | Generic Binary (.hdr Labelled) | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-gff"></Link>`GFF` | Ground-based SAR Applications Testbed File Format (.gff) | read · tile bytes |  |  |
+| <Link id="raster-gif"></Link>`GIF` | Graphics Interchange Format (.gif) | read · write · tile bytes |  |  |
+| <Link id="raster-grassasciigrid"></Link>`GRASSASCIIGrid` | GRASS ASCII Grid | read · tile bytes |  |  |
+| <Link id="raster-gs7bg"></Link>`GS7BG` | Golden Software 7 Binary Grid (.grd) | read · write · tile bytes |  |  |
+| <Link id="raster-gsbg"></Link>`GSBG` | Golden Software Binary Grid (.grd) | read · write · tile bytes |  |  |
+| <Link id="raster-gsc"></Link>`GSC` | GSC Geogrid | read · tile bytes |  |  |
+| <Link id="raster-gxf"></Link>`GXF` | GeoSoft Grid Exchange Format | read · tile bytes |  |  |
+| <Link id="raster-hdf5"></Link>`HDF5` | Hierarchical Data Format Release 5 | read · tile bytes |  |  |
+| <Link id="raster-hdf5image"></Link>`HDF5Image` | HDF5 Dataset | read · tile bytes |  |  |
+| <Link id="raster-hf2"></Link>`HF2` | HF2/HFZ heightfield raster | read · write · tile bytes |  |  |
+| <Link id="raster-ilwis"></Link>`ILWIS` | ILWIS Raster Map | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-iris"></Link>`IRIS` | IRIS data (.PPI, .CAPPi etc) | read · tile bytes |  |  |
+| <Link id="raster-isce"></Link>`ISCE` | ISCE raster | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-isg"></Link>`ISG` | International Service for the Geoid | read · tile bytes |  |  |
+| <Link id="raster-isis2"></Link>`ISIS2` | USGS Astrogeology ISIS cube (Version 2) | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-isis3"></Link>`ISIS3` | USGS Astrogeology ISIS cube (Version 3) | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-jaxapalsar"></Link>`JAXAPALSAR` | JAXA PALSAR Product Reader (Level 1.1/1.5) | read · tile bytes |  |  |
+| <Link id="raster-jdem"></Link>`JDEM` | Japanese DEM (.mem) | read · tile bytes |  |  |
+| <Link id="raster-kro"></Link>`KRO` | KOLOR Raw | read · write · tile bytes |  |  |
+| <Link id="raster-l1b"></Link>`L1B` | NOAA Polar Orbiter Level 1b Data Set | read · tile bytes |  |  |
+| <Link id="raster-lan"></Link>`LAN` | Erdas .LAN/.GIS | read · tile bytes |  |  |
+| <Link id="raster-lcp"></Link>`LCP` | FARSITE v.4 Landscape File (.lcp) | read · write · tile bytes |  |  |
+| <Link id="raster-leveller"></Link>`Leveller` | Leveller heightfield | read · write · tile bytes |  |  |
+| <Link id="raster-libertiff"></Link>`LIBERTIFF` | GeoTIFF (using LIBERTIFF library) | read · tile bytes |  |  |
+| <Link id="raster-loslas"></Link>`LOSLAS` | NADCON .los/.las Datum Grid Shift | read · tile bytes |  |  |
+| <Link id="raster-map"></Link>`MAP` | OziExplorer .MAP | read · tile bytes |  |  |
+| <Link id="raster-mem"></Link>`MEM` | In Memory raster, vector and multidimensional raster | read · write | an in-process dataset that lives in memory: it cannot be held as tile bytes Also a vector driver: [see the vector page](./vector#vector-mem). | GeoBrix has no reader or writer for it. GDAL's in-process dataset cannot be held as tile bytes or cross tasks. GeoBrix uses it inside functions such as `gbx_rst_contour`, so there is nothing to call directly. The GDAL driver itself is not tested with GeoBrix. [Virtual Tiles](../api/virtual-tiles) |
+| <Link id="raster-mff"></Link>`MFF` | Vexcel MFF Raster | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-mff2"></Link>`MFF2` | Vexcel MFF2 (HKV) Raster | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-miramonraster"></Link>`MiraMonRaster` | MiraMon Raster Images | read · write · tile bytes |  |  |
+| <Link id="raster-msgn"></Link>`MSGN` | EUMETSAT Archive native (.nat) | read · tile bytes |  |  |
+| <Link id="raster-ndf"></Link>`NDF` | NLAPS Data Format | read · tile bytes |  |  |
+| <Link id="raster-netcdf"></Link>`netCDF` | Network Common Data Format | read · write · tile bytes | Also a vector driver: [see the vector page](./vector#vector-netcdf). | GeoBrix has its own reader and writer for this format: use `netcdf_gbx` instead of this GDAL driver. It reads CF grids as rasters and as vector features. The GDAL driver itself is not tested with GeoBrix. [NetCDF reader](../readers/netcdf) · [NetCDF writer](../writers/netcdf) · [Zarr](../readers/zarr) |
+| <Link id="raster-ngsgeoid"></Link>`NGSGEOID` | NOAA NGS Geoid Height Grids | read · tile bytes |  |  |
+| <Link id="raster-noaa-b"></Link>`NOAA_B` | NOAA GEOCON/NADCON5 .b format | read · tile bytes |  |  |
+| <Link id="raster-nsidcbin"></Link>`NSIDCbin` | NSIDC Sea Ice Concentrations binary (.bin) | read · tile bytes |  |  |
+| <Link id="raster-ntv2"></Link>`NTv2` | NTv2 Datum Grid Shift | read · tile bytes |  |  |
+| <Link id="raster-numpy"></Link>`NUMPY` | Numeric Python Array | read | an in-process dataset that lives in memory: it cannot be held as tile bytes | GeoBrix has no reader or writer for it. GDAL's in-process array dataset cannot be held as tile bytes or cross tasks. Use plain GDAL (`from osgeo import gdal`). The GDAL driver itself is not tested with GeoBrix. |
+| <Link id="raster-nwt-grc"></Link>`NWT_GRC` | Northwood Classified Grid Format .grc/.tab | read · tile bytes |  |  |
+| <Link id="raster-nwt-grd"></Link>`NWT_GRD` | Northwood Numeric Grid Format .grd/.tab | read · write · tile bytes |  |  |
+| <Link id="raster-openfilegdb"></Link>`OpenFileGDB` | ESRI FileGeodatabase (using OpenFileGDB) | read · write · tile bytes | the whole .gdb folder Also a vector driver: [see the vector page](./vector#vector-openfilegdb). | `file_gdb_gbx` reads and writes File Geodatabase feature classes, on this driver. Prefer it to calling the driver directly. It is vector only. Raster data in a geodatabase is not tested with GeoBrix. [GeoDatabase reader](../readers/filegdb) · [GeoDatabase writer](../writers/filegdb) |
+| <Link id="raster-paux"></Link>`PAux` | PCI .aux Labelled | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-pcidsk"></Link>`PCIDSK` | PCIDSK Database File | read · write · tile bytes | Also a vector driver: [see the vector page](./vector#vector-pcidsk). |  |
+| <Link id="raster-pcraster"></Link>`PCRaster` | PCRaster Raster File | read · write · tile bytes |  |  |
+| <Link id="raster-pdf"></Link>`PDF` | Geospatial PDF | write · tile bytes | Also a vector driver: [see the vector page](./vector#vector-pdf). |  |
+| <Link id="raster-pds"></Link>`PDS` | NASA Planetary Data System | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-pds4"></Link>`PDS4` | NASA Planetary Data System 4 | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile Also a vector driver: [see the vector page](./vector#vector-pds4). |  |
+| <Link id="raster-pnm"></Link>`PNM` | Portable Pixmap Format (netpbm) | read · write · tile bytes |  |  |
+| <Link id="raster-prf"></Link>`PRF` | Racurs PHOTOMOD PRF | read · tile bytes |  |  |
+| <Link id="raster-rcm"></Link>`RCM` | Radarsat Constellation Mission XML Product | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-rik"></Link>`RIK` | Swedish Grid RIK (.rik) | read · tile bytes |  |  |
+| <Link id="raster-roi-pac"></Link>`ROI_PAC` | ROI_PAC raster | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-rpftoc"></Link>`RPFTOC` | Raster Product Format TOC format | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-rraster"></Link>`RRASTER` | R Raster | read · write · tile bytes |  |  |
+| <Link id="raster-rs2"></Link>`RS2` | RadarSat 2 XML Product | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-rst"></Link>`RST` | Idrisi Raster A.1 | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-s102"></Link>`S102` | S-102 Bathymetric Surface Product | read · write · tile bytes |  |  |
+| <Link id="raster-s104"></Link>`S104` | S-104 Water Level Information for Surface Navigation Product | read · write · tile bytes |  |  |
+| <Link id="raster-s111"></Link>`S111` | S-111 Surface Currents Product | read · write · tile bytes |  |  |
+| <Link id="raster-safe"></Link>`SAFE` | Sentinel-1 SAR SAFE Product | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-sar-ceos"></Link>`SAR_CEOS` | CEOS SAR Image | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-sentinel2"></Link>`SENTINEL2` | Sentinel 2 | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile | Not tested with GeoBrix: `raster_gbx` may read it; plain GDAL may suit it better. It opens Sentinel-2 SAFE products. For cloud-native imagery, search STAC with `StacClient` and read the COG bands with `raster_gbx`. [STAC client](../api/stac) · [COG reader](../readers/cog) |
+| <Link id="raster-sigdem"></Link>`SIGDEM` | Scaled Integer Gridded DEM .sigdem | read · write · tile bytes |  |  |
+| <Link id="raster-snap-tiff"></Link>`SNAP_TIFF` | Sentinel Application Processing GeoTIFF | read · tile bytes |  |  |
+| <Link id="raster-snodas"></Link>`SNODAS` | Snow Data Assimilation System | read · tile bytes |  |  |
+| <Link id="raster-srp"></Link>`SRP` | Standard Raster Product (ASRP/USRP) | read · tile bytes |  |  |
+| <Link id="raster-terragen"></Link>`Terragen` | Terragen heightfield | read · write · tile bytes |  |  |
+| <Link id="raster-tga"></Link>`TGA` | TGA/TARGA Image File Format | read · tile bytes |  |  |
+| <Link id="raster-til"></Link>`TIL` | EarthWatch .TIL | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-tsx"></Link>`TSX` | TerraSAR-X Product | read | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |  |
+| <Link id="raster-usgsdem"></Link>`USGSDEM` | USGS Optional ASCII DEM (and CDED) | read · tile bytes |  |  |
+| <Link id="raster-vicar"></Link>`VICAR` | MIPL VICAR file | read · write | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile Also a vector driver: [see the vector page](./vector#vector-vicar). |  |
+| <Link id="raster-zarr"></Link>`Zarr` | Zarr | read · write · tile bytes |  | GeoBrix has its own reader and writer for this format: use `zarr_gbx` instead of this GDAL driver. `gbx_zarr_read` and `gbx_zarr_write` cover stores and transactions. The GDAL driver itself is not tested with GeoBrix. [Zarr reader](../readers/zarr) · [Zarr writer](../writers/zarr) · [Zarr functions](../api/zarr-functions) |
+| <Link id="raster-zmap"></Link>`ZMap` | ZMap Plus Grid | read · write · tile bytes |  |  |
+
+</div>
 
 ## Unavailable raster drivers
 

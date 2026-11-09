@@ -186,3 +186,46 @@
 [data-theme='dark'] .markdown tr:has(.gbx-tested) > td {
   background-color: rgba(37, 194, 160, 0.12);
 }
+
+/* --------------------------------------------------------------------------
+ * Driver tables (docs/gdal-drivers/vector and /raster): fixed layout at the content width, so no column is cut off.
+ * Scoped to the .gbx-driver-table wrapper; other tables keep Docusaurus's own layout. Driver, description and Can
+ * are narrow; the last column of a table that has a guidance column takes the rest, the widest.
+ * ------------------------------------------------------------------------ */
+.gbx-driver-table table {
+  display: table;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.gbx-driver-table th,
+.gbx-driver-table td {
+  overflow-wrap: anywhere;
+  word-break: normal;
+  vertical-align: top;
+}
+
+.gbx-driver-table th:nth-child(1) {
+  width: 11%;
+}
+
+.gbx-driver-table th:nth-child(2) {
+  width: 15%;
+}
+
+.gbx-driver-table th:nth-child(3) {
+  width: 9%;
+}
+
+.gbx-driver-table th:nth-child(4) {
+  width: 16%;
+}
+
+.gbx-driver-table th:nth-child(5):not(:last-child) {
+  width: 20%;
+}
+
+.gbx-driver-table code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}

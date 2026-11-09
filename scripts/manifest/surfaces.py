@@ -823,22 +823,18 @@ def render_drivers_page(snapshot: dict) -> str:
 def render_drivers_subpage(snapshot: dict, kind: str) -> str:
     """The generated body of one driver page (docs/docs/gdal-drivers/<kind>.mdx): the tables of the vector or raster
     drivers in their three groups, or the one table of the other drivers. A driver of both kinds links to its row on
-    the other page; a built-in format links to the built-in table on the parent page."""
-    from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
-
+    the other page. The columns are few so that the table fits the content width: one \"Can\" cell holds read, write and tile bytes."""
     yes = "✓"
-    built_in = {f["driver"]: f for f in BUILT_IN_FORMATS if f["driver"]}
     out: List[str] = []
     if kind == "other":
         out += ["## Other drivers", ""]
         out += _table(
-            ["Driver", "Description", "Read", "Write"],
+            ["Driver", "Description", "Can"],
             [
                 [
                     f"`{d['driver']}`",
                     _mdx_cell(d["description"]),
-                    yes if d["read"] else "",
-                    yes if d["write"] else "",
+                    " · ".join(w for w, on in (("read", d["read"]), ("write", d["write"])) if on),
                 ]
                 for d in _other_drivers(snapshot)
             ],
@@ -850,14 +846,14 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
 
     def row_cells(d, head, with_tested):
         name = d["driver"]
+        can = [w for w, on in (("read", d["read"]), ("write", d["write"])) if on]
+        if kind == "raster" and d["tile_bytes"]:
+            can.append("tile bytes")
         cell = [
             f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
             _mdx_cell(d["description"]),
-            yes if d["read"] else "",
-            yes if d["write"] else "",
+            " · ".join(can),
         ]
-        if "Tile bytes" in head:
-            cell.append(yes if d["tile_bytes"] else "")
         req = _mdx_cell(d["requires"])
         if d[other]:  # a driver of both kinds links to its row on the other page
             link = (
@@ -866,10 +862,6 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
             )
             req = f"{req} {link}".strip()
         cell.append(req)
-        f = built_in.get(name)
-        cell.append(
-            f"[{_mdx_cell(f['format'])}](../gdal-drivers#{f['anchor']})" if f else ""
-        )
         if with_tested:
             cell.append(_tested_cell(name, kind))
         if "GeoBrix guidance" in head:
@@ -903,16 +895,16 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
         if intro:
             out.extend([intro, ""])
         is_tested = group is tested
-        head = ["Driver", "Description", "Read", "Write"]
-        if kind == "raster" and group is not down:
-            head.append("Tile bytes")
+        head = ["Driver", "Description", "Can"]
         head.append("Why" if group is down else "Requires")
-        head.append("GeoBrix built-in")
         if is_tested:
             head.append("Tested with GeoBrix")
         if group is not down:
             head.append("GeoBrix guidance")
+        # the wrapper scopes the column widths in custom.css to these tables
+        out.extend(['<div className="gbx-driver-table">', ""])
         out.extend(_table(head, [row_cells(d, head, is_tested) for d in group]))
+        out.extend(["", "</div>"])
         out.append("")
     return "\n".join(out).rstrip("\n") + "\n"
 

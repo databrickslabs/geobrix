@@ -422,7 +422,7 @@ def effective_levels_scales(levels_mvp, levels_scales, root) -> tuple:
             pass
 
 
-LEVELS_LETTER_SETS = ("S", "G", "A", "H", "SE", "IO")
+LEVELS_LETTER_SETS = ("S", "G", "A", "H", "SE", "IO", "DEM")
 
 
 def levels_set_names(root) -> tuple:

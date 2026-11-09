@@ -56,7 +56,7 @@ Call it as a table function. Pass `'raster'` or `'vector'` to keep one kind, or 
 | `raster`, `vector` | Whether the driver handles rasters, vectors, or both (GeoPackage). |
 | `read`, `write` | Whether the driver can open a dataset, and whether it can create or copy one. |
 | `extensions` | The file extensions GDAL associates with the driver. |
-| `allowed` | Whether GeoBrix lets the driver open data. GeoBrix [turns off](../security#7-raster-data-other-principals-can-write) some drivers by default, so they do not appear. See the [opt-in drivers](../gdal-drivers#geobrix-opt-in-drivers). |
+| `allowed` | Whether GeoBrix lets the driver open data. GeoBrix [turns off](../security#7-raster-data-other-principals-can-write) some drivers by default, so they do not appear. See the [opt-in drivers](../gdal-drivers/other#geobrix-opt-in-drivers). |
 | `tile_bytes` | Whether a raster of this driver can be held as the bytes of a tile. |
 | `available` | Whether the driver works as shipped. It is false for a driver that needs a service, a program or a plugin this runtime lacks. |
 | `requires` | What the driver needs that the runtime does not supply, or NULL. A format that reads sidecar files names them here. |

@@ -762,8 +762,8 @@ def _other_drivers(snapshot: dict) -> list:
 def render_drivers_page(snapshot: dict) -> str:
     """The generated body of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's own build
     (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py) and the built-in formats
-    (``drivers/_builtin.py``): the built-in formats, the index of the three driver pages with their counts, and
-    the opt-in drivers. A built-in format links to its driver's row on the vector or raster page."""
+    (``drivers/_builtin.py``): the built-in formats, and the index of the three driver pages with their counts.
+    A built-in format links to its driver's row on the vector or raster page."""
     from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
 
     drivers = snapshot["drivers"]
@@ -813,11 +813,10 @@ def render_drivers_page(snapshot: dict) -> str:
     if other:
         path, title = DRIVER_SUBPAGES["other"]
         index.append(
-            f"- [{title}](./{path}): {len(other)} drivers that handle neither rasters nor vectors. "
-            "No GeoBrix reader, writer or function uses them."
+            f"- [{title}](./{path}): {len(other)} drivers that handle neither rasters nor vectors, "
+            "and the drivers that are off by default."
         )
     out += index
-    out += _opt_in_section(snapshot.get("opt_in", []))
     return "\n".join(out).rstrip("\n") + "\n"
 
 
@@ -831,6 +830,7 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
     built_in = {f["driver"]: f for f in BUILT_IN_FORMATS if f["driver"]}
     out: List[str] = []
     if kind == "other":
+        out += ["## Other drivers", ""]
         out += _table(
             ["Driver", "Description", "Read", "Write"],
             [
@@ -843,7 +843,8 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
                 for d in _other_drivers(snapshot)
             ],
         )
-        return "\n".join(out) + "\n"
+        out += _opt_in_section(snapshot.get("opt_in", []))
+        return "\n".join(out).rstrip("\n") + "\n"
 
     other = "raster" if kind == "vector" else "vector"
 
@@ -917,7 +918,7 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
 
 
 def _opt_in_section(opt_in: list) -> List[str]:
-    """The last section of docs/docs/gdal-drivers.mdx: the drivers the policy refuses, from the snapshot's
+    """The last section of docs/docs/gdal-drivers/other.mdx: the drivers the policy refuses, from the snapshot's
     ``opt_in`` rows (read from a build with the policy off) and the policy's own reason classes."""
     yes = "✓"
     out = [
@@ -946,7 +947,7 @@ def _opt_in_section(opt_in: list) -> List[str]:
         "  Prefer a separate process or job for work on data you trust and that needs one of these drivers.",
         "- **The live view changes too.** `gbx_drivers()` lists these drivers only when the policy is off.",
         "",
-        "See [The policy covers the whole process](./security#the-policy-covers-the-whole-process) on the Security page.",
+        "See [The policy covers the whole process](../security#the-policy-covers-the-whole-process) on the Security page.",
         "",
     ]
     if not opt_in:

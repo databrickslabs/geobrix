@@ -276,23 +276,26 @@ def test_every_refused_driver_has_a_reason_class_and_a_sentence():
 
 
 def test_the_snapshot_lists_the_refused_set_and_the_opt_in_page_matches_it():
-    """The opt-in section of gdal-drivers.mdx (generated from the snapshot) lists exactly the policy's refused
-    drivers, under the title and anchor the Security page links to."""
+    """The opt-in section of the Other drivers page (generated from the snapshot) lists exactly the policy's refused
+    drivers, under the title and anchor the Security page links to; the parent page has no such section.
+    """
     import re
     from pathlib import Path
 
     snap = json.loads(listing.SNAPSHOT.read_text())["opt_in"]
     assert {r["driver"] for r in snap} == set(policy.refused_names())
     root = Path(__file__).resolve().parents[4]
-    page = (root / "docs/docs/gdal-drivers.mdx").read_text()
+    page = (root / "docs/docs/gdal-drivers/other.mdx").read_text()
+    parent = (root / "docs/docs/gdal-drivers.mdx").read_text()
+    assert "\n## GeoBrix Opt-In Drivers\n" not in parent
     assert "\n## GeoBrix Opt-In Drivers\n" in page
     section = page.split("\n## GeoBrix Opt-In Drivers\n", 1)[1]
     listed = set(re.findall(r"^\| `([A-Za-z0-9_]+)` \|", section, re.M))
     assert listed == set(policy.refused_names())
     security = (root / "docs/docs/security.mdx").read_text()
-    assert "(./gdal-drivers#geobrix-opt-in-drivers)" in security
+    assert "(./gdal-drivers/other#geobrix-opt-in-drivers)" in security
     assert "\n#### The policy covers the whole process\n" in security
-    assert "(./security#the-policy-covers-the-whole-process)" in page
+    assert "(../security#the-policy-covers-the-whole-process)" in page
 
 
 def test_every_driver_of_this_build_is_shipped_by_definition():

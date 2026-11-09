@@ -40,9 +40,9 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | Capability | pyrx function(s) | Backing library |
 |---|---|---|
 | **I/O & metadata** | `rst_fromcontent`, `rst_fromfile`, `rst_width`, `rst_height`, `rst_srid`, `rst_numbands`, `rst_metadata`, `rst_summary`, `rst_subdatasets` | rasterio |
-| **Warp / reproject** | `rst_transform` | rasterio |
+| **Warp / reproject** | `rst_transform`, `rst_to_webmercator` | GDAL `raster reproject` in the worker |
 | **Clip / mask** | `rst_clip` | rasterio + shapely |
-| **Resample** | `rst_resample` | rasterio |
+| **Resample** | `rst_resample`, `rst_resample_to_size`, `rst_resample_to_res` | GDAL `raster reproject` in the worker |
 | **Merge** | `rst_merge`, `rst_merge_agg` | rasterio + NumPy |
 | **COG conversion** | `rst_cog_convert` | rasterio (GDAL's COG driver) |
 | **Spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_threshold` | GDAL `raster calc` |
@@ -174,7 +174,7 @@ Where the lightweight and heavyweight implementations use different underlying a
 
 | Function | Heavyweight | Lightweight | Divergence |
 |---|---|---|---|
-| `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
+| `rst_resample` | `gdalwarp` with a rounded-up size | GDAL `raster reproject` with a size rounded to even | A target size that ends in .5 pixels differs by one pixel |
 
 See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both implementations.
 

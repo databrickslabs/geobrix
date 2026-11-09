@@ -84,7 +84,24 @@ LEVEL_REQUIRED_ANY = {
 }
 
 # The closed vocabulary of a row's `gdal` block (the GDAL spec engine's spec): what `parse_gdal_spec` accepts.
-GDAL_KEYS = frozenset({"alg", "in", "out", "write", "args", "needs_crs", "gdal_min"})
+GDAL_KEYS = frozenset(
+    {
+        "alg",
+        "in",
+        "out",
+        "write",
+        "args",
+        "needs_crs",
+        "gdal_min",
+        "in_read",
+        "same_crs",
+    }
+)
+# `in_read: "factor"`: a virtual tile of the row is read at the size its `size_from_factor` argument asks for (an overview
+# serves it where the file has one).
+GDAL_IN_READS = frozenset({"factor"})
+# `same_crs: "keep"`: a tile already in the CRS the row asks for comes back as it is (its bytes, not a warp of them).
+GDAL_SAME_CRS = frozenset({"keep"})
 GDAL_ARG_KEYS = frozenset(
     {
         "arg",
@@ -123,6 +140,8 @@ GDAL_BINDERS = frozenset(
         "table_alpha",
         "observer_xy",
         "size_from_factor",
+        "int_pair",
+        "double_pair",
     }
 )
 GDAL_NULL = frozenset({"omit", "null_result", "raise"})
@@ -287,6 +306,10 @@ class GdalSpec:
         False  # the input must carry a CRS (a tile without one is a data error)
     )
     gdal_min: Optional[str] = None
+    # How a virtual tile of this row is read: "factor" reads the window at the target size of the row's factor.
+    in_read: Optional[str] = None
+    # "keep": a tile already in the target CRS (`--output-crs`) is the result, as its GeoTIFF bytes.
+    same_crs: Optional[str] = None
     # A features output: (struct field, SQL type, layer field) for each value read from the output layer beside the
     # geometry; the output is `ARRAY<STRUCT<geom_wkb BINARY, <fields>>>`, one element per feature in layer order.
     out_fields: Tuple[Tuple[str, str, str], ...] = ()
@@ -597,6 +620,16 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
         args=tuple(_parse_gdal_arg(a) for a in raw.get("args", ())),
         needs_crs=bool(raw.get("needs_crs", False)),
         gdal_min=raw.get("gdal_min"),
+        in_read=(
+            _one_of(raw["in_read"], GDAL_IN_READS, "in_read")
+            if "in_read" in raw
+            else None
+        ),
+        same_crs=(
+            _one_of(raw["same_crs"], GDAL_SAME_CRS, "same_crs")
+            if "same_crs" in raw
+            else None
+        ),
         out_fields=fields,
     )
 

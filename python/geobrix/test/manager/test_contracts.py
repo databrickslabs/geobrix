@@ -83,13 +83,15 @@ def test_oracle_rows_fit_signature(fn):
             continue
         arg_rows = (
             c.args
-            if c.kind in ("exact_rows", "windows_batch")
+            if c.kind in ("exact_rows", "windows_batch", "per_row")
             else (c.args, *c.variants)
         )
         assert all(
             fn.min_args <= len(r) + extra <= fn.max_args for r in arg_rows
         ), c.cid
-        assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
+        assert c.kind not in ("exact_rows", "per_row") or len(c.expect) == len(
+            c.args
+        ), c.cid
         assert c.surfaces and set(c.surfaces) <= {"session", "uc", "python"}, c.cid
         assert not c.variants or c.kind in ("exact", "null", "geom_srid"), c.cid
         if (
@@ -1994,33 +1996,6 @@ def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):
         "gbx__l3f_rst_updatetype(tile, NULL, " in s and s.startswith("CREATE")
         for s in spark.statements
     ), spark.statements
-
-
-def test_a_factory_row_with_a_file_ref_builds_its_file_udf_from_the_factory(
-    monkeypatch,
-):
-    """A row built by a factory (PROJ grid directories) builds its FILE form the same way: the `file_ref` names a
-    factory, called with the row's `factory_args`, and its UDF sits behind the wrapper.
-    """
-    from databricks.labs.gbx.ds import file_gbx
-    from databricks.labs.gbx.manager import l3
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    built, made = [], object()
-    monkeypatch.setattr(
-        prx, "_build_uf_transform", lambda *dirs: built.append(dirs) or made
-    )
-    monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
-    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
-
-    class Session(_Session):
-        def register(self, name, f, returnType=None):
-            self.registered.append((name, f))
-
-    spark = Session()
-    l3.register_l3(spark, MAN.functions["gbx_rst_transform"], "-")
-    assert spark.registered == [("gbx__l3f_rst_transform", made)]
-    assert len(built) == 1 and isinstance(built[0][0], tuple)
 
 
 def test_the_managers_fromfile_is_the_materializing_udf_built_with_the_drivers_cap(

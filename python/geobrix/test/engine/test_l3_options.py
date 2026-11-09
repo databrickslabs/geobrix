@@ -24,7 +24,10 @@ def _recorder(monkeypatch):
     monkeypatch.setattr(
         l3,
         "_virtual_raster",
-        lambda fn, t, cap, ref=None: seen.append((t["cellid"], ref)) or b"II*\x00",
+        lambda fn, t, cap, ref=None, decimate=None, sizes_out=None: seen.append(
+            (t["cellid"], ref)
+        )
+        or b"II*\x00",
     )
     return seen
 
@@ -53,7 +56,9 @@ def _stub_run(monkeypatch, result):
     monkeypatch.setattr(
         run,
         "run",
-        lambda fn, rasters, values, section=None: calls.append((fn, rasters, values))
+        lambda fn, rasters, values, section=None, src_sizes=None: calls.append(
+            (fn, rasters, values)
+        )
         or result,
     )
     return calls
@@ -163,7 +168,7 @@ def test_the_force_output_form_fills_the_manifest_defaults_for_missing_parameter
 def test_the_force_output_form_gives_a_refused_input_as_an_error_tile(monkeypatch):
     calls = _stub_run(monkeypatch, run.Result(b"never", None, None))
 
-    def refuse(fn, first, read_cap=None, file_refs=None):
+    def refuse(fn, first, read_cap=None, file_refs=None, sizes_out=None, values=None):
         raise run.DataError("tile is unreadable. Fix: pass a GeoTIFF tile")
 
     monkeypatch.setattr(l3, "_inputs", refuse)
@@ -258,7 +263,7 @@ def _read_script(monkeypatch, failures, error):
     monkeypatch.setattr(run, "virtual_source", lambda sql_name, path: None)
     monkeypatch.setattr(_retry.time, "sleep", sleeps.append)
 
-    def read(fn, vt, cap, ref=None):
+    def read(fn, vt, cap, ref=None, decimate=None, sizes_out=None):
         calls.append(vt.path)
         if len(calls) <= failures:
             raise error

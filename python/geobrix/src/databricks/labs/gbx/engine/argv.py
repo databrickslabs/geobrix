@@ -73,6 +73,12 @@ class RasterProps:
     nodata: Optional[float] = (
         None  # band 1's declared NoData value, None when it declares none
     )
+    # The window's own size when the engine was handed a decimated read of it (a virtual tile read at its target size:
+    # 0 when the input is read whole), and the input's pixel size in its CRS units (0 when unknown).
+    src_width: int = 0
+    src_height: int = 0
+    px_x: float = 0.0
+    px_y: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -591,6 +597,55 @@ def data_bound(fn, values: Mapping[str, Any]) -> bool:
 
 # Binders that write one token of their own from one value (no template, no partner).
 _SPECIAL = ("checked_name", "positive_double", "double_list")
+# Binders that write one `a,b` token: a size from a factor, and a pair of whole numbers or of numbers.
+_SIZED = ("size_from_factor", "int_pair", "double_pair")
+
+
+def _positive(fn, arg, name: str, v, whole: bool):
+    """`v` (the value of param `name`) as a number above 0 and finite, else a refusal naming the param and the value."""
+    try:
+        x = int(v) if whole else float(v)
+    except (TypeError, ValueError):
+        x = math.nan
+    if not (0 < x < math.inf):
+        raise _fail(fn, arg, f"{name} must be positive and finite; got {v}")
+    return x
+
+
+def _sized_token(fn, a, values, first: "RasterProps") -> str:
+    """The token of a ``size_from_factor`` (``--size=w,h`` from a factor above 0 and the first input's size, each side
+    rounded half to even and at least 1), ``int_pair`` (the `from` and `and` params as whole numbers) or
+    ``double_pair`` (as numbers) argument. Both members must be above 0 and finite, else a refusal naming the member.
+    """
+    if a.type == "size_from_factor":
+        f = _positive(fn, a, a.source, values[a.source], False)
+        w, h = first.src_width or first.width, first.src_height or first.height
+        return f"--{a.arg}={max(1, round(w * f))},{max(1, round(h * f))}"
+    whole = a.type == "int_pair"
+    x = _positive(fn, a, a.source, values[a.source], whole)
+    y = _positive(fn, a, a.and_, values[a.and_], whole)
+    return (
+        f"--{a.arg}={x},{y}" if whole else f"--{a.arg}={fmt_double(x)},{fmt_double(y)}"
+    )
+
+
+def estimate_output(fn, tokens: Sequence[str], props: Sequence["RasterProps"]) -> int:
+    """The decoded bytes the call's output will hold (the output's size from ``--size`` or ``--resolution``, else the
+    inputs' own decoded size), for the per-call budget: the inputs plus this must fit.
+    """
+    first = props[0]
+    dtype = first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
+    item = _ITEMSIZE.get(dtype, 8)
+    for t in tokens:
+        if t.startswith("--size="):
+            w, h = (int(v) for v in t.split("=", 1)[1].split(","))
+            return w * h * first.bands * item
+        if t.startswith("--resolution=") and first.px_x and first.px_y:
+            rx, ry = (float(v) for v in t.split("=", 1)[1].split(","))
+            w = math.ceil(first.width * abs(first.px_x) / rx)
+            h = math.ceil(first.height * abs(first.px_y) / ry)
+            return w * h * first.bands * item
+    return sum(p.width * p.height * p.bands * _ITEMSIZE.get(p.dtype, 8) for p in props)
 
 
 def _const_token(a, inputs: Sequence[RasterProps]) -> Optional[str]:
@@ -689,6 +744,48 @@ def _plain_token(fn, a, v) -> Optional[str]:
     return f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}"
 
 
+def _is_null_value(a, v, values: Mapping[str, Any]) -> bool:
+    """True when the argument `a` has no value: `v` is NULL, or for a pair (`and`) its partner is."""
+    return _is_null(v) or (a.and_ is not None and _is_null(values.get(a.and_)))
+
+
+def _null_argument(block, values: Mapping[str, Any]) -> bool:
+    """True when an argument whose null rule is ``null_result`` has a NULL value: the result is NULL before any other
+    argument is judged (a wrong word beside a NULL is NULL). NaN counts as NULL: an Arrow UDF hands a NULL DOUBLE over
+    as NaN. The arguments with a rule or a binder of their own (a pair that goes together, a list, a formula) are
+    judged where they are bound.
+    """
+    return any(
+        a.source is not None
+        and a.null == "null_result"
+        and a.with_ is None
+        and a.when_empty is None
+        and a.type not in _SPECIAL
+        and not a.type.startswith("calc_")
+        and _is_null_value(a, values.get(a.source), values)
+        for a in block.args
+    )
+
+
+def _bound_tokens(fn, a, v, values, inputs, n_texts: int):
+    """(the tokens, the map-algebra binding or None) of argument `a` for its non-NULL value `v`: a pair or a size, a
+    map-algebra envelope, a color table (the engine's ``<text{n_texts}>`` file) and its alpha flag, or a plain binder.
+    """
+    if a.type in _SIZED:
+        return [_sized_token(fn, a, values, inputs[0])], None
+    if a.type == "calc_envelope":
+        calc = _calc_binding(fn, a, v, inputs)
+        return [f"--{a.arg}={calc.expr}", "--dialect=muparser"], calc
+    if a.type == "text_vsimem":
+        check_color_table(fn.sql_name, a.source, v)
+        return [f"--{a.arg}=<text{n_texts}>"], None
+    if a.type == "table_alpha":
+        alpha = _color_table(fn.sql_name, a.source, str(v))[1]
+        return ([f"--{a.arg}"] if alpha else []), None
+    tok = _plain_token(fn, a, v)
+    return ([tok] if tok else []), None
+
+
 def _template(fn, values, inputs, section) -> Optional[List[str]]:
     """The argv with the placeholder input and output names: bound once per distinct (spec, values, input props),
     so a literal argument is resolved once, not per row."""
@@ -700,6 +797,8 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
         else [f"<input{i}>" for i in range(len(inputs))]
     )
     by_arg = {a.arg: a for a in block.args}
+    if _null_argument(block, values):
+        return None
     calc: Optional[_Calc] = None
     tokens: List[str] = []
     n_texts = 0
@@ -730,28 +829,16 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             continue
         v = values.get(a.source)
         _check_together(fn, a, v, by_arg, values)
-        if _is_null(v):
-            if a.null == "omit":
-                continue
+        if _is_null_value(a, v, values):
             if a.null == "raise":
                 raise ParamError(f"{fn.sql_name}: {a.source} must not be NULL")
+            if a.null == "omit":
+                continue
             return None
-        if a.type == "calc_envelope":
-            calc = _calc_binding(fn, a, v, inputs)
-            tokens += [f"--{a.arg}={calc.expr}", "--dialect=muparser"]
-            continue
-        if a.type == "text_vsimem":
-            check_color_table(fn.sql_name, a.source, v)
-            tokens.append(f"--{a.arg}=<text{n_texts}>")
-            n_texts += 1
-            continue
-        if a.type == "table_alpha":
-            if _color_table(fn.sql_name, a.source, str(v))[1]:
-                tokens.append(f"--{a.arg}")
-            continue
-        tok = _plain_token(fn, a, v)
-        if tok:
-            tokens.append(tok)
+        toks, bound = _bound_tokens(fn, a, v, values, inputs, n_texts)
+        tokens += toks
+        calc = bound or calc
+        n_texts += a.type == "text_vsimem"
     guard_tokens(
         section,
         block.alg,

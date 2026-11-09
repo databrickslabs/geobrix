@@ -5096,7 +5096,8 @@ def rst_resample_to_res(
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        The tile on a grid of `x_res` by `y_res` pixels; the CRS and the extent stay.
+        The tile on a grid of `x_res` by `y_res` pixels; the CRS stays and the extent
+        changes by less than one pixel.
 
     SQL: ``gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])``
     """

@@ -9,12 +9,15 @@ the cutline covers. `tile_4326` is 64 x 48 pixels of 0.01 degrees from (-1, 52);
 """
 
 import math
+import os
 
+from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
     Case,
+    _build,
     _gtiff,
     _tile,
     builder,
@@ -108,6 +111,39 @@ def _gcp_tile(tmpdir):
         return _tile(mf.read())
 
 
+@builder("dem_cog_overviews")
+def _dem_cog(tmpdir):
+    """The 64 x 64 DEM as a tiled GeoTIFF with one 2x overview, as a virtual tile: a read at half the size is served by
+    the overview."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+
+    path = os.path.join(tmpdir, "warp_dem_overviews.tif")
+    if not os.path.exists(path):
+        raw = _build("dem_3857", tmpdir)["raster"]
+        with open_bytes(bytes(raw)) as src:
+            profile = dict(
+                driver="GTiff",
+                width=src.width,
+                height=src.height,
+                count=src.count,
+                dtype=src.dtypes[0],
+                crs=src.crs,
+                transform=src.transform,
+                nodata=src.nodata,
+                tiled=True,
+                blockxsize=32,
+                blockysize=32,
+            )
+            data = np.asarray(src.read())
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(data)
+        with rasterio.open(path, "r+") as dst:
+            dst.build_overviews([2], Resampling.average)
+    return _tile(None, path, None)
+
+
 _session_warp_rows = (
     # transform: a reprojection judged against rasterio.warp on the same grid (nearest neighbour)
     Case("transform_3857", TR, (T4326, 3857), "tile_props", "EPSG:3857", ONLY),
@@ -154,6 +190,15 @@ _session_warp_rows = (
     Case(
         "resample_virtual_vrt", RS, (Build("dem_vrt"), 0.5), "tile_size", (32, 32), ONLY
     ),
+    # a virtual tile of a file with an overview is read at the target size, so the overview serves it
+    Case(
+        "resample_virtual_cog",
+        RS,
+        (Build("dem_cog_overviews"), 0.25),
+        "tile_size",
+        (16, 16),
+        ONLY,
+    ),
     # `average` by one half is the mean of every 2 x 2 block (GDAL's word `near` and a capital are accepted)
     Case(
         "resample_average_half",
@@ -169,6 +214,15 @@ _session_warp_rows = (
         (Build("warp_ramp"), 0.5, "Average"),
         "ref",
         "resample_average_half",
+        ONLY,
+    ),
+    # NoData stays NoData: the block of the first 4 x 4 NoData pixels is still NoData after the mean of every 2 x 2 block
+    Case(
+        "resample_average_nodata_stays",
+        RS,
+        (T4326, 0.5, "average"),
+        "ref",
+        "resample_average_nodata",
         ONLY,
     ),
     Case("resample_zero", RS, (T4326, 0.0), "raises", "factor", ONLY),
@@ -196,7 +250,20 @@ _session_warp_rows = (
         UPSTREAM_ERROR,
         ONLY,
     ),
+    # an error tile passes through before the word is judged, for a web mercator reprojection too (`error_tile_has`, not
+    # `error_tile`: the JVM web mercator called by its private name still judges the word first)
+    Case(
+        "webmercator_error_tile_passes_bad_word",
+        WM,
+        (ERR, "sinc"),
+        "error_tile_has",
+        UPSTREAM_ERROR,
+        ONLY,
+    ),
     Case("resample_corrupt", RS, (CORRUPT, 0.5), "error_tile", None, ONLY),
+    # an upsampling whose output would not fit the decoded budget is refused before it runs: the input and the output
+    # (400 x the 64 x 48 tile is about 1.9 GiB decoded) are judged together
+    Case("resample_upsample_over_budget", RS, (T4326, 400.0), "error_fix", None, ONLY),
     # a tile decoded over the read cap is an error tile with a Fix, never a failed task (READ_CAP_ROWS lowers the cap)
     Case(
         "resample_decoded_over_cap",
@@ -210,6 +277,10 @@ _session_warp_rows = (
     Case("resample_to_size", RSZ, (T4326, 10, 20), "tile_size", (10, 20), ONLY),
     Case("resample_to_size_zero", RSZ, (T4326, 0, 20), "raises", "width_px", ONLY),
     Case("resample_to_size_null", RSZ, (T4326, 10, None), "null", None, ONLY),
+    # a resolution that does not divide the extent gives the whole number of pixels nearest to it
+    Case(
+        "resample_to_res_rounds", RSR, (T4326, 0.03, 0.03), "tile_size", (21, 16), ONLY
+    ),
     Case("resample_to_res", RSR, (T4326, 0.02, 0.02), "tile_size", (32, 24), ONLY),
     Case("resample_to_res_zero", RSR, (T4326, 0.0, 0.02), "raises", "x_res", ONLY),
     Case("resample_to_res_null", RSR, (T4326, 0.02, None), "null", None, ONLY),

@@ -2343,6 +2343,62 @@ for _fn, _call in _SE_CALC_CALLS.items():
     ]
 
 
+# The warp functions (transform, web mercator, the three resamples) on the same shape: 1024 px Float32 tiles in EPSG:4326
+# with NoData holes, replicated on the executors, each function with the engine's row-wise UDF (c0), its batch UDF behind
+# the wrapper (c1) and a floor.
+def _se_warp_tile(size: int, seed: int) -> dict:
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    yy, xx = np.mgrid[0:size, 0:size].astype("float64")
+    z = 100.0 + 800.0 * np.sin(xx / 97.0 + seed) * np.cos(yy / 71.0) + 3.0 * seed
+    z[::113, ::127] = -9999.0  # NoData holes
+    return oracles._tile(
+        oracles._gtiff(
+            z[np.newaxis].astype("float32"),
+            "EPSG:4326",
+            origin=(-1.0, 52.0),
+            px=0.0001,
+        )
+    )
+
+
+INPUTS["se_warp_1024_mem"] = _se_dems_replicated(1024, _se_warp_tile, "warp")
+BASE_ROWS["se_warp_1024_mem"] = 16
+
+_SE_WARP_CALLS = {
+    "gbx_rst_transform": "{fn}(tile, 3857)",
+    "gbx_rst_to_webmercator": "{fn}(tile, 'bilinear')",
+    "gbx_rst_resample": "{fn}(tile, 0.5, 'bilinear')",
+    "gbx_rst_resample_to_size": "{fn}(tile, 512, 512, 'bilinear')",
+    "gbx_rst_resample_to_res": "{fn}(tile, 0.0002, 0.0002, 'bilinear')",
+}
+SE_WARP_FUNCTIONS = tuple(_SE_WARP_CALLS)
+for _fn, _call in _SE_WARP_CALLS.items():
+    FORMS["SE"] += [
+        _se(
+            _fn,
+            "L3",
+            f"{v}@mem",
+            "se_warp_1024_mem",
+            _SE_FP.format(call=_call),
+            vsql=_SE_VFP.format(call=_call, col="tile.raster", k=8),
+        )
+        for v in ("engine-c0", "engine-c1")
+    ] + [
+        _se(
+            _fn,
+            "L3",
+            "floor-c0@mem",
+            "se_warp_1024_mem",
+            _SE_FLOOR_C0,
+            setup="setup_se_floor",
+            register=False,
+        )
+    ]
+
+
 # --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
 #
 # The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF

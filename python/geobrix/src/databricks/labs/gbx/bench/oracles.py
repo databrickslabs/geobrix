@@ -52,6 +52,8 @@ class Case:
     # geom_srid: `expect` is the WKT of the geometry the output (WKB or EWKB) must equal, Z included, and the SRID it
     # carries: a (WKT, SRID) pair fixes the SRID (0 for none), a bare WKT means the SRID of the first argument.
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
+    # per_row is one batch too (a c1 batch UDF and a per-row binding both see it): `args` is a tuple of argument rows and
+    # `expect` one kind per row, `"tile_props:<crs>"` or `"error_tile"`.
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
     # cell_rows: `expect` is the cell ids the rows' `cellid` column must hold, each once, in any order, as Python ints
     # (a BIGINT id never passes through a float) or strings. triangles: `expect` is the triangles (three (x, y) vertices
@@ -189,6 +191,14 @@ HEAVY_PENDING.update(
     {
         cid: {"L1": _CONFORMING_L1}
         for cid in ("tri_conforming_light_refused", "elevbbox_conforming_light_refused")
+    }
+)
+
+HEAVY_PENDING.update(
+    {
+        "resample_upsample_over_budget": {
+            "L1": "the JVM resample makes the 1.9 GiB result; the engine refuses a call whose input and output together pass the decoded budget"
+        },
     }
 )
 
@@ -1553,6 +1563,22 @@ SPEC_SE: Tuple[Case, ...] = (
         ("uc",),
     ),
 )
+SPEC_SE += (
+    # One batch whose rows bind different CRS values, one of them bad: only that row is an error tile, and the others
+    # keep their result (a batch UDF and a per-row binding both see this batch).
+    Case(
+        "warp_rows_mixed_crs",
+        T,
+        (
+            (Build("tile_4326"), "EPSG:3857"),
+            (Build("tile_4326"), "not a crs"),
+            (Build("tile_4326"), "EPSG:4326"),
+        ),
+        "per_row",
+        ("tile_props:EPSG:3857", "error_tile", "tile_props:EPSG:4326"),
+        ("session",),
+    ),
+)
 
 
 # The read-path table: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to
@@ -2893,6 +2919,25 @@ def _ref_resample_average(args):
     return out, np.zeros(out.shape, dtype=bool)
 
 
+def _ref_resample_average_nodata(args):
+    """rst_resample by a factor 1/k with `average` of a tile with NoData: a k x k block holding only NoData is NoData, any
+    other block's value is the mean of its data pixels."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        z = ds.read(1, masked=True)
+    k = int(round(1.0 / float(args[1])))
+    h, w = z.shape[0] // k * k, z.shape[1] // k * k
+    blocks = (
+        z[:h, :w]
+        .reshape(h // k, k, w // k, k)
+        .swapaxes(1, 2)
+        .reshape(h // k, w // k, k * k)
+    )
+    out = blocks.astype("float64").mean(axis=2)
+    return out.filled(0.0), np.ma.getmaskarray(out)
+
+
 def _ref_proximity(units: str):
     """rst_proximity: the distance to the nearest source pixel (oracle_refs), in ground units or in pixels."""
 
@@ -3456,6 +3501,7 @@ _REFS = {
     "subdataset": _ref_subdataset,
     "transform_gcp": _ref_transform_gcp,
     "resample_average_half": _ref_resample_average,
+    "resample_average_nodata": _ref_resample_average_nodata,
     "proximity_geo": _ref_proximity("GEO"),
     "proximity_pixel": _ref_proximity("PIXEL"),
     "fillnodata": _ref_fillnodata,
@@ -4437,7 +4483,11 @@ def _array_ddl_type(param, value=None) -> str:
 
 
 def _argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
-    raw = case.args if case.kind == "exact_rows" else (case.args, *case.variants)
+    raw = (
+        case.args
+        if case.kind in ("exact_rows", "per_row")
+        else (case.args, *case.variants)
+    )
     return [[resolve_arg(a, tmpdir) for a in row] for row in raw]
 
 
@@ -4445,6 +4495,14 @@ def _verdict(case: Case, outs, rows) -> Optional[str]:
     """`check` for the whole batch: exact_rows judges the list, any other kind each row (variants included)."""
     if case.kind == "exact_rows":
         return check(case, outs, rows[0])
+    if case.kind == "per_row":
+        for i, (out, row, kind) in enumerate(zip(outs, rows, case.expect)):
+            name, _, want = kind.partition(":")
+            one = replace(case, cid=f"{case.cid}[{i}]", kind=name, expect=want or None)
+            why = check(one, out, row)
+            if why:
+                return why
+        return None
     return next(filter(None, (check(case, o, r) for o, r in zip(outs, rows))), None)
 
 

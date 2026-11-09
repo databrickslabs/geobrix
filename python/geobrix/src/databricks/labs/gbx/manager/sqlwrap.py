@@ -31,7 +31,7 @@ def sql_kernel(fn) -> str:
     )
 
 
-def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
+def tile_dispatch(fn, jvm_call: str, l3_name: str, file_sql: str = "") -> str:
     """CREATE FUNCTION text for a tile-first function.
 
     ``jvm_call`` is the JVM branch with ``{tile}`` (the tile argument, NULL unless it is
@@ -39,7 +39,8 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     as placeholders. A NULL required argument
     gives NULL. A tile with neither bytes nor a path is an error tile when it carries a diagnostic
     (it goes out unchanged, so the upstream reason survives, where the function returns a tile) and NULL
-    otherwise, as in the light tier.
+    otherwise, as in the light tier. ``file_sql`` (the FILE-reference expression of ``file_ref_sql``) makes the light
+    branch a function that takes the FILE reference second; it is NULL for a tile the branch does not serve.
     """
     t = fn.params[0].name
     others = [p.name for p in fn.params[1:]]
@@ -47,9 +48,12 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str) -> str:
         f", {n}" for n in others
     )  # each argument after the tile, with its separator: none when none
     required = " OR ".join(f"{p.name} IS NULL" for p in fn.params[: fn.min_args])
-    virt = f"(IF({t}.raster IS NULL AND {t}.path IS NOT NULL, {t}, NULL))"
+    is_virt = f"{t}.raster IS NULL AND {t}.path IS NOT NULL"
+    virt = f"(IF({is_virt}, {t}, NULL))"
     mat = f"(IF({t}.raster IS NOT NULL, {t}, NULL))"
-    light = ", ".join([virt] + others)
+    light = ", ".join(
+        [virt] + ([f"(IF({is_virt}, {file_sql}, NULL))"] if file_sql else []) + others
+    )
     jvm = jvm_call.format(tile=mat, rest=rest)
     # An error tile comes out as itself only where the function returns a tile; any other result is NULL for it.
     error_tile = (

@@ -267,19 +267,27 @@ OPEN_SITES = {
     ),
     (
         "engine/run.py",
-        'sds = gdal.OpenEx(src, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=["GTiff"])',
-    ): (
-        1,
-        "the aspect re-mask reads the engine's input, a /vsimem GeoTIFF (the caller's GeoTIFF bytes, or the "
-        "GeoTIFF the conversion above wrote); allowed_drivers names GTiff only",
-    ),
-    (
-        "engine/run.py",
         'ods = gdal.OpenEx(out, gdal.OF_RASTER | gdal.OF_UPDATE, allowed_drivers=["GTiff"])',
     ): (
         1,
         "the aspect re-mask updates the engine's own output, the /vsimem GeoTIFF the GDAL run just wrote; "
         "allowed_drivers names GTiff only",
+    ),
+    ("engine/run.py", 'return gdal.OpenEx(name, flags, allowed_drivers=["GTiff"])'): (
+        1,
+        "the one open of the engine's own GeoTIFF: its input (the caller's GeoTIFF bytes, or the conversion's output) or its "
+        "output, under the call's /vsimem prefix; allowed_drivers names GTiff only",
+    ),
+    (
+        "bench/oracle_tables/spec_warp.py",
+        'with rasterio.open(path, "w", **profile) as dst:',
+    ): (
+        1,
+        "the dem_cog_overviews fixture: writes a GeoTIFF in the builder's scratch directory (GeoBrix's own fixture)",
+    ),
+    ("bench/oracle_tables/spec_warp.py", 'with rasterio.open(path, "r+") as dst:'): (
+        1,
+        "the dem_cog_overviews fixture: adds the overview to the GeoTIFF written a line above",
     ),
     ("bench/oracle_tables/spec_calc.py", "gdal.BuildVRT(vrt, [tif]).FlushCache()"): (
         1,

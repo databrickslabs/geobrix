@@ -128,6 +128,11 @@ _SE_DEM_SETS = tuple(
         "threshold",
         "color_relief",
         "contour",
+        "transform",
+        "to_webmercator",
+        "resample",
+        "resample_to_size",
+        "resample_to_res",
     )
 )
 

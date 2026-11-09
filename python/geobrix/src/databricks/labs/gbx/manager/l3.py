@@ -74,7 +74,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     reg = _gdal_policy.carrying_session(
         spark
     )  # the driver's remote-path switch goes to the workers
-    if spec.get("file_ref") and name == fn.sql_name:
+    if spec.get("file_ref") not in (None, "engine") and name == fn.sql_name:
         from databricks.labs.gbx.manager import capabilities
 
         if capabilities._sql_functions(spark):
@@ -84,12 +84,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             from databricks.labs.gbx.manager import jvm, sqlwrap
 
             private = jvm._priv(fn, "L3f")
-            file_udf = resolve_ref(spec["file_ref"])
-            if (
-                "factory" in spec
-            ):  # a row built by a factory builds its FILE form the same way
-                file_udf = file_udf(*_factory_args(spec["factory_args"], spark))
-            reg.udf.register(private, file_udf)
+            reg.udf.register(private, resolve_ref(spec["file_ref"]))
             jvm._create_wrapper(
                 spark,
                 fn,
@@ -202,10 +197,11 @@ def _takes_its_defaults(fn, spec, built=None) -> bool:
     return True
 
 
-def register_engine_c0(spark, fn, name: str) -> None:
+def register_engine_c0(spark, fn, name: str, file_ref: bool = False) -> None:
     """Register `fn`'s row-wise GDAL spec engine UDF under `name`, carrying the driver's remote-path switch and the
-    connect-aware read cap. It reads virtual tiles and bytes alike. Registering it never imports ``osgeo``: where the
-    engine is missing a call refuses, naming the env wheel."""
+    connect-aware read cap. It reads virtual tiles and bytes alike. With `file_ref` it takes the tile's FILE
+    reference second. Registering it never imports ``osgeo``: where the engine is missing a call refuses, naming the
+    env wheel."""
     from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.engine import l3 as engine_l3
@@ -213,7 +209,26 @@ def register_engine_c0(spark, fn, name: str) -> None:
     reg = _gdal_policy.carrying_session(spark)
     grid = _factory_args("proj_grid_dirs")[0]
     reg.udf.register(
-        name, engine_l3.c0(fn.sql_name, grid, read_cap=report_detected_cap(spark))
+        name,
+        engine_l3.c0(
+            fn.sql_name, grid, read_cap=report_detected_cap(spark), file_ref=file_ref
+        ),
+    )
+
+
+def _file_sql(spark, tile: str) -> str:
+    from databricks.labs.gbx.ds.file_gbx import file_ref_sql
+
+    return file_ref_sql(tile, spark)
+
+
+def _engine_file_ref(spark, fn) -> bool:
+    """True when `fn`'s light level reads a virtual tile through its FILE reference (`file_ref: "engine"`) and this
+    session has SQL functions to carry the wrapper."""
+    from databricks.labs.gbx.manager import capabilities, levels
+
+    return fn.levels["L3"].get("file_ref") == levels.ENGINE_FILE_REF and bool(
+        capabilities._sql_functions(spark)
     )
 
 
@@ -244,11 +259,26 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
             and capabilities._sql_functions(spark)
         )
     )  # a features output has no batch form: its row-wise UDF serves every form
+    file_aware = _engine_file_ref(spark, fn)
+    if not wrapped and file_aware:
+        # the row-wise UDF that also takes a FILE reference, behind a wrapper that mints it from the tile's path
+        from databricks.labs.gbx.ds.file_gbx import file_ref_sql
+
+        private = jvm._priv(fn, "L3f")
+        register_engine_c0(spark, fn, private, file_ref=True)
+        jvm._create_wrapper(
+            spark,
+            fn,
+            sqlwrap.file_ref_wrapper(
+                fn, private, file_ref_sql(fn.params[0].name, spark)
+            ),
+        )
+        return "engine-c0"
     if not wrapped:
         register_engine_c0(spark, fn, name)
         return "engine-c0"
     c0_name, c1_name = jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")
-    register_engine_c0(spark, fn, c0_name)
+    register_engine_c0(spark, fn, c0_name, file_ref=file_aware)
     reg.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
     first = fn.params[0].name
     if fn.gdal.inputs[0][1] == "rasters":
@@ -265,6 +295,7 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
             fn,
             sqlwrap.tile_from_result(c1_name + "({tile}.raster{rest})", first),
             c0_name,
+            (_file_sql(spark, first) if file_aware else ""),
         )
     jvm._create_wrapper(spark, fn, ddl)
     return "engine-c1"

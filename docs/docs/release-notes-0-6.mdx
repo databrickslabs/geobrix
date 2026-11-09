@@ -108,6 +108,12 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - A pixel is NoData where an input band is NoData, a value is NaN or infinite, or a denominator is 0.
   - A source with no declared NoData value now treats the pixels equal to -9999 as NoData.
   - `rst_chm` subtracts with the same `raster calc`, so it needs the env wheel's GDAL. It raises the reason where GDAL is absent.
+- **The warp functions run GDAL's `raster reproject`.** They are `rst_transform`, `rst_to_webmercator`, `rst_resample`, `rst_resample_to_size` and `rst_resample_to_res`. They used rasterio before. The pixels equal the earlier results, with a few differences.
+  - `rst_resample_to_res` gives pixels of exactly the resolution you ask for. When the resolution does not divide the extent, the extent changes by less than one pixel.
+  - `bilinear` and `cubic` can differ from the earlier pixels beside NoData. `near`, `average` and every reprojection give the same pixels.
+  - A call whose input and result together pass the compute's decoded size gives an error tile with a `Fix:`. Before, only the input counted.
+  - `rst_resample` reads a virtual tile at the target size when the factor is below 1. A file with overviews serves the shrink from them.
+  - A size from a factor that ends in .5 pixels rounds to the even size. The JVM form rounds up.
 - **`gbx_rst_contour` runs GDAL's `raster contour`.** It traced the lines with scikit-image before. The lines cross the same levels, and each level's lines lie within one pixel of the earlier ones.
   - A line now runs to the tile's edge, half a pixel past the outermost pixel centres. It can split differently at a NoData cell.
   - A pixel equal to -9999 is NoData in a tile that declares no NoData value. Before, the lines traced it as data.

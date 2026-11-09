@@ -153,13 +153,17 @@ def _is_missing(exc: BaseException) -> bool:
     return _gdal_policy._MISSING in _chain_text(exc)
 
 
-def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
+def _virtual_raster(
+    fn, tile, read_cap: Optional[int], file_ref=None, decimate=None, sizes_out=None
+) -> bytes:
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
     read cap, judged from the header before any pixel is read. A corrupt or refused file is a DataError (an error
     tile). A file that is not there is not data: it is retried as transient (``_retry_transient``, the limits of
     every Volume read; a UC Volume can lag a write) and, still missing, raises ``MissingSourceError`` with a Fix.
     ``file_ref`` is the tile's FILE reference: a read through it is not staged through the path as well.
+    ``decimate`` (``_decimation``) reads a plain window at its target size, which an overview serves where the file has
+    one; the window's own size is then appended to ``sizes_out``.
     """
     from databricks.labs.gbx.core._retry import _retry_transient
     from databricks.labs.gbx.pyrx.core import open_tile as ot
@@ -183,7 +187,9 @@ def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
                 try:
                     if not is_zarr:
                         run.virtual_source(fn.sql_name, vt.path)
-                    return _read_virtual(fn, vt, read_cap, file_ref)
+                    return _read_virtual(
+                        fn, vt, read_cap, file_ref, decimate, sizes_out
+                    )
                 except (MemoryError, RecursionError):
                     raise
                 except (
@@ -230,14 +236,89 @@ def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
         ) from None
 
 
-def _read_virtual(fn, vt, read_cap: Optional[int], file_ref=None) -> bytes:
-    """The window of a virtual tile whose path is resolved, as GeoTIFF bytes, under this compute's read cap."""
+def _decimation(fn, values):
+    """``(factor, rasterio resampling)`` when a virtual tile of this row is read at its target size: the row reads a
+    factor (``in_read: "factor"``) below 1 and a resampling word that names one. None otherwise; a wrong factor or
+    word is left to the argument check, which raises."""
+    if values is None or fn.gdal.in_read != "factor":
+        return None
+    size_arg = next((a for a in fn.gdal.args if a.type == "size_from_factor"), None)
+    word_arg = next(
+        (a for a in fn.gdal.args if a.arg == "resampling" and a.source), None
+    )
+    if size_arg is None or word_arg is None:
+        return None
+    try:
+        factor = float(values.get(size_arg.source))
+        word = values.get(word_arg.source)
+        from databricks.labs.gbx.pyrx.core._util import resampling_enum
+
+        resampling = resampling_enum(str(word))
+    except (TypeError, ValueError):
+        return None
+    return (factor, resampling) if 0.0 < factor < 1.0 and word is not None else None
+
+
+def _decimated_window(fn, src, window, decimate, read_cap):
+    """``(GeoTIFF bytes, (width, height))`` of ``window`` of the open file ``src`` read at its target size (an overview
+    serves the read where the file has one), with the window's own size. The read cap is judged on the decimated
+    size. ``open_tile.NOT_PLAIN`` for a file whose own mask band the plain read would drop.
+    """
+    from affine import Affine
+
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
+    from databricks.labs.gbx.engine.argv import _ITEMSIZE
+    from databricks.labs.gbx.pyrx.core import compression as comp
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
+    if has_own_mask(src):
+        return ot.NOT_PLAIN
+    factor, resampling = decimate
+    w, h = int(window.width), int(window.height)
+    tw, th = max(1, round(w * factor)), max(1, round(h * factor))
+    dtype = str(src.dtypes[0])
+    size = tw * th * src.count * _ITEMSIZE.get(_GDAL_TYPE.get(dtype, dtype), 8)
+    if materialize_decision(size, "ingest", cap_bytes=read_cap) == "error":
+        raise run.DataError(
+            f"{fn.sql_name}: the virtual tile is {size // 2**20} MiB decoded at its target size, over this "
+            "compute's read cap. Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+        )
+    data = src.read(window=window, out_shape=(src.count, th, tw), resampling=resampling)
+    profile = comp.source_profile(src.profile)
+    profile.update(
+        driver="GTiff",
+        width=tw,
+        height=th,
+        count=src.count,
+        transform=src.window_transform(window) * Affine.scale(w / tw, h / th),
+    )
+    return comp.write_gtiff(profile, data, alpha_like=src.colorinterp), (w, h)
+
+
+def _read_virtual(
+    fn, vt, read_cap: Optional[int], file_ref=None, decimate=None, sizes_out=None
+) -> bytes:
+    """The window of a virtual tile whose path is resolved, as GeoTIFF bytes, under this compute's read cap. With
+    ``decimate`` a plain window is read at its target size instead (``_decimated_window``).
+    """
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
     from databricks.labs.gbx.engine.argv import _ITEMSIZE
     from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.pyrx.core import open_tile as ot
 
     with run.engine_settings():
+        if decimate is not None and sizes_out is not None:
+            got = ot.with_plain_window(
+                vt,
+                file_ref,
+                lambda src, window: _decimated_window(
+                    fn, src, window, decimate, read_cap
+                ),
+            )
+            if got is not ot.NOT_PLAIN:
+                sizes_out.append(got[1])
+                return got[0]
         with ot.open_header(vt, file_ref=file_ref) as h:
             dtype = str(h.dtypes[0])
             size = (
@@ -272,11 +353,20 @@ _GDAL_TYPE = {
 }
 
 
-def _inputs(fn, first, read_cap: Optional[int] = None, file_refs=None):
+def _inputs(
+    fn,
+    first,
+    read_cap: Optional[int] = None,
+    file_refs=None,
+    sizes_out=None,
+    values=None,
+):
     """(rasters, passthrough, cellid): the rasters to run on, or (None, what to return as it is, None) for a
     NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL). A virtual
     tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable). ``file_refs`` is one FILE
-    reference, or for an array input a list with one per tile.
+    reference, or for an array input a list with one per tile. For a row that reads a virtual tile at its target
+    size (``in_read: "factor"``, with the call's ``values``), ``sizes_out`` is filled with one ``(width, height)`` or
+    None per raster: the window's own size where it was read decimated.
     """
     tiles = [first] if fn.gdal.inputs[0][1] == "raster" else list(first or ())
     if first is None or not tiles:
@@ -288,13 +378,20 @@ def _inputs(fn, first, read_cap: Optional[int] = None, file_refs=None):
         if t is None or tile_checks.is_empty(t):
             return None, None, None
     rasters = []
+    decimate = _decimation(fn, values)
     for i, t in enumerate(tiles):
         d = t.asDict() if hasattr(t, "asDict") else dict(t)
         raw = d.get("raster")
         ref = file_refs[i] if isinstance(file_refs, (list, tuple)) else file_refs
-        rasters.append(
-            bytes(raw) if raw is not None else _virtual_raster(fn, t, read_cap, ref)
-        )
+        if raw is not None:
+            rasters.append(bytes(raw))
+            if sizes_out is not None:
+                sizes_out.append(None)
+            continue
+        box: list = []
+        rasters.append(_virtual_raster(fn, t, read_cap, ref, decimate, box))
+        if sizes_out is not None:
+            sizes_out.append(box[0] if box else None)
     return rasters, None, tile_checks.cellid(tiles[0])
 
 
@@ -350,8 +447,11 @@ def c0(
         if file_ref:
             refs, args = args[0], args[1:]
         values = dict(zip(names, list(args) + defaults[len(args) :]))
+        sizes: list = []
         try:
-            rasters, passthrough, cellid = _inputs(fn, first, read_cap, refs)
+            rasters, passthrough, cellid = _inputs(
+                fn, first, read_cap, refs, sizes, values
+            )
         except run.DataError as exc:
             if not raster_out:
                 _log_once(fn.sql_name, str(exc))
@@ -359,7 +459,7 @@ def c0(
             return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
         if rasters is None:
             return passthrough if raster_out else None
-        res = run.run(fn, rasters, values, _section(section_ref))
+        res = run.run(fn, rasters, values, _section(section_ref), src_sizes=sizes)
         return _tile(res, cellid) if raster_out else _value(fn, res)
 
     return _c0
@@ -382,13 +482,16 @@ def forced_c0(
         _setup(grid_dirs)
         args, (vdir, vprefix, mat) = rest[:-3], rest[-3:]
         values = dict(zip(names, list(args) + defaults[len(args) :]))
+        sizes: list = []
         try:
-            rasters, passthrough, cellid = _inputs(fn, first, read_cap)
+            rasters, passthrough, cellid = _inputs(
+                fn, first, read_cap, None, sizes, values
+            )
         except run.DataError as exc:
             return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
         if rasters is None:
             return passthrough
-        res = run.run(fn, rasters, values)
+        res = run.run(fn, rasters, values, src_sizes=sizes)
         if res is not None and res.raster is not None:
             from databricks.labs.gbx.pyrx import functions as prx
 

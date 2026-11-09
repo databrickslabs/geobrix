@@ -184,6 +184,27 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_threshold",
         )
     },
+    # the warp functions, each over replicated 1024 px EPSG:4326 tiles with its two light UDFs and a floor
+    **{
+        "SE-"
+        + fn[len("gbx_rst_") :]: SetSpec(
+            mvp="SE",
+            forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+            reference="engine-c0@mem",
+            ns=(24, 96, 384),
+            fn=fn,
+            peer_exempt=(
+                "engine-c1@mem",
+            ),  # the batch UDF behind the wrapper: recorded, not a peer
+        )
+        for fn in (
+            "gbx_rst_transform",
+            "gbx_rst_to_webmercator",
+            "gbx_rst_resample",
+            "gbx_rst_resample_to_size",
+            "gbx_rst_resample_to_res",
+        )
+    },
     # contour, a GDAL spec engine row that returns an array of lines: over the same replicated 1024 px tiles as the DEM
     # functions, with the row-wise UDF (c0), the batch form (which a features row resolves to c0) and a floor
     "SE-contour": SetSpec(

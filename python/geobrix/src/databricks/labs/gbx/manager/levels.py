@@ -211,6 +211,9 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # c0 against c1): NDVI 3.5 s against 5.2, NDWI 3.4 against 4.7, NBR 3.8 against 5.4, SAVI 4.2 against 5.7, EVI 3.9
 # against 5.0, rst_index 3.6 against 5.0, threshold 7.5 against 9.1.
 # Contour returns an array of lines, which has no batch form: every engine form registers the row-wise UDF.
+# The warp functions took the row-wise form in the local pass (1024 px Float32 tiles in EPSG:4326 with NoData holes, median
+# of 3 runs, 384 tiles, c0 against c1): transform 5.7 s against 8.3, web mercator 6.8 against 9.1, resample 5.7 against 6.0,
+# resample_to_size 5.2 against 6.4, resample_to_res 4.7 against 6.8.
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -228,6 +231,11 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "threshold",
             "color_relief",
             "contour",
+            "transform",
+            "to_webmercator",
+            "resample",
+            "resample_to_size",
+            "resample_to_res",
         )
     },
 }
@@ -290,15 +298,18 @@ def no_sql_functions(fn) -> str:
 
 
 # An L3 spec with one of these keys has a light form of its own; without one the engine is its only light form.
+# (`file_ref: "engine"` is the engine's own FILE-aware form, not another light form.)
 _L3_OTHER_FORMS = frozenset({"variants", "factory", "callable", "udtf", "file_ref"})
+ENGINE_FILE_REF = "engine"
 
 
 def engine_only(fn, level: str) -> bool:
     """True when the GDAL spec engine is the only form `fn` has at the light level."""
     spec = fn.levels.get(level) or {}
-    return (
-        level == "L3" and bool(spec.get("engine")) and not (_L3_OTHER_FORMS & set(spec))
-    )
+    other = _L3_OTHER_FORMS & set(spec)
+    if spec.get("file_ref") == ENGINE_FILE_REF:
+        other = other - {"file_ref"}
+    return level == "L3" and bool(spec.get("engine")) and not other
 
 
 def available(fn, level: str, caps: Capabilities) -> Optional[str]:

@@ -243,113 +243,104 @@ def _assert_pixel_equal(grouped_bytes, scalar_bytes, name):
     )
 
 
-# --- rst_transform_grouped ---------------------------------------------------
+# --- the warp helpers: each pixel-equals the engine's row-wise UDF of its function ------------------------------------
 
 
-def test_rst_transform_grouped_parity(spark, raster_bytes):
-    """rst_transform_grouped pixel-equals _uf_transform on the same materialized tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_transform
-    from databricks.labs.gbx.rasterx.helpers import rst_transform_grouped
-
-    df = _parity_df(spark, raster_bytes)
-    g_bytes = _read_grouped(rst_transform_grouped(df, 3857, out_col="out"))
-    s_bytes = _read_scalar(df, _uf_transform(F.col("tile"), F.lit(None), F.lit(3857)))
-    _assert_pixel_equal(g_bytes, s_bytes, "rst_transform_grouped")
-
-
-# --- rst_to_webmercator_grouped -----------------------------------------------
-
-
-def test_rst_to_webmercator_grouped_parity(spark, raster_bytes):
-    """rst_to_webmercator_grouped pixel-equals _uf_to_webmercator (bilinear)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_to_webmercator
-    from databricks.labs.gbx.rasterx.helpers import rst_to_webmercator_grouped
-
-    df = _parity_df(spark, raster_bytes)
-    g_bytes = _read_grouped(rst_to_webmercator_grouped(df, "bilinear", out_col="out"))
-    s_bytes = _read_scalar(
-        df,
-        _uf_to_webmercator(F.col("tile"), F.lit(None), F.lit("bilinear")),
-    )
-    _assert_pixel_equal(g_bytes, s_bytes, "rst_to_webmercator_grouped")
-
-
-# --- rst_transformcrs_grouped ------------------------------------------------
-
-
-def test_rst_transformcrs_grouped_parity(spark, raster_bytes):
-    """rst_transformcrs_grouped pixel-equals the engine's row-wise transformcrs for EPSG:3857."""
+def _engine_parity(spark, raster_bytes, fn, helper_out, *call):
+    """The grouped helper's bytes and the engine's row-wise UDF bytes of `fn` on the same tile, for a pixel comparison."""
     from databricks.labs.gbx.engine import l3 as engine_l3
     from databricks.labs.gbx.engine import run as engine_run
-    from databricks.labs.gbx.rasterx.helpers import rst_transformcrs_grouped
 
     if engine_run.unavailable_reason():
         pytest.skip(engine_run.unavailable_reason())
     df = _parity_df(spark, raster_bytes)
-    g_bytes = _read_grouped(rst_transformcrs_grouped(df, "EPSG:3857", out_col="out"))
+    g_bytes = _read_grouped(helper_out(df))
     s_bytes = _read_scalar(
-        df,
-        engine_l3.c0("gbx_rst_transformcrs")(F.col("tile"), F.lit("EPSG:3857")),
+        df, engine_l3.c0(fn)(F.col("tile"), *[F.lit(v) for v in call])
+    )
+    return g_bytes, s_bytes
+
+
+def test_rst_transform_grouped_parity(spark, raster_bytes):
+    from databricks.labs.gbx.rasterx.helpers import rst_transform_grouped
+
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_transform",
+        lambda df: rst_transform_grouped(df, 3857, out_col="out"),
+        3857,
+    )
+    _assert_pixel_equal(g_bytes, s_bytes, "rst_transform_grouped")
+
+
+def test_rst_to_webmercator_grouped_parity(spark, raster_bytes):
+    from databricks.labs.gbx.rasterx.helpers import rst_to_webmercator_grouped
+
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_to_webmercator",
+        lambda df: rst_to_webmercator_grouped(df, "bilinear", out_col="out"),
+        "bilinear",
+    )
+    _assert_pixel_equal(g_bytes, s_bytes, "rst_to_webmercator_grouped")
+
+
+def test_rst_transformcrs_grouped_parity(spark, raster_bytes):
+    from databricks.labs.gbx.rasterx.helpers import rst_transformcrs_grouped
+
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_transformcrs",
+        lambda df: rst_transformcrs_grouped(df, "EPSG:3857", out_col="out"),
+        "EPSG:3857",
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_transformcrs_grouped")
 
 
-# --- rst_resample_grouped ---------------------------------------------------
-
-
 def test_rst_resample_grouped_parity(spark, raster_bytes):
-    """rst_resample_grouped pixel-equals _uf_resample (nearest, factor=2.0)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_resample
     from databricks.labs.gbx.rasterx.helpers import rst_resample_grouped
 
-    df = _parity_df(spark, raster_bytes)
-    g_bytes = _read_grouped(rst_resample_grouped(df, 2.0, "nearest", out_col="out"))
-    s_bytes = _read_scalar(
-        df,
-        _uf_resample(F.col("tile"), F.lit(None), F.lit(2.0), F.lit("nearest")),
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_resample",
+        lambda df: rst_resample_grouped(df, 2.0, "nearest", out_col="out"),
+        2.0,
+        "nearest",
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_resample_grouped")
 
 
-# --- rst_resample_to_size_grouped -------------------------------------------
-
-
 def test_rst_resample_to_size_grouped_parity(spark, raster_bytes):
-    """rst_resample_to_size_grouped pixel-equals _uf_resample_to_size (2x2, nearest)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_resample_to_size
     from databricks.labs.gbx.rasterx.helpers import rst_resample_to_size_grouped
 
-    df = _parity_df(spark, raster_bytes)
-    g_bytes = _read_grouped(
-        rst_resample_to_size_grouped(df, 2, 2, "nearest", out_col="out")
-    )
-    s_bytes = _read_scalar(
-        df,
-        _uf_resample_to_size(
-            F.col("tile"), F.lit(None), F.lit(2), F.lit(2), F.lit("nearest")
-        ),
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_resample_to_size",
+        lambda df: rst_resample_to_size_grouped(df, 2, 2, "nearest", out_col="out"),
+        2,
+        2,
+        "nearest",
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_resample_to_size_grouped")
 
 
-# --- rst_resample_to_res_grouped --------------------------------------------
-
-
 def test_rst_resample_to_res_grouped_parity(spark, raster_bytes):
-    """rst_resample_to_res_grouped pixel-equals _uf_resample_to_res (1.0, nearest)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_resample_to_res
     from databricks.labs.gbx.rasterx.helpers import rst_resample_to_res_grouped
 
-    df = _parity_df(spark, raster_bytes)
     # Original pixel res = 0.5 degrees; resample to 1.0 degrees (halve pixel count)
-    g_bytes = _read_grouped(
-        rst_resample_to_res_grouped(df, 1.0, 1.0, "nearest", out_col="out")
-    )
-    s_bytes = _read_scalar(
-        df,
-        _uf_resample_to_res(
-            F.col("tile"), F.lit(None), F.lit(1.0), F.lit(1.0), F.lit("nearest")
-        ),
+    g_bytes, s_bytes = _engine_parity(
+        spark,
+        raster_bytes,
+        "gbx_rst_resample_to_res",
+        lambda df: rst_resample_to_res_grouped(df, 1.0, 1.0, "nearest", out_col="out"),
+        1.0,
+        1.0,
+        "nearest",
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_resample_to_res_grouped")
 

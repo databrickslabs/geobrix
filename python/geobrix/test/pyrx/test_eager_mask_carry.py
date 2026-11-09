@@ -12,7 +12,6 @@ import numpy as np
 import pytest
 import rasterio
 
-from databricks.labs.gbx.pyrx import functions as F
 from databricks.labs.gbx.pyrx.core import warp
 
 from . import test_virtual_tile_mask as vm
@@ -73,6 +72,32 @@ def test_the_identity_short_circuit_keeps_the_mask(tmp_path, warper, target, nod
     vm.assert_same_pixels(got[:2], want, "identity")
 
 
+def _engine_transform(tile, srid, fn="gbx_rst_transform"):
+    """The bytes the engine's row-wise reprojection `fn` gives for `tile`."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
+
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
+    return bytes(engine_l3.c0(fn).func(tile.to_row(), srid)["raster"])
+
+
+@pytest.mark.parametrize("srid", [3857, 4326])
+def test_rst_transformcrs_keeps_the_mask(tmp_path, srid):
+    """The same rule for the engine's string-taking reprojection."""
+    masked = vm.write_masked(tmp_path / "m.tif")
+    index = vm._index_file(tmp_path / "idx.tif", None)
+    target = f"EPSG:{srid}"
+    _, valid, _ = vm.decode(
+        _engine_transform(vm.virtual(masked), target, "gbx_rst_transformcrs")
+    )
+    idx, _, _ = vm.decode(
+        _engine_transform(vm.virtual(index), target, "gbx_rst_transformcrs")
+    )
+    from_masked = (idx[0] != 0) & np.isin(idx[0].astype("int64") - 100, MASKED_ROWS)
+    assert from_masked.any() and (valid[0] == ~from_masked).all()
+
+
 @pytest.mark.parametrize("srid", [3857, 4326])
 def test_rst_transform_keeps_the_mask(tmp_path, srid):
     """The tile function behind ``rst_transform``, from a virtual tile (the default): the
@@ -81,8 +106,8 @@ def test_rst_transform_keeps_the_mask(tmp_path, srid):
     The index file names the source row of every output pixel."""
     masked = vm.write_masked(tmp_path / "m.tif")
     index = vm._index_file(tmp_path / "idx.tif", None)
-    data, valid, _ = vm.decode(F._transform_bytes(vm.virtual(masked), srid))
-    idx, _, _ = vm.decode(F._transform_bytes(vm.virtual(index), srid))
+    data, valid, _ = vm.decode(_engine_transform(vm.virtual(masked), srid))
+    idx, _, _ = vm.decode(_engine_transform(vm.virtual(index), srid))
     covered = idx[0] != 0
     from_masked = covered & np.isin(idx[0].astype("int64") - 100, MASKED_ROWS)
     assert from_masked.any(), "fixture: the warp must keep some masked source pixels"

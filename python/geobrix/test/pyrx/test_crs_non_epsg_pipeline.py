@@ -3,7 +3,7 @@
 TDD tests — cover the 6 bug sites:
   1. agg._pick_ref_crs: deterministic for all-non-EPSG groups
   2. warp.reproject_to_srid: identity check uses CRS-object comparison
-  3. functions._transform_bytes: same CRS-object identity check (via reproject_to_srid path)
+  3. the engine's rst_transform: same CRS identity check
   4. tessellate (5 sites): H3/quadbin/BNG CRS-object branch decisions
   5. gridagg.already_bng: CRS-object compare
   6. open_tile: non-EPSG tile.crs triggers warp (via _warp_window_bytes_crs)
@@ -227,23 +227,23 @@ def test_reproject_to_srid_non_epsg_to_4326_reprojects():
 
 
 # ---------------------------------------------------------------------------
-# Bug 3: functions._transform_bytes / _transform_udf identity check
+# Bug 3: the engine's rst_transform identity check
 # ---------------------------------------------------------------------------
 
 
-def test_transform_bytes_identity_for_epsg4326_raster():
-    """_transform_bytes with a materialized EPSG:4326 tile and target_srid=4326 must
-    return the original raster bytes (identity short-circuit preserved).
-
-    Post-fix, identity check uses CRS-object comparison: ds.crs == CRS.from_epsg(4326).
-    For a standard EPSG:4326 raster this is equivalent to the to_epsg() path.
+def test_transform_identity_for_epsg4326_raster():
+    """rst_transform of a materialized EPSG:4326 tile to 4326 returns the original raster bytes (the
+    identity short-circuit is kept): the tile's CRS is compared as a CRS, not as a string.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     tile_bytes = _small_4326_bytes()
     v1_tile = {"cellid": 0, "raster": bytearray(tile_bytes), "metadata": {}}
-    result = prx._transform_bytes(v1_tile, 4326)
-    assert isinstance(result, bytes) and len(result) > 0
+    result = engine_l3.c0("gbx_rst_transform").func(v1_tile, 4326)
+    assert bytes(result["raster"]) == tile_bytes
 
 
 # ---------------------------------------------------------------------------

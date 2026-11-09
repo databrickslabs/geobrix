@@ -195,6 +195,15 @@ def _shift_pixels(raster_bytes, delta):
         return out.read()
 
 
+def _engine():
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
+
+    if engine_run.unavailable_reason():  # transform runs on the GDAL spec engine alone
+        pytest.skip(engine_run.unavailable_reason())
+    return engine_l3
+
+
 @pytest.mark.parametrize("target", [32633, 4326], ids=["identity", "reproject"])
 @pytest.mark.parametrize("virtualize", [False, True], ids=["bytes", "virtualize_dir"])
 def test_transform_of_a_virtual_tile_opens_in_the_target_crs(
@@ -202,15 +211,16 @@ def test_transform_of_a_virtual_tile_opens_in_the_target_crs(
 ):
     """The result is self-consistent in the target CRS (the emitted row's crs is None), whether the
     transform is the identity (a passthrough) or a reprojection (new pixels)."""
+    engine_l3 = _engine()
     tile = _virtual_tile(tmp_path, epsg=32633)
     if virtualize:
-        row = prx._transform_v2_udf.func(
+        row = engine_l3.forced_c0("gbx_rst_transform").func(
             tile, target, str(tmp_path / "tout"), None, None
         )
         assert row["raster"] is None and row["path"] is not None
         opened = ot._open(row)
     else:
-        out = prx._transform_udf.func(tile, target)
+        out = engine_l3.c0("gbx_rst_transform").func(tile, target)
         assert out["raster"] is not None
         opened = _serde.open_tile(bytes(out["raster"]))
     with opened as ds:
@@ -225,11 +235,12 @@ def test_identity_transform_returns_the_original_bytes_and_keeps_the_merge_winne
     """
     from databricks.labs.gbx.pyrx.core import agg as agg_core
 
+    transform = _engine().c0("gbx_rst_transform").func
     a = make_geotiff_bytes(width=4, height=4, epsg=4326)
     b = _shift_pixels(make_geotiff_bytes(width=4, height=4, epsg=4326), +50.0)
-    ta = prx._transform_udf.func({"cellid": 0, "raster": a, "metadata": {}}, 4326)
+    ta = transform({"cellid": 0, "raster": a, "metadata": {}}, 4326)
     assert bytes(ta["raster"]) == a
-    tb = prx._transform_udf.func({"cellid": 0, "raster": b, "metadata": {}}, 4326)
+    tb = transform({"cellid": 0, "raster": b, "metadata": {}}, 4326)
     got = prx._merge_udf.func([ta, tb])
     assert bytes(got["raster"]) == agg_core.merge_tiles([a, b])
 

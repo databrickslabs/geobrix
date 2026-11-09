@@ -1183,16 +1183,11 @@ def rst_transform_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import warp
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    def _core(ds, cellid):
-        new_bytes = warp.reproject_to_srid(ds, int(target_srid))
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core("gbx_rst_transform", {"srid": int(target_srid)})
 
     return grouped_tile_map(
         df,
@@ -1221,18 +1216,11 @@ def rst_to_webmercator_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import warp
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _resampling = str(resampling)
-
-    def _core(ds, cellid):
-        new_bytes = warp.reproject_to_srid(ds, 3857, resampling=_resampling)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core("gbx_rst_to_webmercator", {"resampling": str(resampling)})
 
     return grouped_tile_map(
         df,
@@ -1296,18 +1284,13 @@ def rst_resample_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import resample
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _alg = str(algorithm)
-
-    def _core(ds, cellid):
-        new_bytes = resample.resample_by_factor(ds, float(factor), _alg)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_resample", {"factor": float(factor), "algorithm": str(algorithm)}
+    )
 
     return grouped_tile_map(
         df,
@@ -1338,18 +1321,18 @@ def rst_resample_to_size_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import resample
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _alg = str(algorithm)
-
-    def _core(ds, cellid):
-        new_bytes = resample.resample_to_size(ds, int(width_px), int(height_px), _alg)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_resample_to_size",
+        {
+            "width_px": int(width_px),
+            "height_px": int(height_px),
+            "algorithm": str(algorithm),
+        },
+    )
 
     return grouped_tile_map(
         df,
@@ -1380,18 +1363,14 @@ def rst_resample_to_res_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import resample
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _alg = str(algorithm)
-
-    def _core(ds, cellid):
-        new_bytes = resample.resample_to_res(ds, float(x_res), float(y_res), _alg)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_resample_to_res",
+        {"x_res": float(x_res), "y_res": float(y_res), "algorithm": str(algorithm)},
+    )
 
     return grouped_tile_map(
         df,

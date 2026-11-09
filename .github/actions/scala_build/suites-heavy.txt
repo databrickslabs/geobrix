@@ -70,11 +70,13 @@ com.databricks.labs.gbx.rasterx.expressions.vector.RST_IsobandTest
 com.databricks.labs.gbx.rasterx.expressions.vector.VectorRasterBridgeTest
 com.databricks.labs.gbx.rasterx.expressions.web.*
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerNativeDirTest
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerNodeCopyTest
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerPolicyTest
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerProjGridsSpec
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerStaleNativeDirTest
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerTest
 com.databricks.labs.gbx.rasterx.gdal.GDALUtilsTest
+com.databricks.labs.gbx.rasterx.gdal.NativeCopyTest
 com.databricks.labs.gbx.rasterx.gdal.RasterDriversTest
 com.databricks.labs.gbx.rasterx.gdal.ValidMaskTest
 com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest

@@ -2492,6 +2492,9 @@ FORMS["DEM"].append(
         "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
         f"FROM (SELECT {_FC} AS t FROM {{src}})",
         allows_null=True,
+        # the pixels of the distinct tiles (the input replicates a few), as the other forms of a constructor are compared
+        vsql="SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+        f"FROM (SELECT {_FC} AS t FROM (SELECT first(content) AS content FROM {{src}} GROUP BY xxhash64(content)))",
         nullsql=_DEM_ERRORS.format(call=_FC).replace("{src}", "{src}"),
         computes=("dedicated",),
         opt_in=True,

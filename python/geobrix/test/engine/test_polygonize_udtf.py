@@ -71,6 +71,10 @@ def test_one_row_per_feature_and_an_argument_left_out_is_its_default(monkeypatch
     assert seen == {"band": 2, "connectedness": 8}
     list(_handler().eval(TILE, connectedness=8))  # `connectedness => 8`
     assert seen == {"band": 1, "connectedness": 8}
+    list(
+        _handler().eval(tile=TILE, band=3)
+    )  # `tile => t, band => 3`: the tile by its name
+    assert seen == {"band": 3, "connectedness": 4}
 
 
 def test_an_unknown_named_argument_is_refused():

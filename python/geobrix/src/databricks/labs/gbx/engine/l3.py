@@ -563,10 +563,13 @@ def udtf(
     names = [p.name for p in fn.params[1:]]
     defaults = [_sql_default(p.default) for p in fn.params[1:]]
     row_type = return_type(fn).elementType
+    tile_name = fn.params[0].name
 
     class _EngineUDTF:
-        def eval(self, first, *args, **named):
+        def eval(self, first=None, *args, **named):
             _setup(grid_dirs)
+            if tile_name in named:  # `tile => t`: the first parameter by its name
+                first = named.pop(tile_name)
             values = dict(zip(names, list(args) + defaults[len(args) :]))
             for key, val in named.items():  # `band => 2`
                 if key not in names:

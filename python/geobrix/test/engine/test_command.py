@@ -41,6 +41,25 @@ def test_the_command_gives_the_golden_tokens(case):
     assert _build(case["command"]) == case["tokens"]
 
 
+@pytest.mark.parametrize(
+    "cmd,why",
+    [
+        ("clip --bbox=1,2", "needs four numbers"),
+        ("clip --window=0,0", "needs four numbers"),
+        ("reproject --output-crs=3857 --bbox=0,0,1", "needs four numbers"),
+        ("clip --bbox=0,0,inf,1", "must be finite"),
+        ("resize --resolution=nan", "must be finite"),
+        ("resize --resolution=10,-inf", "must be finite"),
+    ],
+)
+def test_a_box_or_window_of_the_wrong_size_or_a_value_that_is_not_finite_is_refused_by_name(
+    cmd, why
+):
+    """These reached the budget estimate and failed there with an IndexError, ValueError or OverflowError."""
+    with pytest.raises(spec.ParamError, match=why):
+        _build(cmd)
+
+
 @pytest.mark.parametrize("case", GOLDEN["command_refused"], ids=lambda c: c["id"])
 def test_a_refused_command_names_the_cause(case):
     with pytest.raises(spec.ParamError) as exc:
@@ -145,6 +164,7 @@ def test_no_allowed_argument_hides_a_second_step_in_its_value(step, arg, kind):
         "sizes": "10%,20",
         "expr": "[0,1]=1; DEFAULT=0",
     }[kind]
+    ok = {"bbox": "1,2,3,4", "window": "1,2,3,4"}.get(arg, ok)  # a box has four numbers
     steps = command.steps_of(
         command.pipeline_tokens(
             f'{step}{_needs(step, (arg,))} --{arg}="{ok}"', SECTION, str, []

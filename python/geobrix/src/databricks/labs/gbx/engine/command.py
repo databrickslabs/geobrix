@@ -18,6 +18,7 @@ Pure Python: the checks run on the host, and the pipeline's tokens are the only 
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Callable, List, Mapping, Sequence
 
@@ -208,6 +209,19 @@ def _value(
         raise _refuse(
             f"the value of '{key}' in step '{step}' must be {_KIND_NAME[kind]} (got {value[:60]!r})",
             "pass the value without a path, quote or separator",
+        )
+    listed = value.split(",")
+    if key in ("bbox", "window") and len(listed) != 4:
+        raise _refuse(
+            f"the value of '{key}' in step '{step}' needs four numbers (got {len(listed)})",
+            f"write --{key}=<four numbers separated by commas>",
+        )
+    if key in ("bbox", "resolution") and not all(
+        math.isfinite(float(v)) for v in listed
+    ):
+        raise _refuse(
+            f"the value of '{key}' in step '{step}' must be finite numbers (got {value[:60]!r})",
+            "pass numbers, not nan or inf",
         )
     return value
 

@@ -143,10 +143,11 @@ def usage_json(path: str) -> str:
 
 
 def decoded_budget() -> int:
-    """The decoded bytes one call may hold (its inputs plus an output of the same size)."""
-    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+    """The decoded bytes one call may hold (its inputs plus its estimated output): the cap the registration carried to
+    this worker, else the worker's own budget (``budget.call_decoded_budget``)."""
+    from databricks.labs.gbx.pyrx.core.budget import call_decoded_budget
 
-    return decoded_budget_bytes("auto")
+    return call_decoded_budget()
 
 
 @contextlib.contextmanager

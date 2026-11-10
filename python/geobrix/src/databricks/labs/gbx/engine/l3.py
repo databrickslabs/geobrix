@@ -436,8 +436,13 @@ def _inputs(
     tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable). ``file_refs`` is one FILE
     reference, or for an array input a list with one per tile. For a row that reads a virtual tile at its target
     size (``in_read: "factor"``, with the call's ``values``), ``sizes_out`` is filled with one ``(width, height)`` or
-    None per raster: the window's own size where it was read decimated.
+    None per raster: the window's own size where it was read decimated. `read_cap` judges a virtual tile's window where
+    the registration carried no read cap; a carried one wins (``budget.carried_or``), so a window is judged by the
+    cap a tile's bytes are (on standard access mode the driver's connect-aware `read_cap` is Serverless's).
     """
+    from databricks.labs.gbx.pyrx.core.budget import carried_or
+
+    read_cap = carried_or(read_cap)
     tiles = [first] if fn.gdal.inputs[0][1] == "raster" else list(first or ())
     if first is None or not tiles:
         return None, None, None

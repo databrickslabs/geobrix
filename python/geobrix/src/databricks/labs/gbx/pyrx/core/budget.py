@@ -177,6 +177,28 @@ def tile_read_cap() -> int:
     return carried if carried is not None else process_read_cap()
 
 
+def call_decoded_budget() -> int:
+    """Worker side: the decoded bytes one call may hold, its inputs and its output together (the GDAL spec engine's
+    budget): the cap the registration carried (:func:`session_read_cap`), else this process's decoded budget
+    (``decoded_budget_bytes("auto")``). A worker of standard access mode (Spark Connect over classic compute) reads
+    neither ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so its own budget would be Serverless's 64 MiB: the carried cap,
+    the classic budget there, is the one that holds, as it is for :func:`tile_read_cap`.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else decoded_budget_bytes("auto")
+
+
+def carried_or(cap: Optional[int]) -> Optional[int]:
+    """Worker side: the cap the registration carried (:func:`session_read_cap`) when one is carried, else *cap* (a cap the
+    function was built with on the driver). A virtual tile's window is judged by the same read cap as a tile's bytes."""
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else cap
+
+
 @functools.lru_cache(maxsize=1)
 def process_read_cap() -> int:
     """This process's decoded budget, read once (it reads the task's cgroup limit on Serverless)."""

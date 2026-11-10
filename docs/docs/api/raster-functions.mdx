@@ -1011,7 +1011,7 @@ On Unity Catalog a virtual tile is refused, and so is a tile over the size limit
 ### rst_summary
 
 {/* BEGIN GENERATED gbx_rst_summary: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1025,7 +1025,7 @@ On Unity Catalog a virtual tile is refused, and so is a tile over the size limit
 {/* END GENERATED gbx_rst_summary */}
 
 :::note Implementation
-Runs GDAL's `raster info` with statistics, through the GDAL spec engine. The heavyweight function runs `gdalinfo -json` without statistics.
+Runs GDAL's `raster info` with statistics, through the GDAL spec engine.
 :::
 
 Describe the tile as JSON, with GDAL's own report: the text of `gdalinfo -json` with statistics.
@@ -1047,7 +1047,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has rea
   name="rst_summary"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -4834,7 +4833,7 @@ World X / Y coordinate of a pixel.
 ### rst_resample
 
 {/* BEGIN GENERATED gbx_rst_resample: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4879,14 +4878,13 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
   name="rst_resample"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ### rst_resample_to_res
 
 {/* BEGIN GENERATED gbx_rst_resample_to_res: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4920,7 +4918,6 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
   name="rst_resample_to_res"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -4968,7 +4965,7 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 ### rst_transform
 
 {/* BEGIN GENERATED gbx_rst_transform: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4996,7 +4993,6 @@ Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that
   name="rst_transform"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6002,7 +5998,7 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 ### rst_fillnodata
 
 {/* BEGIN GENERATED gbx_rst_fillnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6039,7 +6035,6 @@ A tile whose validity is its own mask band keeps it. The filled pixels become va
   name="rst_fillnodata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6351,7 +6346,7 @@ An empty array means no line crosses. NULL means a NULL, error or unreadable til
 ### rst_proximity
 
 {/* BEGIN GENERATED gbx_rst_proximity: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6381,7 +6376,6 @@ Compute a Float32 raster where each pixel holds the exact Euclidean distance to 
   name="rst_proximity"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 

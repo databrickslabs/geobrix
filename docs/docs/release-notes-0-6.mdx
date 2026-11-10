@@ -105,6 +105,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
 - **The JAR no longer holds `RST_GridFromPoints`.** On a dedicated cluster the JVM form took 1.78x and 1.91x the time of the lightweight form at 4x and 16x rows. The decoded output was the same. `gbx_rst_gridfrompoints` ran the JVM form by default with the JAR. It now runs the lightweight form. From Scala, call it with `call_function("gbx_rst_gridfrompoints", ...)`.
 - **The JAR no longer holds `RST_Slope`.** On a dedicated cluster, the JVM form took 0.97x and 1.05x the time of the lightweight form at 4x and 16x rows. So it is no faster. `gbx_rst_slope` runs the lightweight form, which runs GDAL's own slope algorithm. From Scala, call it with `call_function("gbx_rst_slope", ...)`. `gbx_rst_mapalgebra` and `gbx_rst_transformcrs` have no JVM form either. The JVM form of map algebra took 1.05x and 1.15x the time. The JVM form of `gbx_rst_transformcrs` returned NULL tiles for some of 4000 tiles under load. The lightweight forms returned none.
 - **The JAR no longer holds `RST_Aspect`, `RST_TPI`, `RST_Roughness` or `RST_ColorRelief`, and `gbx_rst_tri` runs its JVM form by default on JAR compute.** On a dedicated cluster at 16x rows, the JVM forms of aspect, TPI and roughness were 1.17x, 1.14x and 1.05x faster. The comparison is the best lightweight form. That is under the 1.2x bar to keep a JVM form. The JVM color relief could not read a color table on a Volume. `gbx_rst_tri` was 1.24x faster at 16x rows with the same output, so it keeps its JVM form. From Scala, call the four culled functions with `call_function("gbx_rst_<x>", ...)`.
+- **The JAR no longer holds `RST_Transform`, `RST_Resample`, `RST_ResampleToRes`, `RST_FillNodata`, `RST_Proximity` or `RST_Summary`.** On a dedicated cluster, none of the JVM forms ran 1.2x faster than the best lightweight form. `gbx_rst_transform` ran at 0.71x the speed at 4x rows. `gbx_rst_resample` ran at 1.18x and 0.84x, and `gbx_rst_resample_to_res` at 1.10x and 1.01x, at 4x and 16x rows. `gbx_rst_fillnodata` ran at 0.32x and 0.18x. `gbx_rst_proximity` ran at 1.0x and 1.16x. The JVM summary wrote no band statistics, so its output differed from the lightweight one. These six functions ran the lightweight form by default and still do. From Scala, call them with `call_function("gbx_rst_<x>", ...)`. `gbx_rst_to_webmercator` and `gbx_rst_resample_to_size` ran at 0.98x at 4x rows. They keep their JVM forms for now.
 - **The spectral indices, `rst_index` and `rst_threshold` run GDAL's `raster calc`.** The pixels equal the earlier results, with a few differences.
   - A pixel is NoData where an input band is NoData, a value is NaN or infinite, or a denominator is 0.
   - A source with no declared NoData value now treats the pixels equal to -9999 as NoData.
@@ -626,9 +627,8 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - The STAC windowed download and the vizx tile-simplify raster path read a JPEG/YCbCr source. They failed on `PHOTOMETRIC=YCBCR`.
   - The lightweight `rst_cog_convert` keeps the red, green and blue labels of RGB tiles.
 
-### Heavyweight proximity, COG overviews and tile size (fix) {#l1-parity}
+### Heavyweight tile size (fix) {#l1-parity}
 
-- **The heavyweight `rst_proximity` returns the exact Euclidean distance.** It used GDAL's approximate proximity, which was off by up to 6%. It now matches the lightweight function to Float32 precision.
 - **Heavyweight rasterize and `rst_binpoints_agg` tiles are compressed.** They were raw bytes. They now use the heavyweight default (DEFLATE with the dtype's predictor). A 64 x 64 `rst_binpoints_agg` tile of four points is 630 bytes, not 16,776. Pixels are unchanged.
 
 ### `rst_sample` on virtual tiles (fix) {#rst-sample}
@@ -778,7 +778,7 @@ Both tiers apply one rule for which pixels are valid.
     - The pixels that `gbx_rst_polygonize` and `gbx_rst_isoband` vectorise.
   - The heavyweight statistics used to count transparent pixels. They now leave out a band masked by its own mask band. The alpha band itself is summarised over every pixel.
   - `gbx_rst_isempty` is true for a raster with no valid pixel.
-  - The lightweight `gbx_rst_summary` takes its statistics over the valid pixels. The heavyweight one reports none.
+  - The lightweight `gbx_rst_summary` takes its statistics over the valid pixels.
   - `gbx_rst_derivedband` of one raster is invalid where its input is, in both tiers.
 - **Lightweight functions label a band alpha exactly where their source does.** GDAL labels band 4 of every four-band `uint8` GeoTIFF alpha when it creates one. It drops the alpha band of a 16-bit RGBA or gray-plus-alpha raster. The lightweight functions that write a raster from another one used to do the same. This covers:
   - `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_setsrid` and `gbx_rst_setcrs`.
@@ -954,7 +954,7 @@ Every raster function follows the same order of checks on both implementations.
 - **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
 - **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
 - **`SHOW USER FUNCTIONS` works on DBR 17.3 after `gbx.register`.** The SQL tile functions that mint a `FILE` argument (`gbx_rst_avg`, `gbx_rst_width` and 32 more) run a check once per session. The check asks whether the runtime can list a function with `FILE` in its body. Where it cannot, they pass NULL and read the tile by its path.
-- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones. The differences are an even-count median, the top histogram edge, GDAL's merged metadata and a summary with no statistics. None is a default level.
+- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram` and `gbx_rst_metadata` keep results that differ from the lightweight ones. The differences are an even-count median, the top histogram edge and GDAL's merged metadata. None is a default level.
 
 ## Grid functions {#grid-functions}
 

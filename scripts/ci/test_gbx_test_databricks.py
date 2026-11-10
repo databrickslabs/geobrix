@@ -31,6 +31,7 @@ def _load(name, path):
 sys.path.insert(0, str(TESTS))
 ts = _load("_test_shards", TESTS / "_test_shards.py")
 sr = _load("_shard_runner", TESTS / "_shard_runner.py")
+tm = _load("_timings", TESTS / "_timings.py")
 launcher = _load("push_and_run_tests_on_cluster", TESTS / "push_and_run_tests_on_cluster.py")
 
 
@@ -309,10 +310,11 @@ def test_the_summary_lists_the_table_the_failures_and_the_skips(tmp_path):
     f.write_text(JUNIT)
     j = launcher.parse_junit(f)
     row = dict(name="ds", slug="ds", pool="gbx-test-1n", verdict="FAILED", expected_min=12, passed=j["passed"], failed=1, errors=1, skipped=2,
-               wall_s=100, reason="", failures=j["failures"], skip_reasons=j["skip_reasons"])
+               wall_s=100, reason="", failures=j["failures"], skip_reasons=j["skip_reasons"], actual_s=780, est_src="history")
     plan = {"run_id": "t1", "sha": "a" * 40, "wheel": {"name": "w.whl", "built_from": "b" * 40}, "purpose": "p", "jar": None}
     md = launcher.summary_md(plan, [row], {"gbx-test-1n": {"cluster_id": "c1", "node_type": "m5d.8xlarge", "job_run": 9, "wall_s": 100}})
-    assert "| ds | gbx-test-1n | FAILED | 2 | 1 | 1 | 2 | 100 | 12 |" in md
+    assert "| ds | gbx-test-1n | FAILED | 2 | 1 | 1 | 2 | 100 | 720 | 780 | +8 | history |" in md, "predicted vs actual, and the error"
+    assert "median abs error 8%" in md and "err %" in launcher.table_text([row])
     assert "`t.a::bad`" in md and "no corpus" in md
     assert "ds" in launcher.table_text([row])
 
@@ -416,26 +418,158 @@ def test_relane_sizes_the_runners_to_the_clusters_that_were_free(shards):
     assert spec["queue"] == before, "the queue and its order stay as they were"
 
 
-def test_the_timings_file_keeps_the_seconds_per_test_file(tmp_path):
-    out = tmp_path / "out"
-    (out / "ds").mkdir(parents=True)
-    f = next((PKG / "test" / "ds").glob("test_*.py"))
-    mod = f"test.ds.{f.stem}"
-    (out / "ds" / "junit.xml").write_text(
-        f'<testsuites><testsuite tests="2"><testcase classname="{mod}" name="a" time="1.5"/>'
-        f'<testcase classname="{mod}.TestK" name="b" time="2.0"/></testsuite></testsuites>'
-    )
-    rows = [dict(slug="ds", name="ds", verdict="ok", wall_s=100)]
-    path = tmp_path / "timings.json"
-    path.write_text(json.dumps({"files": {"test/other.py": 9.0}, "shards": {}}))
-    launcher.write_timings(path, {"run_id": "r", "sha": "a" * 40}, rows, out)
-    got = json.loads(path.read_text())
-    assert got["files"][f"test/ds/{f.name}"] == 3.5 and got["files"]["test/other.py"] == 9.0
-    assert got["shards"]["ds"] == 100
-    assert launcher.file_seconds_of(launcher.load_timings(path))[f"test/ds/{f.name}"] == 3.5
-    rows[0]["verdict"] = "INCOMPLETE"  # a shard that did not finish adds nothing
-    launcher.write_timings(path, {"run_id": "r2", "sha": "b" * 40}, rows, out)
-    assert json.loads(path.read_text())["run"] == "r2"
+def _junit(path, cases):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f'<testcase classname="{c}" name="{n}" time="{t}"/>' for c, n, t in cases)
+    path.write_text(f"<testsuites><testsuite tests='{len(cases)}'>{body}</testsuite></testsuites>")
+    return path
+
+
+def _ds_files(n=3):
+    return sorted(p.relative_to(PKG).as_posix() for p in (PKG / "test" / "ds").glob("test_*.py"))[:n]
+
+
+def _mod(f):
+    return f[:-3].replace("/", ".")
+
+
+def test_every_run_merges_its_samples_and_none_overwrites_another(tmp_path):
+    path = tmp_path / "h.json"
+    f = _ds_files(1)[0]
+    for run, secs in (("r1", 10.0), ("r2", 30.0), ("r3", 20.0)):
+        tm.merge(path, [{"key": f, "s": secs, "slots": 1}], {"run": run})
+    tm.merge(path, [{"key": f, "s": 999.0, "slots": 1}], {"run": "r3"})  # the same run again adds nothing
+    h = tm.load(path)
+    assert [x["s"] for x in h["keys"][f]["samples"]] == [10.0, 30.0, 20.0] and [r["run"] for r in h["runs"]] == ["r1", "r2", "r3"]
+    est = tm.estimates(h, 1)[f]
+    assert est == {"s": 20.0, "n": 3, "lb": False}, "the median of the last runs, with the count"
+    assert tm.estimates(h, 8)[f]["s"] == round(20.0 * ts.slowdown(8), 2), "normalized to a chunk alone, then to the plan's slots"
+    tm.merge(path, [{"key": f, "s": 20.0 * ts.slowdown(8), "slots": 8}], {"run": "r4"})
+    assert tm.load(path)["keys"][f]["samples"][-1]["s"] == 20.0
+
+
+MERGER = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import _timings as tm
+sys.stdin.readline()
+for i in range(40):
+    tm.merge(sys.argv[2], [{"key": f"k{j}", "s": float(i), "slots": 1} for j in range(20)], {"run": f"{sys.argv[3]}-{i}"})
+"""
+
+
+def test_two_runs_merging_at_once_keep_every_sample(tmp_path):
+    script = tmp_path / "merger.py"
+    script.write_text(MERGER)
+    path = tmp_path / "h.json"
+    procs = [subprocess.Popen([sys.executable, str(script), str(TESTS), str(path), name], stdin=subprocess.PIPE, text=True) for name in ("a", "b")]
+    for p in procs:
+        p.stdin.write("go\n")
+        p.stdin.flush()
+    for p in procs:
+        p.communicate(timeout=120)
+        assert p.returncode == 0
+    h = tm.load(path)
+    assert len(h["runs"]) == 80, "no run of either writer lost"
+    assert all(len(h["keys"][f"k{j}"]["samples"]) == tm.KEEP for j in range(20))
+    assert {x["run"].split("-")[0] for x in h["keys"]["k0"]["samples"]} == {"a", "b"}
+
+
+def test_a_version_one_file_becomes_one_sample_per_file(tmp_path):
+    p = tmp_path / "t.json"
+    p.write_text(json.dumps({"run": "old", "slots": 8, "files": {"test/x.py": 24.0}}))
+    h = tm.load(p)
+    assert h["version"] == tm.VERSION and tm.estimates(h, 8)["test/x.py"]["s"] == 24.0
+
+
+def test_a_stopped_chunk_leaves_lower_bounds_and_gets_a_chunk_of_its_own_first_next_time(shards, tmp_path):
+    files = _ds_files(4)
+    chunk = {"files": files}
+    junit = _junit(tmp_path / "junit.xml", [(_mod(files[0]), "a", 30), (_mod(files[1]), "b", 20)])  # stopped inside files[1]
+    got = {x["key"]: x for x in tm.run_samples(chunk, "INCOMPLETE", 2742, junit, REPO_ROOT, 1)}  # the 45 min cap
+    assert got[files[0]] == {"key": files[0], "s": 30.0, "slots": 1, "lb": False}
+    assert all(got[f]["lb"] for f in files[1:]) and got[files[1]]["s"] > got[files[2]]["s"] > 800, got
+    assert not tm.run_samples(chunk, "INCOMPLETE", 600, tmp_path / "absent.xml", REPO_ROOT, 1)[0]["s"] < 100, "no junit (a crash): the time is shared"
+    path = tmp_path / "h.json"
+    tm.merge(path, [{"key": f, "s": 10.0, "slots": 4} for f in files], {"run": "before"})
+    tm.merge(path, list(got.values()), {"run": "stopped"})
+    h = tm.load(path)
+    assert tm.lower_bounds(h, 4) == set(files[1:]), "a bound newer than the last full sample counts"
+    ds = next(s for s in shards if s.name == "ds")
+    out = ts.auto_split([ds], REPO_ROOT, tm.seconds(h, 4), 5.0, tm.lower_bounds(h, 4))
+    alone = [c for c in out if any(f in c.paths for f in files[1:])]
+    assert all(len(c.paths) == 1 and c.est_src == "lower bound" for c in alone), [(c.name, c.paths) for c in alone]
+    assert sr.queue_order({c.slug: c.expected_min for c in out})[:3] == sorted([c.slug for c in alone], key=lambda x: -next(c.expected_min for c in out if c.slug == x)), "first in the queue"
+    tm.merge(path, [{"key": f, "s": 12.0, "slots": 4} for f in files], {"run": "after"})
+    assert not tm.lower_bounds(tm.load(path), 4), "a later full run answers the bound"
+
+
+def test_a_failed_or_partial_run_still_leaves_its_samples(tmp_path):
+    files = _ds_files(2)
+    junit = _junit(tmp_path / "junit.xml", [(_mod(files[0]), "a", 3), (_mod(files[0]), "b", 4), (_mod(files[1]), "c", 5)])
+    assert {x["key"]: x["s"] for x in tm.run_samples({"files": files}, "FAILED", 60, junit, REPO_ROOT, 4)} == {files[0]: 7.0, files[1]: 5.0}
+    assert tm.run_samples({"files": files}, "EMPTY", 60, junit, REPO_ROOT, 4) == []
+    assert tm.run_samples({"files": files}, "ERRORS", 60, junit, REPO_ROOT, 4) == [], "a collection error times nothing"
+
+
+def test_the_family_file_is_timed_and_cut_by_oracle_table(shards, tmp_path):
+    fam = next(s for s in shards if s.name == "manager family 1/3")
+    tables = fam.oracle_tables.split(",")
+    fn_table = tm.table_of_function(REPO_ROOT)
+    fn = next(n for n, t in fn_table.items() if t == tables[0])
+    cls = "test.manager.test_family_cross_tier"
+    junit = _junit(tmp_path / "junit.xml", [(cls, f"test_family_oracle[{fn}-L3--sql]", 40), (cls, f"test_family_oracle_uc_handlers[{tables[1]}-x]", 7),
+                                           (cls, "test_detect_sees_the_jar_and_gdal", 2)])
+    got = {x["key"]: x["s"] for x in tm.run_samples({"tables": tables}, "ok", 100, junit, REPO_ROOT, 1)}
+    assert got == {f"table:{tables[0]}": 40.0, f"table:{tables[1]}": 7.0, "table:*": 2.0}
+    secs = {f"table:{t}": 30.0 for t in tables}
+    secs[f"table:{tables[0]}"] = 900.0  # one heavy table
+    out = ts.auto_split([fam], REPO_ROOT, secs, 5.0)
+    heavy = [c for c in out if tables[0] in c.oracle_tables.split(",")]
+    assert len(heavy) == 1 and heavy[0].oracle_tables == tables[0], "the heavy table has a chunk of its own"
+    assert sorted(t for c in out for t in c.oracle_tables.split(",")) == sorted(tables) and all(c.est_src == "history" for c in out)
+    assert max(c.est_min for c in out if c is not heavy[0]) <= 5.0 * 1.6
+
+
+def test_one_file_longer_than_the_target_gets_a_chunk_of_its_own():
+    got = ts.pack({"a": 30.0, "b": 2.0, "c": 2.0, "d": 1.0, "e": 1.0}, 4.0)
+    assert got[0] == ["a"] and sorted(x for g in got for x in g) == ["a", "b", "c", "d", "e"]
+    assert ts.pack({"a": 1.0}, 4.0) == [["a"]]
+
+
+def test_history_wins_over_the_ci_minutes_from_its_first_sample(shards):
+    ds = next(s for s in shards if s.name == "ds")
+    files = ts.files_of(ds, REPO_ROOT)
+    assert ts.estimate_src(ds, REPO_ROOT, {}) == (float(ds.expected_min), "ci")
+    one = {files[0]: 600.0}
+    est, src = ts.estimate_src(ds, REPO_ROOT, one)
+    assert src == "partial" and est > ds.expected_min + 9, "one timed file already moves the estimate"
+    assert ts.estimate_src(ds, REPO_ROOT, {f: 1.0 for f in files})[1] == "history"
+
+
+def test_the_plan_shows_where_each_estimate_came_from(shards):
+    ds = next(s for s in shards if s.name == "ds")
+    files = ts.files_of(ds, REPO_ROOT)
+    chunks = ts.auto_split([ds, next(s for s in shards if s.name == "zarr 1/4")], REPO_ROOT, {f: 40.0 for f in files}, 5.0)
+    plan = _plan(_args(), chunks)
+    text = launcher.explain(plan, [], [launcher.estimate_note(chunks, {"keys": {"a": 1}, "runs": [1]}, "h.json")])
+    assert " h)" in text and " ci)" in text and "h = history" in text
+    assert "from history" in text and "from CI minutes" in text and "holds 1 key(s) from 1 run(s)" in text
+    assert plan["shards"][chunks[0].slug]["files"] == chunks[0].paths and plan["shards"][chunks[0].slug]["est_src"] == "history"
+
+
+def test_the_backfill_reads_earlier_runs_once(tmp_path):
+    files = _ds_files(2)
+    run = tmp_path / "runs" / "tst-old"
+    _junit(run / "ds-1-2" / "junit.xml", [(_mod(files[0]), "a", 8)])
+    (run / "ds-1-2" / "result.json").write_text(json.dumps({"rc": 0, "reason": ""}))
+    _junit(run / "ds-2-2" / "junit.xml", [(_mod(files[1]), "b", 9)])
+    (run / "ds-2-2" / "result.json").write_text(json.dumps({"rc": 130, "reason": "shard cap 45 min"}))  # stopped: no full sample
+    (run / "summary.md").write_text("schedule: 2 chunks on 2 lane(s) (8 slots per cluster)")
+    path = tmp_path / "h.json"
+    assert tm.backfill(path, tmp_path / "runs", REPO_ROOT) == {"runs": 1, "keys": 1}
+    assert tm.backfill(path, tmp_path / "runs", REPO_ROOT) == {"runs": 1, "keys": 0}, "a run is merged once"
+    assert tm.load(path)["keys"][files[0]]["samples"][0]["slots"] == 8
 
 
 def test_the_summary_says_the_speedup_over_a_serial_run():

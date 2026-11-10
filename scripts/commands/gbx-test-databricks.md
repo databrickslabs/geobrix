@@ -23,7 +23,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards. The cut sets the queue's order and grain, not which slot runs a part.
 - `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min. A task spends about 0.7 min before its first test.
-- `--timings <path>` - per-file seconds from earlier runs. Default: `test-logs/databricks-tests/timings.json`. The run reads it to cut and order the queue (longest first) and writes it from the junit files.
+- `--timings <path>` - the timing history of every run. Default: `test-logs/databricks-tests/timings-history.json`. The run cuts and orders the queue by it, then merges its own times in.
 - `--serverless` - run the light shards on Serverless env 6 (a fidelity leg). Spark-free dirs only.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
 - `--pool-light <name>`, `--pool-jar <name>` - the pools. Defaults: `gbx-test-1n` (no JAR), `gbx-test-1n-jar` (the JAR).
@@ -70,7 +70,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A shard alone ran about 20% faster than CI's runner. The plan therefore uses 4 slots per node and gets its speed from more clusters.
 - Estimate for the full light bank: about 205 min of work in 44 chunks. On 1 cluster that is about 50 min of wall; on 3 clusters about 18 min; on 4 about 14 min. Raise the pool's cap with `gbx:bench:pool up --name gbx-test-1n --n 3 --warm 0 --single-node --node-type m5d.8xlarge`; the run starts clusters on demand up to the cap.
 - These numbers come from one partial run (cancelled with 12 chunks unstarted) and the CI minutes.
-- The next real run measures the plan and rewrites `timings.json`.
+- Each run adds its times to the timing history (see below), so each plan cuts and orders by more runs.
 - The summary prints a line per slot: its busy time, its wait while shards were queued, and its idle time at the end. Read those first.
   - The wait should be a few seconds per shard (the claim). A large wait means a slot idled while work was queued.
   - The idle time at the end is the tail: the last shards end at different times.
@@ -78,6 +78,20 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Each runner adds about 6 s per shard: the claim and the start of the shard's notebook run (2026-11-10: 107 s over 18 shards on 4 slots).
 - The order of the queue follows the estimates. A long shard estimated short starts last and makes the tail; the next run's timings correct it.
 - `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
+
+## Timing history
+
+- Every run merges its times into the history: passed, failed, partial or cancelled. No run overwrites another's samples.
+- A key is a test file, or an oracle table of `test_family_cross_tier.py` (`table:<TABLE>`). The family file's other tests are `table:*`.
+- A sample is normalized to a chunk running alone, so runs at different slot counts pool. An estimate is the median of a key's last 5 samples.
+- A chunk stopped by `--shard-cap-min`, `--stall-min` or a crash leaves lower bounds for the files it did not finish.
+  - The next plan gives such a file a chunk of its own and puts it first. A later full run replaces the bound.
+- History wins over CI's minutes from a key's first sample. A file with no sample takes its share of CI's minutes.
+- The cut uses the history too. A file or table longer than `--target-min` gets a chunk of its own; the family file is cut by table.
+- `--explain-only` marks each chunk's estimate: `h` history, `p` partly history, `lb` a lower bound, `ci` CI's minutes.
+- The summary prints each chunk's predicted and actual seconds and the error. The actual time is the chunk's notebook run.
+- Writers lock `<history>.lock` and replace the file atomically, so runs that end together keep both their samples.
+- The history started from the junit files of the runs under `test-logs/databricks-tests/` (`python examples/tests/_timings.py <history> <runs dir>`).
 
 ## Known failures on a node
 

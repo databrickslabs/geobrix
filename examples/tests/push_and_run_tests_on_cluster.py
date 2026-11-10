@@ -75,6 +75,7 @@ from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
 import _shard_runner as sr  # sibling module: the runners' claim-and-run loop (its source rides in the runner notebook)
 import _test_shards as ts  # sibling module: the shards, read from CI's files
+import _timings as tm  # sibling module: the timing history every run merges into
 import push_and_run_mutation_on_cluster as mut  # sibling module: staging, download and wheel helpers the guidance run uses
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -91,6 +92,8 @@ SUBSET = (".", *(f":(exclude){d}" for d in EXCLUDED))  # a git pathspec
 RESOURCES = "src/test/resources"  # the test rasters, NetCDF and MODIS scenes the tests open: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3
+TIMINGS = "test-logs/databricks-tests/timings-history.json"  # every run's samples (examples/tests/_timings.py)
+OLD_TIMINGS = "test-logs/databricks-tests/timings.json"  # the last run's seconds only: read when there is no history yet
 POLL_S = 15
 STATUS_EVERY_S = 150
 BEAT_EVERY_S = 60  # heartbeats are read this often: a pool has up to 20 shards and each read is a Files call
@@ -112,7 +115,7 @@ def parse(argv):
     p.add_argument("--clusters", type=int, default=0, help="clusters to spread over (default: every cluster the pool has that is free)")
     p.add_argument("--split", default="auto", help="auto: cut shards longer than --target-min by file; off: CI's shards as they are")
     p.add_argument("--target-min", type=float, default=0.0, help="length a cut shard aims at (default: chosen so there are about 3.5 chunks per slot)")
-    p.add_argument("--timings", default="test-logs/databricks-tests/timings.json")
+    p.add_argument("--timings", default=TIMINGS)
     p.add_argument("--serverless", action="store_true")
     p.add_argument("--fresh-cluster", action="store_true")
     p.add_argument("--pool-light", default=os.environ.get("GBX_TEST_POOL_LIGHT", ts.POOL_LIGHT))
@@ -204,11 +207,16 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "shards": {
             s.slug: {
                 "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": ts.shard_env(s), "expected_min": round(s.expected_min, 1),
+                "est_src": s.est_src or "ci", "files": [] if s.oracle_tables else (ts.files_of(s, root) or []),
+                "tables": [t for t in s.oracle_tables.split(",") if t],
                 "cwd": "." if s.kind == "scripts" else ts.PKG, "pool": "serverless" if a.serverless else pool_of(s, a),
             }
             for s in shards
         },
     }
+
+
+SRC_MARK = {"history": "h", "partial": "p", "lower bound": "lb", "ci": "ci"}
 
 
 def queue_table(volroot: str, run_id: str, kind: str) -> str:
@@ -247,7 +255,8 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
         lines.append(f"  {where}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
                      f"{spec['expected_min']:g} min after the start (the longest shard is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
         lines.append(f"    queue (longest first; each runner takes the next when it is free): "
-                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g})" for s in spec["queue"]))
+                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')})" for s in spec["queue"]))
+        lines.append("    (estimates: h = history, p = history for some of its files, lb = a lower bound from a stopped chunk, ci = CI's minutes)")
         lines.append(f"    queue table: {spec['table']} (made by the job's first task, dropped at the end)")
     lines.append(f"  staging: {plan['stage']}/ (source tarball, plan.json); removed at the end")
     lines.append(f"  wheel: {plan['wheel']['name'] or '-'}"
@@ -662,11 +671,13 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
         out.append(f"- {isolation_line(rows)}")
     if plan["jar"]:
         out.append(f"- JAR `{plan['jar']['name']}` sha1 {plan['jar'].get('sha1', '')[:12]} sha256 {plan['jar']['sha256'][:16]}")
-    out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | CI ~min |", "|---|---|---|---|---|---|---|---|---|"]
+    out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | predicted s | actual s | error % | estimate |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
-        out.append(f"| {r['name']} | {r['pool']} | {r['verdict']} | {r['passed']} | {r['failed']} | {r['errors']} | {r['skipped']} | {r['wall_s']} | {r['expected_min']} |")
+        out.append(f"| {r['name']} | {r['pool']} | {r['verdict']} | {r['passed']} | {r['failed']} | {r['errors']} | {r['skipped']} | {r['wall_s']} | "
+                   f"{predicted_s(r)} | {r.get('actual_s') if r.get('actual_s') is not None else '-'} | {error_pct(r)} | {r.get('est_src', 'ci')} |")
     tot = {k: sum(r[k] for r in rows if isinstance(r[k], int)) for k in ("passed", "failed", "errors", "skipped")}
-    out.append(f"| **total** | | | {tot['passed']} | {tot['failed']} | {tot['errors']} | {tot['skipped']} | | |")
+    out.append(f"| **total** | | | {tot['passed']} | {tot['failed']} | {tot['errors']} | {tot['skipped']} | | | | {prediction_line(rows)} | |")
     for r in rows:
         if r["failures"]:
             out += ["", f"## {r['name']}: failures", ""]
@@ -683,11 +694,33 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
     return "\n".join(out) + "\n"
 
 
+def predicted_s(row: dict) -> int:
+    return int(round(float(row["expected_min"]) * 60))
+
+
+def error_pct(row: dict) -> str:
+    """How far the actual time of a chunk was from its prediction, as a percentage of the prediction (+ = longer)."""
+    act = row.get("actual_s")
+    if act is None or not row.get("expected_min"):
+        return "-"
+    return f"{(act - predicted_s(row)) / predicted_s(row) * 100:+.0f}"
+
+
+def prediction_line(rows: List[dict]) -> str:
+    errs = [abs(row["actual_s"] - predicted_s(row)) / predicted_s(row) * 100 for row in rows if row.get("actual_s") is not None and row.get("expected_min")]
+    return f"median abs error {sorted(errs)[len(errs) // 2]:.0f}%" if errs else ""
+
+
 def table_text(rows: List[dict]) -> str:
-    head = f"{'shard':<22} {'verdict':<10} {'passed':>7} {'failed':>6} {'errors':>6} {'skipped':>7} {'wall s':>7} {'CI ~min':>7}"
+    head = (f"{'shard':<22} {'verdict':<10} {'passed':>7} {'failed':>6} {'errors':>6} {'skipped':>7} {'wall s':>7} "
+            f"{'pred s':>7} {'act s':>7} {'err %':>6} {'est':>4}")
     lines = [head, "-" * len(head)]
     for r in rows:
-        lines.append(f"{r['name']:<22} {r['verdict']:<10} {r['passed']:>7} {r['failed']:>6} {r['errors']:>6} {r['skipped']:>7} {r['wall_s']:>7} {r['expected_min']:>7}")
+        act = r.get("actual_s")
+        lines.append(f"{r['name']:<22} {r['verdict']:<10} {r['passed']:>7} {r['failed']:>6} {r['errors']:>6} {r['skipped']:>7} {r['wall_s']:>7} "
+                     f"{predicted_s(r):>7} {act if act is not None else '-':>7} {error_pct(r):>6} {SRC_MARK.get(r.get('est_src'), 'ci'):>4}")
+    if prediction_line(rows):
+        lines.append(f"predicted vs actual per chunk: {prediction_line(rows)} (actual: the chunk's notebook run, install included)")
     return "\n".join(lines)
 
 
@@ -805,16 +838,19 @@ def main(argv=None) -> int:
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
-    timings = load_timings(REPO_ROOT / a.timings)
+    hist = history_for(REPO_ROOT / a.timings)
     plan_slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
-    fsec = ts.rescale_seconds(file_seconds_of(timings), int(timings.get("slots") or plan_slots), plan_slots)  # as with this run's slots
+    fsec = tm.seconds(hist, plan_slots)  # per file / per oracle table, at this run's slots
+    lower = tm.lower_bounds(hist, plan_slots)
     if a.split == "auto" and shards:
         n_slots = (a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)) * max(1, a.clusters)
         target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots)
-        shards = ts.auto_split(shards, REPO_ROOT, fsec, target)
-        split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s) ({'timings of ' + str(timings.get('run')) if fsec else 'no timings yet: the CI minutes spread over each shard'})")
+        shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower)
+        split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)")
     elif shards:
-        shards = [ts.Shard(**{**s.__dict__, "est_min": round(ts.estimate(s, REPO_ROOT, fsec), 2)}) for s in shards]
+        shards = [ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}) for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
+    if shards:
+        split_notes.append(estimate_note(shards, hist, a.timings))
     if not shards:
         print(f"No shard holds a test touched by the {len(changed or [])} file(s) changed between {a.base} and {sha[:10]}: nothing to run.")
         return 0
@@ -1019,50 +1055,48 @@ def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
     assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"
 
 
-def load_timings(path: Path) -> dict:
-    try:
-        return json.loads(Path(path).read_text())
-    except (OSError, ValueError):
-        return {}
+def history_for(path: Path) -> dict:
+    """The timing history at ``path``; with none yet, the last run's seconds of the old ``timings.json`` (one sample per file)."""
+    h = tm.load(path)
+    if not h["keys"] and Path(path) == REPO_ROOT / TIMINGS:
+        h = tm.load(REPO_ROOT / OLD_TIMINGS)
+    return h
 
 
-def file_seconds_of(timings: dict) -> Dict[str, float]:
-    return {k: float(v) for k, v in (timings.get("files") or {}).items()}
+def estimate_note(shards: List[ts.Shard], hist: dict, path: str) -> str:
+    """Where the chunks' estimates came from: the history (every key timed), partly, a lower bound, or CI's minutes."""
+    c = Counter(s.est_src or "ci" for s in shards)
+    words = {"history": "history", "partial": "history, partly", "lower bound": "a lower bound (a chunk that was stopped)", "ci": "CI minutes"}
+    parts = [f"{c[k]} from {words[k]}" for k in words if c[k]]
+    return f"estimates: {', '.join(parts)}; the history {path} holds {len(hist.get('keys', {}))} key(s) from {len(hist.get('runs', []))} run(s)"
 
 
-def write_timings(path: Path, plan: dict, rows: List[dict], local_out: Path) -> None:
-    """Keep the seconds each test file took in this run (from the junit files) and each shard's wall time: the next run cuts
-    and orders its tasks by them. Only shards that finished are taken; the latest run wins per file."""
-    t = load_timings(path)
-    shards = dict(t.get("shards") or {})
-    run_sum: Dict[str, float] = {}
+def chunk_busy(records: Dict[str, List[dict]]) -> Dict[str, float]:
+    """Per chunk, the seconds its runner spent on it (its notebook run, start to end): the actual time a plan predicts."""
+    return {x["slug"]: x["end"] - x["start"] for recs in records.values() for r in recs for x in r.get("shards", [])
+            if x.get("end") is not None and x.get("start") is not None}
+
+
+def actual_s(row: dict, busy: Dict[str, float]):
+    if row["slug"] in busy:
+        return int(busy[row["slug"]])
+    return int(row["wall_s"] + ts.FIXED_MIN * 60) if isinstance(row["wall_s"], int) else None
+
+
+def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, records: Optional[Dict[str, List[dict]]] = None) -> dict:
+    """Merge this run's samples into the history, whatever the run's outcome: the seconds per file (per oracle table for the
+    family file) of every chunk from its junit, and lower bounds for what a stopped chunk did not finish (``_timings``)."""
+    busy = chunk_busy(records or {})
+    fn_table = tm.table_of_function(REPO_ROOT)
+    samples = []
     for r in rows:
-        f = local_out / r["slug"] / "junit.xml"
-        if r["verdict"] in ("INCOMPLETE", "EMPTY") or not f.exists():
-            continue
-        try:
-            cases = list(ET.parse(f).getroot().iter("testcase"))
-        except ET.ParseError:
-            continue
-        for case in cases:
-            mod = (case.get("classname") or "").split(".")
-            for k in range(len(mod), 0, -1):  # the dotted module path, then a class when there is one: the file is the longest prefix
-                cand = "/".join(mod[:k]) + ".py"
-                if (REPO_ROOT / ts.PKG / cand).is_file() or (REPO_ROOT / cand).is_file():
-                    run_sum[cand] = run_sum.get(cand, 0.0) + float(case.get("time") or 0)
-                    break
-        if isinstance(r["wall_s"], int):
-            shards[r["name"]] = r["wall_s"]
-    files = file_seconds_of(t)
-    slots = max((spec.get("slots", 1) for spec in plan.get("pools", {}).values()), default=1)
-    if (t.get("slots") or slots) != slots:  # files from runs at another slot count: bring the old ones to this run's
-        files = ts.rescale_seconds(files, int(t["slots"]), slots)
-    files.update({k: round(v, 2) for k, v in run_sum.items()})
-    out = {"updated": time.strftime("%Y-%m-%d %H:%M:%S"), "run": plan["run_id"], "sha": plan["sha"][:10], "slots": slots,
-           "files": {k: round(v, 2) for k, v in sorted(files.items())}, "shards": shards}
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps(out, indent=1))
-    print(f"Timings: {len(run_sum)} file(s) from this run, {len(files)} in {path}")
+        chunk = plan["shards"].get(r["slug"], {})
+        slots = plan["pools"].get(chunk.get("pool"), {}).get("slots", 1)
+        samples += tm.run_samples(chunk, r["verdict"], actual_s(r, busy), local_out / r["slug"] / "junit.xml", REPO_ROOT, slots, fn_table)
+    got = tm.merge(path, samples, {"run": plan["run_id"], "sha": plan["sha"][:10],
+                                   "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)})
+    print(f"Timings: {got['keys']} sample(s) and {got['lower_bounds']} lower bound(s) from this run merged into {path}")
+    return got
 
 
 def life_and_result(run) -> tuple:
@@ -1091,6 +1125,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
     rc = EXIT_FAILED
     ok = False
     pool_info: Dict[str, dict] = {}
+    runs: Dict[str, int] = {}
+    recorded = False
     try:
         tar_local = local_out / f"{run_id}-src.tar.gz"
         size = build_tarball(plan["sha"], tar_local)
@@ -1108,7 +1144,6 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 mut.stage_file(w, Path(plan["jar"]["local"]), plan["jar"]["volume"])
 
         with contextlib.ExitStack() as stack:
-            runs: Dict[str, int] = {}
             t_submit: Dict[str, float] = {}
             finished: set = set()
             with cancel_on_error(w, runs, finished):  # inside the leases: a failed launch cancels its runs before the clusters are given back
@@ -1151,7 +1186,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     info["serial_s"] = sum(walls)
                     info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
                     info.update(pool_metrics(records.get(pool, [])))
-                write_timings(REPO_ROOT / a.timings, plan, rows, local_out)
+                record_timings(REPO_ROOT / a.timings, plan, rows, local_out, records)
+                recorded = True
                 text = summary_md(plan, rows, pool_info)
                 (local_out / "summary.md").write_text(text)
                 print("\n" + table_text(rows))
@@ -1173,6 +1209,12 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     rc = EXIT_FAILED
                 ok = rc == 0
     finally:
+        if runs and not recorded:  # a launch that ended early (Ctrl-C, an error) still leaves what its chunks measured
+            try:
+                records = runner_records(w, plan, local_out)
+                record_timings(REPO_ROOT / a.timings, plan, collect(w, plan, runs, local_out, records), local_out, records)
+            except Exception as exc:  # noqa: BLE001 - the history is a by-product; the stage is removed regardless
+                print(f"WARNING: the timings of this run were not merged ({type(exc).__name__}: {str(exc)[:120]})", file=sys.stderr)
         tables = [spec["table"] for spec in plan["pools"].values()]
         if a.keep_stage:
             print(f"Kept {stage}, {', '.join(nbs)} and the queue table(s) {', '.join(tables)} (--keep-stage).")
@@ -1385,7 +1427,8 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
             "failed": (junit or {}).get("failed", (res or {}).get("failed", 0)),
             "errors": (junit or {}).get("errors", (res or {}).get("errors", 0)),
             "skipped": (junit or {}).get("skipped", (res or {}).get("skipped", 0)),
-            "wall_s": (res or {}).get("wall_s", "-"), "reason": reason, "claims": len(mine),
+            "wall_s": (res or {}).get("wall_s", "-"), "reason": reason, "claims": len(mine), "est_src": s.get("est_src", "ci"),
+            "actual_s": int(mine[-1]["end"] - mine[-1]["start"]) if mine and mine[-1].get("end") is not None else None,
             "isolation": (res or {}).get("isolation"),
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),
         })

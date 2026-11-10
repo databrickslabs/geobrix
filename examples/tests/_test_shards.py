@@ -51,6 +51,7 @@ class Shard:
     local_only: str = ""  # why it does not run on a cluster ("" when it does)
     est_min: float = 0.0  # measured/estimated minutes (from the timings of earlier runs); 0: use the CI-based table
     unsplittable: bool = False  # one test file the shard cannot be cut below (the family oracle tables)
+    est_src: str = ""  # where est_min came from: history | partial (some keys timed) | lower bound | ci (CI's minutes)
 
     @property
     def group(self) -> str:
@@ -360,32 +361,115 @@ def untimed_file_seconds(shard: Shard, n_files: int) -> float:
     return max((shard.expected_min - FIXED_MIN) * 60.0 / max(1, n_files), 1.0)
 
 
-def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
-    """Minutes the shard takes: the measured seconds of its files plus the fixed cost of a task; the table when nothing is known.
-    An oracle-table shard runs one file for some of its tables, so the file's total says nothing about it: the table counts."""
+TABLE_REST = "table:*"  # the tests of the family file that run in every table chunk, a key of their own
+
+
+def _items(shard: Shard, root: Path, file_seconds: Dict[str, float]):
+    """The units the shard is made of and their minutes: its oracle tables (``table:<T>``) or its files. A unit with no
+    recorded time gets its share of CI's minutes for the shard. Also returns how many units were timed, and the per-chunk
+    minutes of the family file's other tests. None when the shard has no units to cut by."""
     if shard.oracle_tables:
-        return float(shard.est_min or shard.expected_min)
-    files = files_of(shard, root)
-    known = [f for f in (files or []) if f in file_seconds]
-    if files and len(known) >= max(1, len(files) // 2):
-        return FIXED_MIN + sum(file_minutes(files, file_seconds, untimed_file_seconds(shard, len(files))).values())
-    return float(shard.expected_min)
+        tables = [t for t in shard.oracle_tables.split(",") if t]
+        keys = [f"table:{t}" for t in tables]
+        share = max((shard.expected_min - FIXED_MIN), 0.5) * 60.0 / max(1, len(tables))
+        rest = file_seconds.get(TABLE_REST, 0.0) / 60.0
+    else:
+        keys = files_of(shard, root)
+        if not keys:
+            return None
+        share = untimed_file_seconds(shard, len(keys))
+        rest = 0.0
+    mins = {k: file_seconds.get(k, share) / 60.0 for k in keys}
+    return mins, sum(1 for k in keys if k in file_seconds), rest
 
 
-def split_tables(shard: Shard, k: int) -> List[Shard]:
-    """Cut an oracle-table shard (one test file, run once per table) into ``k`` shards of whole tables, equal in number: a
-    table takes about the same time as another, and the table list is CI's own."""
+def estimate_src(shard: Shard, root: Path, file_seconds: Dict[str, float], lower: Optional[set] = None):
+    """(minutes, source) of the shard: the recorded times of its files or tables, plus the fixed cost of a task, once ANY of
+    them has a recorded time (history wins over CI's minutes from its first sample; untimed units take their share of CI's
+    minutes); CI's minutes when none has. Source: history | partial | lower bound | ci."""
+    it = _items(shard, root, file_seconds)
+    if it is None or not it[1]:
+        return float(shard.est_min or shard.expected_min) if shard.oracle_tables else float(shard.expected_min), "ci"
+    mins, timed, rest = it
+    src = "history" if timed == len(mins) else "partial"
+    if lower and any(k in lower for k in mins):
+        src = "lower bound"
+    return FIXED_MIN + rest + sum(mins.values()), src
+
+
+def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
+    """Minutes the shard takes (``estimate_src`` without the source)."""
+    return estimate_src(shard, root, file_seconds)[0]
+
+
+def pack(mins: Dict[str, float], target: float) -> List[List[str]]:
+    """Cut units (minutes each) into chunks of about ``target`` minutes: a unit longer than the target is a chunk of its own,
+    the rest go longest first onto the lightest of about ``sum / target`` chunks. So one long file or table never makes a
+    lopsided chunk with others."""
+    work = max(0.1, target - FIXED_MIN)
+    big = [k for k in sorted(mins, key=lambda k: (-mins[k], k)) if mins[k] >= work]
+    small = [k for k in sorted(mins, key=lambda k: (-mins[k], k)) if mins[k] < work]
+    out = [[k] for k in big]
+    if small:
+        n = max(1, round(sum(mins[k] for k in small) / work))
+        parts: List[List[str]] = [[] for _ in range(min(n, len(small)))]
+        load = [0.0] * len(parts)
+        for k in small:
+            i = load.index(min(load))
+            parts[i].append(k)
+            load[i] += mins[k]
+        out += [p for p in parts if p]
+    return out
+
+
+def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float], lower: Optional[set] = None) -> List[Shard]:
+    """Cut ``shard`` into chunks of about ``target`` minutes by its files, or by its oracle tables (the family file), from the
+    recorded times (``pack``). A shard with nothing to cut by comes back whole."""
+    it = _items(shard, root, file_seconds)
+    if it is None:
+        return [shard]
+    mins, _, rest = it
+    groups = pack(mins, target)
+    if len(groups) <= 1:
+        est, src = estimate_src(shard, root, file_seconds, lower)
+        return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src})]
+    out = []
+    for i, g in enumerate(groups, 1):
+        timed = sum(1 for k in g if k in file_seconds)
+        src = "lower bound" if lower and any(k in lower for k in g) else ("history" if timed == len(g) else "partial" if timed else "ci")
+        common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src)
+        if shard.oracle_tables:
+            out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
+                             oracle_tables=",".join(k.split(":", 1)[1] for k in g), unsplittable=True,
+                             est_min=round(FIXED_MIN + rest + sum(mins[k] for k in g), 2), **common))
+        else:
+            out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=sorted(g), ignore=[], part="", oracle_tables="",
+                             est_min=round(FIXED_MIN + sum(mins[k] for k in g), 2), **common))
+    return out
+
+
+def split_tables(shard: Shard, k: int, file_seconds: Optional[Dict[str, float]] = None) -> List[Shard]:
+    """Cut an oracle-table shard (one test file, run once per table) into ``k`` shards of whole tables, balanced by the recorded
+    seconds of each table (``table:<T>``; an untimed table takes its share of CI's minutes)."""
     tables = [t for t in shard.oracle_tables.split(",") if t]
     k = min(k, len(tables))
     if k <= 1:
         return [shard]
-    per_table = max((shard.expected_min - FIXED_MIN), 0.5) / len(tables)
-    parts = [tables[i::k] for i in range(k)]  # a round robin: neighbouring tables are often alike in size
+    fsec = file_seconds or {}
+    share = max((shard.expected_min - FIXED_MIN), 0.5) * 60.0 / len(tables)
+    mins = {t: fsec.get(f"table:{t}", share) / 60.0 for t in tables}
+    parts: List[List[str]] = [[] for _ in range(k)]
+    load = [0.0] * k
+    for t in sorted(tables, key=lambda t: (-mins[t], t)):
+        i = load.index(min(load))
+        parts[i].append(t)
+        load[i] += mins[t]
+    rest = fsec.get(TABLE_REST, 0.0) / 60.0
     return [
         Shard(name=f"{shard.name} [{i}/{k}]", kind=shard.kind, paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
               oracle_tables=",".join(ts_), delta=shard.delta, pool=shard.pool, marker=shard.marker,
-              est_min=round(FIXED_MIN + per_table * len(ts_), 2), unsplittable=True)
-        for i, ts_ in enumerate(parts, 1)
+              est_min=round(FIXED_MIN + rest + sum(mins[t] for t in ts_), 2), unsplittable=True)
+        for i, ts_ in enumerate(parts, 1) if ts_
     ]
 
 
@@ -393,7 +477,7 @@ def split_shard(shard: Shard, k: int, root: Path, file_seconds: Dict[str, float]
     """Cut ``shard`` into ``k`` shards of whole files, balanced by the measured seconds of each file (longest first onto the
     lightest part), so that no part is much longer than another. A shard that cannot be cut by file comes back as it is."""
     if shard.oracle_tables:
-        return split_tables(shard, k)
+        return split_tables(shard, k, file_seconds)
     files = files_of(shard, root)
     if not files or k <= 1:
         return [shard]
@@ -414,17 +498,18 @@ def split_shard(shard: Shard, k: int, root: Path, file_seconds: Dict[str, float]
     return out
 
 
-def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], target_min: float) -> List[Shard]:
-    """Cut every shard longer than ``target_min`` (by the timings, else the table) into parts of about that length. A task
-    pays about FIXED_MIN before its first test, so ``target_min`` should stay several times that."""
+def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], target_min: float, lower: Optional[set] = None) -> List[Shard]:
+    """Cut every shard longer than ``target_min`` (by the recorded times, else CI's minutes) into chunks of about that length
+    (``cut``: a file or table longer than the target gets a chunk of its own). A task pays about FIXED_MIN before its first
+    test, so ``target_min`` should stay several times that. Every chunk carries its estimate and where it came from."""
     out: List[Shard] = []
     for s in shards:
-        est = estimate(s, root, file_seconds)
+        est, src = estimate_src(s, root, file_seconds, lower)
+        whole = Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src})
         if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min * 1.25:
-            out.append(Shard(**{**s.__dict__, "est_min": round(est, 2)}))
+            out.append(whole)
             continue
-        k = max(2, round((est - FIXED_MIN) / (target_min - FIXED_MIN)))
-        out += split_shard(s, k, root, file_seconds)
+        out += cut(s, target_min, root, file_seconds, lower)
     return out
 
 

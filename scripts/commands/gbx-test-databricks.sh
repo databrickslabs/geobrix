@@ -23,7 +23,7 @@ show_help() {
     echo -e "  ${GREEN}--clusters <n>${NC}         Clusters to spread over (default: every free cluster the pool has; a busy pool gives fewer)"
     echo -e "  ${GREEN}--split auto|off${NC}       auto (default) cuts shards longer than --target-min by file; off keeps CI's shards"
     echo -e "  ${GREEN}--target-min <n>${NC}       Length a cut shard aims at (default: chosen for about 3.5 chunks per slot, at least 3.5 min)"
-    echo -e "  ${GREEN}--timings <path>${NC}       Per-file seconds of earlier runs, rescaled to this run's slots (default test-logs/databricks-tests/timings.json)"
+    echo -e "  ${GREEN}--timings <path>${NC}       Timing history every run merges into; it cuts and orders the queue (default test-logs/databricks-tests/timings-history.json)"
     echo -e "  ${GREEN}--serverless${NC}           Run light shards on Serverless env 6 (fidelity leg; Spark-free dirs only)"
     echo -e "  ${GREEN}--fresh-cluster${NC}        Use a new cluster that ends with the run, not the pools"
     echo -e "  ${GREEN}--pool-light <name>${NC}    Default gbx-test-1n (no JAR)"

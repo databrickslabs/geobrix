@@ -362,6 +362,34 @@ def test_a_file_that_fails_its_check_before_the_first_row_gives_no_rows_and_logs
     assert "missing" not in msgs[0]
 
 
+def test_a_file_with_no_readable_feature_count_gives_no_rows_and_logs(
+    engine, monkeypatch, caplog
+):
+    res = _two_regions()
+    scratch, gdal = res.features._scratch, res.features._gdal
+    real = gdal.OpenEx
+
+    class _NoCount:
+        def __init__(self, lyr):
+            self._lyr = lyr
+
+        def GetFeatureCount(self):
+            return -1
+
+    class _Ds:
+        def __init__(self, ds):
+            self._ds = ds
+
+        def GetLayer(self, i):
+            return _NoCount(self._ds.GetLayer(i))
+
+    monkeypatch.setattr(gdal, "OpenEx", lambda *a, **k: _Ds(real(*a, **k)))
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.engine"):
+        assert list(_serve(monkeypatch, res).eval(TILE)) == []
+    assert res.features.expected is None and not os.path.exists(scratch)
+    assert any("no readable feature count" in r.getMessage() for r in caplog.records)
+
+
 def test_a_read_that_fails_after_rows_went_out_raises_and_the_file_is_removed(
     engine, monkeypatch
 ):

@@ -24,10 +24,8 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
         def runQuery(df: DataFrame): Unit = {
             val base = df
-                .withColumn("bbox", rst_boundingbox(col("raster")))
-                // Clip to reduce data size for faster, more stable testing (1 px ~470m, so -520000 = ~1100px clip)
-                .withColumn("clipper", st_buffer(col("bbox"), lit(-520000.0))) // projection in meters 1 px is ~470m
-                .withColumn("clipped", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
+                // Resample down to reduce data size for faster, more stable testing
+                .withColumn("clipped", rst_resample_to_size(col("raster"), 256, 256))
                 .cache()
             base.collect()
             Seq(
@@ -69,10 +67,8 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
         def convolveQuery(df: DataFrame): Unit = {
             val base = df
-                .withColumn("bbox", rst_boundingbox(col("raster")))
-                // Clip more for convolve operations (which are compute-intensive)
-                .withColumn("clipper", st_buffer(col("bbox"), lit(-540000.0))) // projection in meters 1 px is ~470m
-                .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
+                // Resample down further for convolve operations (which are compute-intensive)
+                .withColumn("raster", rst_resample_to_size(col("raster"), 128, 128))
                 .cache()
             base.collect()
             // Test one representative convolve operation for stability

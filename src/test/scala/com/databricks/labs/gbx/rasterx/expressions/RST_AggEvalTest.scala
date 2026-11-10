@@ -48,9 +48,8 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         def runQuery(df: DataFrame): Unit = {
             df
-                .withColumn("bbox", rst_boundingbox(col("raster")))
-                .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0))) // projection in meters 1 px is ~470m
-                .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
+                // Resample down to reduce data size for faster, more stable testing
+                .withColumn("raster", rst_resample_to_size(col("raster"), 128, 128))
                 .groupBy(lit(1))
                 .agg(
                   rst_combineavg_agg(col("raster")),
@@ -273,9 +272,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         }
     }
 
-    test("null tiles from rst_clip are skipped by the buffering aggregators (no NPE)") {
-        // Regression: child.eval(input) returns null when rst_clip sees a
-        // non-intersecting geometry.  Before the fix, the null InternalRow was
+    test("null tiles from a child are skipped by the buffering aggregators (no NPE)") {
+        // Regression: child.eval(input) returns null when the child yields no
+        // tile (formerly rst_clip on a non-intersecting geometry).  Before the fix, the null InternalRow was
         // passed straight to normalizeToV2Row which called row.numFields() on
         // it -> NullPointerException.  After the fix, null tiles are skipped in
         // update(); a group whose tiles all clip to null yields an empty buffer,
@@ -287,15 +286,13 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
-        // One MODIS tile clipped with a geometry shrunk by 500 km -- far
-        // outside the raster extent, so rst_clip returns a null tile.
+        // One MODIS tile whose tile column is NULL for every row: the child expression
+        // evaluates to a null InternalRow, as the clip did.
         val df = Seq(
           s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
         ).toDF("path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("bbox", rst_boundingbox(col("raster")))
-            .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0)))
-            .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
+            .withColumn("raster", rst_resample_to_size(when(lit(false), col("raster")), 128, 128))
 
         noException should be thrownBy {
             df.groupBy(lit(1))

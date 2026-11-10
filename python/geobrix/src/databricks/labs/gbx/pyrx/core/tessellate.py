@@ -1,7 +1,6 @@
 """Spark-free H3, quadbin, and BNG raster tessellation.
 
-Mirrors heavyweight ``RST_H3_Tessellate`` / ``RST_Quadbin_Tessellate`` (``RasterTessellate``);
-the BNG tessellate has no heavyweight level.
+This is the only form of the H3, quadbin, custom-grid and BNG raster tessellates.
 
 The single generic entry point is :func:`iter_tessellate`, which dispatches on
 ``grid`` for the ~40% divergent cell math (CRS setup, polyfill, cell geometry,

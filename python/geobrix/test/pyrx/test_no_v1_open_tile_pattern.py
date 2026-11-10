@@ -25,7 +25,7 @@ import databricks.labs.gbx.pyrx.functions as functions_module
 # the front-door itself (or a byte-length contract), so they are not v1 leaks.
 _ALLOWLIST = {
     # rst_maketiles: the power-of-4 split count keys on the encoded GTiff byte
-    # length (heavy BalancedSubdivision parity), so the UDTF materialises the
+    # length (the rule of the former JVM maketiles), so the UDTF materialises the
     # tile through the front-door FIRST (ot._to_virtual_tile + materialize_to_bytes
     # for a virtual tile; verbatim bytes otherwise) and opens those bytes with
     # a length it can measure. The open is on front-door-obtained bytes, not on

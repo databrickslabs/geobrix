@@ -1,7 +1,7 @@
 """Windowed GTiff re-encode + 11-key metadata, matching the heavy reader.
 
-Mirrors RasterDriver.writeToBytes (GTiff on the wire) and WindowedExtract
-metadata. tile.raster is NOT raw source bytes.
+Writes GTiff on the wire, like the JVM reader's `RasterDriver.writeToBytes`, with the same 11 metadata keys.
+tile.raster is NOT raw source bytes.
 
 Default compression is ``"auto"`` which routes through the compression
 authority (``pyrx.core.compression``) for ZSTD + dtype-predictor output.

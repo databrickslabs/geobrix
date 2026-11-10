@@ -3314,7 +3314,7 @@ class _RstMakeTilesUDTF:
             # to pre-change behavior for materialized tiles; preserves the encoded byte
             # length the old path used via len(raster)). For virtual tiles (tile.raster
             # is None, whether opened via FILE stream or FUSE path) size_bytes=None and the
-            # opened dataset estimates its own (matching heavy BalancedSubdivision): the
+            # opened dataset estimates its own (the size rule of the former JVM maketiles): the
             # encoded window where it fits the read cap, else the decoded size from the
             # header, and the tiles are cut as windows of the open file (see
             # ``open_tile.open_tile_windows``), so a window over the cap is never decoded whole.

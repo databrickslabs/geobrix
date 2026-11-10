@@ -1,15 +1,15 @@
-"""Spark-free aggregation reducers — pure-Python counterparts to the heavyweight
-rasterx ``*_agg`` UDAFs. Each reducer takes plain Python inputs (lists of raster
-GTiff ``bytes``, ``(band_index, bytes)`` pairs, or ``(wkb, value)`` feature lists
-plus extent params) and returns the result raster's GTiff ``bytes``.
+"""Spark-free aggregation reducers for the rasterx ``*_agg`` aggregates. Each reducer
+takes plain Python inputs (lists of raster GTiff ``bytes``, ``(band_index, bytes)``
+pairs, or ``(wkb, value)`` feature lists plus extent params) and returns the result
+raster's GTiff ``bytes``.
 
-These mirror the heavyweight operations:
-  * ``merge_tiles``           -> RST_MergeAgg / MergeRasters (spatial mosaic)
-  * ``combineavg_tiles``      -> RST_CombineAvgAgg / CombineAVG (per-pixel mean, NoData-aware)
+These implement the aggregates:
+  * ``merge_tiles``           -> gbx_rst_merge_agg (spatial mosaic)
+  * ``combineavg_tiles``      -> gbx_rst_combineavg_agg (per-pixel mean, NoData-aware)
   * ``combine_{stat}_tiles``  -> gbx_rst_combine{min,max,sum,count,median,stddev}
-  * ``frombands_tiles``       -> RST_FromBandsAgg (stack bands, ascending band_index)
-  * ``rasterize_features``    -> RST_RasterizeAgg (burn all features into one raster)
-  * ``derivedband_tiles``     -> RST_DerivedBandAgg (user pyfunc across N tiles-as-bands)
+  * ``frombands_tiles``       -> gbx_rst_frombands_agg (stack bands, ascending band_index)
+  * ``rasterize_features``    -> gbx_rst_rasterize_agg (burn all features into one raster)
+  * ``derivedband_tiles``     -> gbx_rst_derivedband_agg (user pyfunc across N tiles-as-bands)
   * ``align_to_tiles``        -> gbx_rst_align_to (warp tile to reference grid)
 """
 
@@ -1154,7 +1154,7 @@ class _MemberSpool:
 
     # -- the order --
     def ordered(self) -> List[_Entry]:
-        """The members in fold order: the bytes members first, sorted by their bytes (the order of the heavyweight
+        """The members in fold order: the bytes members first, sorted by their bytes (the order of the former JVM
         aggregate), then the references, sorted by ``(path, window)``. The last folds last and wins an overlap.
         """
         by_bytes = [e for e in self.entries if e.kind == "b"]
@@ -1384,20 +1384,19 @@ def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> byte
     receives them one at a time, calls :func:`merge_members`, which this is a call of.
 
     Each GTiff carries its own georef/CRS, so ``rasterio.merge.merge`` places
-    them by extent and the output spans the union extent (mirrors the
-    heavyweight RST_MergeAgg / MergeRasters ``gdalbuildvrt -resolution highest``
-    mosaic). On overlap we use ``method="last"`` so the LAST source in the fold
-    order wins, matching the heavyweight ``gdalbuildvrt`` (overlapping pixels
-    take the last-listed source).
+    them by extent and the output spans the union extent (the same mosaic as
+    ``gdalbuildvrt -resolution highest``). On overlap we use ``method="last"`` so
+    the LAST source in the fold order wins, as in ``gdalbuildvrt`` (overlapping
+    pixels take the last-listed source).
 
     DETERMINISM: a Spark ``groupBy().agg()`` does not guarantee the order rows
     reach the reducer, so a last-wins mosaic would otherwise pick a different
-    overlap winner from run to run (and from the heavyweight). To make the fold
+    overlap winner from run to run. To make the fold
     order-invariant we sort the inputs by their raw GTiff byte content -- a total
     order intrinsic to each tile that has NO ties for distinct content -- before
-    merging; the highest-bytes tile folds last and wins the overlap. The
-    heavyweight RST_MergeAgg sorts on the identical key (the same serialized tile
-    bytes each row carries), so the two tiers pick the same winner for ALL inputs
+    merging; the highest-bytes tile folds last and wins the overlap. The former
+    JVM aggregate sorted on the identical key (the same serialized tile bytes
+    each row carries), so the winner is the same for ALL inputs
     -- including same-origin overlapping tiles, which a geotransform-origin key
     could not separate (it tied on origin and fell back to a per-open
     ``/vsimem/<uuid>`` description, i.e. random). Raw bytes are bitwise-identical
@@ -1431,11 +1430,10 @@ def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> byte
     differ in layout, so never in a byte comparison: the in-RAM result is a striped zstd GeoTIFF, the
     streamed one a Cloud Optimized GeoTIFF (512-pixel tiles, overviews, DEFLATE).
 
-    TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
-    merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
-    differs, and returns ONE tile, the one that sorts first in byte order (probed against
-    the JVM tier: a 4326 and a 3857 tile gave a single 12 x 12 tile). Here both are
-    mosaicked, so there is nothing in the heavyweight output to place them against.
+    TILES IN ANOTHER CRS: both are mosaicked. The former JVM aggregate did not merge them.
+    It built a ``gdalbuildvrt`` mosaic, which skips a tile whose projection differs, and
+    returned ONE tile, the one that sorts first in byte order (a 4326 and a 3857 tile
+    gave a single 12 x 12 tile).
 
     SIZE GATE: the headers are read one member at a time (no pixel is read and no member stays open), and the
     canonical COG decision (`materialize_decision`, kind "cog_write") says what to do with the decoded size of the
@@ -1542,14 +1540,13 @@ def _bounded(out: bytes, max_out, route: str) -> bytes:
 def combineavg_tiles(rasters: List[bytes], max_out=None) -> bytes:
     """Per-pixel mean across the group's aligned tiles, ignoring NoData (GTiff bytes).
 
-    Mirrors the heavyweight RST_CombineAvgAgg / CombineAVG: each tile's declared
-    NoData is excluded from BOTH the sum and the divisor; a valid ``0`` counts
-    toward the mean. Where every input at a pixel is NoData, the output cell
-    carries the first declared input NoData (or 0 if none declared one), and
+    Each tile's declared NoData is excluded from BOTH the sum and the divisor; a
+    valid ``0`` counts toward the mean. Where every input at a pixel is NoData, the
+    output cell carries the first declared input NoData (or 0 if none declared one), and
     that NoData value is stamped on the output band.
 
-    PARITY DIVERGENCE: the heavyweight builds a VRT with ``-resolution highest``
-    which can tolerate differing grids; this reducer assumes the tiles are
+    NOTE: the former JVM form built a VRT with ``-resolution highest``
+    which tolerated differing grids; this reducer assumes the tiles are
     ALREADY aligned (same shape/extent/CRS) and raises ``ValueError`` if their
     raster shapes differ, rather than silently resampling.
 
@@ -1724,8 +1721,8 @@ def rasterize_features(
     features reach the reducer, so a last-wins burn would otherwise pick a
     different overlap winner from run to run. To make the fold order-invariant we
     burn features in a canonical order, sorted by ``(geom_wkb, value)`` -- a
-    stable key intrinsic to each feature. The heavyweight RST_RasterizeAgg burns
-    in the same canonical order, so both tiers resolve overlaps identically.
+    stable key intrinsic to each feature. The former JVM aggregate burned
+    in the same canonical order, so overlaps resolve the same way.
     """
     if not features:
         return None
@@ -1814,7 +1811,7 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
 # must share identical CRS, extent, pixel size, and dimensions. A pixel that is
 # NoData in ALL inputs produces NoData in the output.
 #
-# Conventions (mirrors the heavy tier exactly for parity):
+# Conventions (the rules of the former JVM combine functions):
 #   median : np.ma.median (mean of two middle values on even count)
 #   stddev : population (ddof=0), masked.std() default
 #   count  : number of valid (non-NoData) inputs; all-NoData pixel -> NoData, NOT 0
@@ -1828,7 +1825,7 @@ _REL_TOL = 1e-6
 
 
 def _approx_eq(a: float, b: float) -> bool:
-    """Relative tolerance comparison (matches RasterAlignment.approxEq in Scala)."""
+    """Relative tolerance comparison."""
     return abs(a - b) <= _REL_TOL * (1.0 + abs(b))
 
 
@@ -1969,7 +1966,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str, max_out=None) -> bytes:
     the budget (:func:`_merge_budget`), one window when it fits: the peak is a window of the stack, not the canvas.
     Output dtype is preserved from the
     first input tile; integer output is rounded via np.rint before the cast (same
-    as the heavy VRT pixel function's `np.copyto(out_ar, np.rint(result), casting='unsafe')`).
+    as the former JVM VRT pixel function's `np.copyto(out_ar, np.rint(result), casting='unsafe')`).
 
     All-NoData pixels → the chosen fallback NoData sentinel (first declared NoData
     or 0.0 if none declared). The fallback is stamped as NoData on every output band
@@ -2016,7 +2013,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str, max_out=None) -> bytes:
                 )
                 for window in windows:
                     result = reduce(datasets, nodatas, stat, fallback, window)
-                    # Dtype preservation + integer rounding (matches heavy tier exactly).
+                    # Dtype preservation + integer rounding (the rule of the former JVM form).
                     if np.issubdtype(np.dtype(out_dtype), np.integer):
                         result = np.rint(result)
                     dst.write(result.astype(out_dtype), window=window)
@@ -2068,7 +2065,7 @@ def combine_stddev_tiles(rasters: List[bytes]) -> bytes:
     """Per-pixel population stddev of valid (non-NoData) values (GTiff bytes).
 
     Mirrors ``gbx_rst_combinestddev``. Population standard deviation (ddof=0),
-    matching the heavy tier's ``masked.std()`` default.
+    ``masked.std()`` default.
     """
     return _combine_stat_tiles(rasters, "stddev")
 

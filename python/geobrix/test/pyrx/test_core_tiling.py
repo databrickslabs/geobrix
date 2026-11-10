@@ -131,7 +131,7 @@ def test_overlapping_tiles():
 
 
 def _heavy_overlap_windows(size, tile_dim, overlap_pct):
-    """Reference port of heavy OverlappingTiles.generateWindows (one axis).
+    """Reference rule of the former JVM tooverlappingtiles windows (one axis).
 
     overlapWidth = ceil(tile_dim * overlap_pct / 100); step = tile_dim - overlap;
     starts enumerated as Scala ``0 until size by step``.
@@ -194,7 +194,7 @@ def _square_geotiff_bytes(side, count, dtype="float32"):
 
 
 def _heavy_count(width, height, size_bytes, dest_mib):
-    """Reference port of BalancedSubdivision.getTileSize + ReTile tile count.
+    """Reference rule of the former JVM maketiles: tile size and tile count.
 
     Power-of-4 split: smallest k (capped at 4^(k+1) <= 512) such that
     size_bytes >> (2*k) <= limit; nx = ny = 2**k; tiles via ceil-div.

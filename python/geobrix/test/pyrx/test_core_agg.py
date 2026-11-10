@@ -72,7 +72,7 @@ def test_merge_tiles_single_passthrough():
 
 def test_merge_tiles_overlap_last_wins():
     # Two 4x4 tiles overlapping in x=[2,4]: union mosaic is 4x6, overlap = cols
-    # 2 and 3. Heavyweight MergeRasters builds a GDAL VRT (gdalbuildvrt), where
+    # 2 and 3. The former JVM merge built a GDAL VRT (gdalbuildvrt), where
     # overlapping pixels take the LAST listed source. The order passed here is
     # [left, right], so the overlap must take the RIGHT tile's value (20), not
     # the left's (10) -- pre-fix rasterio defaults to first-wins and returns 10.

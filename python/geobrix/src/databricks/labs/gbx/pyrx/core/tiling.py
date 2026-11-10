@@ -193,9 +193,8 @@ def retile(ds, tile_width, tile_height) -> list:
 
 
 def _overlap_steps(tile_width, tile_height, overlap):
-    # ``overlap`` is a percentage of tile size, matching heavy
-    # OverlappingTiles.generateWindows: overlap_px = ceil(tile_dim * overlap / 100),
-    # step = tile_dim - overlap_px. (Heavy is the v0.3.0-released contract.)
+    # ``overlap`` is a percentage of tile size: overlap_px = ceil(tile_dim * overlap / 100),
+    # step = tile_dim - overlap_px. (This is the contract released in v0.3.0.)
     tw, th, ov = int(tile_width), int(tile_height), int(overlap)
     overlap_w = math.ceil(tw * ov / 100.0)
     overlap_h = math.ceil(th * ov / 100.0)
@@ -252,7 +251,7 @@ def to_overlapping_tiles(ds, tile_width, tile_height, overlap) -> list:
 
 
 def _get_tile_size(width, height, size_bytes, size_in_mb):
-    """Power-of-4 tile dimensions, ported from heavy BalancedSubdivision.getTileSize.
+    """Power-of-4 tile dimensions (the rule of the former JVM maketiles).
 
     Finds the smallest number of quad-split rounds ``k`` such that the per-tile
     byte size ``size_bytes >> (2*k)`` no longer exceeds the MB limit, capped so
@@ -326,7 +325,7 @@ def iter_make_tiles(ds, size_in_mb, size_bytes=None):
 def make_tiles(ds, size_in_mb, size_bytes=None) -> list:
     """Split a raster into a power-of-4 grid of tiles, matching heavy rst_maketiles.
 
-    Aligned to heavy BalancedSubdivision: keyed on the encoded raster byte size
+    Keyed on the encoded raster byte size
     versus the MB limit, the raster is quad-split ``k`` times into a
     ``2**k x 2**k`` grid (so 1, 4, 16, 64, ... tiles).  Returns one tile when the
     full raster already fits the budget.

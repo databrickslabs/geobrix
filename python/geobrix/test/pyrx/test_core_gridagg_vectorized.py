@@ -11,6 +11,8 @@ order-independent measure stats (``fingerprint_dggs_grid``), so cell ORDER does
 not matter -- only the cell-id SET and the per-cell measures.
 """
 
+import contextlib
+
 import h3
 import numpy as np
 import pytest
@@ -22,8 +24,11 @@ from databricks.labs.gbx.pygx import _quadbin
 from databricks.labs.gbx.pyrx.core import gridagg
 
 
+@contextlib.contextmanager
 def _open(raster_bytes):
-    return MemoryFile(raster_bytes).open()
+    # the MemoryFile reads its bytes in place, without a copy: it, and so the bytes, must outlive every read
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        yield ds
 
 
 def _custom_raster(data, nodata=-9999.0, epsg=4326, origin=(10.0, 50.0), px=0.5):

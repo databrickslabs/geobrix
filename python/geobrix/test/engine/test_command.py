@@ -6,6 +6,7 @@ need the engine (the dev container) and check what the caller's text cannot reac
 outside the list runs, and the budget judges a large output before GDAL writes it.
 """
 
+import contextlib
 import json
 import os
 from pathlib import Path
@@ -458,9 +459,12 @@ def _run(cmd, raster=None):
     return run.run(FN, [raster if raster is not None else _dem()], {"command": cmd})
 
 
+@contextlib.contextmanager
 def _open(res):
+    # the MemoryFile reads its bytes in place, without a copy: it, and so the bytes, must outlive every read
     assert res.error is None, res.error
-    return MemoryFile(res.raster).open()
+    with MemoryFile(res.raster) as mf, mf.open() as ds:
+        yield ds
 
 
 @needs_engine

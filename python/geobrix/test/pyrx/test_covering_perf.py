@@ -15,6 +15,7 @@ boundary pixel straddling tile x=15/16, 1 interior pixel fully inside tile x=15)
 The res=0 world-covering fixture cannot distinguish the fast-path from the old path.
 """
 
+import contextlib
 from unittest.mock import patch
 
 import numpy as np
@@ -33,8 +34,11 @@ pytestmark = pytest.mark.perf
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
 def _open(b):
-    return MemoryFile(b).open()
+    # the MemoryFile reads its bytes in place, without a copy: it, and so the bytes, must outlive every read
+    with MemoryFile(b) as mf, mf.open() as ds:
+        yield ds
 
 
 def _to_measure_map(band_result):

@@ -5,6 +5,7 @@ launcher reads the leg table and the registry as text. Run:
   gbx:test:notebooks --path test_bench_launcher_functions.py
 """
 
+import os
 import re
 
 import pytest
@@ -295,6 +296,31 @@ def test_an_unknown_levels_set_is_a_launch_problem_not_a_pass(monkeypatch):
     got = _preflight.probe_problems("XYZ", (1,), root)
     assert len(got) == 1 and "XYZ" in got[0]
     assert "XYZ" in launcher.levels_scales_problem("XYZ", (1,), root)
+
+
+def test_the_probe_workers_import_the_launch_checkout_not_the_installed_copy(monkeypatch, tmp_path):
+    """A launch from a clean worktree must probe that tree's code: the workers read PYTHONPATH, not the driver's sys.path."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    import _preflight
+    from pyspark.sql import SparkSession
+
+    seen = {}
+
+    class _Stop(Exception):
+        pass
+
+    class _Builder:
+        def master(self, *_a):
+            seen["pythonpath"] = os.environ.get("PYTHONPATH", "")
+            raise _Stop()
+
+    monkeypatch.setenv("PYTHONPATH", "/elsewhere")
+    monkeypatch.setattr(SparkSession, "builder", _Builder())
+    monkeypatch.syspath_prepend(str(root / "python/geobrix/src"))
+    with pytest.raises(_Stop):
+        _preflight.probe_problems("JV", (1,), tmp_path, forms=("gbx_rst_crs:c0@n",))
+    assert seen["pythonpath"].split(os.pathsep) == [str(tmp_path / "python/geobrix/src"), "/elsewhere"]
 
 
 def test_a_levels_forms_typo_is_refused_at_argument_time_with_exit_2(monkeypatch, capsys):

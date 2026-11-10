@@ -162,6 +162,10 @@ def probe_problems(mvp: str, scales: Sequence[int], root, *, rows: int = 8, form
     from pyspark.sql import SparkSession
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    # The Python workers import the checkout under test, not the interpreter's installed copy: an editable install
+    # points at the main checkout, so a launch from a clean worktree probed the main tree's (other work's) code.
+    src = str(pathlib.Path(root) / "python/geobrix/src")
+    os.environ["PYTHONPATH"] = os.pathsep.join([src] + [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p and p != src])
     spark = (
         SparkSession.builder.master("local[2]")
         .appName("gbx-bench-preflight")

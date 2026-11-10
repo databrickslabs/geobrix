@@ -389,6 +389,48 @@ def test_a_bad_split_point_finder_and_crossing_break_lines_raise_with_the_functi
         )
 
 
+_BOX = ["POINT Z (0 -5 0)", "POINT Z (10 -5 0)", "POINT Z (10 5 0)", "POINT Z (0 5 0)"]
+_CROSSING = ["LINESTRING Z (1 -0.5 0, 9 0.5 0)", "LINESTRING Z (2 0.5 0, 8.63 -0.5 0)"]
+
+
+@pytest.mark.parametrize(
+    "fn,call",
+    [
+        (
+            "gbx_st_interpolateelevationbbox",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationbbox_rows(
+                pts, bl, 0.0, 0.0, spf, 0.0, -5.0, 10.0, 5.0, 2, 2, 0, mode
+            ),
+        ),
+        (
+            "gbx_st_interpolateelevationgeom",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationgeom_rows(
+                pts,
+                bl,
+                0.0,
+                0.0,
+                spf,
+                _geoms(["POINT (0 5)"])[0],
+                2,
+                2,
+                5.0,
+                -5.0,
+                mode,
+            ),
+        ),
+    ],
+)
+def test_the_elevation_forms_name_the_function_on_a_bad_finder_and_a_give_up(fn, call):
+    with pytest.raises(ValueError, match=f"{fn}: split_point_finder must be"):
+        call(_geoms(_BOX), None, "SIDEWAYS", "constrained")
+    with pytest.raises(
+        ValueError, match=f"{fn}: mode 'conforming' could not fit .* Fix:"
+    ):
+        call(_geoms(_BOX), _geoms(_CROSSING), "NONENCROACHING", "conforming")
+    # with no points there is nothing to triangulate: no rows, as in the session, whatever the finder
+    assert call([], None, "SIDEWAYS", "constrained") is None
+
+
 def test_the_conforming_mode_runs_here():
     # no break lines: the conforming triangulation is the Delaunay one, the four triangles round the centre
     rows = forms.st_triangulate_rows(

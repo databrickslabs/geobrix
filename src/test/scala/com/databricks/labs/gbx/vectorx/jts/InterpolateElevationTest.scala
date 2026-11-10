@@ -216,4 +216,17 @@ class InterpolateElevationTest extends AnyFunSuite {
         e.getMessage should include("locating a point did not converge")
         e.getMessage should include("Fix: split crossing break lines where they cross")
     }
+
+    test("merge_tolerance 0 merges only the same X and Y, at any magnitude") {
+        // a 1e-12 merge grid once overflowed above about 9.2e6, so distant points merged
+        val far = JTS.multiPoint(
+          Seq((2.0e7, 1.0e7, 1.0), (2.0e7 + 4.0, 1.0e7, 2.0), (2.0e7, 1.0e7, 3.0), (0.0, 1.0, 4.0), (-0.0, 1.0, 5.0))
+              .map { case (x, y, z) => JTS.point(new Coordinate(x, y, z)) }
+              .toArray
+        )
+        val bl = Seq(line((5.0e6, 0.0, 0.0), (5.0e6, 1.0, 0.0)))
+        // a snap above 0 runs the merge of the mass points (no point is in reach of the line)
+        val (kept, _) = InterpolateElevation.prepareSites(far, bl, 0.0, 1e-9)
+        kept.map(_.getZ).toSeq shouldBe Seq(1.0, 2.0, 4.0)
+    }
 }

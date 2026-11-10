@@ -1333,11 +1333,11 @@ def st_triangulate_rows(
         or split_point_finder is None
     ):
         return None
-    _tin_finder(fn, split_point_finder)
     parsed = _tin_sites(fn, points_array, breaklines_array)
     coords, bls = parsed
     if coords is None:
         return None
+    _tin_finder(fn, split_point_finder)
     sites = len(coords) + sum(len(b) for b in bls)
     _check_bytes(
         fn,
@@ -1368,7 +1368,6 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     _tin_mode(fn, mode)
     if mt is None or st is None or spf is None:
         return None
-    _tin_finder(fn, spf)
     _check_bytes(
         fn,
         cells * _POINT_ROW_BYTES,
@@ -1381,6 +1380,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     parsed = _tin_sites(fn, points, breaklines)
     if parsed[0] is None:
         return None
+    _tin_finder(fn, spf)
     return _tin_rows(
         fn,
         _tin.elevation_wkbs(

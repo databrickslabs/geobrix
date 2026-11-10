@@ -280,3 +280,11 @@ def test_merge_tolerance_0_merges_only_the_same_x_and_y_at_any_magnitude():
     assert _tin._merge_vertices(pts, 0.0).tolist() == pts[:2].tolist()
     assert _tin._jlong_floor(float("inf")) == 2**63 - 1
     assert _tin._jlong_floor(float("nan")) == 0
+
+
+def test_merge_keys_saturate_as_java_casts_a_double_to_long():
+    got = _tin._saturating_int64(np.array([1e19, -1e19, np.nan, 3.0]))
+    assert got.tolist() == [2**63 - 1, -(2**63), 0, 3]
+    # both keys saturate in x, so the y keys decide: the two points are kept, as on the JVM
+    pts = np.array([[2.0e7, 1.0, 0.0], [3.0e7, 2.0, 0.0]])
+    assert len(_tin._merge_vertices(pts, 1e-12)) == 2

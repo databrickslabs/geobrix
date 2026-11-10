@@ -200,7 +200,7 @@ jobs:
             oracle_tables: DRIVERS,GRID_ARRAY,MVP_H,RASTER_ACCESSOR,RASTER_GENERATOR,RASTER_RASTERIZE,SPEC_DEM,VECTOR_GENERATOR,VECTOR_SCALAR
           - name: manager family 3/3
             paths: test/manager/test_family_cross_tier.py
-            oracle_tables: GRID_SCALAR,RASTER_AGGREGATE,RASTER_CONSTRUCTOR,RASTER_FILE_OP,RASTER_STAT,RASTER_TILE_OP,SPEC_CALC,SPEC_SE,VECTOR_AGGREGATE
+            oracle_tables: GRID_SCALAR,RASTER_AGGREGATE,RASTER_CONSTRUCTOR,RASTER_FILE_OP,RASTER_STAT,RASTER_TILE_OP,SPEC_CALC,SPEC_GDAL,SPEC_SE,VECTOR_AGGREGATE
           - name: manager
             paths: test/manager
             ignore: test/manager/test_family_cross_tier.py

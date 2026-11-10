@@ -18,7 +18,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--base <rev>` - for `affected`. Default: `origin/streamline/0.6.0`.
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel. Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.
-- `--jar-path <path>` - the JAR of the heavy shards. Default: `python/geobrix/lib/`.
+- `--jar-path <path>` - the JAR of the heavy shards, or the folder that holds it. Default: `python/geobrix/lib/`.
 - `--max-parallel <n>` - shards side by side per cluster. Default: the node's cores / 8 (4 on 32 vCPU).
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards.

@@ -18,7 +18,7 @@ show_help() {
     echo -e "  ${GREEN}--base <rev>${NC}           For affected: files changed between this and --sha pick the shards (default origin/streamline/0.6.0)"
     echo -e "  ${GREEN}--sha <rev>${NC}            Commit to test (default HEAD); uncommitted edits are not in the run"
     echo -e "  ${GREEN}--wheel <path>${NC}         env6 wheel for dependencies and native payload (default dist/env6/)"
-    echo -e "  ${GREEN}--jar-path <path>${NC}      JAR of the heavy shards (default python/geobrix/lib/)"
+    echo -e "  ${GREEN}--jar-path <path>${NC}      JAR of the heavy shards, or its folder (default python/geobrix/lib/)"
     echo -e "  ${GREEN}--max-parallel <n>${NC}     Shards side by side per cluster (default: the node's cores / 8, so 4 on 32 vCPU)"
     echo -e "  ${GREEN}--clusters <n>${NC}         Clusters to spread over (default: every free cluster the pool has; a busy pool gives fewer)"
     echo -e "  ${GREEN}--split auto|off${NC}       auto (default) cuts shards longer than --target-min by file; off keeps CI's shards"

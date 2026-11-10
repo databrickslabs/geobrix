@@ -30,7 +30,7 @@ Options:
   --base <rev>           `affected`: the files changed between this and --sha pick the shards (default origin/streamline/0.6.0)
   --sha <rev>            the commit to test (default HEAD)
   --wheel <path>         the env6 wheel (default dist/env6/); it carries dependencies and native payload, not the code under test
-  --jar-path <path>      the JAR of the heavy shards (default python/geobrix/lib/; copied out and sha-checked before use)
+  --jar-path <path>      the JAR of the heavy shards, or its folder (default python/geobrix/lib/; copied out and sha-checked)
   --max-parallel <n>     shards run side by side per pool (default 5; one 32 vCPU node)
   --serverless           run the selected light shards on Serverless env 6 (a fidelity leg; Spark-free dirs only)
   --fresh-cluster        use a new cluster that ends with the run, not the pools
@@ -655,6 +655,15 @@ def stage_jar(path: Path, root: Path, copy: bool = True) -> dict:
 # ---------------------------------------------------------------------------------------------- the workspace side
 
 
+def jar_source(jar_path: str) -> Optional[Path]:
+    """The JAR ``--jar-path`` names: the file itself, or in a folder (``python/geobrix/lib/`` when unset) its
+    ``geobrix-*-jar-with-dependencies.jar`` (the last by name). None when there is none."""
+    p = Path(jar_path) if jar_path else REPO_ROOT / "python/geobrix/lib"
+    if p.is_dir():
+        return next(iter(sorted(p.glob("geobrix-*-jar-with-dependencies.jar"), reverse=True)), None)
+    return p
+
+
 def main(argv=None) -> int:
     exit_if_help(__doc__, argv)
     a = parse(argv)
@@ -714,7 +723,7 @@ def main(argv=None) -> int:
     volroot = _volroot()
     jar = None
     if any(s.pool == ts.POOL_JAR for s in shards) and not a.serverless:
-        jar_src = Path(a.jar_path) if a.jar_path else next(iter(sorted((REPO_ROOT / "python/geobrix/lib").glob("geobrix-*-jar-with-dependencies.jar"))), None)
+        jar_src = jar_source(a.jar_path)
         if not jar_src or not jar_src.is_file():
             if a.explain_only:
                 notes.append("no JAR found in python/geobrix/lib/ (the heavy shards need one: gbx:build:jar, or --jar-path)")

@@ -675,3 +675,15 @@ def test_a_plan_that_only_explains_makes_no_copy_of_the_jar(tmp_path):
     jar.write_bytes(b"jar")
     got = launcher.stage_jar(jar, REPO_ROOT, copy=False)
     assert got["local"] == str(jar) and got["sha256"] and got["dir"].startswith("test-pool-jars/")
+
+
+def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):
+    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar.write_bytes(b"PK")
+    (tmp_path / "geobrix-0.6.0.jar").write_bytes(b"PK")  # the thin JAR is not the one
+    assert launcher.jar_source(str(tmp_path)) == jar
+    assert launcher.jar_source(str(tmp_path) + "/") == jar
+    assert launcher.jar_source(str(jar)) == jar
+    assert launcher.jar_source(str(tmp_path / "empty")) == tmp_path / "empty"  # no such file: refused by the caller
+    (tmp_path / "none").mkdir()
+    assert launcher.jar_source(str(tmp_path / "none")) is None

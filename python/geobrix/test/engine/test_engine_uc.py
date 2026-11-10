@@ -301,3 +301,48 @@ def test_an_error_tile_passes_through_before_an_argument_is_read_in_every_form_a
     pair = oracles.resolve_arg(oracles.Build("se_pair"), str(tmp_path))
     with pytest.raises(ValueError, match="GDAL cannot evaluate the expression"):
         engine_uc.rst_mapalgebra(pair, "A +* 2")
+
+
+def test_a_parameter_left_out_takes_its_default_and_an_extra_one_raises(tmp_path):
+    dem = _dem(tmp_path)
+    assert engine_uc.rst_slope(dem) == engine_uc.rst_slope(dem, "degrees", None, None)
+    with pytest.raises(TypeError, match="takes 1 arguments, got 2"):
+        engine_uc.rst_tpi(dem, 1)
+
+
+def test_the_features_array_serves_only_a_generator_with_a_features_output(tmp_path):
+    with pytest.raises(
+        ValueError, match="serves a generator row with a features output"
+    ):
+        engine_uc.features("gbx_rst_slope")(_dem(tmp_path))
+
+
+class _FailingStream(_Stream):
+    """A streamed output whose file fails: before its first row (``expected`` unset) or after ``after`` rows."""
+
+    def __init__(self, after):
+        super().__init__(10, b"\x01" * 93)
+        self.after, self.expected, self.read = after, None, 0
+
+    def __iter__(self):
+        if self.after is None:
+            raise run.DataError("the output has no readable feature count")
+        self.expected = 10
+        for row in super().__iter__():
+            if self.read == self.after:
+                raise run.DataError("GDAL's output ended before its last feature")
+            self.read += 1
+            yield row
+
+
+def test_a_stream_that_fails_before_its_first_row_is_null_and_one_that_fails_later_raises():
+    """As the session's table function: an unreadable output is a data error (NULL on UC); a read that fails once rows
+    are out raises, because a result is never silently partial. The file is removed either way.
+    """
+    fn = MAN.functions["gbx_rst_polygonize"]
+    early = _FailingStream(None)
+    assert engine_uc._feature_rows(fn, early) is None and early.closed
+    late = _FailingStream(3)
+    with pytest.raises(RuntimeError, match="failed after 3 of 10 features"):
+        engine_uc._feature_rows(fn, late)
+    assert late.closed

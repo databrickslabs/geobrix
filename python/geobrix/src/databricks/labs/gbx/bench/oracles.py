@@ -252,20 +252,20 @@ VIRTUAL_BUILDS = frozenset(
 )
 
 
-def _virtual_input(case) -> bool:
-    first = case.args[0] if case.args else None
+def _virtual_input(args) -> bool:
+    first = args[0] if args else None
     items = first if isinstance(first, (list, tuple)) else [first]
     return any(isinstance(a, Build) and a.name in VIRTUAL_BUILDS for a in items)
 
 
-def _geometry_args(case) -> list:
-    """The arguments of ``case`` that a UC function takes as a GEOMETRY."""
+def _geometry_args(fn: str, args) -> list:
+    """The arguments of one argument row of ``fn`` that a UC function takes as a GEOMETRY."""
     from databricks.labs.gbx import manifest
 
-    params = manifest.load().functions[case.fn].params
+    params = manifest.load().functions[fn].params
     return [
         a
-        for a, p in zip(case.args, params)
+        for a, p in zip(args, params)
         if (p.uc or "").upper() == "GEOMETRY" and a is not None
     ]
 
@@ -319,10 +319,10 @@ def mirror(rows, null=(), refused=()):
     UC, against the session's value: the UC handler runs the session's engine call, so its answer is the session's.
     The rules a UC function adds decide the rest:
 
-    - a row whose tile is virtual (``VIRTUAL_BUILDS``) stays session-only: UC refuses it (the ``edges`` rows), and so
+    - a row whose tile, in any of its argument rows, is virtual (``VIRTUAL_BUILDS``) stays session-only: UC refuses it (the ``edges`` rows), and so
       does a batch row (``per_row``, ``exact_rows``), a row judged under a lowered session read cap (``READ_CAP_ROWS``),
-      and a row that gives a GEOMETRY parameter WKB bytes or a text that is no geometry (neither is a GEOMETRY on UC:
-      ``uc_clip_wkb_into_geometry_refused`` holds the refusal);
+      a row that gives a GEOMETRY parameter WKB bytes or a text that is no geometry (neither is a GEOMETRY on UC:
+      ``uc_clip_wkb_into_geometry_refused`` holds the refusal), and one whose geometries carry different SRIDs;
     - a GEOMETRY argument carries the SRID of its EWKT on UC, else none (0), as the session reads a plain WKT;
     - a row named in ``null`` is a data error, an error tile in the session: on UC it is NULL (row ``uc_<cid>``);
     - a row named in ``refused`` is refused on UC with a Fix (row ``uc_<cid>``): a CRS form UC does not take, or a call
@@ -351,19 +351,25 @@ def mirror(rows, null=(), refused=()):
             continue
         # a batch row (one call over several argument rows) is a session UDF's form; a UC function takes one row
         batch = c.kind in ("per_row", "exact_rows")
-        geoms = _geometry_args(c)
+        # every argument row (the primary one and each variant) must be one a UC function can be handed
+        rows = (c.args, *c.variants)
+        geoms = [g for r in rows for g in _geometry_args(c.fn, r)]
+        srids = {_ewkt_srid(g) for g in geoms if isinstance(g, str)}
         if (
-            _virtual_input(c)
+            any(_virtual_input(r) for r in rows)
             or batch
             or c.cid
             in READ_CAP_ROWS  # judged under a session read cap the harness lowers; UC's cap is its own
             or not all(_uc_geometry_text(g) for g in geoms)
+            or len(srids)
+            > 1  # a row builds its UC geometries with one SRID (Case.geom_srid)
         ):
             out.append(c)
             continue
         # a GEOMETRY carries its SRID on UC: an EWKT's own, else none (0), as the session reads a plain WKT
-        srid = next((_ewkt_srid(g) for g in geoms if isinstance(g, str)), 0)
-        out.append(replace(c, surfaces=("session", "uc"), geom_srid=srid))
+        out.append(
+            replace(c, surfaces=("session", "uc"), geom_srid=next(iter(srids), 0))
+        )
     missing = set(named) - seen
     assert not missing, f"no such engine session rows for UC: {sorted(missing)}"
     return tuple(out)
@@ -2849,21 +2855,35 @@ def _ref_slope(args):
 def _gdaldem_scale(ds) -> tuple:
     """GDAL's default (xscale, yscale) of a DEM with none given, as ``gdaldem`` derives it from the CRS: about 111 km a
     degree for a geographic CRS (the x scale shrunk by the cosine of the mean latitude), the metres in a linear unit for a
-    projected one, and 1 for none. The heights are taken to be metres."""
+    projected one, and 1 for none or one PROJ cannot read; each divided by the heights' unit in metres (a band in feet).
+    """
     import math
 
     from databricks.labs.gbx.core.crs import to_pyproj_crs
 
     if ds.crs is None:
         return 1.0, 1.0
-    pcrs = to_pyproj_crs(ds.crs)
+    try:
+        pcrs = to_pyproj_crs(ds.crs)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a CRS PROJ cannot read: GDAL's default for no CRS
+        return 1.0, 1.0
+    zunit = (
+        1.0  # the heights' unit in metres: GDAL takes metres when the band names none
+    )
+    unit = (getattr(ds, "units", None) or [None])[0]
+    if unit and unit.lower() in ("ft", "foot", "feet", "foot (international)"):
+        zunit = 0.3048
+    elif unit and unit.lower() in ("us-ft", "foot_us", "us survey foot"):
+        zunit = 1200.0 / 3937.0
     if pcrs.is_geographic:
         ang = math.pi / 180.0
-        yscale = ang * pcrs.ellipsoid.semi_major_metre
+        yscale = ang * pcrs.ellipsoid.semi_major_metre / zunit
         mean_lat = (ds.transform.f + ds.height * ds.transform.e / 2.0) * ang
         return yscale * math.cos(mean_lat), yscale
     if pcrs.is_projected:
-        lin = pcrs.axis_info[0].unit_conversion_factor
+        lin = pcrs.axis_info[0].unit_conversion_factor / zunit
         return lin, lin
     return 1.0, 1.0
 

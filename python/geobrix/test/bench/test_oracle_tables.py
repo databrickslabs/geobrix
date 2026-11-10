@@ -771,3 +771,37 @@ def test_a_str_only_argument_that_differs_between_the_rows_fails_the_python_leg(
     )
     assert "python_func of gbx_rst_derivedband differs between the rows" in msg
     assert "Fix: give the variant rows one value for it" in msg
+
+
+def test_the_slope_reference_takes_gdals_default_scale_for_the_crs():
+    """``oracles._gdaldem_scale``: about 111 km a degree for a geographic DEM (x shrunk by the cosine of the mean
+    latitude), the metres in a unit for a projected one, 1 for none; each divided by the heights' unit in metres.
+    """
+    import math
+
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.bench import oracles
+
+    def scale(crs, units=None):
+        profile = dict(driver="GTiff", width=4, height=10, count=1, dtype="float32", crs=crs,
+                       transform=from_origin(-73.99, 40.75, 0.0001, 0.0001))  # fmt: skip
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(np.zeros((1, 10, 4), "float32"))
+                if units:
+                    dst.units = (units,)
+            with mf.open() as ds:
+                return oracles._gdaldem_scale(ds)
+
+    y = math.pi / 180.0 * 6378137.0
+    mean_lat = math.radians(40.75 - 10 * 0.0001 / 2)
+    gx, gy = scale("EPSG:4326")
+    assert gy == pytest.approx(y, rel=1e-9) and gx == pytest.approx(
+        y * math.cos(mean_lat), rel=1e-9
+    )
+    assert scale("EPSG:3857") == pytest.approx((1.0, 1.0))
+    assert scale(None) == (1.0, 1.0)
+    assert scale("EPSG:3857", "ft") == pytest.approx((1 / 0.3048, 1 / 0.3048))

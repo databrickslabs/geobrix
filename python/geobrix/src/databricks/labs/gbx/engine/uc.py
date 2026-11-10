@@ -24,7 +24,7 @@ Import-light, as :mod:`databricks.labs.gbx.uc.handlers`: no pyspark (``engine.ru
 from __future__ import annotations
 
 import functools
-from typing import Callable, Dict
+from typing import Callable, Dict, Optional
 
 from databricks.labs.gbx.engine import _tile as tile_checks
 from databricks.labs.gbx.pyrx.core.budget import UC_DECODED_CAP
@@ -120,13 +120,20 @@ def _over_cap(fn, res) -> _Refusal:
     )
 
 
-def _feature_rows(fn, features) -> list:
+def _feature_rows(fn, features) -> Optional[list]:
     """The feature rows of an engine output as dicts, judged against the cap as they are read: the running size (each
     geometry's WKB and its other fields, ``uc.tier_b.row_bytes``) is checked after every row, and the call is refused
-    the moment it passes the cap, with no further row read. A streamed output (polygonize) is read from its file on
-    local disk one row at a time, so what the handler holds never passes the cap by more than one row; the file is
-    removed on every path. A UC function returns its array whole, so the rows under the cap are the answer.
+    the moment it passes the cap, with no further row read. A UC function returns its array whole, so the rows under
+    the cap are the answer.
+
+    - A streamed output (polygonize) is read from its file on local disk one row at a time, so what the handler holds
+      never passes the cap by more than one row. Its file is removed on every path. As in the session's table function,
+      a file that fails its check before the first row is NULL (a data error), and a read that fails after rows are
+      out raises: a result is never silently partial.
+    - A list output (contour) is held whole by the engine before it is judged: GDAL writes the lines in memory, as it
+      does in the session, so the cap bounds what the function returns, not what the call holds.
     """
+    from databricks.labs.gbx.engine import run
     from databricks.labs.gbx.uc.tier_b import row_bytes, rows_refusal
 
     names = ["geom_wkb"] + [n for n, _, _ in fn.gdal.out_fields]
@@ -138,6 +145,13 @@ def _feature_rows(fn, features) -> list:
             if size > DECODED_CAP:
                 raise rows_refusal(fn.sql_name, size, DECODED_CAP)
             rows.append(row)
+    except run.DataError as exc:
+        if getattr(features, "expected", None) is None:
+            return None  # the output file failed its check before any row: a data error is NULL on UC
+        raise RuntimeError(
+            f"{fn.sql_name}: the read of its local output failed after {features.read} of {features.expected} "
+            f"features ({exc})"
+        ) from exc
     finally:
         close = getattr(features, "close", None)
         if close is not None:  # a streamed output removes its file

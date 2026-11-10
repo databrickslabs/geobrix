@@ -80,7 +80,7 @@ object RST_SetCrs extends WithExpressionInfo {
       * Dataset is left untouched; the copy then has `SetProjection` called on it
       * (from the resolved CRS's WKT) before being returned. */
     def execute(ds: Dataset, options: Map[String, String], crs: String): (Dataset, Map[String, String]) = {
-        require(ds != null, "RST_SetCrs.execute: source Dataset is null")
+        require(ds != null, s"$name: source Dataset is null")
         val dstSR = SpatialRefOps.resolveCrs(crs)
         val wkt = dstSR.ExportToWkt()
         dstSR.delete()

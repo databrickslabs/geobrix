@@ -90,7 +90,7 @@ object RST_SetSrid extends WithExpressionInfo {
       * it before being returned.
       */
     def execute(ds: Dataset, options: Map[String, String], srid: Int): (Dataset, Map[String, String]) = {
-        require(ds != null, "RST_SetSrid.execute: source Dataset is null")
+        require(ds != null, s"$name: source Dataset is null")
         // Dumb storage bound: only a negative SRID is rejected. `0` clears the CRS
         // (parity with the light tier); a positive code is classified through the
         // shared resolver (`SpatialRefOps.resolveCrs`) — an EPSG or ESRI code (GDAL's

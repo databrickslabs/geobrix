@@ -96,16 +96,15 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
     // ------------------------------------------------------------------
 
     test("RST_DEMProcessingHelper.process rejects null Dataset and empty processing mode") {
-        an[IllegalArgumentException] should be thrownBy {
-            RST_DEMProcessingHelper.process(null, "slope")
-        }
-        an[IllegalArgumentException] should be thrownBy {
-            RST_DEMProcessingHelper.process(demDs, "")
-        }
+        // the messages name the calling SQL function, as the other levels do
+        val noDs = intercept[IllegalArgumentException](RST_DEMProcessingHelper.process(null, "slope", "gbx_rst_tri"))
+        noDs.getMessage should include("gbx_rst_tri: source Dataset is null")
+        val noMode = intercept[IllegalArgumentException](RST_DEMProcessingHelper.process(demDs, "", "gbx_rst_tri"))
+        noMode.getMessage should include("gbx_rst_tri: processing mode required")
     }
 
     test("RST_DEMProcessingHelper.process returns a GTiff Dataset with the expected metadata stamp") {
-        val (out, mtd) = track(RST_DEMProcessingHelper.process(demDs, "TRI"))
+        val (out, mtd) = track(RST_DEMProcessingHelper.process(demDs, "TRI", "gbx_rst_tri"))
         out should not be null
         out.GetDriver().getShortName shouldBe "GTiff"
         mtd("driver") shouldBe "GTiff"

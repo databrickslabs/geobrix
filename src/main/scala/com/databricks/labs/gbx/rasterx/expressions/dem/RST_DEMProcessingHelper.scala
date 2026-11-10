@@ -30,14 +30,16 @@ object RST_DEMProcessingHelper {
       *
       * The result lives at a `/vsimem/` GTiff path; downstream serialization
       * (RasterDriver.writeToBytes / tileToRow) handles materialization to bytes.
+      * `who` is the calling SQL function's name; the argument errors are stated in its name.
       */
     def process(
         srcDs: Dataset,
         processing: String,
+        who: String,
         options: Seq[String] = Seq.empty
     ): (Dataset, Map[String, String]) = {
-        require(srcDs != null, "RST_DEMProcessingHelper.process: source Dataset is null")
-        require(processing != null && processing.nonEmpty, "RST_DEMProcessingHelper.process: processing mode required")
+        require(srcDs != null, s"$who: source Dataset is null")
+        require(processing != null && processing.nonEmpty, s"$who: processing mode required")
 
         val outPath = s"/vsimem/dem_${UUID.randomUUID().toString.replace("-", "")}.$OutputExtension"
 

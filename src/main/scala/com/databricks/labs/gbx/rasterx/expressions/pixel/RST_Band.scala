@@ -65,7 +65,7 @@ object RST_Band extends WithExpressionInfo {
 
     /** Pure compute path — extracted for direct unit-testing without Spark. */
     def execute(ds: Dataset, options: Map[String, String], bandIndex: Int): (Dataset, Map[String, String]) = {
-        require(ds != null, "RST_Band.execute: source Dataset is null")
+        require(ds != null, s"$name: source Dataset is null")
         val nBands = ds.GetRasterCount
         if (bandIndex < 1 || bandIndex > nBands)
             throw new RasterArgumentException(s"gbx_rst_band: band_index $bandIndex out of range [1..$nBands]")

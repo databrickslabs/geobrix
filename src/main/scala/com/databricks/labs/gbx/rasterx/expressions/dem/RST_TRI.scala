@@ -53,7 +53,7 @@ object RST_TRI extends WithExpressionInfo {
 
     /** Pure compute path - extracted for direct unit-testing without Spark. */
     def execute(ds: Dataset): (Dataset, Map[String, String]) =
-        RST_DEMProcessingHelper.process(ds, "TRI")
+        RST_DEMProcessingHelper.process(ds, "TRI", name)
 
     override def name: String = "gbx_rst_tri"
 

@@ -44,4 +44,24 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         joined should include ("collect_list(tile)")
     }
 
+    test("rst_frombands names the SQL function in its skipped-member note") {
+        // A member whose bytes do not open is dropped and noted in last_error; the note is worded as the
+        // Python and UC levels word it, so the text matches whichever level ran.
+        val sc = spark
+        import sc.implicits._
+        TestL1.installAll(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+        val df = Seq(
+          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
+        ).toDF("path").withColumn("tile", udfs.rasterFromPath(col("path")))
+            .withColumn("bad", col("tile").withField("raster", lit(Array[Byte](1, 2, 3))))
+
+        val out = df.selectExpr("gbx_rst_frombands(array(tile, bad)) AS tile")
+            .selectExpr("tile.raster IS NOT NULL AS has_raster", "tile.metadata['last_error'] AS note")
+            .collect()
+        out.head.getBoolean(0) shouldBe true
+        out.head.getString(1) shouldBe "gbx_rst_frombands: skipped 1 corrupt input tile(s)"
+    }
+
 }

@@ -503,10 +503,14 @@ def test_a_file_argument_is_allowed_only_as_a_file_the_engine_writes():
 
 
 def test_the_read_and_crs_rules_are_the_vocabulary_and_the_warp_rows_use_them():
-    """`in_read` is "factor" and `same_crs` is "keep", and nothing else: the shipped rows say so, and the block that
-    says neither parses with both unset."""
-    assert manifest.GDAL_IN_READS == {"factor"} and manifest.GDAL_SAME_CRS == {"keep"}
+    """`in_read` is "factor" or "path" and `same_crs` is "keep", and nothing else: the shipped rows say so, and the block
+    that says neither parses with both unset."""
+    assert manifest.GDAL_IN_READS == {"factor", "path"}
+    assert manifest.GDAL_SAME_CRS == {"keep"}
     assert MAN.functions["gbx_rst_resample"].gdal.in_read == "factor"
+    assert {
+        n for n, f in MAN.functions.items() if f.gdal and f.gdal.in_read == "path"
+    } == {"gbx_rst_viewshed"}
     assert {
         n for n, f in MAN.functions.items() if f.gdal and f.gdal.same_crs == "keep"
     } == {"gbx_rst_transform", "gbx_rst_to_webmercator"}

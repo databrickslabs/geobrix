@@ -24,7 +24,7 @@ def _recorder(monkeypatch):
     monkeypatch.setattr(
         l3,
         "_virtual_raster",
-        lambda fn, t, cap, ref=None, decimate=None, sizes_out=None: seen.append(
+        lambda fn, t, cap, ref=None, decimate=None, sizes_out=None, stack=None: seen.append(
             (t["cellid"], ref)
         )
         or b"II*\x00",
@@ -168,7 +168,15 @@ def test_the_force_output_form_fills_the_manifest_defaults_for_missing_parameter
 def test_the_force_output_form_gives_a_refused_input_as_an_error_tile(monkeypatch):
     calls = _stub_run(monkeypatch, run.Result(b"never", None, None))
 
-    def refuse(fn, first, read_cap=None, file_refs=None, sizes_out=None, values=None):
+    def refuse(
+        fn,
+        first,
+        read_cap=None,
+        file_refs=None,
+        sizes_out=None,
+        values=None,
+        stack=None,
+    ):
         raise run.DataError("tile is unreadable. Fix: pass a GeoTIFF tile")
 
     monkeypatch.setattr(l3, "_inputs", refuse)

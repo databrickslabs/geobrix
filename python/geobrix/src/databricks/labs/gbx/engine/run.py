@@ -74,6 +74,16 @@ class MissingSourceError(FileNotFoundError):
 
 
 @dataclass(frozen=True)
+class PathSource:
+    """An input GDAL opens by its path, read-only, instead of tile bytes the engine writes to /vsimem: the local file of a
+    virtual tile that is nothing but a whole file (``in_read: "path"``). Nothing is materialized, so a raster over the
+    read cap is read the way GDAL reads it, block by block. The caller keeps the file until the call returns.
+    """
+
+    path: str
+
+
+@dataclass(frozen=True)
 class Result:
     """A call's outcome: the output GeoTIFF, or the reason it failed (an error tile), and the argv it ran."""
 
@@ -393,13 +403,21 @@ def _read(gdal, name: str) -> bytes:
 
 
 def _position(
-    gdal, osr, sql_name: str, name: str, x: float, y: float, h: float, src_text: str
+    gdal,
+    osr,
+    sql_name: str,
+    name: str,
+    x: float,
+    y: float,
+    h: float,
+    src_text: str,
+    drivers: Sequence[str] = ("GTiff",),
 ) -> str:
     """The observer as ``x,y,h`` in the CRS of the input `name`: moved from its own CRS when it has one that differs. Both
     references take the traditional GIS axis order (x east, y north), so the same digits come out on every tier. A point
     that cannot be moved into the input's CRS is a DataError.
     """
-    ds = _open_source(gdal, sql_name, name, ("GTiff",))
+    ds = _open_source(gdal, sql_name, name, drivers)
     try:
         dst = ds.GetSpatialRef()
         if src_text and dst is not None:
@@ -427,13 +445,14 @@ def _position(
     return f"{f(x)},{f(y)},{f(h)}"
 
 
-def _place_observer(gdal, fn, values, tokens, name: str, command, shown):
+def _place_observer(gdal, fn, values, tokens, name: str, command, shown, on_path=False):
     """``(tokens, command)`` with the observer's placeholder replaced by its position in the input's CRS; both as they
     were for a row without an observer."""
     if argv_mod.observer_arg(fn) is None:
         return tokens, command
     obs = argv_mod.observer_of(fn, values)
-    pos = _position(gdal, argv_mod._osgeo().osr, fn.sql_name, name, *obs)
+    drivers = virtual_drivers() if on_path else ("GTiff",)
+    pos = _position(gdal, argv_mod._osgeo().osr, fn.sql_name, name, *obs, drivers)
     tokens = [t.replace(argv_mod.OBSERVER, pos) for t in tokens]
     return tokens, _shown(" ".join([fn.gdal.alg] + tokens), shown)
 
@@ -800,9 +819,38 @@ class FeatureStream:
         self.close()
 
 
-def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None):
+_failure_lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _failures(gdal, strict: bool):
+    """The failures GDAL reports (CE_Failure and worse) during the block, as a list of messages; nothing is collected unless
+    `strict`. GDAL reports a read that fails inside an algorithm's own threads, where this thread's error state and handler
+    stack cannot see it, so a process-wide handler is held for the block (one call at a time), then the default handler is
+    put back."""
+    failed: list = []
+    if not strict:
+        yield failed
+        return
+
+    def handler(err_class, _err_no, msg):
+        if err_class >= gdal.CE_Failure:
+            failed.append(msg)
+
+    with _failure_lock:
+        gdal.SetErrorHandler(handler)
+        try:
+            yield failed
+        finally:
+            gdal.SetErrorHandler(None)
+
+
+def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None, strict=False):
     """Instantiate, parse, run and finalize. `refused(message)` makes the exception for a refused argv. `collect(alg)`
-    reads the output after the run and before ``Finalize``; its value is returned."""
+    reads the output after the run and before ``Finalize``; its value is returned. With `strict` a failure GDAL reports
+    while the algorithm runs is a DataError even when the run itself succeeds: an algorithm that reads its file block by
+    block carries on past a block it could not read (the pixels are zeros), and that is no result.
+    """
     alg, group = _instantiate(alg_path)
     try:
         gdal.ErrorReset()
@@ -811,11 +859,14 @@ def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None):
                 _shown(gdal.GetLastErrorMsg() or "GDAL refused the arguments", shown)
             )
         gdal.ErrorReset()
-        if not alg.Run():
-            raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
-        got = collect(alg) if collect is not None else None
-        if not alg.Finalize():
-            raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
+        with _failures(gdal, strict) as failed:
+            if not alg.Run():
+                raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
+            got = collect(alg) if collect is not None else None
+            if not alg.Finalize():
+                raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
+        if failed:
+            raise DataError("; ".join(dict.fromkeys(failed)))
         return got
     finally:
         del alg, group  # release both handles, the step before its group
@@ -1058,15 +1109,68 @@ def _check_expression(gdal, fn, tokens, props, names, prefix, shown) -> None:
         )
 
 
+def _input_names(rasters, prefix: str) -> list:
+    """The name GDAL opens each input by: the file of a ``PathSource``, else a GeoTIFF the engine writes under `prefix`."""
+    return [
+        r.path if isinstance(r, PathSource) else f"{prefix}/in{i}.tif"
+        for i, r in enumerate(rasters)
+    ]
+
+
+def _held_sizes(rasters, props) -> list:
+    """The decoded bytes the engine holds for each input, for the read cap: none for a ``PathSource``, which GDAL reads
+    from its file."""
+    return [
+        (
+            0
+            if isinstance(r, PathSource)
+            else p.width * p.height * p.bands * argv_mod._ITEMSIZE.get(p.dtype, 8)
+        )
+        for r, p in zip(rasters, props)
+    ]
+
+
+def _path_input_format(gdal, tokens, path: str, on_path: bool) -> list:
+    """`tokens`, with ``--input-format`` naming the driver of the file `path` when the input is read by its path (the argv
+    names GeoTIFF, the format of bytes the engine writes): a virtual tile's file may be a COG, a VRT or another driver the
+    virtual-tile policy allows."""
+    if not on_path:
+        return tokens
+    drv = gdal.IdentifyDriverEx(
+        path, gdal.OF_RASTER, allowed_drivers=list(virtual_drivers())
+    )
+    if drv is None:
+        raise DataError(f"{path} is not a raster GeoBrix reads")
+    return [
+        f"--input-format={drv.ShortName}" if t == "--input-format=GTiff" else t
+        for t in tokens
+    ]
+
+
+def _streaming_cache(on_path: bool):
+    """GDAL's block cache held to a share of the compute's memory while an algorithm reads a file by its path: it reads the
+    raster block by block, so the cache, not the raster's size, is what it holds. Nothing for bytes in /vsimem.
+    """
+    if not on_path:
+        return contextlib.nullcontext()
+    from databricks.labs.gbx.pyrx._env import capped_block_cache
+    from databricks.labs.gbx.pyrx.core.budget import block_cache_bytes
+
+    return capped_block_cache(block_cache_bytes())
+
+
 def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple:
     """``(sources, drivers, props)`` of the call's inputs, written under its prefix. A raster with the GeoTIFF magic is
     written as ``in<i>.tif``. Any other is read under the light bytes rule (a driver that can name other files is
     refused) as ``src<i>.bin``, and translated to GeoTIFF once the budget holds (its props are its header's):
-    `sources` maps its index to that name. `src_sizes` marks a raster that is a decimated read of its window.
+    `sources` maps its index to that name. `src_sizes` marks a raster that is a decimated read of its window. A
+    ``PathSource`` is written nowhere: `names[i]` is its path and its header is read from there.
     """
     block = fn.gdal
     sources, payloads = {}, {}
     for i, raster in enumerate(rasters):
+        if isinstance(raster, PathSource):
+            continue
         data = bytes(raster)
         if data[:4] in _TIFF_MAGIC:
             gdal.FileFromMemBuffer(names[i], data)
@@ -1081,9 +1185,15 @@ def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple
         _bytes_source(gdal, fn.sql_name, i, src, payloads[i], drivers)
     props = [
         (
-            _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers, describes)
-            if i in sources
-            else _props(gdal, fn.sql_name, n, block.needs_crs, no_band_ok=describes)
+            _props(gdal, fn.sql_name, n, block.needs_crs, virtual_drivers(), describes)
+            if isinstance(rasters[i], PathSource)
+            else (
+                _props(
+                    gdal, fn.sql_name, sources[i], block.needs_crs, drivers, describes
+                )
+                if i in sources
+                else _props(gdal, fn.sql_name, n, block.needs_crs, no_band_ok=describes)
+            )
         )
         for i, n in enumerate(names)
     ]
@@ -1129,7 +1239,8 @@ def run(
     apply_driver_policy()
     block = fn.gdal
     prefix = f"{PREFIX}/{uuid.uuid4().hex}"
-    names = [f"{prefix}/in{i}.tif" for i in range(len(rasters))]
+    names = _input_names(rasters, prefix)
+    on_path = any(isinstance(r, PathSource) for r in rasters)
     out, scratch = _output_name(block, prefix)
     placeholders = (
         ["<input>"]
@@ -1143,20 +1254,7 @@ def run(
             sources, drivers, props = _stage(
                 gdal, fn, rasters, names, prefix, shown, section, src_sizes
             )
-            sizes = [
-                p.width * p.height * p.bands * argv_mod._ITEMSIZE.get(p.dtype, 8)
-                for p in props
-            ]
-            # the read cap of every tile read from bytes (light's ``_serde.open_tile``), judged from its header
-            from databricks.labs.gbx.pyrx.core.budget import (
-                read_cap_refusal,
-                tile_read_cap,
-            )
-
-            cap = tile_read_cap()
-            for size in sizes:
-                if size > cap:
-                    raise DataError(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
+            sizes = _held_sizes(rasters, props)
             decoded = sum(sizes)
             budget = decoded_budget()
             # the texts of the call's text arguments (a color table) are files of their own under the prefix
@@ -1170,6 +1268,7 @@ def run(
             )
             if tokens is None:
                 return None
+            tokens = _path_input_format(gdal, tokens, names[0], on_path)
             command = _shown(" ".join([block.alg] + tokens), shown)
             fmt = next(
                 t.split("=", 1)[1] for t in tokens if t.startswith("--output-format=")
@@ -1206,7 +1305,14 @@ def run(
                 return Result(_read(gdal, names[0]), None, command)
             _prepare_input(gdal, fn, tokens, props, names, prefix, shown)
             tokens, command = _place_observer(
-                gdal, fn, values, tokens, names[0], command, shown
+                gdal,
+                fn,
+                values,
+                tokens,
+                names[0],
+                command,
+                shown,
+                on_path,
             )
             if block.out_kind == "json":
                 text = _execute(
@@ -1238,7 +1344,8 @@ def run(
                     ),
                 )
                 return Result(None, None, command, features=feats)
-            _execute(gdal, block.alg, tokens, shown, refused)
+            with _streaming_cache(on_path):
+                _execute(gdal, block.alg, tokens, shown, refused, strict=on_path)
             if block.per_band and props[0].bands > 1:
                 _fill_bands(
                     gdal,

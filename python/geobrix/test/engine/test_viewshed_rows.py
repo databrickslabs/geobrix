@@ -70,3 +70,109 @@ def test_an_observer_between_the_edge_and_the_first_pixel_centre_stands_in_that_
     """GDAL takes the pixel the observer stands in, so an observer within half a pixel of the edge gets a real viewshed."""
     with MemoryFile(_viewshed(40, 0.2, 20.0, 5.0, None)) as mf, mf.open() as o:
         assert int((o.read(1) == 255).sum()) > 0
+
+
+def _file_tile(path) -> dict:
+    """A virtual tile that is nothing but the whole file at `path`."""
+    return {
+        "cellid": 0,
+        "raster": None,
+        "path": str(path),
+        "path_mode": None,
+        "window": None,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+
+
+def test_a_dem_over_the_read_cap_is_read_by_gdal_from_its_file_not_materialized(
+    tmp_path,
+):
+    """A virtual tile that is a whole file goes to GDAL by its path, so the read cap (which bounds what the engine
+    holds in memory) does not apply: the 4 MiB DEM under a 1 MiB cap gives the mask the bytes of the same DEM give under
+    a large cap. A tile that is only part of its file is still read under the cap, so it is refused.
+    """
+    from databricks.labs.gbx.engine import l3
+
+    fn = manifest.load().functions[FN]
+    dem = tmp_path / "dem.tif"
+    dem.write_bytes(_flat_dem(1024))
+    values = {
+        "observer_geom": "POINT(512.5 511.5)",
+        "observer_height": 10.0,
+        "target_height": 0.0,
+        "max_distance": None,
+        "crs": None,
+    }
+    cap = 1 << 20
+
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        rasters, _, _ = l3._inputs(fn, _file_tile(dem), cap, None, None, values, stack)
+        assert isinstance(rasters[0], run.PathSource)
+        res = run.run(fn, rasters, values)
+    assert res.error is None, res.error
+    assert "<input>" in res.command and str(dem) not in res.command
+    with pytest.raises(run.DataError, match="read cap"):
+        l3._inputs(
+            fn, _file_tile(dem), cap, None, None, values, None
+        )  # no stack: bytes
+    windowed = {
+        **_file_tile(dem),
+        "window": {"col_off": 0, "row_off": 0, "width": 1024, "height": 600},
+    }
+    with pytest.raises(run.DataError, match="read cap"):
+        with contextlib.ExitStack() as stack:
+            l3._inputs(fn, windowed, cap, None, None, values, stack)
+    want = run.run(
+        fn, [dem.read_bytes()], values
+    )  # the same DEM as bytes, nothing capped
+    with (
+        MemoryFile(res.raster) as a,
+        a.open() as x,
+        MemoryFile(want.raster) as b,
+        b.open() as y,
+    ):
+        assert x.read(1).shape == (1024, 1024) and (x.read(1) == y.read(1)).all()
+        assert int((x.read(1) == 255).sum()) > 0
+
+
+def test_a_file_read_by_path_that_cannot_be_read_is_an_error_tile_not_zeros(tmp_path):
+    """GDAL's viewshed carries on past a block it cannot read and returns success. The engine collects the failures GDAL
+    reports and gives the tile's error, naming the file, never a plausible mask."""
+    import contextlib
+
+    from databricks.labs.gbx.engine import l3
+
+    fn = manifest.load().functions[FN]
+    dem = tmp_path / "cut_short.tif"
+    data = _flat_dem(256)
+    profile = dict(driver="GTiff", width=256, height=256, count=1, dtype="float32")
+    with MemoryFile() as mf:
+        with mf.open(
+            **profile,
+            crs="EPSG:27700",
+            transform=from_origin(0.0, 256.0, 1.0, 1.0),
+            compress="zstd",
+            blockysize=16,
+            tiled=False,
+        ) as dst:
+            dst.write(np.random.default_rng(1).random((1, 256, 256)).astype("float32"))
+        data = mf.read()
+    dem.write_bytes(data[: int(len(data) * 0.6)])
+    values = {
+        "observer_geom": "POINT(128.5 127.5)",
+        "observer_height": 10.0,
+        "target_height": 0.0,
+        "max_distance": None,
+        "crs": None,
+    }
+    with contextlib.ExitStack() as stack:
+        rasters, _, _ = l3._inputs(
+            fn, _file_tile(dem), 1 << 30, None, None, values, stack
+        )
+        res = run.run(fn, rasters, values)
+    assert res.raster is None and "cut_short.tif" in res.error

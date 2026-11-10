@@ -831,6 +831,17 @@ def _output_pixels(tokens: Sequence[str], first: "RasterProps", grid) -> int:
     """The pixels of the output grid: from ``--size``, else ``--resolution`` over the extent, else the grid GDAL picks
     (``grid``; without it the input's own size, with the extent taken from its north-up pixel size).
     """
+    reach = _token_value(tokens, "max-distance")
+    if (
+        reach is not None
+        and first.px_x
+        and first.px_y
+        and any(t.startswith("--position=") for t in tokens)
+    ):
+        # a viewshed with a distance limit writes the window around the observer: the distance each way, in pixels
+        wx = 2 * math.ceil(float(reach) / first.px_x) + 1
+        wy = 2 * math.ceil(float(reach) / first.px_y) + 1
+        return min(first.width, wx) * min(first.height, wy)
     size = _token_value(tokens, "size")
     if size is not None:
         w, h = (int(v) for v in size.split(","))
@@ -875,7 +886,7 @@ def estimate_output(
         bands = 1  # a band-indexed expression (A[1], the map algebra's V[b]) writes one band; a bare A writes every band
     # inputs that are not warped share one grid: the largest bounds what the algorithm writes
     pixels = _output_pixels(tokens, first, grid)
-    if fn.gdal.alg != "raster reproject":
+    if fn.gdal.alg not in ("raster reproject", "raster viewshed"):
         pixels = max(pixels, *(p.width * p.height for p in props))
     out = pixels * bands * item
     if fn.gdal.per_band and bands > 1:

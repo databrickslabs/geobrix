@@ -99,8 +99,9 @@ GDAL_KEYS = frozenset(
     }
 )
 # `in_read: "factor"`: a virtual tile of the row is read at the size its `size_from_factor` argument asks for (an overview
-# serves it where the file has one).
-GDAL_IN_READS = frozenset({"factor"})
+# serves it where the file has one). `in_read: "path"`: a virtual tile that is a whole file is handed to GDAL by its path, read-only,
+# and never materialized (for an algorithm that reads its raster block by block).
+GDAL_IN_READS = frozenset({"factor", "path"})
 # `same_crs: "keep"`: a tile already in the CRS the row asks for comes back as it is (its bytes, not a warp of them).
 GDAL_SAME_CRS = frozenset({"keep"})
 GDAL_ARG_KEYS = frozenset(

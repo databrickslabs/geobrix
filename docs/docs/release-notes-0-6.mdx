@@ -681,7 +681,8 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A POINT EMPTY, and text that is no geometry, raise.
 - **An observer outside the DEM is placed by GDAL,** which extends the DEM past its edge. It got an all-invisible raster.
   - An observer within half a pixel of the DEM's edge gets a viewshed, as before.
-- **The call reads the whole tile.** A tile over the compute's read cap gives an error tile that says to retile it first. The earlier code streamed the DEM from disk.
+- **A virtual tile that is a whole file is read by GDAL from the file,** block by block, as the earlier code read it. A tile with bytes, or a window of a file, is read whole under the compute's read cap. Over the cap it gives an error tile that says to retile it first.
+  - A block GDAL cannot read gives an error tile that names the file. It is never a mask built on zeros.
 - **`rst_viewshed` with a `max_distance` returns the window around the observer (fix).** In v0.5.2 the lightweight tier was wrong on a DEM above its small-DEM size limit (about 366 × 366 pixels by default). The visible area came out several times too large and in the wrong place. The `rst_viewshed_towers` counts (`visible_px`, `total_px`) were inflated.
   - The result is the window: the observer's pixel plus `max_distance` each way, clipped to the DEM. It is aligned to the DEM's pixel grid.
   - Without a `max_distance` it returns the whole DEM.

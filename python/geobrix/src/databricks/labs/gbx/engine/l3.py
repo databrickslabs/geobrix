@@ -171,8 +171,14 @@ def _is_missing(exc: BaseException) -> bool:
 
 
 def _virtual_raster(
-    fn, tile, read_cap: Optional[int], file_ref=None, decimate=None, sizes_out=None
-) -> bytes:
+    fn,
+    tile,
+    read_cap: Optional[int],
+    file_ref=None,
+    decimate=None,
+    sizes_out=None,
+    stack=None,
+):
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
     read cap, judged from the header before any pixel is read. A corrupt or refused file is a DataError (an error
@@ -181,6 +187,10 @@ def _virtual_raster(
     ``file_ref`` is the tile's FILE reference: a read through it is not staged through the path as well.
     ``decimate`` (``_decimation``) reads a plain window at its target size, which an overview serves where the file has
     one; the window's own size is then appended to ``sizes_out``.
+
+    For a row that reads by path (``in_read: "path"``) and a `stack` to hold the file, a tile that is nothing but a whole
+    file is not read at all: the result is ``run.PathSource`` of its local file (the FILE reference's, else its path),
+    which stays until the stack closes. The read cap does not apply: GDAL reads the file block by block.
     """
     from databricks.labs.gbx.core._retry import _retry_transient
     from databricks.labs.gbx.pyrx.core import open_tile as ot
@@ -188,7 +198,11 @@ def _virtual_raster(
 
     vt = ot._to_virtual_tile(tile)
     try:
-        with contextlib.ExitStack() as stack:
+        with (
+            contextlib.nullcontext(stack)
+            if stack is not None
+            else contextlib.ExitStack()
+        ) as held:  # the caller's stack keeps a file GDAL reads by its path until the call ends
             is_zarr = zarr_tiles.is_zarr_tile(
                 vt
             )  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
@@ -197,13 +211,19 @@ def _virtual_raster(
                 # dbfs:/ and file:/ spellings, /Volumes staging, which retries a Volume file on its own); the
                 # policy and the reads below judge that path
                 vt = dataclasses.replace(
-                    vt, path=ot._resolve_local_or_windowed(vt, file_ref, stack)
+                    vt, path=ot._resolve_local_or_windowed(vt, file_ref, held)
                 )
 
             def attempt() -> bytes:
                 try:
                     if not is_zarr:
                         run.virtual_source(fn.sql_name, vt.path)
+                    if (
+                        fn.gdal.in_read == "path"
+                        and stack is not None
+                        and _is_whole_file(vt)
+                    ):
+                        return run.PathSource(vt.path)
                     return _read_virtual(
                         fn, vt, read_cap, file_ref, decimate, sizes_out
                     )
@@ -251,6 +271,29 @@ def _virtual_raster(
         raise run.DataError(
             f"{fn.sql_name}: the virtual tile could not be read ({exc})"
         ) from None
+
+
+def _is_whole_file(vt) -> bool:
+    """True when the virtual tile (its path already the local file) is nothing but its whole file: no bytes, clip, target
+    CRS, pending instruction or Zarr store, and a window that is absent or the file's own size.
+    """
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.zarr import _tiles as zarr_tiles
+
+    if (
+        vt.raster is not None
+        or vt.clip_polygon is not None
+        or vt.crs
+        or ot._has_pending(vt.metadata)
+        or zarr_tiles.is_zarr_tile(vt)
+    ):
+        return False
+    if vt.window is None:
+        return True
+    with ot.open_raster(
+        vt.path
+    ) as src:  # the file itself: a header of the tile would read the window's size
+        return tuple(int(v) for v in vt.window) == (0, 0, src.width, src.height)
 
 
 # resampling words only a warp applies: a decimated read refuses them
@@ -386,6 +429,7 @@ def _inputs(
     file_refs=None,
     sizes_out=None,
     values=None,
+    stack=None,
 ):
     """(rasters, passthrough, cellid): the rasters to run on, or (None, what to return as it is, None) for a
     NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL). A virtual
@@ -415,7 +459,7 @@ def _inputs(
                 sizes_out.append(None)
             continue
         box: list = []
-        rasters.append(_virtual_raster(fn, t, read_cap, ref, decimate, box))
+        rasters.append(_virtual_raster(fn, t, read_cap, ref, decimate, box, stack))
         if sizes_out is not None:
             sizes_out.append(box[0] if box else None)
     return rasters, None, tile_checks.cellid(tiles[0])
@@ -474,19 +518,22 @@ def c0(
             refs, args = args[0], args[1:]
         values = dict(zip(names, list(args) + defaults[len(args) :]))
         sizes: list = []
-        try:
-            rasters, passthrough, cellid = _inputs(
-                fn, first, read_cap, refs, sizes, values
-            )
-        except run.DataError as exc:
-            if not raster_out:
-                _log_once(fn.sql_name, str(exc))
-                return None
-            return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
-        if rasters is None:
-            return passthrough if raster_out else None
-        res = run.run(fn, rasters, values, _section(section_ref), src_sizes=sizes)
-        return _tile(res, cellid) if raster_out else _value(fn, res)
+        with (
+            contextlib.ExitStack() as stack
+        ):  # holds the file of a tile GDAL reads by its path, until the call ends
+            try:
+                rasters, passthrough, cellid = _inputs(
+                    fn, first, read_cap, refs, sizes, values, stack
+                )
+            except run.DataError as exc:
+                if not raster_out:
+                    _log_once(fn.sql_name, str(exc))
+                    return None
+                return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
+            if rasters is None:
+                return passthrough if raster_out else None
+            res = run.run(fn, rasters, values, _section(section_ref), src_sizes=sizes)
+            return _tile(res, cellid) if raster_out else _value(fn, res)
 
     return _c0
 
@@ -580,20 +627,21 @@ def forced_c0(
         args, (vdir, vprefix, mat) = rest[:-3], rest[-3:]
         values = dict(zip(names, list(args) + defaults[len(args) :]))
         sizes: list = []
-        try:
-            rasters, passthrough, cellid = _inputs(
-                fn, first, read_cap, None, sizes, values
-            )
-        except run.DataError as exc:
-            return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
-        if rasters is None:
-            return passthrough
-        res = run.run(fn, rasters, values, src_sizes=sizes)
-        if res is not None and res.raster is not None:
-            from databricks.labs.gbx.pyrx import functions as prx
+        with contextlib.ExitStack() as stack:
+            try:
+                rasters, passthrough, cellid = _inputs(
+                    fn, first, read_cap, None, sizes, values, stack
+                )
+            except run.DataError as exc:
+                return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
+            if rasters is None:
+                return passthrough
+            res = run.run(fn, rasters, values, src_sizes=sizes)
+            if res is not None and res.raster is not None:
+                from databricks.labs.gbx.pyrx import functions as prx
 
-            return prx._shaped_result_row(res.raster, cellid, vdir, vprefix, mat)
-        return _tile(res, cellid)
+                return prx._shaped_result_row(res.raster, cellid, vdir, vprefix, mat)
+            return _tile(res, cellid)
 
     return _forced
 

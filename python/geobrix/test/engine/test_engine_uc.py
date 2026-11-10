@@ -177,12 +177,63 @@ def test_a_virtual_tile_and_a_crs_uc_does_not_take_are_refused_with_a_fix(tmp_pa
         engine_uc.rst_transformcrs(_dem(tmp_path), "+proj=merc")
 
 
-def test_a_list_of_features_over_the_cap_is_refused(tmp_path, monkeypatch):
+class _Stream:
+    """A streamed features output that counts the rows taken from it and records its close."""
+
+    def __init__(self, n, wkb):
+        self.n, self.wkb, self.taken, self.closed = n, wkb, 0, False
+
+    def __iter__(self):
+        for _ in range(self.n):
+            self.taken += 1
+            yield (self.wkb, 1.0)
+
+    def close(self):
+        self.closed = True
+
+
+def test_features_are_judged_against_the_cap_as_they_are_read(monkeypatch):
+    """The running size of the rows read is checked after each row: the call is refused the moment it passes the cap,
+    with no further row taken from the stream, and the stream's file is removed."""
     from databricks.labs.gbx.uc import tier_b
 
-    monkeypatch.setattr(tier_b, "DECODED_CAP", 64)
-    with pytest.raises(ValueError, match="of geometry, over the"):
-        engine_uc.rst_contour(_dem(tmp_path), [100.0, 110.0, 120.0], 0.0, 0.0, "elev")
+    monkeypatch.setattr(engine_uc, "DECODED_CAP", 10_000)
+    fn = MAN.functions["gbx_rst_polygonize"]
+    wkb = b"\x01" * 93  # a one-pixel polygon's WKB is 93 bytes
+    per_row = tier_b.row_bytes({"geom_wkb": wkb})
+    stream = _Stream(1_000_000, wkb)
+    with pytest.raises(ValueError, match="of geometry, over the.*Fix: "):
+        engine_uc._feature_rows(fn, stream)
+    assert stream.taken == 10_000 // per_row + 1 and stream.closed
+    under = _Stream(10, wkb)
+    assert len(engine_uc._feature_rows(fn, under)) == 10 and under.closed
+
+
+def test_a_polygonize_over_the_cap_is_refused_before_its_stream_is_read_out(
+    tmp_path, monkeypatch
+):
+    """A 64 x 64 checkerboard has 4096 one-pixel regions, about 500 KiB of rows. Under a 64 KiB cap the input and the
+    estimate fit, GDAL writes the regions to its local file, and the handler stops reading it once the rows pass the
+    cap: far fewer rows than the output holds are ever read."""
+    import numpy as np
+
+    board = (np.indices((64, 64)).sum(axis=0) % 2 + 1).astype("float64")
+    tile = oracles._tile(oracles._gtiff(board[np.newaxis], "EPSG:3857", dtype="uint8"))
+    seen = []
+    real_run = run.run
+
+    def spy(*a, **k):
+        res = real_run(*a, **k)
+        seen.append((res, res.features._scratch))  # the stream's local folder
+        return res
+
+    monkeypatch.setattr(run, "run", spy)
+    monkeypatch.setattr(engine_uc, "DECODED_CAP", 64 * 1024)
+    with pytest.raises(ValueError, match="of geometry, over the 64 KiB.*Fix: "):
+        engine_uc.rst_polygonize_features(tile, 1, 4)
+    ((res, scratch),) = seen
+    assert res.features.expected == 4096 and res.features.read < 4096 // 4
+    assert scratch and not os.path.exists(scratch)  # the stream's file is removed
 
 
 def test_the_engine_handlers_run_in_a_sandbox_without_pyspark():

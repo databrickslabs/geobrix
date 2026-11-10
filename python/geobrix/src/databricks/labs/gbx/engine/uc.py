@@ -10,8 +10,8 @@ UC raster function has (``uc.tier_b``):
   otherwise;
 - a ``GEOMETRY`` argument arrives as the sandbox's geometry value and reaches the engine as EWKB, with its SRID;
 - a call holds at most :data:`DECODED_CAP` decoded, each input and the inputs with the estimated output together (the
-  engine's budget on Serverless). Over it the call is refused with a ``Fix:``, never truncated. A list of features is
-  refused over the same size;
+  engine's budget on Serverless). Over it the call is refused with a ``Fix:`` before GDAL runs, never truncated. A list
+  of features is judged against the same size as it is read, and refused the moment it passes it;
 - a data error (corrupt bytes, a call GDAL fails) is NULL, because a UC function has no error tile. A parameter error
   raises. An error tile goes through a tile-returning function unchanged.
 
@@ -120,10 +120,29 @@ def _over_cap(fn, res) -> _Refusal:
     )
 
 
-def _check_features(fn, rows) -> None:
-    from databricks.labs.gbx.uc.tier_b import check_rows
+def _feature_rows(fn, features) -> list:
+    """The feature rows of an engine output as dicts, judged against the cap as they are read: the running size (each
+    geometry's WKB and its other fields, ``uc.tier_b.row_bytes``) is checked after every row, and the call is refused
+    the moment it passes the cap, with no further row read. A streamed output (polygonize) is read from its file on
+    local disk one row at a time, so what the handler holds never passes the cap by more than one row; the file is
+    removed on every path. A UC function returns its array whole, so the rows under the cap are the answer.
+    """
+    from databricks.labs.gbx.uc.tier_b import row_bytes, rows_refusal
 
-    check_rows(fn.sql_name, rows)
+    names = ["geom_wkb"] + [n for n, _, _ in fn.gdal.out_fields]
+    rows, size = [], 0
+    try:
+        for feature in features:
+            row = dict(zip(names, feature))
+            size += row_bytes(row)
+            if size > DECODED_CAP:
+                raise rows_refusal(fn.sql_name, size, DECODED_CAP)
+            rows.append(row)
+    finally:
+        close = getattr(features, "close", None)
+        if close is not None:  # a streamed output removes its file
+            close()
+    return rows
 
 
 def _call(fn, first, args):
@@ -146,15 +165,7 @@ def _call(fn, first, args):
         return tile_checks.engine_tile(res, cellid)
     if fn.gdal.out_kind == "json":
         return res.text
-    names = ["geom_wkb"] + [n for n, _, _ in fn.gdal.out_fields]
-    try:
-        rows = [dict(zip(names, row)) for row in res.features]
-    finally:
-        close = getattr(res.features, "close", None)
-        if close is not None:  # a streamed output removes its file
-            close()
-    _check_features(fn, rows)
-    return rows
+    return _feature_rows(fn, res.features)
 
 
 def handler(sql_name: str) -> Callable:

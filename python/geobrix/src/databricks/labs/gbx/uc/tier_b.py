@@ -1465,15 +1465,25 @@ HANDLERS["gbx_rst_dtmfromgeoms"] = rst_dtmfromgeoms
 _ROW_OVERHEAD = 32  # the other fields of a row, an upper estimate
 
 
+def row_bytes(row) -> int:
+    """What one feature row of a result holds, for the cap: its geometry's WKB and an upper estimate of its other fields."""
+    return len(row["geom_wkb"] or b"") + _ROW_OVERHEAD
+
+
+def rows_refusal(fn: str, size: int, cap: int) -> _Refusal:
+    """A result of features over the cap: never truncated, refused with a Fix."""
+    return _Refusal(
+        f"{fn}: the result is {size_text(size)} of geometry, over the {size_text(cap)} a Unity Catalog "
+        f"function returns. Fix: trace fewer levels or bands, clip the tile first (gbx_rst_clip), or run {fn} in "
+        "a notebook or job session"
+    )
+
+
 def check_rows(fn: str, rows) -> None:
     """Refuse a result whose geometries are over the cap: never truncated."""
-    size = sum(len(r["geom_wkb"]) + _ROW_OVERHEAD for r in rows)
+    size = sum(row_bytes(r) for r in rows)
     if size > DECODED_CAP:
-        raise _Refusal(
-            f"{fn}: the result is {size_text(size)} of geometry, over the {size_text(DECODED_CAP)} a Unity Catalog "
-            f"function returns. Fix: trace fewer levels or bands, clip the tile first (gbx_rst_clip), or run {fn} in "
-            "a notebook or job session"
-        )
+        raise rows_refusal(fn, size, DECODED_CAP)
 
 
 def rst_isoband(tile, breaks):

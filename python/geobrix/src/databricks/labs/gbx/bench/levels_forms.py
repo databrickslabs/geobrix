@@ -2640,13 +2640,12 @@ for _fn in DEM_FUNCTIONS:
         )
     )
 
-# --- HV, the remaining JVM companions under the keep rule -------------------------------------------------------------------
+# --- HV, the warps, fill-NoData, summary and proximity (light forms only) -------------------------------------------------
 #
 # The five warp functions, fill-NoData, summary and proximity are timed on one input per function with the engine's row-wise UDF
 # (c0) and its batch UDF (c1) (proximity has the one light UDF, c0), and a floor: the warps on the corpus tiles (4 bands, 16 MiB,
 # in four CRSs), the rest on tiles replicated on the executors (128 at 1x, 512 at 4x, 2048 at 16x, over 32 partitions as the DEM
-# forms). Only to_webmercator and resample_to_size keep a JVM companion (held for a decision): they also carry its form
-# (`today`). Every form carries a decoded-value fingerprint and a NULL report; the JVM form's report names the distinct
+# forms). None keeps a JVM companion. Every form carries a decoded-value fingerprint and a NULL report that names the distinct
 # `last_error` texts with their counts.
 HV_WARP_FUNCTIONS = (
     "gbx_rst_transform",
@@ -2657,16 +2656,10 @@ HV_WARP_FUNCTIONS = (
 )
 HV_OTHER_FUNCTIONS = ("gbx_rst_fillnodata", "gbx_rst_summary", "gbx_rst_proximity")
 HV_FUNCTIONS = HV_WARP_FUNCTIONS + HV_OTHER_FUNCTIONS
-HV_L1_FUNCTIONS = ("gbx_rst_to_webmercator", "gbx_rst_resample_to_size")
-_RX_PKG = "com.databricks.labs.gbx.rasterx.expressions."
-_HV_COMPANION = {
-    "gbx_rst_to_webmercator": _RX_PKG + "web.RST_ToWebMercator",
-    "gbx_rst_resample_to_size": _RX_PKG + "resample.RST_ResampleToSize",
-}
 # the pixel size of a corpus tile in its own CRS units: degrees in 4326, metres in the other three; the tile struct carries the
 # CRS, so the resolution is a cheap CASE and no function reads the tile
 _HV_RES = "CASE WHEN tile.crs = 'EPSG:4326' THEN 0.0002D ELSE 20D END"
-# `{n}` is the function's name at the level (the SQL name, or the private name of the JVM companion)
+# `{n}` is the function's SQL name
 _HV_CALLS = {
     "gbx_rst_transform": "{n}(tile, 3857)",
     "gbx_rst_to_webmercator": "{n}(tile, 'bilinear')",
@@ -2696,16 +2689,6 @@ INPUTS["hv_warp_1024_mem"] = _se_dems_replicated(
 INPUTS["hv_classes_1024_mem"] = _se_dems_replicated(
     1024, _se_class_tile, "classes32", parts=32
 )
-
-
-def setup_hv_l1(spark):
-    """Install the HV companions that remain under their private names (dedicated compute; a Connect session refuses)."""
-    from databricks.labs.gbx.manager import jvm
-
-    for fn, fqn in _HV_COMPANION.items():
-        why = jvm.install_private_l1(spark, fqn, dem_l1_name(fn))
-        if why:
-            raise RuntimeError(why)
 
 
 # The decoded pixels of the corpus tiles whose path hashes to 0 mod 8 (a filter by path: every form reads the same tiles, and no
@@ -2754,7 +2737,7 @@ for _fn in HV_FUNCTIONS:
     _text = _fn == "gbx_rst_summary"
     _corpus = _fn in HV_WARP_FUNCTIONS
     _call = _HV_CALLS[_fn]
-    _l1, _l3 = _call.format(n=dem_l1_name(_fn)), _call.format(n=_fn)
+    _l3 = _call.format(n=_fn)
     _fp = (
         "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM {{src}})"
         if _text
@@ -2774,21 +2757,6 @@ for _fn in HV_FUNCTIONS:
         _l3_variants = (
             "engine-c0",
         )  # a JSON row has no batch form: engine-c1 would be the same UDF
-    if _fn in HV_L1_FUNCTIONS:
-        FORMS["DEM"].append(
-            _hv(
-                _fn,
-                "L1",
-                f"today@{_label}",
-                _fp.format(call=_l1),
-                setup="databricks.labs.gbx.bench.levels_forms:setup_hv_l1",
-                register=False,
-                computes=("dedicated",),
-                allows_null=True,  # an error tile under load is reported, not a lost row
-                vsql=_v(_l1),
-                nullsql=_n(_l1),
-            )
-        )
     for _v3 in _l3_variants:
         FORMS["DEM"].append(
             _hv(

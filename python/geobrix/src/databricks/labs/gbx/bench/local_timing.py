@@ -92,9 +92,7 @@ class SetSpec:
 
 
 # The `HV-<function>` sets: the warps over the corpus tiles (4-band, 16 MiB: n stays small for a local[8] heap), the others over
-# tiles replicated in memory. Only to_webmercator and resample_to_size keep a JVM companion (held for a decision); their
-# companion (`today`) is what the pass measures, so it is not a peer of the light forms. The other functions time their light
-# forms and a floor.
+# tiles replicated in memory. None keeps a JVM companion: each set times the light forms and a floor.
 _HV_WARPS = frozenset(
     "gbx_rst_" + n
     for n in (
@@ -106,10 +104,6 @@ _HV_WARPS = frozenset(
     )
 )
 _HV_OTHERS = ("gbx_rst_fillnodata", "gbx_rst_summary", "gbx_rst_proximity")
-_HV_TODAY = (
-    "gbx_rst_to_webmercator",
-    "gbx_rst_resample_to_size",
-)  # the functions that keep a JVM companion
 _HV_LIGHT = {  # the light variants of a function with fewer than the engine's two UDFs
     "gbx_rst_summary": ("engine-c0",),
     "gbx_rst_proximity": ("c0",),
@@ -120,7 +114,6 @@ def _hv_set(fn: str) -> SetSpec:
     warp = fn in _HV_WARPS
     label = "mat" if warp else "mem"
     light = _HV_LIGHT.get(fn, ("engine-c0", "engine-c1"))
-    today = ("today",) if fn in _HV_TODAY else ()
     corpus = (
         dict(
             corpus_src="/Volumes/main/default/bench-corpus/rows",
@@ -131,11 +124,11 @@ def _hv_set(fn: str) -> SetSpec:
     )
     return SetSpec(
         mvp="DEM",
-        forms=tuple(f"{v}@{label}" for v in (*today, *light, "floor-c0")),
+        forms=tuple(f"{v}@{label}" for v in (*light, "floor-c0")),
         reference=f"{light[0]}@{label}",
         ns=(4, 8, 16) if warp else (24, 96, 384),
         fn=fn,
-        peer_exempt=tuple(f"{v}@{label}" for v in (*today, "engine-c1")),
+        peer_exempt=tuple(f"{v}@{label}" for v in ("engine-c1",)),
         **corpus,
     )
 

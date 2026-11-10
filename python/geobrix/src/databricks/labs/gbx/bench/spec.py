@@ -1031,7 +1031,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "warp",
         _BOTH,
         {"resampling": "bilinear"},
-        sources=_WARP_LIGHT + (_HEAVY + "web/RST_ToWebMercator.scala",),
+        sources=_WARP_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: warp.reproject_to_srid(
             ds, 3857, resampling=a["resampling"]
@@ -1662,7 +1663,8 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_resample_to_size(
             t, a["width_px"], a["height_px"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToSize.scala",),
+        sources=_RESAMPLE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # rst_resample_to_res takes an absolute ground resolution in CRS units. A

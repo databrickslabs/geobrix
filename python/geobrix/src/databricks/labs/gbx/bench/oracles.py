@@ -195,11 +195,6 @@ HEAVY_PENDING.update(
     }
 )
 
-# A reprojection of a source with no NoData declared masks the pixels outside the footprint; the JVM web mercator
-# warp (held for the user's decision) fills them with 0, which reads as a valid value.
-_WARP_MASK_L1 = "the JVM warp fills the pixels outside the footprint of a source with no NoData with 0, a valid value; the engine masks them"
-HEAVY_PENDING.update({"webmercator_undeclared_masked": {"L1": _WARP_MASK_L1}})
-
 HEAVY_PENDING.update(
     {
         "tri_multipoint_element": {

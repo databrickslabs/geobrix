@@ -1039,7 +1039,7 @@ The JSON is GDAL's, not the earlier GeoBrix shape. A query that reads its keys m
 - `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`.
 - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
 - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` values with more digits.
-- A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`, and a virtual tile of a container with no band gives NULL.
+- A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`. A virtual tile of a container with no band gives NULL.
 - On Unity Catalog the function still returns the earlier shape.
 :::
 
@@ -1308,7 +1308,7 @@ Rasterize an array of BNG cells into one tile, the scalar twin of [`rst_bng_rast
 ### rst_combineavg_agg
 
 {/* BEGIN GENERATED gbx_rst_combineavg_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1338,14 +1338,13 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` (same grid). All t
   name="rst_combineavg_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_derivedband_agg
 
 {/* BEGIN GENERATED gbx_rst_derivedband_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1377,7 +1376,6 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
   name="rst_derivedband_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1447,7 +1445,7 @@ density. See the [LiDAR reader](../readers/lidar) and [Performance](./performanc
 ### rst_frombands_agg
 
 {/* BEGIN GENERATED gbx_rst_frombands_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1478,7 +1476,6 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 
   name="rst_frombands_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1860,7 +1857,7 @@ Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_
 ### rst_rasterize_agg
 
 {/* BEGIN GENERATED gbx_rst_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1898,7 +1895,6 @@ _Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4
   name="rst_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -2198,7 +2194,7 @@ points into other surfaces.
 ### rst_binpoints_agg
 
 {/* BEGIN GENERATED gbx_rst_binpoints_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2237,7 +2233,6 @@ wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
   name="rst_binpoints_agg"
   sql={rasterxSqlCode}                     sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}             scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -2344,7 +2339,7 @@ On Unity Catalog, a canvas that is too large for one function call is refused. T
 ### rst_isoband
 
 {/* BEGIN GENERATED gbx_rst_isoband: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2378,7 +2373,6 @@ Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL requi
   name="rst_isoband"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -2491,7 +2485,7 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
 ### rst_h3_tessellate
 
 {/* BEGIN GENERATED gbx_rst_h3_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2512,7 +2506,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 <Impl udtf/>
 
 :::note Implementation
-Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell at `resolution`, returning one row per cell via streaming UDTF (the JVM level behaves the same).
+Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell at `resolution`, returning one row per cell via streaming UDTF.
 :::
 
 Tessellate raster to H3 cells. assignment is `"centroid"` (default — pixel-centroid single-assignment) or `"covering"` (every overlapping cell, clipped); coverage is `"complete"` (default) or `"sparse"`. See [Grid raster tessellation](./grid-raster-tessellation) for the full guide.
@@ -2523,14 +2517,13 @@ Covering mode uses a **positive-area overlap** rule. All three grids share it: `
   name="rst_h3_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_maketiles
 
 {/* BEGIN GENERATED gbx_rst_maketiles: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2549,7 +2542,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 <Impl udtf/>
 
 :::note Implementation
-Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. The Python level applies the same size thresholds and power-of-4 split as the JVM level. With `size_in_mb > 0`, every window is emitted, including windows whose pixels are all NoData, at every level.
+Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. It splits the tile into a power-of-4 grid, sized by its encoded bytes against `size_in_mb`. With `size_in_mb > 0`, every window is emitted, including windows whose pixels are all NoData, at every level.
 :::
 
 Subdivide into smaller tiles by approximate size in MB.
@@ -2560,14 +2553,13 @@ Subdivide into smaller tiles by approximate size in MB.
   name="rst_maketiles"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
 ### rst_quadbin_tessellate
 
 {/* BEGIN GENERATED gbx_rst_quadbin_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2588,7 +2580,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 <Impl udtf/>
 
 :::note Implementation
-The implementation is backed by quadbin cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell, matching the JVM level's cell set.
+The implementation is backed by quadbin cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell.
 :::
 
 Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. A raster in another CRS is accepted. Its footprint is reprojected to EPSG:4326 to find the overlapping cells (see [Grid raster tessellation](./grid-raster-tessellation) for the antimeridian and pole limits). Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
@@ -2601,14 +2593,13 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
   name="rst_quadbin_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_custom_tessellate
 
 {/* BEGIN GENERATED gbx_rst_custom_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2643,7 +2634,6 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
   name="rst_custom_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
@@ -2687,7 +2677,7 @@ Retile to uniform dimensions.
 ### rst_separatebands
 
 {/* BEGIN GENERATED gbx_rst_separatebands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2705,7 +2695,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 <Impl udtf/>
 
 :::note Implementation
-Powered by **rasterio**. Streams one band-tile row per band via streaming UDTF — O(1) worker memory regardless of band count (the JVM level behaves the same).
+Powered by **rasterio**. Streams one band-tile row per band via streaming UDTF — O(1) worker memory regardless of band count.
 :::
 
 Split multi-band into array of bands.
@@ -2716,14 +2706,13 @@ Split multi-band into array of bands.
   name="rst_separatebands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
 ### rst_tooverlappingtiles
 
 {/* BEGIN GENERATED gbx_rst_tooverlappingtiles: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2755,7 +2744,6 @@ Create overlapping tiles.
   name="rst_tooverlappingtiles"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
@@ -4580,7 +4568,7 @@ Initialize NoData values.
 ### rst_isempty
 
 {/* BEGIN GENERATED gbx_rst_isempty: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4607,7 +4595,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
   name="rst_isempty"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -4672,7 +4659,7 @@ On Unity Catalog the function evaluates the expression with NumExpr instead, whi
 ### rst_merge
 
 {/* BEGIN GENERATED gbx_rst_merge: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4686,7 +4673,7 @@ On Unity Catalog the function evaluates the expression with NumExpr instead, whi
 {/* END GENERATED gbx_rst_merge */}
 
 :::note Implementation
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent. Where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins. Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does the same. It reprojects a tile in another CRS onto the pixel size and grid of a tile in the reference CRS, the smallest EPSG code present. It then mosaics them and never leaves a tile out.
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent. Where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins. Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros.
 :::
 
 :::note Python-only keywords
@@ -4699,7 +4686,6 @@ Merge tiles into mosaic.
   name="rst_merge"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
@@ -5034,7 +5020,7 @@ Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts an
 ### rst_tryopen
 
 {/* BEGIN GENERATED gbx_rst_tryopen: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5059,7 +5045,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo,
   name="rst_tryopen"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -6489,11 +6474,11 @@ tower needs before minting the per-tower VRT.
 
 ## JVM-level specifics
 
-This section documents one detail of the JVM level: the GDAL VRT Python pixel-function configuration used by `gbx_rst_combineavg` / `gbx_rst_derivedband` (and their `_agg` forms).
+This section documents one detail of the JVM level: the GDAL VRT Python pixel-function configuration used by `gbx_rst_derivedband`.
 
 ### VRT Python pixel functions
 
-`gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband`, and `gbx_rst_derivedband_agg` evaluate a Python expression on each pixel via GDAL's [VRT Python pixel-function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python). That API is gated behind the GDAL config option `GDAL_VRT_ENABLE_PYTHON`, which **GeoBrix sets to `NO` at executor startup** (see [Security - Restrict GDAL drivers](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). When you call one of the four functions above, GeoBrix flips the option to `YES` for the duration of that call only. It does so via the internal `GDALManager.withVrtPython` bracket and restores `NO` immediately on return. You don't need to set anything on the cluster or in your notebook to use the built-in functions.
+The JVM form of `gbx_rst_derivedband` evaluates a Python expression on each pixel via GDAL's [VRT Python pixel-function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python). That API is gated behind the GDAL config option `GDAL_VRT_ENABLE_PYTHON`, which **GeoBrix sets to `NO` at executor startup** (see [Security - Restrict GDAL drivers](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). When you call it, GeoBrix flips the option to `YES` for the duration of that call only. It does so via the internal `GDALManager.withVrtPython` bracket and restores `NO` immediately on return. You don't need to set anything on the cluster or in your notebook to use the built-in functions.
 
 #### When you need to enable it yourself
 

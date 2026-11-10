@@ -791,6 +791,37 @@ def _proc_norm(value):
     return value
 
 
+def _proc_summary(text) -> Optional[list]:
+    """A tile summary as the values both of its shapes hold, so the two compare like with like: the UC level returns
+    GeoBrix's earlier JSON (``bands[].min``, ``max``, full precision) and the session GDAL's ``gdalinfo -json``
+    (``bands[].minimum``, ``maximum``, which GDAL rounds to three decimals). Compared: the size, and for each band its
+    index, type, NoData, minimum, maximum, mean and standard deviation, to three decimals. The keys either shape has alone
+    (the coordinate system's form, GDAL's corner coordinates and metadata) are left out. None for a NULL summary.
+    """
+    if text is None:
+        return None
+    info = json.loads(text)
+
+    def r(v):
+        return None if v is None else round(float(v), 3)
+
+    return [
+        list(info.get("size", ())),
+        [
+            [
+                b.get("band"),
+                b.get("type"),
+                r(b.get("noDataValue")),
+                r(b.get("minimum", b.get("min"))),
+                r(b.get("maximum", b.get("max"))),
+                r(b.get("mean")),
+                r(b.get("stdDev")),
+            ]
+            for b in info.get("bands", ())
+        ],
+    ]
+
+
 def _proc_pixels(blob, decimals: int = 9) -> list:
     """The pixels of a GeoTIFF as nested lists (None for no bytes): two tiles are the same when their pixels are.
 
@@ -1157,7 +1188,10 @@ def _proc_tile_case_defs(t, lit) -> list:
             "ref": "SELECT z.zone_id, t.tile_id, gbx_rst_summary(gbx_rst_clip(t.tile, st_asewkb(z.geom), true)) "
             f"AS summary FROM {t('zs_zones')} AS z JOIN {t('zs_tiles')} AS t ON st_intersects(z.geom, t.bbox) "
             "ORDER BY zone_id, tile_id",
-            "compare": "rows",
+            # the procedure's summary is the UC level's (GeoBrix's earlier JSON shape), the session's is GDAL's own
+            # gdalinfo JSON: they are compared by what both shapes hold (_proc_summary), not as texts
+            "compare": "summary",
+            "column": "summary",
         }
     )
     return cases
@@ -1595,6 +1629,8 @@ def _proc_rows(rows, case) -> list:
             d[case["column"]] = _proc_pixels(blob, case.get("decimals", 9))
         elif kind == "mvt":
             d["mvt"] = _proc_mvt_features(d["mvt"])
+        elif kind == "summary":
+            d[case["column"]] = _proc_summary(d[case["column"]])
         for col in case.get("geometries", ()):
             d[col] = _proc_geometry(d[col])
         out.append(_proc_norm(d))

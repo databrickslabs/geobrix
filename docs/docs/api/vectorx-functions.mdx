@@ -364,7 +364,7 @@ Each TIN function takes a trailing `mode` argument (default `'constrained'`):
 
 | Mode | Levels | Behavior |
 |---|---|---|
-| `constrained` *(default)* | Every level | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your mass points, after the snap, plus breakline vertices. The algorithm is the same at every level. |
+| `constrained` *(default)* | Every level | Constrained Delaunay triangulation. Every breakline segment is a forced edge, with **no Steiner points** — the output vertex set is exactly your mass points, after the merge and the snap, plus breakline vertices. A point exactly on a breakline splits it there. The algorithm is the same at every level. |
 | `conforming` | Every level | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
 
 The `conforming` mode gives the same vertices and triangles at every level, Unity Catalog included. The Python level reproduces JTS 1.20, the library the JVM level runs. In the `constrained` mode, the levels can pick different edges where several triangulations are equally valid, such as four points on one circle.
@@ -372,6 +372,17 @@ The `conforming` mode gives the same vertices and triangles at every level, Unit
 In the `conforming` mode, `split_point_finder` places the extra points. `'NONENCROACHING'` projects the point that breaks the Delaunay rule onto the break line. `'MIDPOINT'` splits the segment in half. An extra point takes the Z of its break line.
 
 The `conforming` mode raises with a `Fix:` when it cannot fit the break lines, for example where two break lines cross. Split crossing break lines at the crossing, or use `'constrained'`.
+
+The `constrained` mode raises with a `Fix:` where break lines cross, or a line crosses itself. Split the break lines at the crossing.
+
+### Merging points
+
+Both modes merge close points first, whether or not anything snaps:
+
+1. The break line vertices come first, then the mass points, each in input order.
+2. A point within `merge_tolerance` of a point kept before it merges into the nearest one. The first point kept wins, with its Z.
+3. So a mass point near a break line vertex merges into the vertex.
+4. With `merge_tolerance` 0, only points with the same X and Y merge.
 
 ### Snapping points to break lines
 
@@ -403,7 +414,7 @@ Rows: `elevation_point` `BINARY`.
 |---|---|---|---|---|
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance in X and Y merge into the first one kept. A break line vertex wins over a mass point. 0 merges only identical points. |
 | `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
 | `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
 | `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the grid. |
@@ -449,7 +460,7 @@ Rows: `elevation_point` `BINARY`.
 |---|---|---|---|---|
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance in X and Y merge into the first one kept. A break line vertex wins over a mass point. 0 merges only identical points. |
 | `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
 | `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
 | `grid_origin` | `BINARY` or `STRING` | `GEOMETRY` |  | The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID is the SRID of the output. |
@@ -492,7 +503,7 @@ Rows: `triangle` `BINARY`.
 |---|---|---|---|---|
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance in X and Y merge into the first one kept. A break line vertex wins over a mass point. 0 merges only identical points. |
 | `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
 | `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
 | `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default, adds no points. `'conforming'` adds points along the break lines, so the triangles meet the Delaunay rule there. Any other word raises. |

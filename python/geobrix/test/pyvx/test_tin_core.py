@@ -277,14 +277,130 @@ def test_merge_tolerance_0_merges_only_the_same_x_and_y_at_any_magnitude():
     pts = np.array(
         [[2.0e7, 1.0e7, 1.0], [2.0e7 + 4.0, 1.0e7, 2.0], [2.0e7, 1.0e7, 3.0]]
     )
-    assert _tin._merge_vertices(pts, 0.0).tolist() == pts[:2].tolist()
+    assert _tin.prepare_sites(pts, [], 0.0, 0.0)[0].tolist() == pts[:2].tolist()
     assert _tin._jlong_floor(float("inf")) == 2**63 - 1
     assert _tin._jlong_floor(float("nan")) == 0
 
 
-def test_merge_keys_saturate_as_java_casts_a_double_to_long():
-    got = _tin._saturating_int64(np.array([1e19, -1e19, np.nan, 3.0]))
-    assert got.tolist() == [2**63 - 1, -(2**63), 0, 3]
-    # both keys saturate in x, so the y keys decide: the two points are kept, as on the JVM
-    pts = np.array([[2.0e7, 1.0, 0.0], [3.0e7, 2.0, 0.0]])
-    assert len(_tin._merge_vertices(pts, 1e-12)) == 2
+def test_the_merge_is_first_wins_and_the_line_vertex_wins():
+    # (0.9, 0) is within 1 of the line's (0, 0): it merges into it, the line's Z kept. (3, 0) and (3.6, 0) are 0.6
+    # apart, so the second joins the first; a grid of 1 m cells would split them (3 and 4 after rounding).
+    bl = [np.array([[0.0, 0.0, 5.0], [0.0, 10.0, 5.0]])]
+    pts = _sites([(0.9, 0.0), (3.0, 0.0), (3.6, 0.0), (8.0, 8.0)], z=1.0)
+    kept, lines = _tin.prepare_sites(pts, bl, 1.0, 0.0)
+    assert kept.tolist() == [[3.0, 0.0, 1.0], [8.0, 8.0, 1.0]]
+    assert lines[0].tolist() == bl[0].tolist()
+
+
+def test_a_line_vertex_merges_into_the_nearest_kept_vertex():
+    # the second line's first vertex is 0.5 from the first line's end: it takes that coordinate, so the lines meet; a
+    # line merged into one coordinate is a mass point
+    bl = [
+        np.array([[0.0, 0.0, 1.0], [5.0, 0.0, 1.0]]),
+        np.array([[5.3, 0.4, 2.0], [9.0, 4.0, 2.0]]),
+        np.array([[20.0, 20.0, 3.0], [20.2, 20.0, 3.0]]),
+    ]
+    kept, lines = _tin.prepare_sites(np.zeros((0, 3)), bl, 0.5, 0.0)
+    assert [ln.tolist() for ln in lines] == [
+        [[0.0, 0.0, 1.0], [5.0, 0.0, 1.0]],
+        [[5.0, 0.0, 1.0], [9.0, 4.0, 2.0]],
+    ]
+    assert kept.tolist() == [[20.0, 20.0, 3.0]]
+
+
+def test_snapping_on_changes_no_merge_where_nothing_snaps():
+    # the two points 0.8 apart merge, the first kept, whether or not snap_tolerance is above 0
+    pts = _sites([(0.4, 0.0), (-0.4, 0.0), (5.0, 5.0), (-5.0, 5.0), (0.0, -5.0)])
+    pts[0, 2], pts[1, 2] = 1.0, 2.0
+    bl = [np.array([[100.0, 0.0, 0.0], [100.0, 10.0, 0.0]])]
+    for mode in ("constrained", "conforming"):
+        got = [
+            {
+                tuple(v)
+                for t in _tin.triangulate(pts, bl, 1.0, snap, mode)
+                for v in t.tolist()
+            }
+            for snap in (0.0, 1e-9)
+        ]
+        assert got[0] == got[1], mode
+        assert (0.4, 0.0, 1.0) in got[0] and not any(v[0] == -0.4 for v in got[0]), mode
+
+
+def _edges(tris):
+    return {
+        frozenset(((t[a][0], t[a][1]), (t[b][0], t[b][1])))
+        for t in tris
+        for a, b in ((0, 1), (1, 2), (2, 0))
+    }
+
+
+# The snapped point lands at (0.45, 0.45), 1.27 from the line's first vertex, so it is a vertex of the line. A second,
+# grid-cell merge once dropped it (both points round to the cell (0, 0)) and so left both of its segments unenforced.
+DIAG_LINE = [np.array([[-0.45, -0.45, 0.0], [10.0, 10.0, 10.0]])]
+DIAG_PTS = _sites([(0.46, 0.44), (10.0, -5.0), (-5.0, 10.0), (12.0, 0.0), (0.0, 12.0)])
+
+
+def test_constrained_keeps_a_snapped_vertex_and_enforces_both_segments():
+    _, lines = _tin.prepare_sites(DIAG_PTS, DIAG_LINE, 1.0, 0.05)
+    assert len(lines[0]) == 3
+    edges = _edges(_tin.triangulate(DIAG_PTS, DIAG_LINE, 1.0, 0.05))
+    cs = [(r[0], r[1]) for r in lines[0].tolist()]
+    for a, b in zip(cs, cs[1:]):
+        assert frozenset((a, b)) in edges, (a, b)
+
+
+def test_constrained_crossing_break_lines_raise_with_a_fix():
+    pts = _sites([(0, -5), (10, -5), (10, 5), (0, 5), (5, 3), (5, -3)])
+    bl = [
+        np.array([[1.0, -1.0, 0.0], [9.0, 1.0, 0.0]]),
+        np.array([[1.0, 1.0, 0.0], [9.0, -1.0, 0.0]]),
+    ]
+    with pytest.raises(_tin.ConstrainedError) as e:
+        _tin.triangulate(pts, bl, 0.0, 0.0)
+    assert str(e.value) == _tin.CONSTRAINED_CROSSING
+    assert "Fix: split the break lines where they cross" in str(e.value)
+
+
+def test_constrained_a_point_on_a_break_line_splits_it():
+    grid = _sites([(x, y) for x in (0.0, 5.0, 10.0) for y in (0.0, 5.0, 10.0)])
+    bl = [np.array([[0.0, 5.0, 1.0], [10.0, 5.0, 1.0]])]
+    tris = _tin.triangulate(grid, bl, 0.0, 0.0)
+    edges = _edges(tris)
+    assert frozenset(((0.0, 5.0), (5.0, 5.0))) in edges
+    assert frozenset(((5.0, 5.0), (10.0, 5.0))) in edges
+    assert sum(abs(_tin._orient2d(*t)) / 2 for t in tris) == pytest.approx(100.0)
+
+
+def test_constrained_makes_every_segment_of_long_lines_an_edge():
+    rng = np.random.default_rng(7)
+    pts = np.column_stack([rng.random(400) * 100, rng.random(400) * 100, np.zeros(400)])
+    bl = [
+        np.array(
+            [[i * 20.0, 15.0 + 33.0 * k + rng.random() * 5, 1.0] for i in range(6)]
+        )
+        for k in range(3)
+    ]
+    edges = _edges(_tin.triangulate(pts, bl, 0.0, 0.0))
+    for ln in bl:
+        cs = [(r[0], r[1]) for r in ln.tolist()]
+        assert all(frozenset(s) in edges for s in zip(cs, cs[1:]))
+
+
+def test_point_to_segment_and_project_on_a_zero_length_segment():
+    assert _tin._point_segment_distance(3.0, 4.0, 0.0, 0.0, 0.0, 0.0) == 5.0
+    a = (1.0, 1.0, 7.0)
+    assert _tin._project((4.0, 5.0, 0.0), a, (1.0, 1.0, 9.0)) == (0.0, a)
+
+
+def test_snap_inserts_on_a_later_segment_of_a_polyline():
+    bl = [np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 10.0], [10.0, 10.0, 20.0]])]
+    kept, lines = _tin.prepare_sites(
+        _sites([(10.02, 4.0), (20.0, 20.0)]), bl, 0.0, 0.05
+    )
+    assert kept[:, :2].tolist() == [[20.0, 20.0]]
+    assert lines[0].tolist() == [
+        [0.0, 0.0, 0.0],
+        [10.0, 0.0, 10.0],
+        [10.0, 4.0, 14.0],
+        [10.0, 10.0, 20.0],
+    ]

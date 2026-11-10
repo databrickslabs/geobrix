@@ -335,8 +335,9 @@ def st_interpolateelevationbbox(
         breaklines_array: The break lines (line strings in any of the four formats), as
             an array; NULL or empty for none. Each segment becomes an edge of the
             triangulation.
-        merge_tolerance: Points closer than this in X and Y become one point. 0 merges
-            only identical points.
+        merge_tolerance: Points within this distance in X and Y merge into the first one
+            kept. A break line vertex wins over a mass point. 0 merges only identical
+            points.
         snap_tolerance: Points within this distance of a break line are moved onto it,
             taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming
@@ -401,8 +402,9 @@ def st_interpolateelevationgeom(
         breaklines_array: The break lines (line strings in any of the four formats), as
             an array; NULL or empty for none. Each segment becomes an edge of the
             triangulation.
-        merge_tolerance: Points closer than this in X and Y become one point. 0 merges
-            only identical points.
+        merge_tolerance: Points within this distance in X and Y merge into the first one
+            kept. A break line vertex wins over a mass point. 0 merges only identical
+            points.
         snap_tolerance: Points within this distance of a break line are moved onto it,
             taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming
@@ -722,8 +724,9 @@ def st_triangulate(
         breaklines_array: The break lines (line strings in any of the four formats), as
             an array; NULL or empty for none. Each segment becomes an edge of the
             triangulation.
-        merge_tolerance: Points closer than this in X and Y become one point. 0 merges
-            only identical points.
+        merge_tolerance: Points within this distance in X and Y merge into the first one
+            kept. A break line vertex wins over a mass point. 0 merges only identical
+            points.
         snap_tolerance: Points within this distance of a break line are moved onto it,
             taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming

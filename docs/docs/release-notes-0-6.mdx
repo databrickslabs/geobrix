@@ -622,6 +622,12 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **Any `split_point_finder` other than `'NONENCROACHING'` or `'MIDPOINT'` raises on the Python level too (behavior change).** The JVM level already raised, in both modes.
 - **The `mode` word is taken in any case on every level (fix).** The JVM level raised for `'CONFORMING'`, which the Python level ran.
 - **A multi-line break line adds each of its lines, and a polygon adds its rings (behavior change).** Any other geometry in `breaklines_array` is ignored. Before, the Python level raised for a multi-line string, and a point added a site. The JVM `st_interpolateelevationbbox` raised for anything but a line string.
+- **`merge_tolerance` merges each point into the nearest one kept before it (breaking).** Output can differ from 0.5.x when `merge_tolerance` is above 0.
+  - The break line vertices come first, so a mass point near a vertex merges into it. The vertex keeps its Z.
+  - The merge runs once, whether or not `snap_tolerance` is above 0, the same way in both modes.
+  - Before, the `constrained` mode merged the points in one grid cell of `merge_tolerance`. Points closer than it could stay apart, and a snapped point could be lost.
+- **The `constrained` mode makes every break line segment a triangle edge (fix).** Before, it often left a segment that crossed more than one edge without that edge, and gave no error. A point exactly on a break line now splits it there.
+- **The `constrained` mode raises with a `Fix:` where break lines cross (behavior change).** Before, one of the crossing segments was not an edge, and it gave no error.
 - **`merge_tolerance` 0 merges only points with the same X and Y (fix).** Before, points under 1e-12 apart merged too. A coordinate above about 9.2 million then overflowed the merge key, so distant points could merge.
 - **The JAR no longer holds `ST_InterpolateElevationGeom`.** `gbx_st_interpolateelevationgeom` ran its Python level by default and still does. Its Scala Column wrapper is gone. From Scala, call it with `call_function("gbx_st_interpolateelevationgeom", ...)`.
 

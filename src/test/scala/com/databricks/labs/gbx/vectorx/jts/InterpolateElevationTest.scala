@@ -225,8 +225,7 @@ class InterpolateElevationTest extends AnyFunSuite {
               .toArray
         )
         val bl = Seq(line((5.0e6, 0.0, 0.0), (5.0e6, 1.0, 0.0)))
-        // a snap above 0 runs the merge of the mass points (no point is in reach of the line)
-        val (kept, _) = InterpolateElevation.prepareSites(far, bl, 0.0, 1e-9)
+        val (kept, _) = InterpolateElevation.prepareSites(far, bl, 0.0, 0.0)
         kept.map(_.getZ).toSeq shouldBe Seq(1.0, 2.0, 4.0)
     }
 
@@ -242,5 +241,119 @@ class InterpolateElevationTest extends AnyFunSuite {
         // a null mode is the same argument error, not a NullPointerException
         intercept[IllegalArgumentException](tris(null)).getMessage shouldBe
             "mode must be 'constrained' or 'conforming'; got 'null'"
+    }
+
+    // ====== the one merge, and the constrained recovery ======
+
+    private def pts(cs: (Double, Double, Double)*) =
+        JTS.multiPoint(cs.map { case (x, y, z) => JTS.point(new Coordinate(x, y, z)) }.toArray)
+
+    private def edges(tris: Seq[Geometry]): Set[Set[(Double, Double)]] =
+        tris.flatMap { t =>
+            val cs = t.getCoordinates.take(3).map(c => (c.x, c.y))
+            Seq(Set(cs(0), cs(1)), Set(cs(1), cs(2)), Set(cs(2), cs(0)))
+        }.toSet
+
+    /** Each segment of each prepared line is a triangle edge. */
+    private def enforced(tris: Seq[Geometry], lines: Seq[Array[Coordinate]]): Boolean =
+        lines.forall(l => l.sliding(2).forall(s => edges(tris).contains(Set((s(0).x, s(0).y), (s(1).x, s(1).y)))))
+
+    // The snapped point lands at (0.45, 0.45), 1.27 from the line's first vertex, so it is a vertex of the line. A
+    // second, grid-cell merge once dropped it (both points round to the cell (0, 0)), so neither segment was enforced.
+    private val diagLine = Seq(line((-0.45, -0.45, 0.0), (10.0, 10.0, 10.0)))
+    private def diagPts() = pts((0.46, 0.44, 0.0), (10.0, -5.0, 0.0), (-5.0, 10.0, 0.0), (12.0, 0.0, 0.0), (0.0, 12.0, 0.0))
+
+    test("constrained keeps a snapped vertex and makes both of its segments edges") {
+        val (_, lines) = InterpolateElevation.prepareSites(diagPts(), diagLine, 1.0, 0.05)
+        lines(0).length shouldBe 3
+        val tris = InterpolateElevation.triangulate(diagPts(), diagLine, 1.0, 0.05, None, "constrained")
+        enforced(tris, lines) shouldBe true
+    }
+
+    test("the merge is first-wins, a line vertex winning over a mass point") {
+        // (0.9, 0) merges into the line's (0, 0); (3.6, 0) joins (3, 0), 0.6 away, where 1 m grid cells split them
+        val bl = Seq(line((0.0, 0.0, 5.0), (0.0, 10.0, 5.0)))
+        val (kept, lines) =
+            InterpolateElevation.prepareSites(pts((0.9, 0.0, 1.0), (3.0, 0.0, 1.0), (3.6, 0.0, 1.0), (8.0, 8.0, 1.0)), bl, 1.0, 0.0)
+        kept.map(c => (c.x, c.y, c.getZ)).toSeq shouldBe Seq((3.0, 0.0, 1.0), (8.0, 8.0, 1.0))
+        lines(0).map(c => (c.x, c.y, c.getZ)).toSeq shouldBe Seq((0.0, 0.0, 5.0), (0.0, 10.0, 5.0))
+    }
+
+    test("a line vertex merges into the nearest kept vertex; a line merged into one coordinate is a mass point") {
+        val bl = Seq(
+          line((0.0, 0.0, 1.0), (5.0, 0.0, 1.0)),
+          line((5.3, 0.4, 2.0), (9.0, 4.0, 2.0)),
+          line((20.0, 20.0, 3.0), (20.2, 20.0, 3.0))
+        )
+        val (kept, lines) = InterpolateElevation.prepareSites(pts(), bl, 0.5, 0.0)
+        lines.map(_.map(c => (c.x, c.y, c.getZ)).toSeq) shouldBe Seq(
+          Seq((0.0, 0.0, 1.0), (5.0, 0.0, 1.0)),
+          Seq((5.0, 0.0, 1.0), (9.0, 4.0, 2.0))
+        )
+        kept.map(c => (c.x, c.y, c.getZ)).toSeq shouldBe Seq((20.0, 20.0, 3.0))
+    }
+
+    test("turning snap on changes no merge where nothing snaps, in both modes") {
+        val p = pts((0.4, 0.0, 1.0), (-0.4, 0.0, 2.0), (5.0, 5.0, 0.0), (-5.0, 5.0, 0.0), (0.0, -5.0, 0.0))
+        val bl = Seq(line((100.0, 0.0, 0.0), (100.0, 10.0, 0.0)))
+        for (m <- Seq("constrained", "conforming")) {
+            def vs(snap: Double) =
+                InterpolateElevation.triangulate(p, bl, 1.0, snap, None, m).flatMap(_.getCoordinates).map(c => (c.x, c.y, c.getZ)).toSet
+            vs(0.0) shouldBe vs(1e-9)
+            vs(0.0) should contain((0.4, 0.0, 1.0))
+            vs(0.0).exists(_._1 == -0.4) shouldBe false
+        }
+    }
+
+    test("constrained: crossing break lines raise with a Fix, the same text as the Python level") {
+        val box = pts((0.0, -5.0, 0.0), (10.0, -5.0, 0.0), (10.0, 5.0, 0.0), (0.0, 5.0, 0.0), (5.0, 3.0, 0.0), (5.0, -3.0, 0.0))
+        val bl = Seq(line((1.0, -1.0, 0.0), (9.0, 1.0, 0.0)), line((1.0, 1.0, 0.0), (9.0, -1.0, 0.0)))
+        val e = intercept[IllegalArgumentException] {
+            InterpolateElevation.triangulate(box, bl, 0.0, 0.0, None, "constrained")
+        }
+        e.getMessage shouldBe InterpolateElevation.ConstrainedCrossing
+        e.getMessage should include("Fix: split the break lines where they cross")
+    }
+
+    test("constrained: a point exactly on a break line splits it, and every segment is an edge") {
+        // a 3 x 3 grid with a break line along its middle row through (5, 5)
+        val grid = pts((for (x <- Seq(0.0, 5.0, 10.0); y <- Seq(0.0, 5.0, 10.0)) yield (x, y, 0.0)): _*)
+        val bl = Seq(line((0.0, 5.0, 1.0), (10.0, 5.0, 1.0)))
+        val tris = InterpolateElevation.triangulate(grid, bl, 0.0, 0.0, None, "constrained")
+        edges(tris) should contain(Set((0.0, 5.0), (5.0, 5.0)))
+        edges(tris) should contain(Set((5.0, 5.0), (10.0, 5.0)))
+        tris.map(_.getArea).sum shouldBe 100.0 +- 1e-9
+    }
+
+    test("constrained: every segment of long break lines through many points is an edge") {
+        val rnd = new scala.util.Random(7)
+        val p = pts((0 until 400).map(_ => (rnd.nextDouble() * 100, rnd.nextDouble() * 100, 0.0)): _*)
+        val bl = (0 until 3).map(k => line((0 until 6).map(i => (i * 20.0, 15.0 + 33.0 * k + rnd.nextDouble() * 5, 1.0)): _*))
+        val (_, lines) = InterpolateElevation.prepareSites(p, bl, 0.0, 0.0)
+        enforced(InterpolateElevation.triangulate(p, bl, 0.0, 0.0, None, "constrained"), lines) shouldBe true
+    }
+
+    test("pointToSegment and project on a zero-length segment measure to and return its point") {
+        InterpolateElevation.pointToSegment(3.0, 4.0, 0.0, 0.0, 0.0, 0.0) shouldBe 5.0
+        val a = new Coordinate(1.0, 1.0, 7.0)
+        val (r, q) = InterpolateElevation.project(new Coordinate(4.0, 5.0, 0.0), a, new Coordinate(1.0, 1.0, 9.0))
+        r shouldBe 0.0
+        (q eq a) shouldBe true
+    }
+
+    test("snap inserts a point on a later segment of a polyline, between that segment's ends") {
+        val bl = Seq(line((0.0, 0.0, 0.0), (10.0, 0.0, 10.0), (10.0, 10.0, 20.0)))
+        val (kept, lines) = InterpolateElevation.prepareSites(pts((10.02, 4.0, 0.0), (20.0, 20.0, 0.0)), bl, 0.0, 0.05)
+        kept.map(c => (c.x, c.y)).toSeq shouldBe Seq((20.0, 20.0))
+        lines(0).map(c => (c.x, c.y, c.getZ)).toSeq shouldBe
+            Seq((0.0, 0.0, 0.0), (10.0, 0.0, 10.0), (10.0, 4.0, 14.0), (10.0, 10.0, 20.0))
+    }
+
+    test("a 2D mass point has Z 0") {
+        val p = JTS.multiPoint(Seq((0.0, 0.0), (10.0, 0.0), (0.0, 10.0)).map { case (x, y) => JTS.point(new Coordinate(x, y)) }.toArray)
+        for (m <- Seq("constrained", "conforming")) {
+            InterpolateElevation.triangulate(p, Seq.empty, 0.0, 0.0, None, m).flatMap(_.getCoordinates).map(_.getZ).toSet shouldBe
+                Set(0.0)
+        }
     }
 }

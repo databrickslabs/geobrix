@@ -1276,12 +1276,14 @@ def _tin_finder(fn: str, split_point_finder) -> None:
 
 
 def _tin_rows(fn: str, rows, what: str):
-    """The rows within the cap; a conforming triangulation that gives up raises with the function's name and its Fix."""
+    """The rows within the cap; a triangulation that gives up (either mode) raises with the function's name and its
+    Fix."""
     from databricks.labs.gbx.pyvx._conforming import ConformingError
+    from databricks.labs.gbx.pyvx._tin import ConstrainedError
 
     try:
         return _rows_within_cap(fn, rows, what)
-    except ConformingError as exc:
+    except (ConformingError, ConstrainedError) as exc:
         raise _parameter(fn, str(exc)) from None
 
 

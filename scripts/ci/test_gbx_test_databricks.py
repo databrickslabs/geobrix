@@ -844,6 +844,9 @@ def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):
     newer.write_bytes(b"PK")
     os.utime(jar, (1, 1))  # an older build, though its name sorts after the newer one
     assert launcher.jar_source(str(tmp_path)) == newer
+    os.utime(jar, (5, 5))
+    os.utime(newer, (5, 5))  # equal mtimes (a copied folder): the higher version wins, not the later name
+    assert launcher.jar_source(str(tmp_path)) == newer
 
 
 # ---- the queue and the runners that take shards from it

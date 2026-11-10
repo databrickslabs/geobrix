@@ -801,12 +801,17 @@ def stage_jar(path: Path, root: Path, copy: bool = True) -> dict:
 # ---------------------------------------------------------------------------------------------- the workspace side
 
 
+def _version_key(name: str) -> tuple:
+    """The numbers of a file name as ints, so ``0.10.0`` sorts after ``0.9.0`` (the tie-break of equal mtimes)."""
+    return tuple(int(n) for n in re.findall(r"\d+", name))
+
+
 def jar_source(jar_path: str) -> Optional[Path]:
     """The JAR ``--jar-path`` names: the file itself, or in a folder (``python/geobrix/lib/`` when unset) its
-    ``geobrix-*-jar-with-dependencies.jar`` (the newest, should it hold several). None when there is none."""
+    ``geobrix-*-jar-with-dependencies.jar`` (the newest by mtime, then by version, should it hold several). None when there is none."""
     p = Path(jar_path) if jar_path else REPO_ROOT / "python/geobrix/lib"
     if p.is_dir():
-        jars = sorted(p.glob("geobrix-*-jar-with-dependencies.jar"), key=lambda j: (j.stat().st_mtime, j.name))
+        jars = sorted(p.glob("geobrix-*-jar-with-dependencies.jar"), key=lambda j: (j.stat().st_mtime, _version_key(j.name)))
         return jars[-1] if jars else None
     return p
 

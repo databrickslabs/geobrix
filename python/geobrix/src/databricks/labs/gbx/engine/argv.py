@@ -32,6 +32,10 @@ from databricks.labs.gbx.engine.spec import (
     guard_tokens,
 )
 
+# what a streamed polygonize holds for each column of the band, at most: two lines of values (8 bytes) and of region ids
+# (4 bytes), a line of mask bytes and two lines of the polygonizer's arm records (under 100 bytes each)
+_STREAM_BYTES_PER_COLUMN = 256
+
 _ITEMSIZE = {
     "Byte": 1,
     "UInt8": 1,
@@ -1140,11 +1144,16 @@ def estimate_output(
     count), else the input's own size. The type is the argv's ``--output-data-type`` when it has one, else the row's
     output type; the bands are the algorithm's (``_OUT_BANDS``), else the input's. A reprojection that carries a mask
     (``RasterProps.mask``) also holds the mask's working arrays: a byte per input pixel in four copies and a byte per
-    output pixel in three.
+    output pixel in three. A JSON output holds nothing to count, and a streamed features output its line buffers.
     """
     first = props[0]
     if fn.gdal.out_kind == "json":
         return 0  # the text is small; the statistics read the pixels block by block
+    if fn.gdal.out_kind == "features" and fn.gdal.out_stream:
+        # a streamed features output writes no raster: GDAL writes the features to a file on local disk and reads the
+        # band a line at a time, so what it holds is its line buffers (``_STREAM_BYTES_PER_COLUMN``). Its bookkeeping
+        # grows with the regions it finds (about 30 bytes a region, test_polygonize_memory), which no header gives.
+        return first.width * _STREAM_BYTES_PER_COLUMN
     if fn.gdal.alg == command_mod.PIPELINE_ALG:
         raise ValueError(
             "a command's output is judged by pipeline_peak (run._judge_budget)"

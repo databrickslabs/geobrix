@@ -219,3 +219,23 @@ def test_a_transparent_pixel_is_left_out_and_the_alpha_is_read_a_strip_at_a_time
     assert res.error is None, res.error
     assert {row[1] for row in res.features} == {1.0}
     assert reads and max(reads) <= 4  # no read of the whole tile
+
+
+def test_a_tile_whose_decoded_size_fits_the_budget_is_polygonized(engine, monkeypatch):
+    """The output is features on local disk, not a raster: a tile is judged by its own decoded size, so one that fits
+    the budget with little to spare is polygonized."""
+    import numpy as np
+
+    from databricks.labs.gbx.engine import argv
+
+    values = np.ones((1024, 64), "uint8")
+    values[8:, :] = 3
+    props = [argv.RasterProps(4000, 4000, 1, "Byte")]
+    assert argv.estimate_output(POLY, [], props) == 4000 * argv._STREAM_BYTES_PER_COLUMN
+    # the tile's 64 KiB and its line buffers, where a raster of its pixels would be 64 KiB more
+    monkeypatch.setattr(
+        run, "decoded_budget", lambda: 1024 * 64 + 64 * argv._STREAM_BYTES_PER_COLUMN
+    )
+    res = run.run(POLY, [_tile(values)], {"band": 1, "connectedness": 4})
+    assert res.error is None, res.error
+    assert sorted(row[1] for row in res.features) == [1.0, 3.0]

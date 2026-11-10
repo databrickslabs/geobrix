@@ -47,6 +47,12 @@ bash scripts/commands/gbx-review-round.sh [OPTIONS] [-- <extra isaac args>]
 Extra isaac flags after `--` pass through (e.g. `-- -f markdown -o report.md`). Isaac runs
 via `dbexec repo run isaac` (the shell alias is not available in a non-interactive script).
 
+## Scope in a dirty checkout
+
+- Isaac's local mode also reviews uncommitted and untracked files, not only `base...HEAD`.
+- When the checkout has any, the command reviews `HEAD` from a clean detached worktree. The scope is then the committed change alone.
+- Commit what you want reviewed first.
+
 ## Examples
 
 ```bash

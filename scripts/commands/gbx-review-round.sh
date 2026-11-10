@@ -172,6 +172,14 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
     ISAAC_ARGS=(review --uncommitted)
     echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
+elif [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain 2>/dev/null)" ]]; then
+    # isaac's local mode reviews the checkout's uncommitted and untracked files too, not only base...HEAD: in a
+    # tree another agent edits, that pulls their work-in-progress into the review. Review HEAD from a clean
+    # detached worktree instead, so the scope is the committed change alone.
+    REVIEW_DIR="$(mktemp -d -t gbx-review-wt.XXXXXX)"
+    trap 'git -C "$PROJECT_ROOT" worktree remove --force "$REVIEW_DIR" >/dev/null 2>&1' EXIT
+    git worktree add --quiet --detach "$REVIEW_DIR" HEAD || exit 2
+    echo -e "${CYAN}Uncommitted changes here:${NC} reviewing HEAD in a clean worktree, so only ${BASE}...HEAD is in scope."
 fi
 # Report every severity, and skip the generated lock files by default (Isaac opt_out.paths in the
 # layered config). One config is passed: isaac-review-local.yaml (all severities + the opt_out), or with

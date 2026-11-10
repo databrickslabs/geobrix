@@ -127,6 +127,15 @@ SPEC_GDAL = (
         "overlaps",
         ONLY,
     ),
+    # a refusal GDAL still makes after the grammar is the tile's: a tile with no CRS gives an error tile that says how to set one
+    Case(
+        "gdal_reproject_no_crs",
+        G,
+        (Build("tile_nocrs"), "reproject --output-crs=3857"),
+        "error_fix",
+        None,
+        ONLY,
+    ),
     # the input rows
     Case("gdal_error_in", G, (ERR, "slope"), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("gdal_corrupt", G, (CORRUPT, "slope"), "error_tile", None, ONLY),

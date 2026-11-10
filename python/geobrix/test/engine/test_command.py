@@ -67,6 +67,22 @@ def test_the_engine_writes_the_read_and_write_steps_and_the_caller_cannot_move_t
     assert [s[0] for s in steps] == ["read", "select", "slope", "tpi", "write"]
 
 
+_GOOD = {
+    "kernel": "[[1,1,1],[1,1,1],[1,1,1]]",
+    "mapping": "[0,1]=1",
+    "output-data-type": "Int16",
+    "band": "1",
+    "position": "1,2,3",
+    "size": "10,10",
+}
+
+
+def _needs(step, skip=()):
+    """The arguments a step cannot run without (`command.REQUIRED`, and a size for resize), written out."""
+    keys = list(command.REQUIRED.get(step, ())) + (["size"] if step == "resize" else [])
+    return "".join(f" --{k}={_GOOD[k]}" for k in keys if k not in skip)
+
+
 # --- every allowed argument against every way to name a file --------------------------------------------------------
 
 _ARGS = [
@@ -102,7 +118,10 @@ def test_no_allowed_argument_takes_a_path_url_file_or_separator(step, arg, kind,
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     with pytest.raises(spec.ParamError):
         command.pipeline_tokens(
-            f'{step} --{arg}="{escaped}"', SECTION, argv.canonical_crs, []
+            f'{step}{_needs(step, (arg,))} --{arg}="{escaped}"',
+            SECTION,
+            argv.canonical_crs,
+            [],
         )
 
 
@@ -127,7 +146,9 @@ def test_no_allowed_argument_hides_a_second_step_in_its_value(step, arg, kind):
         "expr": "[0,1]=1; DEFAULT=0",
     }[kind]
     steps = command.steps_of(
-        command.pipeline_tokens(f'{step} --{arg}="{ok}"', SECTION, str, [])
+        command.pipeline_tokens(
+            f'{step}{_needs(step, (arg,))} --{arg}="{ok}"', SECTION, str, []
+        )
     )
     assert [s[0] for s in steps] == ["read", step, "write"]
 
@@ -222,17 +243,131 @@ def test_a_flag_takes_true_or_false_only():
     assert "--no-edges" not in _build("slope --no-edges=false")
 
 
-def test_the_pipeline_estimate_counts_a_resize_a_reprojection_and_a_held_step():
-    one = argv._pipeline_estimate(_build("slope"), PROPS[0], None)
-    assert one == 64 * 48 * 4  # a terrain step writes Float32
-    big = argv._pipeline_estimate(_build("resize --size=640,480"), PROPS[0], None)
-    assert big == 640 * 480 * 4
-    pct = argv._pipeline_estimate(_build("resize --size=200%,200%"), PROPS[0], None)
-    assert pct == 128 * 96 * 4
-    held = argv._pipeline_estimate(_build("sieve ! fill-nodata"), PROPS[0], None)
+class _Geo(argv.NoGeo):
+    """A reprojection that keeps the grid of the state it is given, scaled by `scale` in each direction."""
+
+    def __init__(self, scale=1.0):
+        self.scale = scale
+
+    def warp(self, st, target):
+        return (
+            int(st.width * self.scale),
+            int(st.height * self.scale),
+            st.px_x / self.scale,
+            st.px_y / self.scale,
+            st.ox,
+            st.oy,
+        )
+
+    def envelope(self, bbox, from_crs, to_crs):
+        return tuple(bbox)
+
+
+def _start(width=64, height=48, bands=1, item=4, px=10.0):
+    return argv.PipeState(
+        width, height, px, px, 0.0, 0.0, "EPSG:32633", bands, item, True
+    )
+
+
+def _peak(cmd, start=None, geo=None):
+    return argv.pipeline_peak(_build(cmd), start or _start(), geo or _Geo())
+
+
+def test_the_peak_is_the_largest_state_any_step_leaves():
+    assert _peak("slope") == 64 * 48 * 4  # a terrain step writes Float32
+    assert _peak("resize --size=640,480") == 640 * 480 * 4
+    assert _peak("resize --size=200%,200%") == 128 * 96 * 4
     assert (
-        held == 64 * 48 * 4 * 3
-    )  # the input's size, once for each held step, plus the output
+        _peak("sieve") == 64 * 48 * 4 * 2
+    )  # a step that holds its result also holds its input
+    # a later step that shrinks the tile does not lower the peak
+    assert _peak("resize --size=640,480 ! resize --size=10,10") == 640 * 480 * 4
+
+
+def test_chained_resizes_are_sized_from_the_step_before_not_from_the_input():
+    """Two 200% resizes make a tile 16 times the pixels, not 4: the second is sized from the first's output."""
+    once = _peak("resize --size=200%,200%")
+    twice = _peak("resize --size=200%,200% ! resize --size=200%,200%")
+    assert twice == 16 * 64 * 48 * 4 == 4 * once
+    assert (
+        _peak(
+            "resize --size=200%,200% ! resize --size=200%,200% ! resize --size=200%,200%"
+        )
+        == 64 * 64 * 48 * 4
+    )
+
+
+def test_a_resolution_is_read_against_the_extent_the_steps_before_it_left():
+    # 640 x 480 m of 10 m pixels; a 1 m resolution makes 640 x 480 pixels, and after a 2x reprojection, 1280 x 960
+    assert _peak("resize --resolution=1,1") == 640 * 480 * 4
+    assert (
+        _peak("reproject --output-crs=3857 ! resize --resolution=1,1", geo=_Geo(2.0))
+        == 640 * 480 * 4
+    )
+    # a fine resolution after a reprojection is bounded by that reprojection's grid
+    assert (
+        _peak("reproject --output-crs=3857 --resolution=0.5,0.5", geo=_Geo(2.0))
+        == 1280 * 960 * 4
+    )
+
+
+def test_a_reprojection_is_sized_from_the_state_it_gets():
+    # each reproject asks GDAL for the grid of the step before: two 2x grids make 4x each way
+    assert (
+        _peak(
+            "reproject --output-crs=3857 ! reproject --output-crs=4326", geo=_Geo(2.0)
+        )
+        == 256 * 192 * 4
+    )
+    assert (
+        _peak("resize --size=128,96 ! reproject --output-crs=3857", geo=_Geo(2.0))
+        == 256 * 192 * 4
+    )
+
+
+def test_a_clip_shrinks_the_state_and_a_type_step_changes_the_bytes():
+    assert _peak("clip --window=0,0,16,8 ! resize --size=200%,200%") == max(
+        16 * 8 * 4, 32 * 16 * 4
+    )
+    assert (
+        _peak("set-type --output-data-type=Byte ! resize --size=200%,200%")
+        == 128 * 96 * 1
+    )
+    assert _peak("set-type --output-data-type=Float64") == 64 * 48 * 8
+    # a box outside the tile is bounded by the box itself when the step allows it
+    big = _peak("clip --bbox=0,0,64000,48000 --allow-bbox-outside-source")
+    assert big == 6400 * 4800 * 4
+    assert _peak("clip --bbox=0,0,64000,48000") == 64 * 48 * 4
+
+
+def test_a_step_whose_output_cannot_be_bounded_is_refused_with_a_fix():
+    unknown = argv.PipeState(64, 48, 0.0, 0.0, 0.0, 0.0, "EPSG:32633", 1, 4, True)
+    with pytest.raises(spec.DataError, match="give --size"):
+        _peak("resize --resolution=1,1", unknown)
+    with pytest.raises(spec.DataError, match="give --size"):
+        _peak("reproject --output-crs=3857 --resolution=1,1", unknown, argv.NoGeo())
+    no_crs = argv.PipeState(64, 48, 10.0, 10.0, 0.0, 0.0, None, 1, 4, True)
+    with pytest.raises(spec.DataError, match="no CRS"):
+        _peak("reproject --output-crs=3857", no_crs)
+    # an absolute --size needs no extent
+    assert _peak("resize --size=100,100", unknown) == 100 * 100 * 4
+    assert (
+        _peak("reproject --output-crs=3857 --size=100,100", unknown, argv.NoGeo())
+        == 100 * 100 * 4
+    )
+
+
+def test_a_required_argument_missing_is_the_callers_mistake_and_raises():
+    for cmd, names in [
+        ("neighbors --method=mean", "kernel"),
+        ("reclassify", "mapping"),
+        ("set-type", "output-data-type"),
+        ("select", "band"),
+        ("viewshed", "position"),
+        ("resize", "size"),
+    ]:
+        with pytest.raises(spec.ParamError, match=names):
+            _build(cmd)
 
 
 # --- the run: what the caller's text cannot reach --------------------------------------------------------------------
@@ -242,7 +377,14 @@ needs_engine = pytest.mark.skipif(
 )
 
 
-def _dem(width=64, height=48, crs="EPSG:32633", nodata=None) -> bytes:
+def _dem(
+    width=64,
+    height=48,
+    crs="EPSG:32633",
+    nodata=None,
+    origin=(500000.0, 4000000.0),
+    px=10.0,
+) -> bytes:
     y, x = np.mgrid[0:height, 0:width]
     z = (np.sin(x / 6.0) * 30 + y * 2).astype("float32")
     profile = dict(
@@ -253,7 +395,7 @@ def _dem(width=64, height=48, crs="EPSG:32633", nodata=None) -> bytes:
         dtype="float32",
         crs=crs,
         nodata=nodata,
-        transform=from_origin(500000.0, 4000000.0, 10.0, 10.0),
+        transform=from_origin(origin[0], origin[1], px, px),
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -346,9 +488,12 @@ def test_the_scratch_is_removed_after_every_call():
 
 
 @needs_engine
-def test_gdal_refusing_a_value_is_a_parameter_error_naming_the_cause():
-    with pytest.raises(spec.ParamError, match="kernel"):
-        _run("neighbors --method=mean --size=3")
+def test_a_refusal_gdal_still_makes_is_the_tiles_and_gives_an_error_tile():
+    """The grammar rejects every problem of the command; what GDAL refuses after that comes from the tile."""
+    res = _run("reproject --output-crs=3857", _dem(crs=None))
+    assert res.raster is None and "CRS" in res.error
+    res = _run("clip --window=0,0,640,480")
+    assert res.raster is None and res.error
 
 
 @needs_engine
@@ -363,7 +508,57 @@ def test_a_large_output_is_judged_before_gdal_writes_it(monkeypatch):
     res = _run("resize --size=20000,20000")
     assert res.raster is None and "MiB decoded" in res.error
     monkeypatch.setattr(run, "decoded_budget", lambda: 64 * 1024 * 1024)
-    assert _run("resize --size=200,200").error is None
+    assert (
+        _run("resize --size=200,200").error is None
+    )  # a single size within the cap runs
+
+
+@needs_engine
+def test_chained_percent_resizes_and_a_fine_resolution_are_refused_by_the_budget(
+    monkeypatch,
+):
+    """Each step is sized from the one before it (the real GDAL grid), so the steps cannot add up to more than the cap."""
+    monkeypatch.setattr(run, "decoded_budget", lambda: 8 * 1024 * 1024)
+    # 64 x 48 -> x16 each way over 3 steps: 4096 x 3072 Float32 = 48 MiB
+    res = _run("resize --size=4000%,4000% ! resize --size=100%,100%")
+    assert res.raster is None and "MiB decoded" in res.error
+    res = _run(" ! ".join(["resize --size=800%,800%"] * 2))
+    assert res.raster is None and "MiB decoded" in res.error
+    # a reprojection and then a fine resolution: the extent is the reprojected one
+    res = _run("reproject --output-crs=3857 ! resize --resolution=0.01,0.01")
+    assert res.raster is None and "MiB decoded" in res.error
+    res = _run("reproject --output-crs=3857 --resolution=0.01,0.01")
+    assert res.raster is None and "MiB decoded" in res.error
+    # within the cap, the same chain runs
+    assert _run("resize --size=200%,200% ! resize --size=200%,200%").error is None
+
+
+@needs_engine
+def test_a_reprojection_keeps_the_footprint_as_a_mask_not_zeros():
+    """A source with no declared NoData: the pixels no source pixel reaches are masked, never a valid 0."""
+    src = _dem(crs="EPSG:4326", origin=(-1.0, 52.0), px=0.01)
+    res = _run("reproject --output-crs=EPSG:3035", src)
+    assert res.error is None, res.error
+    with MemoryFile(res.raster) as mf, mf.open() as out:
+        masked = int((out.dataset_mask() == 0).sum())
+        assert out.count == 1 and out.nodata is None
+    assert masked > 0, "the reprojected tile has corners outside the footprint"
+    # a value step after it keeps the mask
+    res = _run("reproject --output-crs=EPSG:3035 ! slope", src)
+    assert res.error is None, res.error
+    with MemoryFile(res.raster) as mf, mf.open() as out:
+        assert int((out.dataset_mask() == 0).sum()) >= masked
+    # a source that declares NoData already has its footprint as NoData: no mask band is added
+    res = _run(
+        "reproject --output-crs=EPSG:3035",
+        _dem(crs="EPSG:4326", origin=(-1.0, 52.0), px=0.01, nodata=-9999.0),
+    )
+    with MemoryFile(res.raster) as mf, mf.open() as out:
+        assert (
+            out.nodata == -9999.0
+            and int((out.dataset_mask() == 0).sum()) == 0
+            or out.nodata == -9999.0
+        )
 
 
 @needs_engine

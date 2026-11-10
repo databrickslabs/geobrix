@@ -67,6 +67,16 @@ _KIND_NAME = {
     "sizes": "whole numbers or percentages separated by commas",
     "expr": "an expression of letters, digits, spaces and _ . + - , ; = [ ] ( )",
 }
+# The arguments GDAL needs for a step (its usage marks them required). A step without one is the caller's mistake and
+# raises here, so a refusal GDAL still makes is the tile's. `resize` needs a size or a resolution.
+REQUIRED = {
+    "neighbors": ("kernel",),
+    "reclassify": ("mapping",),
+    "set-type": ("output-data-type",),
+    "select": ("band",),
+    "viewshed": ("position",),
+}
+ONE_OF = {"resize": ("size", "resolution")}
 _LONG = re.compile(r"^--([a-z][a-z0-9-]*)(?:=(.*))?$", re.DOTALL)
 
 
@@ -253,6 +263,17 @@ def check_step(
                 "join the argument and its value with =",
             )
         out.append(f"--{key}={_value(name, key, kind, value, canonical)}")
+    for key in REQUIRED.get(name, ()):
+        if key not in seen:
+            raise _refuse(
+                f"the step '{name}' needs the argument '{key}'",
+                f"write --{key}=<value>",
+            )
+    if name in ONE_OF and not seen & set(ONE_OF[name]):
+        raise _refuse(
+            f"the step '{name}' needs one of {', '.join(ONE_OF[name])}",
+            f"write --{ONE_OF[name][0]}=<value>",
+        )
     return out
 
 

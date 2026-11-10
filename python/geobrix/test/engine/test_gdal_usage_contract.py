@@ -139,6 +139,27 @@ def test_every_command_step_and_argument_exists_and_is_canonical(step_usage, ste
             ), (step, name, choices)
 
 
+@pytest.mark.parametrize("step", _COMMAND_STEPS)
+def test_the_arguments_gdal_requires_are_the_ones_the_grammar_requires(
+    step_usage, step
+):
+    """A step without an argument GDAL needs is the caller's mistake and raises in the grammar, so what GDAL still refuses
+    is the tile's."""
+    from databricks.labs.gbx.engine import command
+
+    required = {
+        n
+        for n, a in _args(step_usage[step]).items()
+        if a.get("required") and n not in ("input", "output")
+    }
+    have = set(command.REQUIRED.get(step, ())) | set(command.ONE_OF.get(step, ()))
+    # GDAL marks neither of two alternatives (resize: a size or a resolution) nor an argument its standard mode needs
+    # (viewshed: the position), so the grammar may require these beyond what the usage marks
+    extra = {"resize": {"resolution"}, "viewshed": {"position"}}.get(step, set())
+    assert required | extra == have, (step, required, have)
+    assert have <= set(MAN.gdal.command_allow[step]), step
+
+
 def test_the_crs_arguments_are_the_ones_whose_name_says_so():
     """`command_crs_args` is every CRS-kind argument of the allowed steps, and GDAL's CRS arguments are the `*-crs` ones."""
     named = {

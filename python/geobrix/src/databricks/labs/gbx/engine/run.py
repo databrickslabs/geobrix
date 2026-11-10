@@ -600,13 +600,44 @@ def _mask_to_carry(gdal, ds):
     return valid, declared
 
 
-def _carry_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> None:
+# The steps of a command that move pixels to another grid: the footprint mask goes through these alone.
+_GRID_STEPS = ("reproject", "resize", "clip")
+
+
+def _mask_pipeline(tokens, mask_in: str, mask_out: str) -> list:
+    """The argv of the command's grid steps alone (its `reproject`, `resize` and `clip` steps, in order, with nearest
+    resampling) over the mask raster: the mask lands on the same grid as the command's output, whatever value steps
+    (slope, scale ...) ran between them."""
+    steps = command_mod.steps_of(tokens)[1:-1]
+    out = ["read", f"--input={mask_in}", "--input-format=GTiff"]
+    for step in steps:
+        if step[0] in _GRID_STEPS:
+            keep = [t for t in step if not t.startswith("--resampling=")]
+            out += (
+                ["!"]
+                + keep
+                + (
+                    ["--resampling=nearest"]
+                    if step[0] in ("reproject", "resize")
+                    else []
+                )
+            )
+    return out + ["!", "write", f"--output={mask_out}", "--output-format=GTiff"]
+
+
+def _carry_mask(
+    gdal, tokens, src: str, out: str, prefix: str, shown, alg="raster reproject"
+) -> None:
     """The output's own mask band, from the source (see ``_mask_to_carry``): the mask is warped like the pixels, as data
-    (nearest), by the same arguments. The output gets no mask band when every pixel of it is valid; the bands stay as
-    they are (no alpha band is added)."""
+    (nearest), by the same arguments (for a command, by its grid steps). The output gets no mask band when every pixel of
+    it is valid; the bands stay as they are (no alpha band is added)."""
     import numpy as np
 
-    ds = _open_geotiff(gdal, src)
+    ds = (
+        _open_geotiff(gdal, src)
+        if src.startswith(PREFIX)
+        else _open_source(gdal, "gbx_rst_gdal", src, virtual_drivers())
+    )
     try:
         carry = _mask_to_carry(gdal, ds)
         if carry is None:
@@ -637,18 +668,15 @@ def _carry_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> None:
         )
     ]
     mask_out = f"{prefix}/mask_out.tif"
-    _execute(
-        gdal,
-        "raster reproject",
-        [
+    if alg == command_mod.PIPELINE_ALG:
+        mask_argv = _mask_pipeline(tokens, f"{prefix}/mask_in.tif", mask_out)
+    else:
+        mask_argv = [
             f"--input={prefix}/mask_in.tif",
             f"--output={mask_out}",
             "--resampling=nearest",
-        ]
-        + args,
-        shown,
-        DataError,
-    )
+        ] + args
+    _execute(gdal, alg, mask_argv, shown, DataError)
     wd = _open_geotiff(gdal, mask_out)
     od = None
     try:
@@ -1206,33 +1234,132 @@ def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple
     return sources, drivers, props
 
 
+def _suggest(gdal, ds, target: str):
+    """``(width, height, px_x, px_y, ox, oy)`` of the grid GDAL's reprojection picks for the open dataset `ds` (its header
+    alone) into `target`, or None where GDAL gives none."""
+    try:
+        got = gdal.SuggestedWarpOutput(ds, [f"DST_SRS={target}"])
+    except Exception:  # noqa: BLE001 - no grid GDAL can suggest
+        return None
+    if got is None:
+        return None
+    gt = got.geotransform
+    return int(got.width), int(got.height), abs(gt[1]), abs(gt[5]), gt[0], gt[3]
+
+
+class _PipeGeo:
+    """The geometry calls a command's output estimate needs (``argv.NoGeo``), from GDAL: the grid a reprojection picks
+    for a state (read from the input's own header while the state is still the input, else from a header-only VRT of
+    the state: no pixels are allocated), and a box moved between CRSs."""
+
+    def __init__(self, gdal, sql_name: str, name: str, drivers):
+        self.gdal, self.sql_name, self.name, self.drivers = (
+            gdal,
+            sql_name,
+            name,
+            drivers,
+        )
+
+    def warp(self, st, target):
+        gdal = self.gdal
+        if st.fresh:
+            ds = _open_source(gdal, self.sql_name, self.name, self.drivers)
+            try:
+                return _suggest(gdal, ds, target)
+            finally:
+                ds = None
+        if st.crs is None or st.px_x <= 0:
+            return None
+        vrt = gdal.GetDriverByName("VRT").Create("", st.width, st.height, 0)
+        try:
+            vrt.SetGeoTransform((st.ox, st.px_x, 0.0, st.oy, 0.0, -st.px_y))
+            vrt.SetSpatialRef(argv_mod._osr_reference(st.crs))
+            return _suggest(gdal, vrt, target)
+        finally:
+            vrt = None
+
+    def envelope(self, bbox, from_crs, to_crs):
+        osr = argv_mod._osgeo().osr
+        src, dst = argv_mod._osr_reference(from_crs), argv_mod._osr_reference(to_crs)
+        for sr in (src, dst):
+            sr.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        if src.IsSame(dst):
+            return tuple(bbox)
+        x0, y0, x1, y1 = bbox
+        try:
+            with osr.ExceptionMgr(useExceptions=True):
+                tr = osr.CoordinateTransformation(src, dst)
+                pts = [
+                    tr.TransformPoint(x, y)[:2]
+                    for x in (x0, (x0 + x1) / 2, x1)
+                    for y in (y0, (y0 + y1) / 2, y1)
+                ]
+        except RuntimeError:
+            return None
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        if not all(map(math.isfinite, xs + ys)):
+            return None
+        return min(xs), min(ys), max(xs), max(ys)
+
+
+def _pipe_start(gdal, sql_name: str, name: str, props, drivers):
+    """The ``argv.PipeState`` of a command's input: the header of the open dataset `name`."""
+    ds = _open_source(gdal, sql_name, name, drivers)
+    try:
+        sr = ds.GetSpatialRef() or (ds.GetGCPSpatialRef() if ds.GetGCPCount() else None)
+        gt = ds.GetGeoTransform()
+        known = not ds.GetGCPCount() and gt[2] == 0 and gt[4] == 0 and gt[1] and gt[5]
+        return argv_mod.PipeState(
+            props.width,
+            props.height,
+            abs(gt[1]) if known else 0.0,
+            abs(gt[5]) if known else 0.0,
+            gt[0],
+            gt[3],
+            argv_mod._export_crs(sr) if sr is not None else None,
+            props.bands,
+            argv_mod._ITEMSIZE.get(props.dtype, 8),
+            fresh=True,
+        )
+    finally:
+        ds = None
+
+
 def _judge_budget(
     gdal, fn, tokens, props, names, sources, drivers, decoded, budget
 ) -> None:
     """DataError (with a Fix) unless the call's inputs and its estimated output fit the decoded budget at once (spec
-    4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header.
+    4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header. A command is judged
+    by the largest state any of its steps leaves (``argv.pipeline_peak``): each step is sized from the one before it.
     """
-    grid = None
-    warp = tokens
-    if fn.gdal.alg == "raster pipeline":
-        # a command's first reprojection: its grid is taken from the input's header (a bound for later steps)
-        warp = next(
-            (s for s in command_mod.steps_of(tokens) if s and s[0] == "reproject"),
-            None,
-        )
-    if warp is not None and fn.gdal.alg in ("raster reproject", "raster pipeline"):
-        grid = (
-            _warp_grid(gdal, fn.sql_name, sources[0], warp, drivers)
+    if fn.gdal.alg == command_mod.PIPELINE_ALG:
+        if not budget:
+            return
+        name = sources.get(0, names[0])
+        drv = (
+            drivers
             if 0 in sources
-            else _warp_grid(
-                gdal,
-                fn.sql_name,
-                names[0],
-                warp,
-                ("GTiff",) if names[0].startswith(PREFIX) else virtual_drivers(),
-            )
+            else ("GTiff",) if names[0].startswith(PREFIX) else virtual_drivers()
         )
-    need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
+        start = _pipe_start(gdal, fn.sql_name, name, props[0], drv)
+        geo = _PipeGeo(gdal, fn.sql_name, name, drv)
+        out = argv_mod.pipeline_peak(tokens, start, geo)
+        if props[0].mask and any(
+            s[0] == "reproject" for s in command_mod.steps_of(tokens)[1:-1]
+        ):  # the footprint mask is carried through the geometry steps: a byte a pixel, in and out
+            out += 4 * props[0].width * props[0].height + 3 * (
+                out // max(start.bands * start.item, 1)
+            )
+        need = decoded + out
+    else:
+        grid = None
+        if fn.gdal.alg == "raster reproject":
+            grid = (
+                _warp_grid(gdal, fn.sql_name, sources[0], tokens, drivers)
+                if 0 in sources
+                else _warp_grid(gdal, fn.sql_name, names[0], tokens)
+            )
+        need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
     if budget and need > budget:
         raise DataError(
             f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
@@ -1380,6 +1507,14 @@ def run(
                 _remask_zero_for_flat(gdal, names[0], out)
             if block.alg == "raster reproject":
                 _carry_mask(gdal, tokens, names[0], out, prefix, shown)
+            elif block.alg == command_mod.PIPELINE_ALG and any(
+                st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]
+            ):
+                # a command that reprojects keeps the footprint, as gbx_rst_transformcrs does: GDAL fills what no source
+                # pixel reaches with 0, a value the tile never held
+                _carry_mask(
+                    gdal, tokens, names[0], out, prefix, shown, command_mod.PIPELINE_ALG
+                )
             return Result(_read(gdal, out), None, command)
         except DataError as exc:
             return Result(None, _shown(str(exc), shown), command)

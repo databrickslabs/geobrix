@@ -681,6 +681,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - GDAL's `calc` step does not run inside a pipeline. Use `gbx_rst_mapalgebra`.
 - **The tile in a file is read by its path.** A virtual tile that is a whole file is read block by block.
   - A pipeline that GDAL cannot run on a tile gives an error tile with GDAL's reason.
+  - A source with no declared NoData keeps its footprint as a mask after `reproject`. The decoded size of each step is checked against the compute's cap.
 
 ### Raster viewshed: GDAL's `raster viewshed` (behavior change) {#viewshed}
 

@@ -6263,7 +6263,7 @@ SELECT gbx_rst_gdal(tile, 'reproject --output-crs=EPSG:3857 ! slope ! hillshade 
 
 **What the command cannot do.** You cannot name an input or an output. The input is the tile you pass, and the output is the tile you get. You cannot set a file format, a creation option or a `--config` option. For map algebra, use `gbx_rst_mapalgebra`: GDAL's `calc` step does not run inside a pipeline.
 
-**Results.** The function returns what GDAL writes. `reproject` here does not mask the area outside the source, as `gbx_rst_transformcrs` does. A step that GDAL cannot run on the tile gives an error tile with GDAL's reason. A command GDAL does not accept raises. A virtual tile that is a whole file is read by its path, block by block.
+**Results.** The function returns what GDAL writes. After a `reproject` step, a source with no declared NoData keeps its footprint as a mask, as `gbx_rst_transformcrs` does: the area outside it is masked, never zero. A step that GDAL cannot run on the tile gives an error tile with GDAL's reason. This includes `reproject` on a tile with no CRS. A command that breaks the rules above, or leaves out a required argument, raises. A virtual tile that is a whole file is read by its path, block by block. The decoded size of every step is checked against the compute's cap before GDAL runs. A step whose output size cannot be bounded gives an error tile that asks for `--size`.
 
 <FunctionExamples
   name="rst_gdal"

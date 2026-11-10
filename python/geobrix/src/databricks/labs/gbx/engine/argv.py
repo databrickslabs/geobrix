@@ -8,6 +8,7 @@ format and creation options, ``--num-threads`` where the algorithm has it, and `
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import json
 import math
@@ -860,76 +861,270 @@ def _output_pixels(tokens: Sequence[str], first: "RasterProps", grid) -> int:
     return grid.width * grid.height if grid is not None else first.width * first.height
 
 
-# The steps whose result is a float (or wider than a Byte input) unless the step names the type.
+@dataclass(frozen=True)
+class PipeState:
+    """What a command's output holds after a step, for the budget: size, pixel size and top-left corner in `crs` (a pixel
+    size of 0 when the extent is unknown: a rotated or ground-control-point tile), bands and the bytes of a pixel.
+    `fresh` is True while it is still the input's own header (run reads GCPs from the file then).
+    """
+
+    width: int
+    height: int
+    px_x: float
+    px_y: float
+    ox: float
+    oy: float
+    crs: Optional[str]
+    bands: int
+    item: int
+    fresh: bool = False
+
+    @property
+    def nbytes(self) -> int:
+        return self.width * self.height * self.bands * self.item
+
+    @property
+    def extent(self) -> Optional[Tuple[float, float]]:
+        return (
+            (self.width * self.px_x, self.height * self.px_y)
+            if self.px_x > 0 and self.px_y > 0
+            else None
+        )
+
+
+class NoGeo:
+    """The geometry calls a command's estimate needs from GDAL: ``warp(state, target_crs)`` is
+    ``(width, height, px_x, px_y, ox, oy)`` of the grid a reprojection picks (None when GDAL gives none), and
+    ``envelope(bbox, from_crs, to_crs)`` is the (minx, miny, maxx, maxy) of a box moved between CRSs (None when it
+    cannot be). ``run`` supplies them from GDAL; this one has none, so a step that needs one is not bounded.
+    """
+
+    def warp(self, state, target):
+        return None
+
+    def envelope(self, bbox, from_crs, to_crs):
+        return None
+
+
+UNBOUNDED_FIX = "Fix: give --size (absolute pixels) for the step, or cut the tile smaller first (gbx_rst_retile)"
+# The steps that hold their whole result in memory while they run (GDAL cannot stream them).
 _FLOAT_STEPS = frozenset(
-    {
-        "slope",
-        "aspect",
-        "tri",
-        "tpi",
-        "roughness",
-        "proximity",
-        "neighbors",
-        "unscale",
-        "scale",
-    }
+    {"slope", "aspect", "tri", "tpi", "roughness", "proximity", "neighbors"}
 )
 
 
-def _step_pixels(step: Sequence[str], first: "RasterProps", grid) -> int:
-    """The pixels one step of a command writes at most, for the estimate: a ``--size`` (whole numbers or percentages of the
-    input's size), else a ``--resolution`` over the extent (``_output_pixels``), else the grid GDAL picks for a reprojection,
-    else the input's size."""
-    base = first.width * first.height
-    size = _token_value(step, "size")
-    if size is not None:
-        dims = (first.width, first.height)
-        try:
-            vals = [
-                (
-                    max(1, round(dims[i] * float(v[:-1]) / 100.0))
-                    if v.endswith("%")
-                    else int(v)
-                )
-                for i, v in enumerate(size.split(","))
-            ]
-        except ValueError:
-            return base
-        if (
-            len(vals) == 1
-        ):  # `--size=N` keeps the aspect ratio (GDAL's resize) or is a square: count the larger
-            vals = [vals[0], max(vals[0], round(vals[0] * dims[1] / max(dims[0], 1)))]
-        return vals[0] * vals[1]
-    if step[0] in ("reproject", "resize"):
-        return _output_pixels(
-            list(step), first, grid if step[0] == "reproject" else None
+def _unbounded(step: str, why: str) -> DataError:
+    return DataError(
+        f"gbx_rst_gdal: the output of the step '{step}' cannot be bounded ({why}). {UNBOUNDED_FIX}"
+    )
+
+
+def _numbers(text: Optional[str]) -> List[float]:
+    return [] if text is None else [float(v) for v in text.split(",")]
+
+
+def _scaled(value: str, base: int) -> Optional[int]:
+    """One `--size` value: a whole number of pixels, or a percentage of `base`; 0 (keep the aspect) is None."""
+    if value.endswith("%"):
+        return max(1, math.ceil(base * float(value[:-1]) / 100.0))
+    n = int(value)
+    return n or None
+
+
+def _sized(step, st: PipeState, size: List[str], extent) -> Tuple[int, int]:
+    """(width, height) of a ``--size`` of `st` (percentages of the current size, 0 keeps the aspect ratio)."""
+    w = _scaled(size[0], st.width)
+    h = _scaled(size[1], st.height) if len(size) > 1 else None
+    if w is None and h is None:
+        raise _unbounded(step[0], "a size of 0 and 0")
+    if w is None:
+        w = max(1, math.ceil(h * st.width / st.height))
+    if h is None:
+        h = max(1, math.ceil(w * st.height / st.width))
+    return w, h
+
+
+def _cut(step, st: PipeState, geo, box, box_crs) -> PipeState:
+    """`st` cut to the box (xmin, ymin, xmax, ymax) given in `box_crs` (None: the state's own CRS)."""
+    if st.extent is None:
+        raise _unbounded(step[0], "the tile's pixel size is unknown")
+    if box_crs is not None and st.crs is not None and box_crs != st.crs:
+        env = geo.envelope(box, box_crs, st.crs)
+        if env is None:
+            raise _unbounded(step[0], "the box cannot be moved into the tile's CRS")
+        box = env
+    elif box_crs is not None and st.crs is None:
+        raise _unbounded(step[0], "the tile has no CRS")
+    dx, dy = box[2] - box[0], box[3] - box[1]
+    w = max(1, math.ceil(dx / st.px_x))
+    h = max(1, math.ceil(dy / st.px_y))
+    if "--allow-bbox-outside-source" not in step:
+        w, h = min(w, st.width), min(h, st.height)
+    return dataclasses.replace(st, width=w, height=h, ox=box[0], oy=box[3], fresh=False)
+
+
+def _reproject(step, st: PipeState, geo) -> PipeState:
+    if _token_value(step, "input-crs") is not None:
+        st = dataclasses.replace(st, crs=_token_value(step, "input-crs"), fresh=False)
+    target = _token_value(step, "output-crs") or st.crs
+    if st.crs is None or target is None:
+        raise DataError(
+            "gbx_rst_gdal: the tile has no CRS, so it cannot be reprojected. Fix: set its CRS first with gbx_rst_setcrs"
         )
-    return base
+    g = geo.warp(st, target)
+    size, res = _token_value(step, "size"), _token_value(step, "resolution")
+    bbox = _numbers(_token_value(step, "bbox"))
+    out = dataclasses.replace(st, crs=target, fresh=False)
+    if g is not None:
+        gw, gh, gpx, gpy, gox, goy = g
+        out = dataclasses.replace(
+            out, width=gw, height=gh, px_x=gpx, px_y=gpy, ox=gox, oy=goy
+        )
+    if bbox:
+        box_crs = _token_value(step, "bbox-crs")
+        env = (
+            geo.envelope(tuple(bbox), box_crs, target)
+            if box_crs not in (None, target)
+            else tuple(bbox)
+        )
+        if env is None:
+            raise _unbounded("reproject", "the box cannot be moved into the target CRS")
+        out = dataclasses.replace(out, ox=env[0], oy=env[3])
+        ext = (env[2] - env[0], env[3] - env[1])
+    elif g is not None:
+        ext = (g[0] * g[2], g[1] * g[3])
+    else:
+        ext = None
+    if size is not None:
+        sw, sh = _sized(step, out, size.split(","), ext)
+        return dataclasses.replace(
+            out,
+            width=sw,
+            height=sh,
+            px_x=ext[0] / sw if ext else 0.0,
+            px_y=ext[1] / sh if ext else 0.0,
+        )
+    if res is not None or bbox:
+        rx, ry = (_numbers(res) * 2)[:2] if res is not None else (out.px_x, out.px_y)
+        if ext is None or rx <= 0 or ry <= 0:
+            raise _unbounded(
+                "reproject", "the extent or pixel size after the CRS change is unknown"
+            )
+        return dataclasses.replace(
+            out,
+            width=max(1, math.ceil(ext[0] / rx)),
+            height=max(1, math.ceil(ext[1] / ry)),
+            px_x=rx,
+            px_y=ry,
+        )
+    if g is None:
+        raise _unbounded("reproject", "GDAL gives no output grid for the tile")
+    return out
 
 
-def _pipeline_estimate(tokens: Sequence[str], first: "RasterProps", grid) -> int:
-    """The decoded bytes a ``command`` row's output will hold, for the per-call budget. Steps are lazy or stream in GDAL,
-    so this is a bound, not a measurement: the largest pixel count any step writes (a reprojection's from the grid GDAL
-    picks for the input), the input's bands (plus one for an alpha band), the widest type the input or a step names
-    (Float32 after a terrain, scale or neighbors step), and one more copy for each step that holds its result in memory
-    while it runs (``command.MATERIALIZING``).
+def _resize(step, st: PipeState) -> PipeState:
+    size, res = _token_value(step, "size"), _token_value(step, "resolution")
+    if size is not None:
+        w, h = _sized(step, st, size.split(","), st.extent)
+        ext = st.extent
+        return dataclasses.replace(
+            st,
+            width=w,
+            height=h,
+            px_x=ext[0] / w if ext else 0.0,
+            px_y=ext[1] / h if ext else 0.0,
+            fresh=False,
+        )
+    rx, ry = (_numbers(res) * 2)[:2]
+    if st.extent is None or rx <= 0 or ry <= 0:
+        raise _unbounded("resize", "the tile's pixel size is unknown")
+    return dataclasses.replace(
+        st,
+        width=max(1, math.ceil(st.extent[0] / rx)),
+        height=max(1, math.ceil(st.extent[1] / ry)),
+        px_x=rx,
+        px_y=ry,
+        fresh=False,
+    )
+
+
+def _clip(step, st: PipeState, geo) -> PipeState:
+    window = _numbers(_token_value(step, "window"))
+    bbox = _numbers(_token_value(step, "bbox"))
+    geometry = _token_value(step, "geometry")
+    if window:
+        out = dataclasses.replace(
+            st,
+            width=max(1, int(window[2])),
+            height=max(1, int(window[3])),
+            ox=st.ox + window[0] * st.px_x,
+            oy=st.oy - window[1] * st.px_y,
+            fresh=False,
+        )
+    elif bbox:
+        out = _cut(step, st, geo, tuple(bbox), _token_value(step, "bbox-crs"))
+    elif geometry is not None:
+        import shapely
+
+        out = _cut(
+            step,
+            st,
+            geo,
+            tuple(shapely.from_wkt(geometry).bounds),
+            _token_value(step, "geometry-crs"),
+        )
+    else:
+        out = st
+    return dataclasses.replace(out, bands=out.bands + ("--add-alpha" in step))
+
+
+def _advance(step, st: PipeState, geo) -> PipeState:
+    """The state after one step of a command."""
+    name = step[0]
+    named = _token_value(step, "output-data-type")
+    if name == "reproject":
+        out = _reproject(step, st, geo)
+    elif name == "resize":
+        out = _resize(step, st)
+    elif name == "clip":
+        out = _clip(step, st, geo)
+    elif name == "nodata-to-alpha":
+        out = dataclasses.replace(st, bands=st.bands + 1)
+    elif name == "select":
+        listed = len(_token_value(step, "band").split(","))
+        out = dataclasses.replace(
+            st, bands=max(1, st.bands - listed if "--exclude" in step else listed)
+        )
+    else:
+        out = st
+    if named is not None:
+        item = _ITEMSIZE.get(named, 8)
+    elif name == "unscale":
+        item = 8
+    elif name in _FLOAT_STEPS:
+        item = max(out.item, 4)
+    else:
+        item = out.item
+    return dataclasses.replace(out, item=item, fresh=out.fresh and out is st)
+
+
+def pipeline_peak(tokens: Sequence[str], start: PipeState, geo) -> int:
+    """The most decoded bytes a command holds at once, for the per-call budget. GDAL runs the steps lazily or in memory,
+    so the bound is the largest state any step leaves (a step that holds its result in memory while it runs also holds
+    its input), judged from the state before it: a reprojection's grid is the one GDAL picks for the previous step's
+    output (``geo.warp``), a ``--resolution`` or box is read against the previous extent, a clip cuts it, a type
+    step changes the bytes of a pixel. A step whose output cannot be bounded raises a DataError with a Fix.
     """
     steps = command_mod.steps_of(tokens)[1:-1]  # without the read and write steps
-    pixels = first.width * first.height
-    item = _ITEMSIZE.get(first.dtype, 8)
-    bands = first.bands
-    held = 0
+    state, peak = start, 0
     for step in steps:
-        pixels = max(pixels, _step_pixels(step, first, grid))
-        named = _token_value(step, "output-data-type")
-        if named is not None:
-            item = max(item, _ITEMSIZE.get(named, 8))
-        elif step[0] in _FLOAT_STEPS:
-            item = max(item, 4)
-        if step[0] == "nodata-to-alpha" or "--add-alpha" in step:
-            bands = first.bands + 1
-        held += step[0] in command_mod.MATERIALIZING
-    return pixels * bands * item * (1 + held)
+        after = _advance(step, state, geo)
+        held = after.nbytes + (
+            state.nbytes if step[0] in command_mod.MATERIALIZING else 0
+        )
+        peak = max(peak, held)
+        state = after
+    return peak
 
 
 def estimate_output(
@@ -951,7 +1146,9 @@ def estimate_output(
     if fn.gdal.out_kind == "json":
         return 0  # the text is small; the statistics read the pixels block by block
     if fn.gdal.alg == command_mod.PIPELINE_ALG:
-        return _pipeline_estimate(tokens, first, grid)
+        raise ValueError(
+            "a command's output is judged by pipeline_peak (run._judge_budget)"
+        )
     dtype = _token_value(tokens, "output-data-type") or (
         first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
     )

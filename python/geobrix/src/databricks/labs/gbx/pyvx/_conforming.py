@@ -407,41 +407,94 @@ def _incircle(A, B, C, p):
     return det, _ICC_ERR * perm
 
 
-def frame_vertices(env) -> np.ndarray:
-    """The three frame vertices JTS's subdivision is built in (``QuadEdgeSubdivision.createFrame``)."""
-    minx, miny, maxx, maxy = env
-    offset = max(maxx - minx, maxy - miny) * 10.0
-    return np.array(
-        [
-            [(maxx + minx) / 2.0, maxy + offset],
-            [minx - offset, miny - offset],
-            [maxx + offset, miny - offset],
-        ]
-    )
+def _orient_sign(a, b, c) -> np.ndarray:
+    """The sign of the orientation of each row triple a, b, c (+1 counter-clockwise), 0 where the floating-point
+    determinant cannot certify it (Shewchuk's error bound)."""
+    left = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
+    right = (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+    det = left - right
+    sure = np.abs(det) > _CCW_ERR * (np.abs(left) + np.abs(right))
+    return np.where(sure, np.sign(det), 0.0)
 
 
-def unique_delaunay(xy: np.ndarray, frame: Optional[np.ndarray] = None):
-    """scipy's (Qhull's) Delaunay simplices of ``xy`` when they are PROVABLY the triangles JTS makes, else None: every
-    vertex used, every triangle oriented beyond the floating-point error bound, every interior edge strictly locally
-    Delaunay beyond it (so the triangulation is unique), and, given the ``frame`` vertices, no frame vertex inside
-    or near the circle of a hull triangle (where JTS's frame and its convex-hull repair could choose otherwise). The
-    incircle expression is JTS's ``isInCircleNormalized``, so a certified sign is the sign JTS computes.
+def _valid_triangulation(xy: np.ndarray, s: np.ndarray, nb: np.ndarray) -> bool:
+    """True when the triangles ``s`` (counter-clockwise, ``nb[t, k]`` the triangle across from vertex k, -1 on the
+    hull) PROVABLY tile the convex hull of ``xy`` once: every interior edge is walked in opposite directions by its
+    two triangles (they lie on either side of it), and the hull edges form one cycle that turns strictly left at
+    every vertex, once around. With every triangle counter-clockwise, that covers each point of the hull once.
+    """
+    ti, k = np.nonzero(nb >= 0)
+    tj = nb[ti, k]
+    # the edge of ti across from k is s[ti, k+1] -> s[ti, k+2]; its twin in tj must run the other way
+    m = np.argmax(nb[tj] == ti[:, None], axis=1)
+    if not np.all(nb[tj, m] == ti):
+        return False
+    if not (
+        np.array_equal(s[ti, (k + 1) % 3], s[tj, (m + 2) % 3])
+        and np.array_equal(s[ti, (k + 2) % 3], s[tj, (m + 1) % 3])
+    ):
+        return False
+    hi, hk = np.nonzero(nb < 0)
+    org, dst = s[hi, (hk + 1) % 3], s[hi, (hk + 2) % 3]  # the hull, counter-clockwise
+    if len(org) < 3 or len(np.unique(org)) != len(org):
+        return False
+    if 2 * len(xy) - (3 * len(s) + len(org)) + 2 * len(s) != 2:  # a disk: V - E + F = 1
+        return False
+    nxt = np.full(len(xy), -1, dtype=np.int64)
+    nxt[org] = dst
+    v, n = int(org[0]), 0
+    while True:
+        v = int(nxt[v])
+        n += 1
+        if v < 0 or n > len(org):
+            return False
+        if v == org[0]:
+            break
+    if n != len(org):
+        return False
+    p, q, r = xy[org], xy[dst], xy[nxt[dst]]
+    if np.any(_orient_sign(p, q, r) <= 0):
+        return False
+    u, w = q - p, r - q
+    turn = np.arctan2(u[:, 0] * w[:, 1] - u[:, 1] * w[:, 0], (u * w).sum(axis=1))
+    return bool(turn.sum() < 3.0 * math.pi)  # 2*pi once around; 4*pi or more twice
+
+
+def unique_delaunay(xy: np.ndarray, origin=None) -> Optional[np.ndarray]:
+    """scipy's (Qhull's) Delaunay simplices of ``xy`` when they are PROVABLY the unique Delaunay triangulation, else
+    None: every vertex used, every triangle oriented beyond the floating-point error bound, the triangles a valid
+    tiling of the convex hull (:func:`_valid_triangulation`, whose hull turns strictly at every vertex), and every
+    interior edge strictly locally Delaunay beyond the error bound. The incircle expression is JTS's
+    ``isInCircleNormalized``, so a certified sign is the sign JTS computes.
+
+    JTS 1.20 builds the triangulation inside a frame triangle, but its ``forceConvex`` rules (a hull edge never flips
+    towards the frame, a concave hull corner is filled) give the Delaunay triangulation of the sites themselves, even
+    where a frame vertex lies in the circle of a thin hull triangle. Checked against the JVM on 735 point sets in each
+    mode (such a hull triangle in 439 of them in the constrained mode, 343 in the conforming mode): the certified
+    triangles were JTS's every time. The oracle rows ``tri_thin_hull_triangle_*`` pin one such input.
+
+    ``origin`` (a point) runs Qhull on ``xy - origin``, as it keeps close points far from 0 that way; the proof is on
+    ``xy`` itself, so the rounding of the shift cannot change the answer.
     """
     from scipy.spatial import Delaunay, QhullError
 
     try:
-        tri = Delaunay(xy)
+        tri = Delaunay(xy if origin is None else xy - origin)
     except QhullError:
         return None
     s = tri.simplices
     if len(getattr(tri, "coplanar", [])) or len(np.unique(s)) != len(xy):
         return None
-    a, b, c = xy[s[:, 0]], xy[s[:, 1]], xy[s[:, 2]]
-    left = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
-    right = (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
-    if np.any(np.abs(left - right) <= _CCW_ERR * (np.abs(left) + np.abs(right))):
+    ori = _orient_sign(xy[s[:, 0]], xy[s[:, 1]], xy[s[:, 2]])
+    if np.any(ori == 0.0):
         return None
-    nb = tri.neighbors
+    s, nb = s.copy(), tri.neighbors.copy()
+    # each triangle counter-clockwise: swap vertices 1 and 2, and the neighbours across from them
+    cw = ori < 0
+    s[cw, 1], s[cw, 2] = s[cw, 2], s[cw, 1]
+    nb[cw, 1], nb[cw, 2] = nb[cw, 2], nb[cw, 1]
+    if not _valid_triangulation(xy, s, nb):
+        return None
     ti, k = np.nonzero(nb >= 0)
     once = ti < nb[ti, k]  # each interior edge once
     ti, k = ti[once], k[once]
@@ -450,13 +503,6 @@ def unique_delaunay(xy: np.ndarray, frame: Optional[np.ndarray] = None):
     det, bound = _incircle(xy[opp[:, 0]], xy[opp[:, 1]], xy[opp[:, 2]], xy[s[ti, k]])
     if np.any(det > -bound):
         return None
-    if frame is not None:
-        hull = s[np.any(nb < 0, axis=1)]
-        for f in frame:
-            p = np.broadcast_to(f, (len(hull), 2))
-            det, bound = _incircle(xy[hull[:, 0]], xy[hull[:, 1]], xy[hull[:, 2]], p)
-            if np.any(det > -bound):
-                return None
     return s
 
 
@@ -494,7 +540,7 @@ def triangulate(
         return []
     va = np.array(verts, dtype=float)
     simplices = (
-        unique_delaunay(va[:, :2], frame_vertices(env))
+        unique_delaunay(va[:, :2], origin=va[:, :2].min(axis=0))
         if delaunay == "hybrid"
         else None
     )

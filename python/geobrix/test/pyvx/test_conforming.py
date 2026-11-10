@@ -196,15 +196,50 @@ def test_the_port_takes_a_point_on_an_edge_with_a_merge_tolerance(monkeypatch):
     assert _key(port) == {frozenset(t) for t in want}
 
 
-def test_the_certificate_refuses_a_hull_triangle_whose_circle_holds_a_frame_vertex():
+def test_the_certificate_takes_a_hull_triangle_whose_circle_holds_a_frame_vertex():
     # (0, 0), (5, 0.001), (10, 0) is a hull triangle with a circle of radius 12500: it holds a frame vertex of JTS's
-    # subdivision, so the hybrid takes the port's triangles
+    # subdivision, yet JTS's forceConvex rules give the Delaunay triangulation of the sites, so the hybrid keeps
+    # scipy's triangles, and they are the port's
     pts = _sites([(0, 0), (10, 0), (5, 5), (2, 3), (7, 2.5), (5, 0.001)])
     verts, env = _conforming.conforming_vertices(pts, [], 0.0)
     xy = np.array(verts)[:, :2]
     assert _conforming.unique_delaunay(xy) is not None
-    assert _conforming.unique_delaunay(xy, _conforming.frame_vertices(env)) is None
     stats = {}
     hybrid = _conforming.triangulate(pts, [], 0.0, stats=stats)
-    assert stats["fallback"] is True
+    assert stats["fallback"] is False
     assert _key(hybrid) == _key(_conforming.triangulate(pts, [], 0.0, delaunay="jts"))
+
+
+def test_the_certificate_refuses_a_folded_or_non_convex_tiling(monkeypatch):
+    # the proof is on the sites themselves: a candidate whose triangles overlap, or whose hull is not convex, is
+    # refused (each candidate: two triangles sharing the edge 0-2)
+    import scipy.spatial
+
+    class Fake:
+        def __init__(self, p):
+            self.simplices = np.array([[0, 1, 2], [0, 2, 3]])
+            self.neighbors = np.array([[-1, 1, -1], [-1, -1, 0]])
+            self.coplanar = []
+
+    monkeypatch.setattr(scipy.spatial, "Delaunay", Fake)
+    # a fold: (3, 1) is inside the triangle (0, 0), (4, 0), (4, 4), so both triangles lie on one side of 0-2
+    assert (
+        _conforming.unique_delaunay(
+            np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 4.0], [3.0, 1.0]])
+        )
+        is None
+    )
+    # a reflex hull corner at (1, 1): the triangles tile a dart, not the convex hull
+    assert (
+        _conforming.unique_delaunay(
+            np.array([[0.0, 0.0], [4.0, 0.0], [1.0, 1.0], [0.0, 4.0]])
+        )
+        is None
+    )
+    # the same two triangles over a convex quadrilateral (0-2 its Delaunay diagonal) are taken
+    assert (
+        _conforming.unique_delaunay(
+            np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [-1.0, 3.0]])
+        )
+        is not None
+    )

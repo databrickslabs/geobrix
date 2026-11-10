@@ -174,6 +174,41 @@ VECTOR_GENERATOR = (
         "triangles_exact",
         R.GRID_CONFORMING,
     ),
+    # The same grid in the constrained mode: JTS's Delaunay triangulation (its choice among the ties), then the
+    # recovery of the break line; on every level.
+    Case(
+        "tri_grid_constrained",
+        TRI,
+        (R.points(R.GRID), [R.line(R.GRID_LINE)], 0.0, 0.0, F, "constrained"),
+        "triangles_exact",
+        R.GRID_CONSTRAINED,
+    ),
+    Case(
+        "tri_grid_constrained_no_lines",
+        TRI,
+        (R.points(R.GRID), [], 0.0, 0.0, F, "constrained"),
+        "triangles_exact",
+        R.GRID_DELAUNAY,
+    ),
+    # A break line through grid sites is the chain of edges between them.
+    Case(
+        "tri_grid_diagonal_constrained",
+        TRI,
+        (R.points(R.GRID), [R.line(R.GRID_DIAGONAL)], 0.0, 0.0, F, "constrained"),
+        "triangles_exact",
+        R.GRID_DIAGONAL_CONSTRAINED,
+    ),
+    # A thin hull triangle whose circle holds a vertex of JTS's frame: still the Delaunay triangles, in both modes.
+    *(
+        Case(
+            f"tri_thin_hull_triangle_{mode}",
+            TRI,
+            (R.points(R.THIN_HULL), [], 0.0, 0.0, F, mode),
+            "triangles_exact",
+            R.THIN_HULL_DELAUNAY,
+        )
+        for mode in ("constrained", "conforming")
+    ),
     Case(
         "tri_crossing_lines_conforming_raises",
         TRI,

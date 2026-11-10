@@ -127,8 +127,8 @@ def test_triangulate_skips_empty_breakline():
 
 
 def test_triangulate_collinear_points_returns_empty():
-    # scipy Delaunay on collinear points raises QhullError ("Initial simplex
-    # is flat"). Heavy returns gracefully (no triangles); light must return [].
+    # scipy Delaunay on collinear points raises QhullError ("Initial simplex is flat"), so the JTS port triangulates
+    # them, as the JVM level does: every triangle touches JTS's frame, so there is none.
     pts = np.array(
         [[0, 0, 0], [1, 1, 0], [2, 2, 0], [3, 3, 0]], dtype=float
     )  # all on y=x
@@ -432,9 +432,9 @@ def test_a_mass_point_near_a_snapped_vertex_merges_into_it():
 
 def test_constrained_keeps_close_points_far_from_0(monkeypatch):
     # points under 1 cm apart at BNG magnitudes: Qhull on the raw coordinates leaves one out of every triangle; from
-    # the corner it keeps them all (the JTS port, the fallback, is ruled out here)
+    # the corner it keeps them all, and the certificate (on the raw coordinates) takes them (the port is ruled out)
     monkeypatch.setattr(
-        _tin, "_jts_delaunay", lambda xy: pytest.fail("Qhull left out a site")
+        _tin, "_jts_delaunay", lambda *a: pytest.fail("Qhull left out a site")
     )
     rng = np.random.default_rng(0)
     base = np.column_stack(
@@ -448,35 +448,90 @@ def test_constrained_keeps_close_points_far_from_0(monkeypatch):
     assert {(x, y) for x, y, _ in pts.tolist()} <= vs
 
 
+def _port_calls(monkeypatch):
+    calls = []
+    real = _tin._jts_delaunay
+
+    def spy(xy, env):
+        calls.append(len(xy))
+        return real(xy, env)
+
+    monkeypatch.setattr(_tin, "_jts_delaunay", spy)
+    return calls
+
+
 def test_the_jts_port_stands_in_where_qhull_leaves_out_a_site(monkeypatch):
-    # forced: the same sites through the JTS port give every site and a valid constrained triangulation
-    real = _tin.Delaunay
+    # forced: Qhull leaves a site out, so the certificate refuses and the JTS port gives every site and a valid
+    # constrained triangulation
+    import scipy.spatial
+
+    real = scipy.spatial.Delaunay
 
     class LeftOut:
         def __init__(self, xy):
-            self.simplices, self.coplanar = real(xy).simplices, [0]
+            d = real(xy)
+            self.simplices, self.neighbors, self.coplanar = (
+                d.simplices,
+                d.neighbors,
+                [0],
+            )
 
-    monkeypatch.setattr(_tin, "Delaunay", LeftOut)
-    grid = _sites([(x, y) for x in range(0, 11, 2) for y in range(0, 11, 2)])
+    monkeypatch.setattr(scipy.spatial, "Delaunay", LeftOut)
+    calls = _port_calls(monkeypatch)
+    rng = np.random.default_rng(3)
+    pts = np.column_stack([rng.random((30, 2)) * 10, np.zeros(30)])
     bl = [np.array([[1.0, 1.0, 1.0], [9.0, 8.0, 1.0]])]
-    tris = _tin.triangulate(grid, bl, 0.0, 0.0)
+    tris = _tin.triangulate(pts, bl, 0.0, 0.0)
+    assert calls == [32]
     assert frozenset(((1.0, 1.0), (9.0, 8.0))) in _edges(tris)
-    assert sum(abs(_tin._orient2d(*t)) / 2 for t in tris) == pytest.approx(100.0)
+    vs = {(v[0], v[1]) for t in tris for v in t.tolist()}
+    assert {(x, y) for x, y, _ in pts.tolist()} <= vs
 
 
-def test_a_locate_failure_in_the_jts_port_keeps_qhulls_triangles(monkeypatch):
-    from databricks.labs.gbx.pyvx._conforming import LOCATE_FAILED, ConformingError
+def test_constrained_takes_scipys_triangles_in_general_position_and_the_port_on_ties(
+    monkeypatch,
+):
+    # random sites: Qhull's triangles are certified the unique Delaunay triangulation (no port); a grid is
+    # co-circular, so the port makes JTS's choice among the ties, and the two paths agree wherever both apply
+    calls = _port_calls(monkeypatch)
+    rng = np.random.default_rng(1)
+    general = np.column_stack([rng.random((200, 2)) * 100, np.zeros(200)])
+    hybrid = _tin.triangulate(general, [], 0.0, 0.0)
+    assert calls == []
+    xy = general[:, :2]
+    env = (*map(float, xy.min(axis=0)), *map(float, xy.max(axis=0)))
+    port = {frozenset(t) for t in _tin._jts_delaunay(xy, env).tolist()}
+    calls.clear()
+    assert {frozenset(map(tuple, t[:, :2].tolist())) for t in hybrid} == {
+        frozenset(map(tuple, xy[list(t)].tolist())) for t in port
+    }
+    grid = _sites([(x, y) for x in range(6) for y in range(6)])
+    assert len(_tin.triangulate(grid, [], 0.0, 0.0)) == 50
+    assert calls == [36]
 
-    real = _tin.Delaunay
 
-    class LeftOut:
-        def __init__(self, xy):
-            self.simplices, self.coplanar = real(xy).simplices, [0]
+def test_a_thin_hull_triangle_is_certified_and_is_the_ports():
+    # (0, 0), (5, 0.001), (10, 0) is a hull triangle whose circle (radius 12500) holds a vertex of JTS's frame; JTS's
+    # forceConvex rules still give the Delaunay triangulation of the sites, so the certificate takes scipy's triangles
+    from databricks.labs.gbx.pyvx import _conforming
 
-    def fail(xy):
-        raise ConformingError(LOCATE_FAILED)
+    pts = _sites([(0, 0), (10, 0), (5, 5), (2, 3), (7, 2.5), (5, 0.001)])
+    xy = pts[:, :2]
+    s = _conforming.unique_delaunay(xy, origin=xy.min(axis=0))
+    assert s is not None
+    env = (0.0, 0.0, 10.0, 5.0)
+    assert {frozenset(t) for t in s.tolist()} == {
+        frozenset(t) for t in _tin._jts_delaunay(xy, env).tolist()
+    }
 
-    monkeypatch.setattr(_tin, "Delaunay", LeftOut)
-    monkeypatch.setattr(_tin, "_jts_delaunay", fail)
+
+def test_a_locate_failure_raises_the_constrained_error(monkeypatch):
+    # the JVM level raises the same text when DelaunayTriangulationBuilder's point location does not converge
+    from databricks.labs.gbx.pyvx import _conforming, _quadedge
+
+    monkeypatch.setattr(_conforming, "unique_delaunay", lambda xy, origin=None: None)
+    monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
     pts = _sites([(0, 0), (10, 0), (10, 10), (0, 10), (5, 5)])
-    assert len(_tin.triangulate(pts, [], 0.0, 0.0)) == 4
+    with pytest.raises(_tin.ConstrainedError) as e:
+        _tin.triangulate(pts, [], 0.0, 0.0)
+    assert str(e.value) == _tin.CONSTRAINED_LOCATE_FAILED

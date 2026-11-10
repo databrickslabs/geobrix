@@ -1,9 +1,9 @@
 """Pure-Python TIN engine for the pyvx light tier (Serverless-safe).
 
 The shared pre-step (:func:`prepare_sites`: the Z of 2D coordinates, the merge of ``merge_tolerance`` and the snap of
-``snap_tolerance``), then either mode: ``constrained`` (scipy Delaunay + Sloan constraint recovery, no Steiner points)
-or ``conforming`` (JTS 1.20's conforming Delaunay, ``_conforming``); then barycentric Z interpolation and the grid
-generators.
+``snap_tolerance``), then either mode: ``constrained`` (JTS's Delaunay triangulation, from scipy where it is certified
+unique, + Sloan constraint recovery, no Steiner points) or ``conforming`` (JTS 1.20's conforming Delaunay,
+``_conforming``); then barycentric Z interpolation and the grid generators.
 Heavy parity target: vectorx.jts.InterpolateElevation (both modes).
 """
 
@@ -12,7 +12,6 @@ from collections import deque
 from typing import List, Sequence
 
 import numpy as np
-from scipy.spatial import Delaunay, QhullError
 
 from ._jmath import hypot
 
@@ -29,8 +28,17 @@ CONSTRAINED_CROSSING = (
 )
 
 
+# The message of a constrained triangulation whose point location does not converge (JTS's LocateFailureException,
+# seen with sites very close together); the JVM level raises the same text.
+CONSTRAINED_LOCATE_FAILED = (
+    "mode 'constrained' could not triangulate the sites: locating a point did not converge, as with sites very "
+    "close together. Fix: merge close sites with a merge_tolerance above 0"
+)
+
+
 class ConstrainedError(ValueError):
-    """The constrained triangulation cannot make a break line segment an edge (``CONSTRAINED_CROSSING``)."""
+    """The constrained triangulation gave up: a break line segment cannot be made an edge (``CONSTRAINED_CROSSING``),
+    or locating a site did not converge (``CONSTRAINED_LOCATE_FAILED``)."""
 
 
 def _unique_xy(pts: np.ndarray) -> np.ndarray:
@@ -312,30 +320,15 @@ def triangulate(
 
 def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
     """Constrained Delaunay over the merged sites of :func:`prepare_sites` (no second merge): every break line
-    coordinate is a site (breaklines first), scipy's Delaunay, then Sloan recovery makes each break line segment an
-    edge, or raises :class:`ConstrainedError`."""
+    coordinate is a site (breaklines first), the Delaunay triangulation the JVM level's ``DelaunayTriangulationBuilder``
+    makes (:func:`_delaunay`), then Sloan recovery makes each break line segment an edge, or raises
+    :class:`ConstrainedError`."""
     if lines:
         pts = _unique_xy(np.vstack(lines + [pts]))
     if len(pts) < 3:
         return []
-    xy = pts[:, :2]
-    try:
-        # from its corner: Qhull loses close points far from 0
-        tri = Delaunay(xy - xy.min(axis=0))
-    except QhullError:
-        # Collinear/degenerate input ("Initial simplex is flat"): no 2D simplex
-        # exists. Heavy returns gracefully (no triangles); match it.
-        return []
-    simplices = tri.simplices.copy()
-    if len(tri.coplanar):
-        # Qhull left out a site: JTS's own triangles of every site (Qhull's, should its point location fail)
-        from ._conforming import ConformingError
-
-        try:
-            simplices = _jts_delaunay(xy)
-        except ConformingError:
-            pass
-    if lines:
+    simplices = _delaunay(pts[:, :2])
+    if lines and len(simplices):
         where = {(x + 0.0, y + 0.0): i for i, (x, y) in enumerate(pts[:, :2].tolist())}
         segments = [
             (where[(a[0] + 0.0, a[1] + 0.0)], where[(b[0] + 0.0, b[1] + 0.0)])
@@ -347,15 +340,33 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
     return [np.column_stack([pts[s, 0], pts[s, 1], z[s]]) for s in simplices]
 
 
-def _jts_delaunay(xy: np.ndarray) -> np.ndarray:
+def _delaunay(xy: np.ndarray) -> np.ndarray:
+    """The triangles (site index triples) of the JVM level's ``DelaunayTriangulationBuilder`` over ``xy``, the same
+    hybrid as the conforming mode: scipy's (Qhull's, run from the sites' corner, where it keeps close points far from
+    0) when they are certified to be the unique Delaunay triangulation (``_conforming.unique_delaunay``), which is so
+    in general position; otherwise (co-circular sites, such as a regular grid, or sites Qhull leaves out) the port of
+    JTS's incremental triangulation (:func:`_jts_delaunay`), which makes JTS's own choice among the ties.
+    """
+    from ._conforming import unique_delaunay
+
+    lo, hi = xy.min(axis=0), xy.max(axis=0)
+    env = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
+    s = unique_delaunay(xy, origin=lo)
+    return _jts_delaunay(xy, env) if s is None else s
+
+
+def _jts_delaunay(xy: np.ndarray, env) -> np.ndarray:
     """The triangles (site index triples) the JVM level's ``DelaunayTriangulationBuilder`` makes of ``xy``: the sites
-    sorted by (x, y), inserted into JTS's incremental triangulation framed on their envelope, tolerance 0 (the
-    ``_quadedge`` port). For the rare input whose close sites Qhull leaves out."""
-    from ._conforming import jts_delaunay
+    sorted by (x, y), inserted into JTS's incremental triangulation framed on their envelope ``env``, tolerance 0 (the
+    ``_quadedge`` port). Raises :class:`ConstrainedError` (``CONSTRAINED_LOCATE_FAILED``) where JTS's point location
+    fails, as the JVM level does."""
+    from ._conforming import ConformingError, jts_delaunay
 
     order = np.lexsort((xy[:, 1], xy[:, 0]))
-    env = tuple(float(v) for v in (*xy.min(axis=0), *xy.max(axis=0)))
-    tris = jts_delaunay([(x, y, 0.0) for x, y in xy[order].tolist()], env, 0.0)
+    try:
+        tris = jts_delaunay([(x, y, 0.0) for x, y in xy[order].tolist()], env, 0.0)
+    except ConformingError:
+        raise ConstrainedError(CONSTRAINED_LOCATE_FAILED) from None
     return order[tris]
 
 

@@ -131,7 +131,8 @@ object InterpolateElevation {
      *  `_triangulate_constrained`:
      *
      *  1. Site set = breakline coords (first) ++ mass points, a coordinate two lines share kept once.
-     *  2. Unconstrained Delaunay over the XY of all sites (JTS `DelaunayTriangulationBuilder`).
+     *  2. Unconstrained Delaunay over the XY of all sites (JTS `DelaunayTriangulationBuilder`); a point location
+     *     that does not converge raises [[ConstrainedLocateFailed]].
      *  3. Sloan recovery ([[recoverConstraints]]): each breakline segment becomes a triangle edge, or it raises.
      */
     private def triangulateConstrained(
@@ -149,7 +150,9 @@ object InterpolateElevation {
         // --- 2. initial unconstrained Delaunay over XY ---
         val builder = new DelaunayTriangulationBuilder()
         builder.setSites(java.util.Arrays.asList(sites: _*))
-        val triGeomColl = builder.getTriangles(gf)
+        val triGeomColl =
+            try builder.getTriangles(gf)
+            catch { case e: LocateFailureException => throw new IllegalArgumentException(ConstrainedLocateFailed, e) }
         val initialPolys =
             PolygonExtracter.getPolygons(triGeomColl).asScala.map(_.asInstanceOf[Polygon]).toSeq
 
@@ -383,6 +386,12 @@ object InterpolateElevation {
     val ConstrainedCrossing: String =
         "mode 'constrained' could not make every break line segment a triangle edge: break lines cross, or a line " +
             "crosses itself. Fix: split the break lines where they cross"
+
+    /** The message of a constrained triangulation whose point location does not converge (the light
+     *  `CONSTRAINED_LOCATE_FAILED`). */
+    val ConstrainedLocateFailed: String =
+        "mode 'constrained' could not triangulate the sites: locating a point did not converge, as with sites very " +
+            "close together. Fix: merge close sites with a merge_tolerance above 0"
 
     /** >0 if a->b->c is counter-clockwise (2D orientation). Mirrors light `_orient2d`. */
     private def orient2d(a: Coordinate, b: Coordinate, c: Coordinate): Double =

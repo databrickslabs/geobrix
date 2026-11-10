@@ -812,6 +812,23 @@ REGISTRY: Dict[str, FnSpec] = {
         )(ds),
         col_fn=lambda t, a: rx.rst_slope(t, a["unit"]),
     ),
+    # gbx_rst_gdal: the cost is the command's. One step (slope) is timed; the engine, not the step, is what this row
+    # measures, so it is timing-only.
+    "rst_gdal": FnSpec(
+        "rst_gdal",
+        "gbx_rst_gdal",
+        "terrain",
+        ("pure-core",),
+        {"command": "slope --unit=degree"},
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the light level only
+        core=False,
+        fingerprint=False,
+        core_fn=lambda ds, a: _engine_core("gbx_rst_gdal", {"command": a["command"]})(
+            ds
+        ),
+        col_fn=lambda t, a: rx.rst_gdal(t, F.lit(a["command"])),
+    ),
     "rst_ndvi": FnSpec(
         "rst_ndvi",
         "gbx_rst_ndvi",

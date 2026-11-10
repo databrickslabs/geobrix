@@ -23,7 +23,7 @@ _REFUSED = (
     ("read_step", "read --input=/etc/passwd", "read"),
     ("vector_step", "vector buffer", "vector"),
     ("dialect", "calc --calc=A --dialect=builtin", "calc"),
-    ("config_arg", "slope --config=GDAL_CACHEMAX=1", "config"),
+    ("config_arg", "slope --config=GDAL_NUM_THREADS=1", "config"),
     ("output_override", "slope --output=/tmp/gbx_oracle_out.tif", "output"),
     ("input_override", "slope --input=/etc/passwd", "input"),
     ("creation_option", "slope --creation-option=COMPRESS=NONE", "creation-option"),

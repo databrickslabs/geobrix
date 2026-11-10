@@ -373,6 +373,26 @@ def test_a_thin_cutline_that_holds_pixel_centres_keeps_just_those_pixels(tmp_pat
         assert (data[0][kept] == want).all()
 
 
+def test_the_centre_check_scans_past_the_representative_point_and_judges_the_grid(
+    monkeypatch,
+):
+    """An L of thin bars whose representative point sits on the leg (no centre) holds centres along its foot: the strip
+    scan finds them over several strips. The centres are the grid's, so a tile the foot only grazes keeps the centre
+    rule, as the whole raster does; a cutline that misses the raster keeps the caller's rule.
+    """
+    t = from_origin(0, N, 1, 1)  # a column is x, a row is N - y
+    leg = box(3.6, N - 29.55, 3.7, N - 2)  # between the centres of columns 3 and 4
+    foot = box(3.6, N - 29.55, 10.3, N - 29.45)  # the centres of row 29, columns 4 to 9
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 2 * 8)  # two rows a strip
+    assert not edit.holds_no_pixel_centre(leg.union(foot), t, N, N)
+    assert edit.holds_no_pixel_centre(leg, t, N, N)
+    grazed = from_origin(
+        10, N, 1, 1
+    )  # the tile of columns 10 to 14: the foot reaches 0.3 into it
+    assert not edit.holds_no_pixel_centre(foot, grazed, 5, N)
+    assert not edit.holds_no_pixel_centre(box(100.2, 1.1, 100.3, 1.2), t, N, N)
+
+
 # ---------------------------------------------------------------------------
 # the materializers
 # ---------------------------------------------------------------------------

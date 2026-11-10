@@ -62,12 +62,14 @@ _CENTRE_STRIP_PIXELS = 1 << 20
 
 def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     """True when the cutline *shape* (in the raster's CRS, a shapely geometry or its GeoJSON-like dict) holds the centre of
-    no pixel of the ``width`` x ``height`` raster on *transform*, though it reaches the raster. A clip that keeps the pixels
-    whose centre it holds would keep only NoData, so a clip keeps the pixels it touches instead (``all_touched``): the
-    pixels it stands in. A cutline that holds a centre keeps the caller's rule, however small or thin it is.
+    no pixel of the grid *transform* lays out, though it reaches the ``width`` x ``height`` raster. A clip that keeps the
+    pixels whose centre it holds would keep only NoData, so a clip keeps the pixels it touches instead (``all_touched``):
+    the pixels it stands in. A cutline that holds a centre keeps the caller's rule, however small or thin it is.
 
-    It looks at the pixel of the cutline's representative point first (most cutlines hold its centre), then rasterizes
-    the window the cutline's bounds cover, a strip of rows at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found.
+    The centres are the grid's, also past the raster's edge: the tiles of one raster, clipped one at a time, then decide
+    as the whole raster does (a tile the cutline only grazes keeps nothing, not the pixels it touches). It looks at the
+    pixel of the cutline's representative point first (most cutlines hold its centre), then rasterizes the window the
+    cutline's bounds cover, a strip of rows at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found.
     """
     import math
 
@@ -77,20 +79,19 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     if geom.is_empty:
         return False
     inverse = ~transform
-    p = geom.representative_point()
-    col, row = (math.floor(v) for v in inverse * (p.x, p.y))
-    if 0 <= col < width and 0 <= row < height:
-        cx, cy = transform * (col + 0.5, row + 0.5)
-        if geom.contains(shapely.Point(cx, cy)):
-            return False
     x0, y0, x1, y1 = geom.bounds
     corners = [inverse * (x, y) for x in (x0, x1) for y in (y0, y1)]
-    c0 = max(0, math.floor(min(c for c, _ in corners)))
-    c1 = min(width, math.ceil(max(c for c, _ in corners)))
-    r0 = max(0, math.floor(min(r for _, r in corners)))
-    r1 = min(height, math.ceil(max(r for _, r in corners)))
-    if c1 <= c0 or r1 <= r0:
+    c0 = math.floor(min(c for c, _ in corners))
+    c1 = math.ceil(max(c for c, _ in corners))
+    r0 = math.floor(min(r for _, r in corners))
+    r1 = math.ceil(max(r for _, r in corners))
+    if min(c1, width) <= max(c0, 0) or min(r1, height) <= max(r0, 0):
         return False  # it misses the raster: the clip has nothing to keep either way
+    p = geom.representative_point()
+    col, row = (math.floor(v) for v in inverse * (p.x, p.y))
+    if geom.contains(shapely.Point(*(transform * (col + 0.5, row + 0.5)))):
+        return False
+    c1, r1 = max(c1, c0 + 1), max(r1, r0 + 1)
     rows = max(1, _CENTRE_STRIP_PIXELS // (c1 - c0))
     for r in range(r0, r1, rows):
         k = min(rows, r1 - r)

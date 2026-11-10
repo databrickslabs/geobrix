@@ -23,9 +23,23 @@ def test_a_long_function_runs_alone_and_the_longest_part_comes_first():
     assert [p["predicted_min"] for p in parts] == sorted(
         (p["predicted_min"] for p in parts), reverse=True
     )
-    # b, c and d share input x and fit in 20 min of room; e is on another input
+    # b, c and d share input x and fit in 20 min of room; e (another input) would leave a part of 9 + 5 min start-up,
+    # so it does not join them (19 + 9 > 20) and stays alone
     assert sorted(parts[1]["fns"]) == ["b", "c", "d"]
-    assert parts[-1]["fns"] == ["e"]
+    assert parts[-1]["fns"] == ["e"] and parts[-1]["inputs"] == ["y"]
+
+
+def test_small_parts_of_other_inputs_are_merged():
+    t = {
+        "fixed_min": 5.0,
+        "functions": {"p": {"4": {"min": 4.0}}, "q": {"4": {"min": 5.0}}},
+    }
+    parts = lt.plan_parts(["p", "q"], t, 4, 25.0, input_of={"p": "x", "q": "y"}.get)
+    assert (
+        len(parts) == 1
+        and sorted(parts[0]["inputs"]) == ["x", "y"]
+        and parts[0]["predicted_min"] == 14.0
+    )
 
 
 def test_a_scale_with_no_record_is_projected_from_the_nearest_one():

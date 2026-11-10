@@ -111,7 +111,8 @@ def plan_parts(
     """Cut `fns` into parts near `target_min` (fixed start-up included), longest first.
 
     Functions are packed first-fit-decreasing within each input (`input_of(fn)`), so a part reads one input where it can;
-    a function at or over the target is a part on its own."""
+    a function at or over the target is a part on its own. Then parts too small to pay their start-up are merged
+    across inputs (largest first) while the sum fits, so no part is mostly start-up."""
     fixed = float(timings.get("fixed_min", 6.0))
     room = max(target_min - fixed, 1.0)
     by_input: Dict[str, List[Tuple[float, str]]] = {}
@@ -130,10 +131,20 @@ def plan_parts(
                     break
             else:
                 bins.append([m, [fn], inp])
-    bins.sort(key=lambda b: -b[0])
+    merged: List[List] = []  # [minutes, [fns], [inputs]]
+    for m, fs, inp in sorted(bins, key=lambda b: -b[0]):
+        for b in merged:
+            if b[0] + m <= room:
+                b[0] += m
+                b[1].extend(fs)
+                b[2].append(inp)
+                break
+        else:
+            merged.append([m, list(fs), [inp]])
+    merged.sort(key=lambda b: -b[0])
     return [
-        {"fns": b[1], "input": b[2], "predicted_min": round(fixed + b[0], 1)}
-        for b in bins
+        {"fns": b[1], "inputs": b[2], "predicted_min": round(fixed + b[0], 1)}
+        for b in merged
     ]
 
 

@@ -41,6 +41,19 @@ There is no DBR 17.3 / 18 image. On that compute, install the env5 wheel and the
 The JVM engine needs dedicated compute. On standard access mode and Serverless, use
 the [env wheel](../installation.mdx#whl-only).
 
+### Standard access mode and Serverless {#standard-and-serverless}
+
+:::warning Dedicated compute is the supported target today
+- **Standard access mode:** Databricks offers
+  [container images for standard compute](https://docs.databricks.com/aws/en/compute/custom-containers-standard)
+  as a Beta that a workspace admin enables, on DBR 19 for an env 6 base. The image would run
+  GeoBrix's Python level only. Standard access mode loads a JAR for the Scala REPL and Scala UDFs, not
+  as a Spark extension, so GeoBrix's JVM level does not run there. GeoBrix has not tested its image on
+  standard access mode yet.
+- **Serverless:** Serverless cannot use a custom image today. Use the
+  [env wheel](../installation.mdx#whl-only).
+:::
+
 ## The image
 
 The image is published for each instance architecture, with a pinned tag per GeoBrix release and a

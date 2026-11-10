@@ -34,7 +34,6 @@ import dataclasses
 import functools
 import math
 import shutil
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -618,12 +617,27 @@ def _remove(gdal, prefix: str) -> None:
     )  # nothing left to remove is not an error here (exceptions are off)
 
 
+SCRATCH_PREFIX = "gbx_spec_"
+_swept = False
+
+
 def _output_name(block, prefix: str):
     """``(the output's name, the folder it needs removed or None)``: a GeoTIFF under the call's /vsimem prefix, or for a
     streamed features output a GeoPackage in a new folder on local disk, which holds what GDAL has written so memory does
     not."""
     if block.out_kind == "features" and block.out_stream:
-        scratch = tempfile.mkdtemp(prefix="gbx-spec-")
+        from databricks.labs.gbx.pyrx.core.local_temp import (
+            gc_stale_local_temp,
+            new_local_temp_dir,
+        )
+
+        global _swept
+        if (
+            not _swept
+        ):  # a worker ended with os._exit leaves its folder: sweep the old ones once a process
+            _swept = True
+            gc_stale_local_temp(SCRATCH_PREFIX)
+        scratch = new_local_temp_dir(SCRATCH_PREFIX)
         return f"{scratch}/out.gpkg", scratch
     return f"{prefix}/out.tif", None
 

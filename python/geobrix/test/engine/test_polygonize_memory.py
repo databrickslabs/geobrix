@@ -48,8 +48,9 @@ n_small = consume(handler, small)
 mid = rss_mb()
 n_big = consume(handler, big)
 after = rss_mb()
-import glob, tempfile
-left = lambda: len(glob.glob(tempfile.gettempdir() + "/gbx-spec-*"))
+import glob
+from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+left = lambda: len(glob.glob(local_temp_root() + "/gbx_spec_*"))
 full = left()
 gen = handler.eval(small)
 next(gen); next(gen)

@@ -1257,9 +1257,9 @@ _POINT_ROW_BYTES = 29 + _ROW_OVERHEAD  # the WKB of a point with Z
 
 
 def _tin_mode(fn: str, mode) -> None:
-    """The mode: 'constrained' (the default) or 'conforming'; any other word is wrong."""
-    m = (mode or "constrained").lower()
-    if m not in ("constrained", "conforming"):
+    """The mode: 'constrained' (the routine's default) or 'conforming', in any case; any other word is wrong. A NULL
+    passes here and gives no rows, as any NULL argument does."""
+    if mode is not None and mode.lower() not in ("constrained", "conforming"):
         raise _parameter(
             fn, f"mode must be 'constrained' or 'conforming'; got {mode!r}"
         )
@@ -1321,7 +1321,7 @@ def st_triangulate_rows(
     mode,
 ):
     """gbx__st_triangulate_rows: the 2D WKB triangles of the triangulation of the points and break lines (either mode),
-    as an array, in the session's order. NULL points, an empty array or a NULL tolerance give no rows.
+    as an array, in the session's order. NULL points, an empty array, or a NULL tolerance, finder or mode give no rows.
     """
     from databricks.labs.gbx.pyvx import _tin
     from databricks.labs.gbx.uc.handlers import _check_bytes
@@ -1333,6 +1333,7 @@ def st_triangulate_rows(
         or merge_tolerance is None
         or snap_tolerance is None
         or split_point_finder is None
+        or mode is None
     ):
         return None
     parsed = _tin_sites(fn, points_array, breaklines_array)
@@ -1355,7 +1356,7 @@ def st_triangulate_rows(
             None,
             merge_tolerance,
             snap_tolerance,
-            mode or "constrained",
+            mode,
             split_point_finder,
             parsed=parsed,
         ),
@@ -1368,7 +1369,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     from databricks.labs.gbx.uc.handlers import _check_bytes
 
     _tin_mode(fn, mode)
-    if mt is None or st is None or spf is None:
+    if mt is None or st is None or spf is None or mode is None:
         return None
     _check_bytes(
         fn,
@@ -1394,7 +1395,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
             srid,
             flavor="iso",
             parsed=parsed,
-            mode=mode or "constrained",
+            mode=mode,
             split_point_finder=spf,
         ),
         "the points it returns",

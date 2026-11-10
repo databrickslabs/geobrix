@@ -57,8 +57,8 @@ case class ST_Triangulate(
         val ptsElemType = pointsArray.dataType.asInstanceOf[org.apache.spark.sql.types.ArrayType].elementType
         val pts = geomsFromArrayData(pointsVal.asInstanceOf[ArrayData], ptsElemType)
         if (pts.isEmpty) return Iterator.empty
-        // a NULL required argument gives no rows, as explode(NULL) does
-        if (Seq(mergeTolerance, snapTolerance, splitPointFinder).exists(_.eval(input) == null)) return Iterator.empty
+        // a NULL argument (a NULL mode too; a mode left out is 'constrained') gives no rows, as explode(NULL) does
+        if (Seq(mergeTolerance, snapTolerance, splitPointFinder, modeExpr).exists(_.eval(input) == null)) return Iterator.empty
 
         val breaklines: Seq[Geometry] = {
             val bVal = breaklinesArray.eval(input)
@@ -84,8 +84,6 @@ case class ST_Triangulate(
         val modeStr = modeExpr.eval(input) match {
             case s: UTF8String => s.toString
             case s: String     => s
-            case null          => throw new IllegalArgumentException(
-                "gbx_st_triangulate: mode must not be null")
             case other         => other.toString
         }
 

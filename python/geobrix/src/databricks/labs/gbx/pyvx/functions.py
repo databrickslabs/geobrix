@@ -175,6 +175,22 @@ _all_xyz = _tin.all_xyz
 _validate_mode = _tin.validate_mode
 
 
+def _mode_arg(rest):
+    """The ``mode`` of a TIN table function from its trailing arguments: ``'constrained'`` when left out, None for a
+    NULL (no rows, as for any NULL argument), else the word checked. A default in the signature could not tell the two
+    apart."""
+    if len(rest) > 1:
+        raise TypeError(
+            f"a TIN function takes one mode argument at the end; got {len(rest)}"
+        )
+    if not rest:
+        return "constrained"
+    if rest[0] is None:
+        return None
+    _validate_mode(rest[0])
+    return rest[0]
+
+
 def _triangulate_schema():
     from ._serde import TRIANGLE_SCHEMA
 
@@ -190,15 +206,16 @@ class _TriangulateUDTF:
         merge_tolerance,
         snap_tolerance,
         split_point_finder,
-        mode=None,
+        *mode,
     ):
-        _validate_mode(mode)
+        mode = _mode_arg(mode)
         if (
             merge_tolerance is None
             or snap_tolerance is None
             or split_point_finder is None
+            or mode is None
         ):
-            return  # a NULL required argument: no rows, as explode(NULL)
+            return  # a NULL argument: no rows, as explode(NULL)
         for blob in _tin.triangle_wkbs(
             points,
             breaklines,
@@ -221,9 +238,8 @@ def _elevation_schema():
 
 
 def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
-    _validate_mode(mode)
-    if mt is None or st is None or spf is None:
-        return  # a NULL required argument: no rows, as explode(NULL)
+    if mt is None or st is None or spf is None or mode is None:
+        return  # a NULL argument: no rows, as explode(NULL)
     for blob in _tin.elevation_wkbs(
         points, breaklines, mt, st, cell_iter, srid, mode=mode, split_point_finder=spf
     ):
@@ -246,10 +262,10 @@ class _InterpElevBBoxUDTF:
         width_px,
         height_px,
         srid,
-        mode=None,
+        *mode,
     ):
+        mode = _mode_arg(mode)
         if None in (xmin, ymin, xmax, ymax, width_px, height_px, srid):
-            _validate_mode(mode)
             return  # a NULL required argument: no rows, as explode(NULL)
         yield from _emit_elevation(
             points,
@@ -284,14 +300,14 @@ class _InterpElevGeomUDTF:
         grid_rows,
         cell_size_x,
         cell_size_y,
-        mode=None,
+        *mode,
     ):
+        mode = _mode_arg(mode)
         from shapely import get_srid
 
         from ._geom import parse_geom
 
         if None in (grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y):
-            _validate_mode(mode)
             return  # a NULL required argument: no rows, as explode(NULL)
         og = parse_geom(grid_origin)
         ox, oy = (og.x, og.y) if og is not None else (0.0, 0.0)

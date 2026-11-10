@@ -94,6 +94,8 @@ VECTOR_GENERATOR = (
     Case("tri_null_points", TRI, (None, [], 0.0, 0.0, F), "no_rows"),
     Case("tri_empty_points", TRI, ([], [], 0.0, 0.0, F), "no_rows"),
     Case("tri_null_tolerance", TRI, (SQUARE_WKT, [], None, 0.0, F), "no_rows"),
+    # A NULL mode gives no rows, as any NULL argument does; a mode left out is 'constrained'.
+    Case("tri_null_mode", TRI, (KITE, [], 0.0, 0.0, F, None), "no_rows"),
     Case(
         "tri_bad_mode", TRI, (KITE, [], 0.0, 0.0, F, "sideways"), "raises", "sideways"
     ),
@@ -376,6 +378,12 @@ VECTOR_GENERATOR = (
         "no_rows",
     ),
     Case(
+        "elevbbox_null_mode",
+        EBB,
+        (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, None),
+        "no_rows",
+    ),
+    Case(
         "elevbbox_bad_mode",
         EBB,
         (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, "sideways"),
@@ -416,6 +424,12 @@ VECTOR_GENERATOR = (
         "elevgeom_null_points",
         EGM,
         (None, [], 0.0, 0.0, F, "POINT (0 10)", 2, 2, 5.0, -5.0),
+        "no_rows",
+    ),
+    Case(
+        "elevgeom_null_mode",
+        EGM,
+        (SQUARE_WKT, [], 0.0, 0.0, F, "POINT (0 10)", 2, 2, 5.0, -5.0, None),
         "no_rows",
     ),
     # ---------------------------------------------------------------------------------------------- Unity Catalog only

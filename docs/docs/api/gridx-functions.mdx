@@ -595,7 +595,7 @@ Fill NULL quadbin cells from valid neighbours within `k` rings using nearest-nei
 :::
 
 :::note Implementation
-Powered by the **pure-Python quadbin interpolation port**. Cell-set and value parity with the JVM level for mean interpolation.
+Powered by the **pure-Python quadbin interpolation port**.
 :::
 
 **Returns:** `BINARY`, the serialized fill described above.
@@ -1281,7 +1281,7 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
 Generate a k-loop of cells around a center cell (hollow ring).
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring distance `k`. Exact cell-set parity with the JVM level.
+Powered by **pure Python**. The cells at exactly ring distance `k`.
 :::
 
 **Returns:**
@@ -1320,7 +1320,7 @@ Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring di
 Generate a k-ring of cells around a geometry at specified resolution.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then expands by ring distance `k`. Exact cell-set parity with the JVM level.
+Powered by **pure Python** + **shapely**. Polyfills the geometry then expands by ring distance `k`.
 :::
 
 **Returns:**
@@ -1359,7 +1359,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 Generate a k-loop of cells around a geometry at specified resolution. The loop is the hollow outer ring: cells in `kring(k)` but not in `kring(k-1)`.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`. Exact cell-set parity with the JVM level.
+Powered by **pure Python** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`.
 :::
 
 **Returns:**
@@ -1399,7 +1399,7 @@ Fill geometries with grid cells.
 Fill a geometry with BNG cells at specified resolution.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the cells covering the geometry, mirroring the JVM level's seed-and-flood-fill. Exact cell-set parity with the JVM level.
+Powered by **pure Python** + **shapely**. Enumerates the cells covering the geometry, by seed-and-flood-fill.
 :::
 
 **Returns:**
@@ -1476,7 +1476,7 @@ Aggregate multiple cells into a single result.
 Aggregate intersection of multiple BNG cells.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellintersection_agg("chip"))` intersects a group's chips (all belonging to one cell) into the dissolved chip geometry.
+Powered by **pure Python** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellintersection_agg("chip"))` intersects a group's chips (all belonging to one cell) into the dissolved chip geometry.
 :::
 
 :::warning The aggregate returns BINARY
@@ -1544,7 +1544,7 @@ Intersect the chips of one BNG cell from one array of `(cellid, core, chip)` str
 Aggregate union of multiple BNG cells.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellunion_agg("chip"))` dissolves a group's chips (all belonging to one cell) into the unioned chip geometry.
+Powered by **pure Python** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellunion_agg("chip"))` dissolves a group's chips (all belonging to one cell) into the unioned chip geometry.
 :::
 
 :::warning The aggregate returns BINARY
@@ -2480,7 +2480,7 @@ Fill missing H3 cell values from one array of `(cellid, value)` structs, for exa
 
 ## H3 Geometry-Aware Expansion (Python Level Only)
 
-H3 geometry-aware kring/kloop run on the Python level only. They have no JVM implementation. They work like the other grids: one **geometry-taking** function does the whole job in pure Python with the `h3` library. It uses the `polygon_to_cells_experimental` polyfill for the covering set and `grid_disk` for the neighbour walk. They run on every compute, and SQL and PySpark call them the same way:
+H3 geometry-aware kring/kloop run on the Python level only. They work like the other grids: one **geometry-taking** function does the whole job in pure Python with the `h3` library. It uses the `polygon_to_cells_experimental` polyfill for the covering set and `grid_disk` for the neighbour walk. They run on every compute, and SQL and PySpark call them the same way:
 
 ```python
 from databricks.labs.gbx import register

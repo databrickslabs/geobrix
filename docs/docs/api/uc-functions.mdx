@@ -125,7 +125,7 @@ A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to t
 
 `gbx_quadbin_resolution`, `gbx_custom_grid` and `gbx_rst_memsize` run as SQL functions with no Python. They give the same answers as the session functions. `gbx_rst_memsize` returns the length of the tile's pixel bytes and refuses a virtual tile with a `Fix:`.
 
-`gbx_bng_cellarea` and `gbx_bng_eastnorthasbng` also run as SQL functions. On a SQL warehouse over 10 million rows they took about 1 s. The Scala form took 4 to 15 s and the Python form 21 to 79 s. The answers match the session functions.
+`gbx_bng_cellarea` and `gbx_bng_eastnorthasbng` also run as SQL functions. On a SQL warehouse over 10 million rows they took about 1 s. The answers match the session functions.
 
 - `gbx_bng_cellarea` raises for a cell finer than 1 m, as the session function does.
 - `gbx_bng_cellarea` gives `NULL` for an id whose digits carry a sign, spaces or underscores. Such an id is no cell.
@@ -351,7 +351,7 @@ The result is sized before the surface is built. A triangulation can have at mos
 
 ## Python and Scala handlers
 
-Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` also have a Scala form. The install always creates them as [SQL functions](#functions-that-run-as-sql), with or without the JAR, because the SQL form is faster.
+Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` are always [SQL functions](#functions-that-run-as-sql), with or without the JAR, because the SQL form is faster.
 
 The install makes them Scala functions when the install folder also holds `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. Without that JAR, or with `only=` that selects none of them, they are Python functions. The names, signatures and answers are the same.
 

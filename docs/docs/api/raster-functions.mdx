@@ -1208,7 +1208,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. At the Python level a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. A `NaN` that is a real value, not a null, is ignored the same way at every level. Beside a number in one cell, the number is burned. A cell whose values are all `NaN` burns `NaN`.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. A null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. A `NaN` that is a real value, not a null, is ignored the same way at every level. Beside a number in one cell, the number is burned. A cell whose values are all `NaN` burns `NaN`.
 
 :::note Implementation
 The implementation is backed by BNG cell math and `rasterio`. It parses BNG cell IDs (**STRING**) to EPSG:27700-native cell geometries and burns them into the output band. The output canvas is EPSG:27700 throughout, with no warp step. This aggregator takes cellid+value rows, not a raster tile.
@@ -1555,10 +1555,10 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. At the Python level a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. A null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Implementation
-Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask). A typed column of nulls burns `NaN` at the Python level. The extent and pixel size come from the H3 resolution unless you supply explicit bounds. `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
+Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask). A typed column of nulls burns `NaN`. The extent and pixel size come from the H3 resolution unless you supply explicit bounds. `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
 :::
 
 :::note The aggregate returns BINARY
@@ -1568,7 +1568,7 @@ In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF byte
 Streaming aggregator that burns H3 cell centroid pixels (or spatial-envelope pixels) into one raster tile per group. This is the **inverse** of [`rst_h3_rastertogrid*`](#rst_h3_rastertogridavg): where those functions reduce raster pixels to per-cell statistics, `rst_h3_rasterize_agg` reconstructs a raster from per-cell values. Use [`rst_frombands_agg`](#rst_frombands_agg) to stack per-threshold rasters (each produced by one `rst_h3_rasterize_agg` call) into a single multi-band output.
 
 :::note Python-only `out_crs` parameter
-The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. It reads any CRS string.
 :::
 
 :::tip Worked example
@@ -1715,7 +1715,7 @@ Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * 
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. At the Python level a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. A null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Implementation
 The implementation is backed by quadbin cell math and `rasterio`. It burns each quadbin cell's geometry and value into the output band with `rasterio.features.rasterize`.
@@ -1732,7 +1732,7 @@ In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF byte
 Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat. Their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Python-only `out_crs` parameter
-The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. It reads any CRS string.
 :::
 
 _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
@@ -1804,10 +1804,10 @@ Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quad
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. At the Python level a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. A null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Implementation
-Powered by **rasterio** + custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` at the Python level. The extent auto-derives from the cell set when canvas parameters are null.
+Powered by **rasterio** + custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN`. The extent auto-derives from the cell set when canvas parameters are null.
 :::
 
 :::note The aggregate returns BINARY
@@ -2052,7 +2052,7 @@ Read a raster file by path into a tile.
 
 In Python, `rst_fromfile` returns a _virtual_ tile by default. It holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it, so it is the way to load large rasters lazily. Pass `materialize=True` to read the pixels now. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
 
-The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the Python level (the env wheel) and has no Scala form. The JVM cannot read a UC Volume `/Volumes/...` path, because the credential lives in the Spark Python worker. A path that cannot be opened gives null.
+The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the Python level (the env wheel), which reads UC Volume `/Volumes/...` paths with the credential held by the Spark Python worker. A path that cannot be opened gives null.
 
 :::note Remote paths
 A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refuses it at its first evaluation, with the location and a `Fix:`. Set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's environment before `register()` and before the column is built to allow it (see [Security § 7](../security#7-raster-data-other-principals-can-write)).
@@ -2074,7 +2074,7 @@ Reading a file larger than the connect-aware stream cap raises a `ValueError`. T
 :::
 
 :::note Have the bytes already, or need a materialized tile? Use `rst_fromcontent`
-If you already hold raster bytes in a column (e.g. from Spark's built-in `binaryFile` reader), build the tile with [`gbx_rst_fromcontent(content, driver)`](#rst_fromcontent). Note this is **not** a lazy equivalent of `rst_fromfile` at the Python level: `rst_fromcontent` takes bytes you have already read, so it always produces a **materialized** tile. At the JVM level all tiles are materialized, so there the two are interchangeable. It also works on any compute, since the `binaryFile` reader runs in Spark, which holds the Volume credential:
+If you already hold raster bytes in a column (e.g. from Spark's built-in `binaryFile` reader), build the tile with [`gbx_rst_fromcontent(content, driver)`](#rst_fromcontent). Note this is **not** a lazy equivalent of `rst_fromfile`: `rst_fromcontent` takes bytes you have already read, so it always produces a **materialized** tile. It also works on any compute, since the `binaryFile` reader runs in Spark, which holds the Volume credential:
 
 ```python
 df = (
@@ -4100,10 +4100,6 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
 Powered by **rasterio**. Output formats are limited to rasterio's bundled-GDAL writable driver set; the tile is re-encoded in the requested format. `'COG'` produces a Cloud Optimized GeoTIFF (512-pixel blocks, size-adaptive ZSTD compression, and overviews when the tile is larger than 512 pixels), the same layout as [`rst_cog_convert`](#rst_cog_convert).
 :::
 
-:::note JVM level
-`'COG'` is written by GDAL's COG driver with its default options. Its block size, compression and overviews differ from the Python level's.
-:::
-
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
@@ -4548,7 +4544,7 @@ Spatial filter over a square window. A window width that is not a positive odd n
 {/* END GENERATED gbx_rst_initnodata */}
 
 :::note Implementation
-Powered by **rasterio**. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`), the same one the JVM level uses. A NoData value the source already declares is kept.
+Powered by **rasterio**. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`). A NoData value the source already declares is kept.
 :::
 
 :::note Python-only keywords
@@ -5463,7 +5459,7 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 {/* END GENERATED gbx_rst_color_relief */}
 
 :::note Color table and NoData
-The function runs GDAL's own `raster color-map` algorithm in the worker. The color table is text, not a path. Read a table file first and pass its text. The text is checked line by line: a line that is not a color entry raises, naming the line. A NoData pixel takes the `nv` color. Without an `nv` line it is transparent in an RGBA result and black in an RGB one. Values outside the entries take the nearest entry's color. The result is an RGB or RGBA Byte tile, RGBA when any entry has an alpha column. The function has no JVM form.
+The function runs GDAL's own `raster color-map` algorithm in the worker. The color table is text, not a path. Read a table file first and pass its text. The text is checked line by line: a line that is not a color entry raises, naming the line. A NoData pixel takes the `nv` color. Without an `nv` line it is transparent in an RGBA result and black in an RGB one. Values outside the entries take the nearest entry's color. The result is an RGB or RGBA Byte tile, RGBA when any entry has an alpha column.
 :::
 
 :::note Python-only keywords
@@ -5755,7 +5751,7 @@ Generic dispatcher that picks a built-in formula by name and wires bands via a `
 {/* END GENERATED gbx_rst_land_cover */}
 
 :::note Implementation
-Powered by **rasterio** + **NumPy** + **SciPy**. Classifies a multi-band RGB(+NIR) tile into land-cover class ids using spectral thresholds, k-means clustering, or a hybrid approach. Registered as `gbx_rst_land_cover` in SQL (Python level only; no JVM equivalent).
+Powered by **rasterio** + **NumPy** + **SciPy**. Classifies a multi-band RGB(+NIR) tile into land-cover class ids using spectral thresholds, k-means clustering, or a hybrid approach. Registered as `gbx_rst_land_cover` in SQL.
 :::
 
 :::note Python-only keywords

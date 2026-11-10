@@ -1187,11 +1187,11 @@ def run_array_kernel(fn: str, kernel: Callable):
         return None
 
 
-def array_row(fn: str, raster, cellid: int, op: str, dropped: int = 0):
+def array_row(fn: str, raster, cellid: int, dropped: int = 0):
     """The tile an array function returns: the cell id the session gives it, and the note for the members it skipped."""
     row = tile_row(fn, {"cellid": cellid}, raster)
     if row is not None and dropped:
-        row["metadata"]["last_error"] = _kernel("arrays", "skipped_note")(op, dropped)
+        row["metadata"]["last_error"] = _kernel("arrays", "skipped_note")(fn, dropped)
     return row
 
 
@@ -1199,13 +1199,11 @@ def _cellid(tile) -> int:
     return int(_field(tile, "cellid") or 0)
 
 
-def _array_fn(
-    sql_name: str, op: str, kernel: Callable, output: Callable, fixes: Callable
-):
+def _array_fn(sql_name: str, kernel: Callable, output: Callable, fixes: Callable):
     """A handler ``(tiles)`` for a function that folds an array into one tile.
 
     ``kernel(rasters)`` makes the GTiff bytes, ``output(hdrs)`` is the decoded size of the result, ``fixes(hdrs)`` gives
-    the ``(member, total)`` Fix of an array over the cap, and the cell id of the result is the session's rule for ``op``.
+    the ``(member, total)`` Fix of an array over the cap, and the cell id of the result is the session's rule for ``sql_name``.
     """
     fn = sql_name
 
@@ -1219,23 +1217,23 @@ def _array_fn(
         hdrs = _agg()._scan_headers(rasters)
         check_array_cap(fn, hdrs, output(hdrs), *fixes(hdrs))
         made = run_array_kernel(fn, lambda: kernel(rasters))
-        return array_row(fn, made, _result_cellid(op, kept), op, dropped)
+        return array_row(fn, made, _result_cellid(fn, kept), dropped)
 
     handler.__name__ = sql_name[len("gbx_") :]
     handler.__doc__ = (
-        f"{sql_name} over an array of materialized tiles ({op}); the tile it makes."
+        f"{sql_name} over an array of materialized tiles; the tile it makes."
     )
     HANDLERS[sql_name] = handler
     return handler
 
 
-def _result_cellid(op: str, kept) -> int:
+def _result_cellid(sql_name: str, kept) -> int:
     """The cell id of a result, by the session rule of each function: a combine keeps the cell id its members share (-1
     when they differ), a merge has none (0), a stack of bands keeps the first member's.
     """
-    if op == "RST_Merge":
+    if sql_name == "gbx_rst_merge":
         return 0
-    if op == "RST_FromBands":
+    if sql_name == "gbx_rst_frombands":
         return _cellid(kept[0])
     return _kernel("arrays", "shared_cellid")([_cellid(t) for t in kept])
 
@@ -1255,7 +1253,6 @@ def _combine(stat: str) -> Callable:
     reducer = "combineavg_tiles" if stat == "avg" else f"combine_{stat}_tiles"
     return _array_fn(
         f"gbx_rst_combine{stat}",
-        f"RST_Combine{stat.capitalize()}",
         lambda rasters: getattr(_agg(), reducer)(rasters),
         _same_grid,
         _combine_fixes,
@@ -1290,7 +1287,6 @@ def _stack_bytes(hdrs) -> int:
 
 rst_frombands = _array_fn(
     "gbx_rst_frombands",
-    "RST_FromBands",
     lambda rasters: _agg().frombands_tiles(list(enumerate(rasters))),
     _stack_bytes,
     _session_fix("gbx_rst_frombands"),
@@ -1329,7 +1325,7 @@ def rst_merge(tiles):
         agg._vrt_fix(agg._MOSAIC_ROUTE, mixed),
     )
     made = run_array_kernel(fn, lambda: agg.merge_tiles(rasters, stream=False))
-    return array_row(fn, made, 0, "RST_Merge", dropped)
+    return array_row(fn, made, 0, dropped)
 
 
 HANDLERS["gbx_rst_merge"] = rst_merge
@@ -1368,7 +1364,7 @@ def rst_mapalgebra(tiles, expression):
     made = run_array_kernel(
         fn, lambda: _kernel("mapalgebra", "mapalgebra")(rasters, str(expression))
     )
-    return array_row(fn, made, _cellid(tiles[0]), "RST_MapAlgebra")
+    return array_row(fn, made, _cellid(tiles[0]))
 
 
 HANDLERS["gbx_rst_mapalgebra"] = rst_mapalgebra

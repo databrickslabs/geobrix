@@ -2,10 +2,10 @@ from databricks.labs.gbx.pyrx import _serde
 
 
 def test_build_error_tile_shape():
-    t = _serde.build_error_tile("RST_ReTile: unreadable raster")
+    t = _serde.build_error_tile("gbx_rst_retile: unreadable raster")
     assert t["raster"] is None
     assert t["cellid"] == -1
-    assert t["metadata"]["last_error"] == "RST_ReTile: unreadable raster"
+    assert t["metadata"]["last_error"] == "gbx_rst_retile: unreadable raster"
     # A UDTF row must carry every tile column (UDTF_RETURN_SCHEMA_MISMATCH otherwise).
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 

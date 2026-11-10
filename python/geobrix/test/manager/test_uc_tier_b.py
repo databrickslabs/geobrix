@@ -109,7 +109,7 @@ def test_an_error_tile_has_no_pixels_and_a_reason_under_last_error_or_error_mess
     good = _tile(tmp_path)
     noted = {
         **good,
-        "metadata": {"last_error": "RST_Merge: skipped 1 corrupt input tile(s)"},
+        "metadata": {"last_error": "gbx_rst_merge: skipped 1 corrupt input tile(s)"},
     }
     assert not tier_b._is_error_tile(noted) and not tier_b._is_error_tile(good)
     for key in ("last_error", "error_message"):
@@ -224,14 +224,16 @@ def _built(name, tmp_path):
 
 def test_an_array_function_skips_an_unreadable_member_and_says_how_many(tmp_path):
     stack = _built("aa_stack_corrupt", tmp_path)
-    for name, op in (
-        ("gbx_rst_combineavg", "RST_CombineAvg"),
-        ("gbx_rst_combinemax", "RST_CombineMax"),
-        ("gbx_rst_merge", "RST_Merge"),
-        ("gbx_rst_frombands", "RST_FromBands"),
+    for name in (
+        "gbx_rst_combineavg",
+        "gbx_rst_combinemax",
+        "gbx_rst_merge",
+        "gbx_rst_frombands",
     ):
         out = tier_b.HANDLERS[name](stack)
-        assert out["metadata"]["last_error"] == f"{op}: skipped 1 corrupt input tile(s)"
+        assert (
+            out["metadata"]["last_error"] == f"{name}: skipped 1 corrupt input tile(s)"
+        )
         assert out["raster"] is not None and out["metadata"]["driver"] == "GTiff"
 
 
@@ -342,7 +344,9 @@ def test_map_algebra_computes_over_a_good_tile_that_carries_a_skipped_member_not
     a, b, _ = _built("aa_stack", tmp_path)
     noted = {
         **a,
-        "metadata": {"last_error": "RST_CombineAvg: skipped 1 corrupt input tile(s)"},
+        "metadata": {
+            "last_error": "gbx_rst_combineavg: skipped 1 corrupt input tile(s)"
+        },
     }
     out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([noted, b], "A + B")
     assert out["raster"] is not None and out["metadata"]["driver"] == "GTiff"

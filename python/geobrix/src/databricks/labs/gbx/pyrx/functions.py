@@ -1246,7 +1246,7 @@ def _merge_udf(tiles):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_merge: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1272,7 +1272,7 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     if row is not None and dropped:
         row["metadata"][
             "last_error"
-        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_merge: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -1347,7 +1347,7 @@ def _uf_merge(tiles, file_refs):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_merge: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1456,7 +1456,7 @@ def _combineavg_udf(tiles):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_combineavg: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1475,7 +1475,7 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     if row is not None and dropped:
         row["metadata"][
             "last_error"
-        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_combineavg: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -1528,7 +1528,7 @@ def _uf_combineavg(tiles, file_refs):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_CombineAvg: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_combineavg: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1576,7 +1576,6 @@ def _combine_stat_bytes(tiles, stat: str):
 
 def _make_combine_stat_udf(stat: str):
     """Factory that produces a ``_group_udf`` for the given stat."""
-    _stat_cap = stat.capitalize()
 
     @_refusal_as_error_tile
     def _udf(tiles):
@@ -1590,7 +1589,7 @@ def _make_combine_stat_udf(stat: str):
         if dropped:
             tile["metadata"][
                 "last_error"
-            ] = f"RST_Combine{_stat_cap}: skipped {dropped} corrupt input tile(s)"
+            ] = f"gbx_rst_combine{stat}: skipped {dropped} corrupt input tile(s)"
         return tile
 
     _udf.__name__ = f"_combine{stat}_udf"
@@ -1599,7 +1598,6 @@ def _make_combine_stat_udf(stat: str):
 
 def _make_combine_stat_v2_udf(stat: str):
     """Factory for the force-output (v2) variant of a combine-stat UDF."""
-    _stat_cap = stat.capitalize()
 
     @_refusal_as_error_tile
     def _v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
@@ -1615,7 +1613,7 @@ def _make_combine_stat_v2_udf(stat: str):
         if row is not None and dropped:
             row["metadata"][
                 "last_error"
-            ] = f"RST_Combine{_stat_cap}: skipped {dropped} corrupt input tile(s)"
+            ] = f"gbx_rst_combine{stat}: skipped {dropped} corrupt input tile(s)"
         return row
 
     _v2_udf.__name__ = f"_combine{stat}_v2_udf"
@@ -1756,7 +1754,7 @@ def _frombands_udf(bands):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_frombands: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1775,7 +1773,7 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     if row is not None and dropped:
         row["metadata"][
             "last_error"
-        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_frombands: skipped {dropped} corrupt input tile(s)"
     return row
 
 
@@ -1830,7 +1828,7 @@ def _uf_frombands(bands, file_refs):
     if dropped:
         tile["metadata"][
             "last_error"
-        ] = f"RST_FromBands: skipped {dropped} corrupt input tile(s)"
+        ] = f"gbx_rst_frombands: skipped {dropped} corrupt input tile(s)"
     return tile
 
 
@@ -1851,7 +1849,9 @@ def _read_cutline(geom_wkb, clip_crs):
         if geom is not None:
             resolve_source_crs(shapely.get_srid(geom), crs=clip_crs)
     except Exception as exc:
-        raise _UnreadableTile(f"RST_Clip: the cutline cannot be used: {exc}") from exc
+        raise _UnreadableTile(
+            f"gbx_rst_clip: the cutline cannot be used: {exc}"
+        ) from exc
     return geom
 
 
@@ -2243,7 +2243,7 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
     except (MemoryError, RecursionError):
         raise
     except Exception as e:  # noqa: BLE001
-        return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
+        return _serde.build_error_tile(f"gbx_rst_transformcrs: {e}", _tile_cellid(tile))
 
 
 def _empty_tile_out(tile):
@@ -3187,7 +3187,7 @@ class _RstSeparateBandsUDTF:
 
     def eval(self, tile, file_ref=None):
         if _tile_is_empty(tile):
-            yield from _empty_tile_rows(tile, "RST_SeparateBands")
+            yield from _empty_tile_rows(tile, "gbx_rst_separatebands")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -3207,7 +3207,7 @@ class _RstSeparateBandsUDTF:
                         extra_metadata={BAND_METADATA_KEY: str(band)},
                     )
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_SeparateBands: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_separatebands: {e}")
             return
 
 
@@ -3243,7 +3243,7 @@ class _RstRetileUDTF:
             tile_width, tile_height
         )  # a parameter error raises, whatever the tile
         if _tile_is_empty(tile):
-            yield from _empty_tile_rows(tile, "RST_ReTile")
+            yield from _empty_tile_rows(tile, "gbx_rst_retile")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -3261,7 +3261,7 @@ class _RstRetileUDTF:
                 ):
                     yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_ReTile: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_retile: {e}")
             return
 
 
@@ -3273,7 +3273,7 @@ class _RstToOverlappingTilesUDTF:
         tiling.require_window(tile_width, tile_height, "gbx_rst_tooverlappingtiles")
         overlap = tiling.require_overlap(overlap)  # raises for a bad overlap
         if _tile_is_empty(tile):
-            yield from _empty_tile_rows(tile, "RST_ToOverlappingTiles")
+            yield from _empty_tile_rows(tile, "gbx_rst_tooverlappingtiles")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -3293,7 +3293,7 @@ class _RstToOverlappingTilesUDTF:
                 ):
                     yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_tooverlappingtiles: {e}")
             return
 
 
@@ -3303,7 +3303,7 @@ class _RstMakeTilesUDTF:
 
     def eval(self, tile, size_in_mb, file_ref=None):
         if _tile_is_empty(tile):
-            yield from _empty_tile_rows(tile, "RST_MakeTiles")
+            yield from _empty_tile_rows(tile, "gbx_rst_maketiles")
             return
         from databricks.labs.gbx.pyrx import _env
 
@@ -3335,7 +3335,7 @@ class _RstMakeTilesUDTF:
                 for win, b in tiling.iter_retile_located(ds, tile_x, tile_y):
                     yield _cut_tile(b, cellid, win, tile if whole else None, band)
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_maketiles: {e}")
             return
 
 
@@ -3345,7 +3345,7 @@ class _RstH3TessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield from _empty_tile_rows(tile, "RST_H3_Tessellate")
+            yield from _empty_tile_rows(tile, "gbx_rst_h3_tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -3376,7 +3376,7 @@ class _RstH3TessellateUDTF:
                         continue
                     yield _serde.build_tile(raster, "GTiff", cellid, grid_system="h3")
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_H3_Tessellate: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_h3_tessellate: {e}")
             return
 
 
@@ -3408,7 +3408,7 @@ class _RstQuadbinTessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield from _empty_tile_rows(tile, "RST_Quadbin_Tessellate")
+            yield from _empty_tile_rows(tile, "gbx_rst_quadbin_tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -3441,7 +3441,7 @@ class _RstQuadbinTessellateUDTF:
                         raster, "GTiff", cellid, grid_system="quadbin"
                     )
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_Quadbin_Tessellate: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_quadbin_tessellate: {e}")
             return
 
 
@@ -3459,7 +3459,7 @@ class _RstBngTessellateUDTF:
 
     def eval(self, tile, resolution, assignment=None, coverage=None, file_ref=None):
         if _tile_is_empty(tile) or resolution is None:
-            yield from _empty_tile_rows(tile, "RST_BNG_Tessellate")
+            yield from _empty_tile_rows(tile, "gbx_rst_bng_tessellate")
             return
         effective_mode = assignment if assignment is not None else "centroid"
         if effective_mode not in {"covering", "centroid"}:
@@ -3499,7 +3499,7 @@ class _RstBngTessellateUDTF:
                     )
                     yield out
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_BNG_Tessellate: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_bng_tessellate: {e}")
             return
 
 
@@ -3523,11 +3523,11 @@ class _RstCustomTessellateUDTF:
         file_ref=None,
     ):
         if _tile_is_empty(tile):
-            yield from _empty_tile_rows(tile, "RST_Custom_Tessellate")
+            yield from _empty_tile_rows(tile, "gbx_rst_custom_tessellate")
             return
         if resolution is None or grid_struct is None:
             yield _serde.build_error_tile(
-                "RST_Custom_Tessellate: empty tile or missing grid/resolution"
+                "gbx_rst_custom_tessellate: empty tile or missing grid/resolution"
             )
             return
         effective_mode = assignment if assignment is not None else "centroid"
@@ -3563,7 +3563,7 @@ class _RstCustomTessellateUDTF:
                         raster, "GTiff", cellid, grid_system="custom"
                     )
         except Exception as e:  # noqa: BLE001
-            yield _serde.build_error_tile(f"RST_Custom_Tessellate: {e}")
+            yield _serde.build_error_tile(f"gbx_rst_custom_tessellate: {e}")
             return
 
 

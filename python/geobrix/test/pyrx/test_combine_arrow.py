@@ -185,7 +185,7 @@ def test_combineavg_edge_answers_survive_the_arrow_boundary(sql_spark):
     assert bytes(got[5]["raster"]) == bytes(agg.combineavg_tiles([T0]))
     assert (
         got[5]["metadata"]["last_error"]
-        == "RST_CombineAvg: skipped 1 corrupt input tile(s)"
+        == "gbx_rst_combineavg: skipped 1 corrupt input tile(s)"
     )
 
 

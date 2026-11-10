@@ -1,5 +1,6 @@
-"""The HV forms: the remaining JVM companions (the five warps, fill-NoData, summary, proximity) against their light forms, each
-on one input per function with a floor. Equal output is checked by decoded values and the NULL outputs are reported by text."""
+"""The HV forms: the five warps, fill-NoData, summary and proximity, each on one input per function with its light forms and a
+floor; to_webmercator and resample_to_size, whose JVM companion is held for a decision, also carry it. Equal output is checked
+by decoded values and the NULL outputs are reported by text."""
 
 import pytest
 
@@ -8,6 +9,7 @@ from databricks.labs.gbx.bench import levels_forms as lf
 from databricks.labs.gbx.bench import preflight
 
 FNS = lf.HV_FUNCTIONS
+L1_FNS = lf.HV_L1_FUNCTIONS
 
 
 def _of(fn):
@@ -16,9 +18,12 @@ def _of(fn):
 
 def test_the_companions_are_the_manifests_l1_blocks_and_nothing_else_is_timed():
     fns = manifest.load().functions
-    assert set(lf._HV_COMPANION) == set(FNS) and len(FNS) == 8
-    for fn in FNS:
+    assert set(lf._HV_COMPANION) == set(L1_FNS) and len(FNS) == 8
+    for fn in L1_FNS:
         assert fns[fn].levels["L1"]["companion"] == lf._HV_COMPANION[fn]
+    # the six culled functions have no JVM level left to time
+    for fn in set(FNS) - set(L1_FNS):
+        assert "L1" not in fns[fn].levels, fn
     # clip, polygonize and viewshed have no JVM level to measure
     for fn in ("gbx_rst_clip", "gbx_rst_polygonize", "gbx_rst_viewshed"):
         assert "L1" not in fns[fn].levels
@@ -26,7 +31,9 @@ def test_the_companions_are_the_manifests_l1_blocks_and_nothing_else_is_timed():
 
 
 @pytest.mark.parametrize("fn", FNS)
-def test_each_function_has_its_jvm_form_its_light_forms_and_a_floor_on_one_input(fn):
+def test_each_function_has_its_light_forms_a_floor_and_a_jvm_form_where_one_is_kept_on_one_input(
+    fn,
+):
     forms = _of(fn)
     assert len({f.input for f in forms}) == 1 and forms[0].input == lf._HV_INPUT[fn]
     assert len({f.variant for f in forms}) == len(forms)
@@ -34,10 +41,13 @@ def test_each_function_has_its_jvm_form_its_light_forms_and_a_floor_on_one_input
     light = {"gbx_rst_proximity": ("c0",), "gbx_rst_summary": ("engine-c0",)}.get(
         fn, ("engine-c0", "engine-c1")
     )
+    today = ("today",) if fn in L1_FNS else ()
     assert {f.variant for f in forms} == {
-        f"{v}@{label}" for v in ("today", *light, "floor-c0")
+        f"{v}@{label}" for v in (*today, *light, "floor-c0")
     }
-    assert {f.level for f in forms if f.variant.startswith("today")} == {"L1"}
+    assert {f.level for f in forms if f.variant.startswith("today")} == (
+        {"L1"} if today else set()
+    )
 
 
 def test_the_warps_read_the_corpus_tiles_and_the_rest_replicated_tiles():
@@ -48,7 +58,7 @@ def test_the_warps_read_the_corpus_tiles_and_the_rest_replicated_tiles():
         assert lf.BASE_ROWS[lf._HV_INPUT[fn]] == 128
 
 
-@pytest.mark.parametrize("fn", FNS)
+@pytest.mark.parametrize("fn", L1_FNS)
 def test_the_jvm_form_runs_on_dedicated_compute_only_under_a_private_name(fn):
     (l1,) = [f for f in _of(fn) if f.level == "L1"]
     assert l1.computes == ("dedicated",) and not l1.register
@@ -65,8 +75,7 @@ def test_every_form_but_the_floor_is_fingerprinted_by_value_and_reports_its_null
         assert f.vsql.format(src="t", uc="") and f.nullsql.format(src="t", uc="")
         assert f.sql.format(src="t", uc="")
         assert ("gbx_bench_vfp_raster" in f.vsql) == (fn != "gbx_rst_summary")
-    (l1,) = [f for f in _of(fn) if f.level == "L1"]
-    if fn != "gbx_rst_summary":  # a text output has no error tile to carry a reason
+    for l1 in [f for f in _of(fn) if f.level == "L1"]:
         assert "metadata['last_error']" in l1.nullsql
 
 

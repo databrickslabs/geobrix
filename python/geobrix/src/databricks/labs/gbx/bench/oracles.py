@@ -139,9 +139,6 @@ def uc_view(
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
-# The JVM summary runs gdalinfo without --stats, so a band has no minimum, maximum, mean or standard deviation (H21); the
-# engine's `raster info --stats` gives them. The JVM level keeps the companion until its measurement (the 1.2x rule).
-_SUMMARY_L1 = "the JVM summary runs gdalinfo -json without statistics (a band has no minimum, maximum, mean or stdDev) and names its own temporary file; the engine runs raster info --stats and shows the input as <input>"
 # H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
 # is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
 # read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
@@ -166,32 +163,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
     "cg_grid_null_arg": {
         "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
-    },
-    **{
-        cid: {"L1": _SUMMARY_L1}
-        for cid in (
-            "summary",
-            "summary_float32_precision",
-            "summary_json",
-            "summary_two_bands",
-            "summary_all_nodata",
-            "summary_no_crs",
-        )
-    },
-    **{
-        cid: {
-            "L1": "the JVM fill takes a fractional or negative search distance (gdal.FillNodata takes a double); the engine's GDAL algorithm reads a whole number of pixels from 0 and refuses any other value"
-        }
-        for cid in ("fillnodata_fractional_distance", "fillnodata_negative_distance")
-    },
-    **{
-        cid: {
-            "L1": "the JVM fill leaves the source's own mask band as it was, so a pixel it filled stays masked; the engine makes a filled pixel valid"
-        }
-        for cid in ("fillnodata_masked_filled_valid", "fillnodata_masked_short_search")
-    },
-    "fillnodata_negative_smoothing": {
-        "L1": "the JVM fill refuses a negative smoothing_iter with an error tile ('requirement failed'), where the contract raises"
     },
 }
 
@@ -224,23 +195,10 @@ HEAVY_PENDING.update(
     }
 )
 
-HEAVY_PENDING.update(
-    {
-        "resample_upsample_over_budget": {
-            "L1": "the JVM resample makes the 1.9 GiB result; the engine refuses a call whose input and output together pass the decoded budget"
-        },
-    }
-)
-
-# A reprojection of a source with no NoData declared masks the pixels outside the footprint; the JVM companions
-# fill them with 0, which reads as a valid value. Task 19 measures them.
+# A reprojection of a source with no NoData declared masks the pixels outside the footprint; the JVM web mercator
+# warp (held for the user's decision) fills them with 0, which reads as a valid value.
 _WARP_MASK_L1 = "the JVM warp fills the pixels outside the footprint of a source with no NoData with 0, a valid value; the engine masks them"
-HEAVY_PENDING.update(
-    {
-        cid: {"L1": _WARP_MASK_L1}
-        for cid in ("transform_undeclared_masked", "webmercator_undeclared_masked")
-    }
-)
+HEAVY_PENDING.update({"webmercator_undeclared_masked": {"L1": _WARP_MASK_L1}})
 
 HEAVY_PENDING.update(
     {

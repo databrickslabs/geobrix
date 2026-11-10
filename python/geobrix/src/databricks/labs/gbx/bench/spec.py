@@ -833,7 +833,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "warp",
         _BOTH,
         {"target_srid": 3857},
-        sources=_WARP_LIGHT + (_HEAVY + "RST_Transform.scala",),
+        sources=_WARP_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: warp.reproject_to_srid(ds, a["target_srid"]),
         col_fn=lambda t, a: rx.rst_transform(t, a["target_srid"]),
@@ -1392,7 +1393,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: _engine_json("gbx_rst_summary", {})(ds),
         col_fn=lambda t, a: rx.rst_summary(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Summary.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1548,7 +1550,8 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_fillnodata(
             t, a["max_search_dist"], a["smoothing_iter"]
         ),
-        sources=_FEATURES_LIGHT + (_HEAVY + "pixel/RST_FillNodata.scala",),
+        sources=_FEATURES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- focal (focal.py) ---
@@ -1626,7 +1629,8 @@ REGISTRY: Dict[str, FnSpec] = {
             ds, a["factor"], a["algorithm"]
         ),
         col_fn=lambda t, a: rx.rst_resample(t, a["factor"], a["algorithm"]),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_Resample.scala",),
+        sources=_RESAMPLE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_resample_to_size": FnSpec(
@@ -1662,7 +1666,8 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_resample_to_res(
             t, a["x_res"], a["y_res"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT + (_HEAVY + "resample/RST_ResampleToRes.scala",),
+        sources=_RESAMPLE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1816,7 +1821,8 @@ REGISTRY: Dict[str, FnSpec] = {
             ds, a["target_values"], a["distunits"], None
         ),
         col_fn=lambda t, a: rx.rst_proximity(t, a["target_values"], a["distunits"]),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Proximity.scala",),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- clip (edit.py): timing-only ---

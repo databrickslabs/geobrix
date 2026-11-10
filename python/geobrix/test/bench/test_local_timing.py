@@ -175,13 +175,14 @@ def test_every_form_of_the_dem_sets_exists_for_its_function():
 
 
 def test_every_form_of_the_hv_sets_exists_for_its_function():
-    """Each name of an HV set picks exactly one form of its function: the companion first, the floor last."""
+    """Each name of an HV set picks exactly one form of its function: the companion first where one is kept, the floor last."""
     from databricks.labs.gbx.bench import levels_forms as lf
 
     for name in _HV_SETS:
         spec = lt.SETS[name]
         label = spec.forms[0].split("@")[1]
-        assert spec.mvp == "DEM" and spec.forms[0] == f"today@{label}"
+        assert spec.mvp == "DEM"
+        assert (spec.forms[0] == f"today@{label}") == (spec.fn in lf.HV_L1_FUNCTIONS)
         assert spec.forms[-1] == f"floor-c0@{label}"
         assert spec.fn in lf.HV_FUNCTIONS
         for variant in spec.forms:

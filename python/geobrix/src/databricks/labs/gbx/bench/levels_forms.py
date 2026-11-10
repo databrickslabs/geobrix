@@ -2642,11 +2642,12 @@ for _fn in DEM_FUNCTIONS:
 
 # --- HV, the remaining JVM companions under the keep rule -------------------------------------------------------------------
 #
-# The five warp functions, fill-NoData, summary and proximity each keep a JVM companion beside their light form. Each is timed
-# on one input per function with its JVM form (`today`), the engine's row-wise UDF (c0) and its batch UDF (c1) (proximity has the
-# one light UDF, c0), and a floor: the warps on the corpus tiles (4 bands, 16 MiB, in four CRSs), the rest on tiles replicated
-# on the executors (128 at 1x, 512 at 4x, 2048 at 16x, over 32 partitions as the DEM forms). Every form carries a decoded-value
-# fingerprint and a NULL report; the JVM form's report names the distinct `last_error` texts with their counts.
+# The five warp functions, fill-NoData, summary and proximity are timed on one input per function with the engine's row-wise UDF
+# (c0) and its batch UDF (c1) (proximity has the one light UDF, c0), and a floor: the warps on the corpus tiles (4 bands, 16 MiB,
+# in four CRSs), the rest on tiles replicated on the executors (128 at 1x, 512 at 4x, 2048 at 16x, over 32 partitions as the DEM
+# forms). Only to_webmercator and resample_to_size keep a JVM companion (held for a decision): they also carry its form
+# (`today`). Every form carries a decoded-value fingerprint and a NULL report; the JVM form's report names the distinct
+# `last_error` texts with their counts.
 HV_WARP_FUNCTIONS = (
     "gbx_rst_transform",
     "gbx_rst_to_webmercator",
@@ -2656,16 +2657,11 @@ HV_WARP_FUNCTIONS = (
 )
 HV_OTHER_FUNCTIONS = ("gbx_rst_fillnodata", "gbx_rst_summary", "gbx_rst_proximity")
 HV_FUNCTIONS = HV_WARP_FUNCTIONS + HV_OTHER_FUNCTIONS
+HV_L1_FUNCTIONS = ("gbx_rst_to_webmercator", "gbx_rst_resample_to_size")
 _RX_PKG = "com.databricks.labs.gbx.rasterx.expressions."
 _HV_COMPANION = {
-    "gbx_rst_transform": _RX_PKG + "RST_Transform",
     "gbx_rst_to_webmercator": _RX_PKG + "web.RST_ToWebMercator",
-    "gbx_rst_resample": _RX_PKG + "resample.RST_Resample",
     "gbx_rst_resample_to_size": _RX_PKG + "resample.RST_ResampleToSize",
-    "gbx_rst_resample_to_res": _RX_PKG + "resample.RST_ResampleToRes",
-    "gbx_rst_fillnodata": _RX_PKG + "pixel.RST_FillNodata",
-    "gbx_rst_summary": _RX_PKG + "accessors.RST_Summary",
-    "gbx_rst_proximity": _RX_PKG + "analysis.RST_Proximity",
 }
 # the pixel size of a corpus tile in its own CRS units: degrees in 4326, metres in the other three; the tile struct carries the
 # CRS, so the resolution is a cheap CASE and no function reads the tile
@@ -2676,7 +2672,11 @@ _HV_CALLS = {
     "gbx_rst_to_webmercator": "{n}(tile, 'bilinear')",
     "gbx_rst_resample": "{n}(tile, 0.5D, 'bilinear')",
     "gbx_rst_resample_to_size": "{n}(tile, 512, 512, 'bilinear')",
-    "gbx_rst_resample_to_res": "{n}(tile, " + _HV_RES + ", " + _HV_RES + ", 'bilinear')",
+    "gbx_rst_resample_to_res": "{n}(tile, "
+    + _HV_RES
+    + ", "
+    + _HV_RES
+    + ", 'bilinear')",
     "gbx_rst_fillnodata": "{n}(tile, 100.0D, 0)",
     "gbx_rst_summary": "{n}(tile)",
     # the two classes 1 and 2 are the sources: a DEM tile's pixels are all non-zero, which makes every pixel a source
@@ -2699,7 +2699,7 @@ INPUTS["hv_classes_1024_mem"] = _se_dems_replicated(
 
 
 def setup_hv_l1(spark):
-    """Install every HV companion under its private name (dedicated compute; a Connect session refuses)."""
+    """Install the HV companions that remain under their private names (dedicated compute; a Connect session refuses)."""
     from databricks.labs.gbx.manager import jvm
 
     for fn, fqn in _HV_COMPANION.items():
@@ -2719,14 +2719,13 @@ _HV_VFP_TEXT = (
     "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM "
     "(SELECT first(tile) AS tile FROM {{src}} GROUP BY xxhash64(tile.raster)))"
 )
-_HV_ERR_TEXT = (
-    "substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), ';,', '  '), 1, 160)"
-)
+_HV_ERR_TEXT = "substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), ';,', '  '), 1, 160)"
 
 
 def _hv_nulls(call: str, *, text_output: bool = False, paths: bool = False) -> str:
     """How many outputs are NULL, a digest of the input paths of the NULL ones, and the first few: `<count> x <last_error text>`
-    per distinct text, then three paths. One pass over the input; a NULL string (the summary) has no tile to carry a text."""
+    per distinct text, then three paths. One pass over the input; a NULL string (the summary) has no tile to carry a text.
+    """
     what = "'<NULL text>'" if text_output else _HV_ERR_TEXT
     nul = "t IS NULL" if text_output else "t.raster IS NULL"
     p = "tile.path" if paths else "''"
@@ -2772,21 +2771,24 @@ for _fn in HV_FUNCTIONS:
 
     _l3_variants = ("c0",) if _fn == "gbx_rst_proximity" else ("engine-c0", "engine-c1")
     if _fn == "gbx_rst_summary":
-        _l3_variants = ("engine-c0",)  # a JSON row has no batch form: engine-c1 would be the same UDF
-    FORMS["DEM"].append(
-        _hv(
-            _fn,
-            "L1",
-            f"today@{_label}",
-            _fp.format(call=_l1),
-            setup="databricks.labs.gbx.bench.levels_forms:setup_hv_l1",
-            register=False,
-            computes=("dedicated",),
-            allows_null=True,  # an error tile under load is reported, not a lost row
-            vsql=_v(_l1),
-            nullsql=_n(_l1),
+        _l3_variants = (
+            "engine-c0",
+        )  # a JSON row has no batch form: engine-c1 would be the same UDF
+    if _fn in HV_L1_FUNCTIONS:
+        FORMS["DEM"].append(
+            _hv(
+                _fn,
+                "L1",
+                f"today@{_label}",
+                _fp.format(call=_l1),
+                setup="databricks.labs.gbx.bench.levels_forms:setup_hv_l1",
+                register=False,
+                computes=("dedicated",),
+                allows_null=True,  # an error tile under load is reported, not a lost row
+                vsql=_v(_l1),
+                nullsql=_n(_l1),
+            )
         )
-    )
     for _v3 in _l3_variants:
         FORMS["DEM"].append(
             _hv(

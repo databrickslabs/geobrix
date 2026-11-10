@@ -157,7 +157,8 @@ def test_a_json_row_returns_a_string_and_a_result_is_its_text():
 def test_the_fill_works_where_the_process_temp_directory_is_unusable(monkeypatch):
     """GDAL's fill keeps its index and value files on disk, named from CPL_TMPDIR, else TMPDIR, else /tmp, with no check
     that the directory is usable. On a cluster that gave every row of a fill "Could not create Y index work file" (an
-    error tile) while the same rows ran in the dev container. The engine names the canonical local temp for the call."""
+    error tile) while the same rows ran in the dev container. The engine names the canonical local temp for the call.
+    """
     z = _gradient()[np.newaxis]
     z[0, 4, 4] = NODATA
     monkeypatch.setenv("TMPDIR", "/gbx-no-such-directory/tmp")
@@ -181,7 +182,8 @@ def test_every_engine_algorithm_runs_with_the_local_temp_as_gdals_temp_directory
     monkeypatch, fn_name, values
 ):
     """The temp directory is set for every engine call in the shared run path, not for the fill alone: any algorithm may
-    keep work files on disk (a warp's, a viewshed's), and GDAL does not check the directory it is told."""
+    keep work files on disk (a warp's, a viewshed's), and GDAL does not check the directory it is told.
+    """
     from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
     seen = []

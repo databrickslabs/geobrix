@@ -81,3 +81,18 @@ def test_classify_raises_clear_error_on_too_few_bands():
     single_band = np.zeros((16, 16, 1), np.uint8)
     with pytest.raises(ValueError, match="requires a >=3-band"):
         lc.classify(single_band, method="spectral", smooth=0)
+
+
+def test_the_despeckle_footprint_is_the_disk_of_the_window_radius():
+    """The opening's footprint: the cells within the radius of the centre (scikit-image's ``disk``, which it replaced)."""
+    from databricks.labs.gbx.pyrx.core.land_cover import _disk
+
+    assert _disk(1).tolist() == [[0, 1, 0], [1, 1, 1], [0, 1, 0]]
+    assert _disk(2).tolist() == [
+        [0, 0, 1, 0, 0],
+        [0, 1, 1, 1, 0],
+        [1, 1, 1, 1, 1],
+        [0, 1, 1, 1, 0],
+        [0, 0, 1, 0, 0],
+    ]
+    assert _disk(3).sum() == 29 and _disk(3).dtype == "uint8"

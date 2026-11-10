@@ -86,9 +86,6 @@ contextily==1.6.2
 # folium was removed from [vizx]; do not re-add here.
 mapclassify==2.10.0
 
-# --- contour (scikit-image) ---
-scikit-image==0.26.0
-
 # --- lint tooling ---
 black==26.10.1
 isort==8.0.1

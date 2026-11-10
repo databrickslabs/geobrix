@@ -71,12 +71,6 @@ ALLOWED_MOVES = {
         "core.txt typing_extensions>=4.13: rio-tiler 9's TypedDict(extra_items=...) (PEP 728); the env5 runtimes "
         "ship 4.12.2",
     ),
-    "lazy-loader": (
-        (6,),
-        ("core", "full"),
-        "core.txt lazy_loader>=0.5: scikit-image imports it, and on Serverless pip installs it into the "
-        "notebook-scoped environment only above the runtime's version; the ML runtimes ship 0.4",
-    ),
     "requests": (
         (5,),
         ("full",),

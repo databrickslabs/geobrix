@@ -33,7 +33,7 @@ rio-tiler>=9.0,<10
 # so pin it explicitly — same floor the base dependency used to carry.
 pyspark>=4.0.0
 
-# pillow is resolved through [vizx] (matplotlib, scikit-image, imageio, contextily) and certifi
+# pillow is resolved through [vizx] (matplotlib, imageio, contextily) and certifi
 # through requests and httpx2; the floors keep a regenerated lock at the security-patched
 # releases. CI-only: the extras in pyproject.toml are unchanged, and pip leaves the runtime's own
 # pillow and certifi in place.

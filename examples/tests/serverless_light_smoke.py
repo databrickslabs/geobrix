@@ -135,7 +135,7 @@ except Exception as e:
 # 2) Key package versions (confirm what the install upgraded)
 for p in ["protobuf","idna","numpy","pandas","pyarrow","grpcio","ipython",
           "rasterio","shapely","rio-tiler","mapbox-vector-tile","pyogrio",
-          "pyproj","scikit-image","h3","quadbin","scipy","numexpr"]:
+          "pyproj","h3","quadbin","scipy","numexpr"]:
     try:
         r["ver_"+p] = md.version(p)
     except Exception:

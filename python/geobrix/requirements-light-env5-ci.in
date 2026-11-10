@@ -74,9 +74,6 @@ mapbox-vector-tile==2.1.0
 h3==4.5.0
 quadbin==0.2.2
 
-# --- contour (scikit-image) ---
-scikit-image==0.26.0
-
 # --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
 # ERA5): xarray with the netcdf4 engine (single wheel bundling netcdf-c + HDF5;
 # pulls cftime). Keep in lockstep with the pyproject base-dependency floors, and netcdf4 with
@@ -147,7 +144,7 @@ pytest==9.1.1
 
 # --- transitive packages floored at their security-patched releases ---
 # GeoBrix declares none of these directly: certifi comes in through requests and httpx2, pillow
-# through matplotlib, scikit-image, imageio and contextily, aiohttp and multidict through
+# through matplotlib, imageio and contextily, aiohttp and multidict through
 # earthaccess -> s3fs -> aiobotocore.
 # A floor stops a regenerated lock from resolving below the patched release. CI-only: the
 # shipped extras (pyproject.toml) keep their ranges, and pip leaves the runtime's own pillow

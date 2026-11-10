@@ -6,7 +6,6 @@ branches via ``scipy.cluster.vq.kmeans2`` with spectral cluster-labeling."""
 import numpy as np
 from scipy import ndimage as ndi
 from scipy.cluster.vq import kmeans2
-from skimage.morphology import disk
 
 from databricks.labs.gbx.pyrx.core._nodata import emit
 
@@ -117,6 +116,14 @@ def _kmeans(arr, f, names, n_clusters):
     return lab
 
 
+def _disk(radius: int) -> np.ndarray:
+    """A disk footprint of ``radius`` pixels: the cells whose centre lies within the radius of the centre cell (the
+    footprint ``skimage.morphology.disk`` gives, as uint8)."""
+    r = np.arange(-radius, radius + 1)
+    x, y = np.meshgrid(r, r)
+    return ((x**2 + y**2) <= radius**2).astype(np.uint8)
+
+
 def _despeckle(lab, window):
     """Drop small connected specks of each class by binary-opening its mask.
 
@@ -130,7 +137,7 @@ def _despeckle(lab, window):
     for c in np.unique(lab):
         if c < 0:
             continue
-        m = ndi.binary_opening(lab == c, structure=disk(max(1, window // 2)))
+        m = ndi.binary_opening(lab == c, structure=_disk(max(1, window // 2)))
         out[(lab == c) & ~m] = -1  # drop specks of class c
     return out
 

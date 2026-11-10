@@ -34,12 +34,6 @@ numexpr>=2.14.1
 h3>=4.1,<5
 quadbin>=0.2,<0.3
 pmtiles>=3.4,<4
-scikit-image>=0.22,<1
-# scikit-image imports lazy_loader. On Serverless, %pip installs into the notebook-scoped environment only what
-# the runtime's own packages do not already satisfy, and the rst_land_cover worker runs from that environment: a
-# floor above the ML runtimes' 0.4 makes pip install it there (without it, `from skimage.morphology import disk`
-# fails with ModuleNotFoundError: lazy_loader). It moves the ML runtimes' 0.4.
-lazy_loader>=0.5
 defusedxml>=0.7,<1
 laspy>=2.7,<2.8
 lazrs>=0.8.2,<0.9

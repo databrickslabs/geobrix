@@ -324,6 +324,29 @@ def test_the_first_streamed_call_of_a_process_sweeps_the_stale_folders_once(
         assert out == f"{scratch}/out.gpkg" and os.path.isdir(scratch)
 
 
+def test_a_feature_gdal_fails_to_read_mid_stream_is_a_data_error_after_the_rows_before_it(
+    engine, monkeypatch
+):
+    import numpy as np
+
+    values = np.ones((8, 8), "uint8")
+    values[:, 4:] = 2
+    res = run.run(POLY, [_tile(values)], {"band": 1, "connectedness": 4})
+    assert res.error is None, res.error
+    real = run._layer_rows
+
+    def fails_after_one(lyr, fields, fix=None):
+        yield next(real(lyr, fields, fix))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(run, "_layer_rows", fails_after_one)
+    got = []
+    with pytest.raises(run.DataError, match="could not be read back"):
+        for row in res.features:
+            got.append(row)
+    assert len(got) == 1
+
+
 def test_the_sweep_keeps_the_folder_of_a_live_process_however_old_and_removes_a_dead_ones(
     monkeypatch, tmp_path
 ):

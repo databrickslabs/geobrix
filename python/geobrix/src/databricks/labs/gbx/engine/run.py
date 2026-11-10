@@ -889,17 +889,21 @@ class FeatureStream:
             doubles = [
                 i + 1 for i, (_n, t, _s) in enumerate(self._fields) if t == "DOUBLE"
             ]
-            try:
-                for row in _layer_rows(lyr, self._fields):
-                    # the file stores a NaN as NULL
-                    if all(
-                        row[i] is not None and math.isfinite(row[i]) for i in doubles
-                    ):
-                        yield row
-            except RuntimeError as exc:
-                raise DataError(
-                    f"GDAL's output could not be read back ({exc})"
-                ) from None
+            rows = _layer_rows(lyr, self._fields)
+            while True:
+                try:
+                    row = next(rows)
+                except StopIteration:
+                    break
+                except (
+                    RuntimeError
+                ) as exc:  # GDAL's read of a feature, not the conversion after it
+                    raise DataError(
+                        f"GDAL's output could not be read back ({exc})"
+                    ) from None
+                # the file stores a NaN as NULL
+                if all(row[i] is not None and math.isfinite(row[i]) for i in doubles):
+                    yield row
         finally:
             lyr = ds = None
             self.close()

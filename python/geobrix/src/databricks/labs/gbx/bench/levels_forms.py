@@ -2787,7 +2787,7 @@ for _fn in HV_FUNCTIONS:
                 "L3",
                 f"{_v3}@{_label}",
                 _fp.format(call=_l3),
-                allows_null=_corpus,
+                allows_null=True,  # a NULL (an error tile) is reported with its reason, not a lost row
                 vsql=_v(_l3),
                 nullsql=_n(_l3),
             )

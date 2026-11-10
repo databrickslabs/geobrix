@@ -96,7 +96,7 @@ def _final_expr(op):
 
 def test_the_final_step_divides_the_partials_and_leaves_the_others_as_they_are():
     assert _final_expr("avg") == "B / A"
-    assert _final_expr("stddev") == "sqrt(abs(C / A - (B / A) ** 2))"
+    assert _final_expr("stddev") == "sqrt(abs(C / A - (B / A) ^ 2))"
     for op in ("sum", "count", "min", "max"):
         assert _final_expr(op) is None
 
@@ -149,7 +149,7 @@ def _members(n, seed):
 
 def _tree(op, tiles):
     """The tree of ``gbx_combine_by_key`` for one key, level by level, with the cores behind the UC functions."""
-    from databricks.labs.gbx.pyrx.core import agg, mapalgebra
+    from databricks.labs.gbx.pyrx.core import agg
 
     fan, bucket = _bucket_formula(_text())
     simple = {
@@ -183,7 +183,7 @@ def _tree(op, tiles):
             u = [r[0] for r in g]
             parts = [agg.combine_count_tiles(u), agg.combine_sum_tiles(u)]
             if op == "stddev":
-                sq = [mapalgebra.mapalgebra([x], "A * A") for x in u]
+                sq = [_mapalgebra([x], "A * A") for x in u]
                 parts.append(agg.combine_sum_tiles(sq))
             return tuple(parts)
 
@@ -201,7 +201,15 @@ def _tree(op, tiles):
     if final is None:
         return rows[0][0]
     # count is A, the sum B, the sum of squares C
-    return mapalgebra.mapalgebra(list(rows[0]), final)
+    return _mapalgebra(list(rows[0]), final)
+
+
+def _mapalgebra(rasters, expression):
+    """gbx_rst_mapalgebra as the procedure calls it on UC: the engine's UC handler (GDAL's raster calc, muparser)."""
+    from databricks.labs.gbx.bench.oracles import _tile
+    from databricks.labs.gbx.engine import uc
+
+    return uc.rst_mapalgebra([_tile(r) for r in rasters], expression)["raster"]
 
 
 def _flat(op, tiles):
@@ -222,6 +230,12 @@ def _flat(op, tiles):
 @pytest.mark.parametrize("n", [2, 9, 23, 70])
 def test_the_partial_tiles_combine_to_what_the_session_combine_returns(op, n):
     """One key of ``n`` aligned members with holes: the levels of the tree equal the single combine of all of them."""
+    from databricks.labs.gbx.engine import run
+
+    if op in ("avg", "stddev") and run.unavailable_reason():
+        pytest.skip(
+            f"the final step is gbx_rst_mapalgebra, the GDAL spec engine: {run.unavailable_reason()}"
+        )
     tiles = _members(n, seed=n)
     got, want = _pixels(_tree(op, tiles)), _pixels(_flat(op, tiles))
     assert np.array_equal(np.isnan(got), np.isnan(want)), (op, n)

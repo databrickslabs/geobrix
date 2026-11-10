@@ -580,9 +580,10 @@ DECLARE v_lvl INT DEFAULT 1;
 # op -> (the partial tile columns, the combine function of level 1 per column, of the levels above per column, the final
 # expression over the partials or None when p1 is the result). The members of avg and stddev are cast to Float64 first
 # (a sum in the member type wraps: eight uint8 tiles of 200). The partials of stddev are the count A, the sum B and the
-# sum of squares C: the population standard deviation is sqrt(C / A - (B / A) ** 2), the combinestddev of the session.
+# sum of squares C: the population standard deviation is sqrt(C / A - (B / A) ^ 2), the combinestddev of the session.
+# The expressions are gbx_rst_mapalgebra's, so they use GDAL's muparser grammar (`^` is the power).
 _COMBINE_OPS = ("avg", "sum", "count", "min", "max", "stddev")
-_EXPR = {"avg": "B / A", "stddev": "sqrt(abs(C / A - (B / A) ** 2))"}
+_EXPR = {"avg": "B / A", "stddev": "sqrt(abs(C / A - (B / A) ^ 2))"}
 
 
 def _combine_level1(q: str, op: str) -> str:  # members per call: COMBINE_FAN_IN

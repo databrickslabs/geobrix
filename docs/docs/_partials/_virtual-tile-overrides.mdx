@@ -17,8 +17,6 @@ Pixel-producing operations (slope, focal, mapalgebra, reproject, merge, combinea
 materialize and return bytes. For these, `virtualize_dir` is the **only** way to get a virtual tile back.
 It writes the computed result to a durable path and returns a virtual tile.
 
-SQL has no such keywords. In SQL, GeoBrix sends a virtual tile to the Python implementation.
-The JVM level reads materialized tiles only, so a function forced to run there raises an error for a
-virtual tile. Materialize the tile first: pass `materialize=True`, or write with a writer, which
-always materializes. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
+SQL has no such keywords. In SQL, GeoBrix sends a virtual tile to the Python implementation,
+because the JVM level reads materialized tiles only. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
 :::

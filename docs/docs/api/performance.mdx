@@ -31,11 +31,13 @@ GeoBrix has three levels, named by what you install.
 | Heavy | The env wheel and the GeoBrix JAR | Dedicated clusters. Standard access mode only where a Java handler exists. |
 | UC functions | `gbx.uc.install` | SQL warehouses and any compute that reads Unity Catalog |
 
-GeoBrix keeps a heavy level only where it is at least 1.2x faster than the best light form. The test runs on a dedicated cluster at 4x or 16x the base row count, and the output must decode the same. The JAR then makes the heavy level the default. A heavy level that is not that much faster is removed from the JAR. Every other function runs at the light level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
+GeoBrix keeps a heavy level only where it is at least 1.2x faster than the best light form. The test runs on a dedicated cluster at 4x or 16x the base row count, and the output must decode the same. The JAR then makes the heavy level the default. A function with no measurement yet runs at the light level, except a few. [Functions the JAR speeds up](./jar-functions) lists every function that runs the heavy level by default.
+
+Every function not on that page runs at the light level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
 
 ### Light level (no JAR)
 
-The light level runs every function on every compute. It is the default for the raster tile functions, the vector scalars and aggregates, and every grid function that has no JVM form.
+The light level runs every function on every compute. It is the default for the raster tile functions except `gbx_rst_tri`, the vector scalars other than the three CRS functions, the vector aggregates, and every grid function that has no JVM form.
 
 | Function family | What runs | Measured result |
 |---|---|---|
@@ -53,19 +55,21 @@ The light level runs every function on every compute. It is the default for the 
 | Grouped raster aggregates | Grouped-aggregate UDF | See [Aggregates by compute](#aggregates-by-compute) |
 | Vector tiles (`gbx_st_asmvt`) | mapbox-vector-tile | 1.7x to 2.9x faster than the former JVM aggregate, which is no longer shipped |
 | PMTiles archive aggregate | Grouped-aggregate UDF | About 1.07x the JVM time, inside run-to-run noise |
-| Quadbin and custom grid | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
+| Quadbin and the custom-grid arrays | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
 | `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_gridfrompoints` | Python | The JVM form took 1.8x and 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions | Python | The JVM form took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows (131.56 s against 122.16 s, and 576.44 s against 387.95 s), and is no longer shipped. For many tiles per key, `combine_by_key` took 261.07 s at 16x rows |
 | `gbx_rst_bng_tessellate` | Python | The JVM form took 0.97x and 1.03x the time at 4x and 16x rows (1591.42 s against 1540.71 s at 16x), a tie, and is no longer shipped |
 | `gbx_bng_eastnorthasbng` | SQL function, then a Python batch form | The JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows, and is no longer shipped |
-| Other families | Per-function UDF | Not yet measured: highest available level |
+| Other families | Per-function UDF | Not yet measured: the light level |
 
 Source: a dedicated cluster (one driver and four `m5d.2xlarge` workers, DBR 19). Rows are multiples of each function's base row count.
 
 ### Heavy level (with the JAR)
 
 The JAR is the default for these functions on a dedicated cluster. Each is at least 1.2x faster than the best light form at 4x or 16x rows, with the same decoded output. Times are seconds per run. Lower is faster.
+
+These are the measurements. [Functions the JAR speeds up](./jar-functions) lists every function that runs on the JVM by default.
 
 | Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
 |---|---|---|---|
@@ -94,7 +98,7 @@ A raster accessor that returns one value (a number, a string or a WKB polygon) r
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 
-Functions not listed above are not yet measured at the heavy level. GeoBrix uses the highest available level for them where a conforming JVM form exists, and the light level otherwise.
+The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. These run the JVM first: the BNG, custom-grid and H3 cell scalars that have a JVM form, `gbx_rst_frombands`, `gbx_st_crs` and `gbx_st_setcrs`.
 
 #### The Rust kernel for BNG cells
 
@@ -216,15 +220,13 @@ Some aggregates have no twin. They are session aggregates, called with `GROUP BY
 
 ### Generators in SQL
 
-At every default level a generator is a table function. Call it with `LATERAL`:
+On every compute a generator is a table function. Call it with `LATERAL`:
 
 ```sql
 SELECT z, x, y, tile
 FROM   your_table,
 LATERAL gbx_rst_h3_rastertogridavg(tile, 8);   -- one row per H3 cell at resolution 8
 ```
-
-A generator forced to the JVM level (a Catalyst generator such as `gbx_rst_xyzpyramid`, the tessellate functions or `gbx_rst_maketiles`) supports only the select-list form: `SELECT gbx_rst_maketiles(tile, 8) FROM your_table`. It does not resolve through `LATERAL`. GeoBrix does not pick that level for these functions by default.
 
 ---
 

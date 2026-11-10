@@ -61,17 +61,11 @@ Every function has an L3 level, so the wheel alone runs the whole library. The J
 
 ## How GeoBrix picks a level
 
-The wheel ships a table that lists, for each function, the levels to try and in what order. The order comes from measurements. Where a function has not been measured, GeoBrix tries the highest level first.
+The wheel ships a table that lists, for each function, the levels to try and in what order. The order comes from measurements. A function with no measurement yet runs at L3, except a few that [Functions the JAR speeds up](./jar-functions) lists.
 
 For each function, `register` takes the first level that works on this compute. It skips a level when the JAR is missing, when the session is Spark Connect, or when a library is absent.
 
-Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster, or because the JVM form cannot read a virtual tile. On a dedicated cluster with the JAR, GeoBrix picks L1 for these families:
-
-- the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode, tessellate, `gbx_bng_kring` and `gbx_bng_cellfill` functions;
-- `gbx_rst_frombands`, which is not measured yet;
-- `gbx_rst_fromcontent` and `gbx_rst_bng_rasterize_agg`;
-- the raster accessors that return one value (`gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_srid`, `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_memsize`, `gbx_rst_boundingbox`, the pixel size, scale, skew, rotation and upper-left functions, and the single-axis coordinate functions). A virtual tile goes to the Python level, as described below;
-- `gbx_rst_tri`, `gbx_st_triangulate`, `gbx_st_transformcrs` and `gbx_st_interpolateelevationbbox`.
+Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster, or because the JVM form cannot read a virtual tile. [Functions the JAR speeds up](./jar-functions) lists every function that picks L1 on a dedicated cluster with the JAR.
 
 ### GeoBrix says why
 
@@ -90,10 +84,6 @@ chosen["gbx_bng_eastnorthasbng"].level   # 'L0' (SQL) or 'L3'
 
 A name that no level can serve on this compute is skipped, with a line that says why. The other names still register.
 
-### Test-only controls
-
-`register` also takes `_levels` and `_prefer`. They force or favor a level so that tests can compare levels. Do not use them in a job. They carry no compatibility promise.
-
 ## Generators are table functions
 
 A generator returns many rows for each input. Call it as a table function:
@@ -103,7 +93,7 @@ SELECT gbx_out.*
 FROM my_cells AS t, LATERAL gbx_bng_kringexplode(t.cellid, 1) AS gbx_out
 ```
 
-This form works at every default level. The select-list form (`SELECT gbx_...(args)`) and `LATERAL VIEW` work only when you force the JVM level (L1) on a dedicated cluster. The Catalyst generator resolves there and a Python table function does not. Use the `FROM t, LATERAL` form unless you force L1.
+This form works on every compute and at every level. Do not call a generator in the select list or with `LATERAL VIEW`: a Python table function does not resolve there.
 
 ## Where the JAR helps
 
@@ -114,7 +104,7 @@ Install the JAR only when you want the JVM level on a dedicated cluster. The whe
 - A cluster runs one GeoBrix JAR. `stage_jar` refuses a second JAR in the same Volume folder, with a fix.
 - Serverless cannot load the JAR, so it runs L3 and L4. A SQL warehouse runs L4 only.
 
-For measured differences between levels, see [Performance & Benchmarking](./performance).
+[Functions the JAR speeds up](./jar-functions) lists the functions that run on the JVM. For measured differences between levels, see [Performance & Benchmarking](./performance).
 
 ## What needs dedicated compute {#dedicated-compute}
 
@@ -146,8 +136,6 @@ The JVM level reads bytes only. In SQL, GeoBrix routes the two kinds for you:
 - An error tile comes out unchanged at every level.
 
 The accessors and statistics that return an `ARRAY<...>`, a `MAP<...>` or a `STRUCT<...>` (`gbx_rst_avg`, `gbx_rst_georeference` and the like) have no JVM form and run at the Python level. Such a function can sit under `explode` or `inline`, where Spark refuses the SQL function that does the routing.
-
-One function runs on the JVM level without that routing when you force L1 (`gbx_rst_isoband`). A virtual tile raises an error there. To use one, materialize the tile first: pass `materialize=True`, or write with a raster writer and read the output back. Every writer is a materialization boundary.
 
 The Python tile functions take three optional keywords: `virtualize_dir`, `virtualize_prefix` and `materialize`. SQL has none of them. See the [force-output parameters](./raster-functions#virtual-tile-overrides).
 

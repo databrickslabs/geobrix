@@ -600,7 +600,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 - **`gbx_st_legacyaswkb` returns a 2D geometry for 2D input.** The JVM function had a NaN Z.
 - **The CRS functions `st_crs`, `st_setcrs` and `st_transformcrs` run on the JVM level first when the JAR is present.**
 - **A CRS argument is judged by its kind.** A PROJJSON, with its `"$schema"` URL, and a WKT2 with an ID URI bind to their EPSG code on both levels. A URL, a file name and any grid or init file named by path stay refused. Before, a PROJJSON target was refused.
-- **Contour runs on the lightweight level only. Isoband runs there by default.** A forced JVM level of isoband raises for a virtual tile.
+- **Contour and isoband run on the lightweight level.**
 - **`gbx_rst_isoband` raises for breaks that do not rise,** and for a NULL element in `breaks`. `gbx_rst_contour` and `gbx_rst_isoband` give NULL for an unreadable tile.
 
 ## Writers {#writers}

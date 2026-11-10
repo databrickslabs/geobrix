@@ -179,8 +179,8 @@ header function such as `rst_crs` or `rst_width` reads no chunk at all.
   without the credentials of the call that made it. Therefore `gbx_zarr_read` refuses `access="direct"` with
   virtual tiles and raises `ZarrAccessUnavailable`. Read the tiles now with `virtual_tiles=False` to use
   direct access, or leave `access` at `"auto"` or `"fuse"`. See [Access](../readers/zarr#access).
-- **The heavyweight tier needs materialized tiles.** A heavyweight function refuses a virtual Zarr tile like any
-  other. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
+- **The heavyweight tier reads materialized tiles only.** In SQL, GeoBrix sends a virtual Zarr tile to the
+  lightweight tier, like any other virtual tile. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
   `driver` and `format` are then `GTiff`) that both tiers accept. Keep the windows small, because it costs the
   read up front and the memory of the pixels. See
   [Materialize for the heavyweight tier](../readers/zarr#materialize-for-the-heavyweight-tier).
@@ -238,7 +238,7 @@ or read through a FileRef stream. Prefer an internal mask.
 
 The Python level generates and operates on virtual tiles, and materializes them on demand.
 
-The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materialized** tiles and always emits the v2 tile struct. In SQL, GeoBrix sends a virtual tile to the Python implementation. A function you force onto the JVM level raises a clear error for a virtual tile. Materialize it first: call the Python function with `materialize=True`, or write it out and read it back. Writing is itself a materialization boundary.
+The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materialized** tiles and always emits the v2 tile struct. In SQL, GeoBrix sends a virtual tile to the Python implementation.
 
 ## See also
 

@@ -245,8 +245,8 @@ demand and read only the chunks its window touches. A header function such as `r
 
 ### Materialize for the heavyweight tier
 
-The JVM level operates only on materialized tiles. A virtual tile passed to a `gbx_rst_*` function
-there raises an error that says to materialize it (see
+The JVM level reads materialized tiles only. In SQL, GeoBrix sends a virtual tile to the Python
+level, so a `gbx_rst_*` call takes one on every compute (see
 [Virtual Tiles](../api/virtual-tiles#virtual-tiles-and-the-jvm-level)). `virtual_tiles=False` reads
 each tile now and holds its pixels as GeoTIFF bytes, which both tiers accept. It costs the read up
 front and the memory of the pixels, so keep the windows small.

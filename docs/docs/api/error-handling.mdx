@@ -122,7 +122,7 @@ Functions that turn one tile into many rows (tessellation, tiling, pyramids) beh
 - `gbx_rst_xyzpyramid` gives no rows for a `NULL` or unreadable tile. An unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a `max_z` above the cap, or too many tiles for the zoom range raises its message.
 - A `NULL` size, resolution or grid gives one error tile.
 
-Call a generator as `FROM t, LATERAL gbx_...(args)`. That form works at every level. The select-list form works only when you force the JVM level on a dedicated cluster.
+Call a generator as `FROM t, LATERAL gbx_...(args)`. That form works on every compute.
 
 ### Readers
 

@@ -24,3 +24,19 @@ def test_the_session_udtf_takes_mode_left_out_null_or_by_name(spark):
     assert count(f"SELECT * FROM gbx_t_tri({ARGS})") == 4
     assert count(f"SELECT * FROM gbx_t_tri({ARGS}, CAST(NULL AS STRING))") == 0
     assert count(f"SELECT * FROM gbx_t_tri({ARGS}, mode => 'conforming')") == 4
+
+
+@pytest.mark.parametrize(
+    "udtf, grid",
+    [
+        ("_InterpElevBBoxUDTF", "0.0D, 0.0D, 10.0D, 10.0D, 2, 2, 0"),
+        ("_InterpElevGeomUDTF", "'POINT (0 10)', 2, 2, 5.0D, -5.0D"),
+    ],
+)
+def test_the_elevation_udtfs_take_mode_left_out_null_or_by_name(spark, udtf, grid):
+    name = "gbx_t_" + udtf.lower().strip("_")
+    spark.udtf.register(name, getattr(F, udtf))
+    count = lambda sql: spark.sql(sql).count()  # noqa: E731
+    assert count(f"SELECT * FROM {name}({ARGS}, {grid})") == 4
+    assert count(f"SELECT * FROM {name}({ARGS}, {grid}, CAST(NULL AS STRING))") == 0
+    assert count(f"SELECT * FROM {name}({ARGS}, {grid}, mode => 'conforming')") == 4

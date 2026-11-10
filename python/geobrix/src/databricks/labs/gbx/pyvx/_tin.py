@@ -328,9 +328,13 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
         return []
     simplices = tri.simplices.copy()
     if len(tri.coplanar):
-        simplices = _jts_delaunay(
-            xy
-        )  # Qhull left out a site: JTS's own triangles of every site
+        # Qhull left out a site: JTS's own triangles of every site (Qhull's, should its point location fail)
+        from ._conforming import ConformingError
+
+        try:
+            simplices = _jts_delaunay(xy)
+        except ConformingError:
+            pass
     if lines:
         where = {(x + 0.0, y + 0.0): i for i, (x, y) in enumerate(pts[:, :2].tolist())}
         segments = [

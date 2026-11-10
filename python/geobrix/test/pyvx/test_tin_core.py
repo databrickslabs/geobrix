@@ -462,3 +462,21 @@ def test_the_jts_port_stands_in_where_qhull_leaves_out_a_site(monkeypatch):
     tris = _tin.triangulate(grid, bl, 0.0, 0.0)
     assert frozenset(((1.0, 1.0), (9.0, 8.0))) in _edges(tris)
     assert sum(abs(_tin._orient2d(*t)) / 2 for t in tris) == pytest.approx(100.0)
+
+
+def test_a_locate_failure_in_the_jts_port_keeps_qhulls_triangles(monkeypatch):
+    from databricks.labs.gbx.pyvx._conforming import LOCATE_FAILED, ConformingError
+
+    real = _tin.Delaunay
+
+    class LeftOut:
+        def __init__(self, xy):
+            self.simplices, self.coplanar = real(xy).simplices, [0]
+
+    def fail(xy):
+        raise ConformingError(LOCATE_FAILED)
+
+    monkeypatch.setattr(_tin, "Delaunay", LeftOut)
+    monkeypatch.setattr(_tin, "_jts_delaunay", fail)
+    pts = _sites([(0, 0), (10, 0), (10, 10), (0, 10), (5, 5)])
+    assert len(_tin.triangulate(pts, [], 0.0, 0.0)) == 4

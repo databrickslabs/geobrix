@@ -5049,7 +5049,11 @@ def run_session(
                             "takes it as one Python str. Fix: give the variant rows one value for it."
                         )
                 fcols = [
-                    args[i] if i < len(params) and params[i].str_only else F.col(f"c{i}")
+                    (
+                        args[i]
+                        if i < len(params) and params[i].str_only
+                        else F.col(f"c{i}")
+                    )
                     for i in range(len(args))
                 ]
                 call_py = column_of(case.fn)(*fcols, **dict(case.py_kw))

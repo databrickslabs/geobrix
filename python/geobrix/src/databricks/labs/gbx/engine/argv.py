@@ -939,9 +939,17 @@ def _windowed_viewshed(step: Sequence[str]) -> bool:
     )
 
 
-def writes_window(tokens: Sequence[str]) -> bool:
-    """Whether a command has a step that writes a window around the observer (see ``_windowed_viewshed``)."""
-    return any(_windowed_viewshed(st) for st in command_mod.steps_of(tokens)[1:-1])
+def window_mask(tokens: Sequence[str]) -> str:
+    """How the footprint mask a command carries meets a window around the observer: ``"none"`` when no step writes one,
+    ``"cut"`` when the mask, on the grid of the steps before the window, is cut to it (no reproject, resize or clip comes
+    after it), ``"skip"`` when a step after the window changes the grid again, so the mask has no grid of the output.
+    """
+    steps = command_mod.steps_of(tokens)[1:-1]
+    at = next((i for i, st in enumerate(steps) if _windowed_viewshed(st)), None)
+    if at is None:
+        return "none"
+    later = (st[0] for st in steps[at + 1 :])
+    return "skip" if any(n in ("reproject", "resize", "clip") for n in later) else "cut"
 
 
 def _numbers(text: Optional[str]) -> List[float]:
@@ -1125,8 +1133,10 @@ def _viewshed_window(step, st: PipeState) -> PipeState:
     """The state after a viewshed with a distance limit: one band, the window around the observer (the distance each way,
     in pixels, as ``_output_pixels`` sizes the row), placed by the observer's x and y in the state's CRS.
     """
-    if st.extent is None:
-        return st  # no pixel size to measure the distance in: the whole grid bounds it
+    if (
+        st.extent is None
+    ):  # no pixel size to measure the distance in: the whole grid bounds it
+        return dataclasses.replace(st, bands=1, fresh=False)
     reach = float(_token_value(step, "max-distance"))
     x, y = _numbers(_token_value(step, "position"))[:2]
     w = max(1, min(st.width, 2 * math.ceil(reach / st.px_x) + 1))

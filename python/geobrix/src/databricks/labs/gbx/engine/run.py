@@ -633,11 +633,20 @@ def _mask_pipeline(tokens, mask_in: str, mask_out: str) -> list:
 
 
 def _carry_mask(
-    gdal, tokens, src: str, out: str, prefix: str, shown, alg="raster reproject"
+    gdal,
+    tokens,
+    src: str,
+    out: str,
+    prefix: str,
+    shown,
+    alg="raster reproject",
+    window: bool = False,
 ) -> None:
     """The output's own mask band, from the source (see ``_mask_to_carry``): the mask is warped like the pixels, as data
     (nearest), by the same arguments (for a command, by its grid steps). The output gets no mask band when every pixel of
-    it is valid; the bands stay as they are (no alpha band is added)."""
+    it is valid; the bands stay as they are (no alpha band is added). With `window` the command ends on a window around
+    an observer (a viewshed with ``--max-distance``): the mask, on the grid the steps before it leave, is cut to the
+    output's own pixels."""
     import numpy as np
 
     ds = (
@@ -692,11 +701,13 @@ def _carry_mask(
             dtype="u1",
         )
         out_valid = np.where(warped == 0, 255, 0) if inverted else warped
+        if window:
+            out_valid = _cut_to_output(gdal, out, wd, out_valid)
         if out_valid.all():
             return
         with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
             od = _open_geotiff(gdal, out, update=True)
-            if (od.RasterXSize, od.RasterYSize) != (wd.RasterXSize, wd.RasterYSize):
+            if out_valid.size != od.RasterXSize * od.RasterYSize:
                 raise DataError(
                     "the source's mask band does not warp onto the output grid"
                 )
@@ -707,6 +718,38 @@ def _carry_mask(
             od.FlushCache()
     finally:
         od = wd = None
+
+
+def _cut_to_output(gdal, out: str, wd, valid):
+    """The mask `valid` (flat, on the grid of the dataset `wd`) cut to the pixels of the output `out`: a window of that grid,
+    found by its geotransform. DataError when the output is not a whole-pixel window of it.
+    """
+    import numpy as np
+
+    od = _open_geotiff(gdal, out)
+    try:
+        ow, oh, ogt = od.RasterXSize, od.RasterYSize, od.GetGeoTransform()
+    finally:
+        od = None
+    if (ow, oh) == (wd.RasterXSize, wd.RasterYSize):
+        return valid
+    gt = wd.GetGeoTransform()
+    col, row = (ogt[0] - gt[0]) / gt[1], (ogt[3] - gt[3]) / gt[5]
+    c, r = round(col), round(row)
+    fits = (
+        abs(col - c) < 1e-3
+        and abs(row - r) < 1e-3
+        and math.isclose(ogt[1], gt[1], rel_tol=1e-9)
+        and math.isclose(ogt[5], gt[5], rel_tol=1e-9)
+        and 0 <= c
+        and 0 <= r
+        and c + ow <= wd.RasterXSize
+        and r + oh <= wd.RasterYSize
+    )
+    if not fits:
+        raise DataError("the source's mask band does not warp onto the output grid")
+    grid = np.asarray(valid).reshape(wd.RasterYSize, wd.RasterXSize)
+    return np.ascontiguousarray(grid[r : r + oh, c : c + ow]).ravel()
 
 
 def _remove(gdal, prefix: str) -> None:
@@ -1598,13 +1641,21 @@ def run(
                 and any(
                     st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]
                 )
-                and not argv_mod.writes_window(tokens)
+                and argv_mod.window_mask(tokens) != "skip"
             ):
                 # a command that reprojects keeps the footprint, as gbx_rst_transformcrs does: GDAL fills what no source
                 # pixel reaches with 0, a value the tile never held. A command that ends on a window around an observer
-                # (a viewshed with --max-distance) has an output of another grid than the mask's: it keeps no footprint
+                # (a viewshed with --max-distance) cuts the mask to that window; one that changes the grid after the
+                # window has no mask on its grid, and keeps no footprint
                 _carry_mask(
-                    gdal, tokens, names[0], out, prefix, shown, command_mod.PIPELINE_ALG
+                    gdal,
+                    tokens,
+                    names[0],
+                    out,
+                    prefix,
+                    shown,
+                    command_mod.PIPELINE_ALG,
+                    window=argv_mod.window_mask(tokens) == "cut",
                 )
             return Result(_read(gdal, out), None, command)
         except DataError as exc:

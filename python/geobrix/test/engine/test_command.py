@@ -704,7 +704,7 @@ def test_a_reprojection_then_a_windowed_viewshed_keeps_no_footprint_and_is_not_a
             mask[:5, :] = 0
             dst.write_mask(mask)  # a mask band, not a NoData value
         src = mf.read()
-    cx, cy = Transformer.from_crs(4326, 3857, always_xy=True).transform(10.04, 49.97)
+    cx, cy = Transformer.from_crs(4326, 3857, always_xy=True).transform(10.04, 49.996)
     res = _run(
         f"reproject --output-crs=EPSG:3857 ! viewshed --position={cx},{cy},10 --max-distance=800",
         src,
@@ -712,3 +712,51 @@ def test_a_reprojection_then_a_windowed_viewshed_keeps_no_footprint_and_is_not_a
     assert res.error is None, res.error
     with _open(res) as out:
         assert out.width < 80 * 2  # the window, not the reprojected grid
+        valid = out.dataset_mask() > 0
+    # the window reaches the source's masked top rows: they stay masked, the rest is valid
+    assert not valid.all() and valid.any()
+    assert not valid[0].any() and valid[-1].all()
+
+
+@pytest.mark.parametrize(
+    "limit,position",
+    [("0", "300,300,10"), ("-5", "300,300,10"), ("inf", "300,300,10"), ("50", "300")],
+)
+def test_a_viewshed_limit_that_is_not_a_window_leaves_the_whole_grid(limit, position):
+    cmd = f"viewshed --position={position} --max-distance={limit}"
+    assert argv.window_mask(_build(cmd)) == "none"
+    assert _peak(f"{cmd} ! resize --size=200%,200%") == 128 * 96 * 4
+
+
+def test_a_viewshed_limit_that_is_not_a_number_is_refused_by_name():
+    with pytest.raises(spec.ParamError, match="max-distance"):
+        _build("viewshed --position=300,300,10 --max-distance=abc")
+
+
+def test_the_window_mask_is_cut_unless_a_grid_step_follows_the_window():
+    at = "viewshed --position=300,300,10 --max-distance=50"
+    assert argv.window_mask(_build("slope")) == "none"
+    assert argv.window_mask(_build(f"reproject --output-crs=3857 ! {at}")) == "cut"
+    assert (
+        argv.window_mask(_build(f"reproject --output-crs=3857 ! {at} ! slope")) == "cut"
+    )
+    assert argv.window_mask(_build(f"{at} ! reproject --output-crs=3857")) == "skip"
+    assert argv.window_mask(_build(f"{at} ! resize --size=10,10")) == "skip"
+
+
+def test_the_window_is_placed_by_the_observer_and_never_beyond_the_grid():
+    st = argv._viewshed_window(
+        ["viewshed", "--position=300,300,10", "--max-distance=50"], _start()
+    )
+    assert (st.width, st.height, st.bands, st.fresh) == (11, 11, 1, False)
+    assert (st.ox, st.oy) == (300 - 5 * 10, 300 + 5 * 10)
+    big = argv._viewshed_window(
+        ["viewshed", "--position=300,300,10", "--max-distance=100000"], _start()
+    )
+    assert (big.width, big.height) == (64, 48)
+    # a tile with no pixel size (rotated or GCP) has no window to measure: it is no longer the input's header
+    blind = argv._viewshed_window(
+        ["viewshed", "--position=300,300,10", "--max-distance=50"],
+        argv.PipeState(64, 48, 0.0, 0.0, 0, 0, "EPSG:32633", 3, 4, True),
+    )
+    assert (blind.width, blind.height, blind.bands, blind.fresh) == (64, 48, 1, False)

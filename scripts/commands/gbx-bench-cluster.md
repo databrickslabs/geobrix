@@ -111,6 +111,7 @@ See [`--levels` details](#levels-details) for the metrics.
   - `SE`: the GDAL spec engine's rows (slope, transformcrs, mapalgebra against today's implementations).
   - `DEM`: TRI (the function that keeps a JVM companion) against its light forms, beside a floor. The warps, `fillnodata`, `summary` and `proximity` have light forms only. Name a function's forms with `--levels-forms gbx_rst_tri:today@mem,...`. Its probe forms (`gbx_rst_width:nulls-accessors@mat`, `gbx_rst_fromcontent:nulls@mem`) run only when `--levels-forms` names them.
   - `IO`: the raster read and decode forms (its own ladder: 1x, 4x and 10x).
+  - `JV`: every function whose JVM level is not yet measured: its JVM form (`l1@<tag>`), each light variant and a floor, over one input per function, with a value fingerprint and a NULL report. Pick functions with `--levels-forms <fn>:<variant>,...` (see `bench/levels_jvm.py`).
   - The leg times every form of the set at each execution level the compute offers, and at each scale. The default scales are 1x, 4x and 16x the base row count; a set with its own ladder uses that. It writes one row per form and scale in the same results table.
   - The levels are L1 (Catalyst expression), L2 (Java UDF), L3 (light) and L4 (Unity Catalog function).
 - `--levels-only`: run just this leg, without the heavy tests JAR.

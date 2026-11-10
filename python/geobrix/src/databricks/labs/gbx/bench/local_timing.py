@@ -89,6 +89,9 @@ class SetSpec:
     peer_exempt: Tuple[str, ...] = (
         ()  # forms printed with their ratios but kept out of the peer-outlier flags and the peers' median
     )
+    # compare the value fingerprints of the non-floor forms at each n, and flag a pair that differs (the levels of one
+    # function must return the same decoded output)
+    compare_outputs: bool = False
 
 
 # The `HV-<function>` sets: the warps over the corpus tiles (4-band, 16 MiB: n stays small for a local[8] heap), the others over
@@ -449,6 +452,97 @@ def _family_sets() -> Dict[str, SetSpec]:
 
 
 SETS.update(_family_sets())
+
+# The JV sets (`bench.levels_jvm`): a function whose JVM level's fate is not yet measured, at its JVM level (`l1@<tag>`),
+# each light variant and a floor last, over the one input its forms share; the outputs of the levels are compared.
+_JV_TILES = dict(
+    corpus_src="/Volumes/main/default/bench-corpus/rows",
+    corpus_dir="/tmp/gbx-local-timing/IO",
+)
+_JV_NS = {  # small n per input: the pass checks that every form runs, scales and returns what the others return
+    "tiles_n": (4, 8, 16),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
+    "dem_1024_mem": (8, 32, 128),
+    "se_pair_512_mem": (8, 32, 128),
+    "jv_nc_512_mem": (8, 32, 128),
+    "bng_cells": (50_000, 200_000, 800_000),
+    "jv_bng_cells_gen": (25_000, 100_000, 400_000),
+    "jv_bng_points_wkt": (50_000, 200_000, 800_000),
+    "jv_bng_chips": (5_000, 20_000, 80_000),
+    "bng_polys": (5_000, 20_000, 80_000),
+    "jv_custom_polys": (5_000, 20_000, 80_000),
+    "jv_custom_cells": (50_000, 200_000, 800_000),
+    "jv_h3_cells": (50_000, 200_000, 800_000),
+    "jv_quadbin_cells": (50_000, 200_000, 800_000),
+    "jv_srid_polys": (10_000, 40_000, 160_000),
+    "jv_legacy_polys": (10_000, 40_000, 160_000),
+    "tin_points": (100, 400, 1_600),
+    "jv_pm_tiles": (2_000, 8_000, 32_000),
+}
+
+
+def jv_set_name(fn: str) -> str:
+    return "JV-" + fn[len("gbx_") :]
+
+
+def _jv_sets() -> Dict[str, SetSpec]:
+    from databricks.labs.gbx.bench import levels_jvm
+
+    out: Dict[str, SetSpec] = {}
+    for s in levels_jvm.SPECS:
+        forms = levels_jvm.variants_of(s.fn)
+        if not forms:
+            continue  # culled since: no L1 block left
+        out[jv_set_name(s.fn)] = SetSpec(
+            mvp=levels_jvm.MVP,
+            forms=forms,
+            reference=forms[1],  # the first light form
+            ns=_JV_NS[s.inp],
+            fn=s.fn,
+            peer_exempt=(forms[0],),  # the JVM form is what the pass measures, not a peer of the light forms
+            compare_outputs=True,
+            **(_JV_TILES if s.inp == "tiles_n" else {}),
+        )
+    return out
+
+
+SETS.update(_jv_sets())
+
+
+def expand_sets(name: str) -> List[str]:
+    """The sets `--set` names: one name, a comma list, `JV` (every JV set) or `JV@<input>` (the JV sets over one input)."""
+    from databricks.labs.gbx.bench import levels_jvm
+
+    out: List[str] = []
+    for part in [p.strip() for p in name.split(",") if p.strip()]:
+        if part == "JV":
+            out += [jv_set_name(s.fn) for s in levels_jvm.SPECS if jv_set_name(s.fn) in SETS]
+        elif part.startswith("JV@"):
+            inp = part[3:]
+            out += [
+                jv_set_name(s.fn)
+                for s in levels_jvm.SPECS
+                if s.inp == inp and jv_set_name(s.fn) in SETS
+            ]
+        else:
+            out.append(part)
+    return out
+
+
+def output_flags(outputs: Dict[Tuple[str, int], str], *, forms, ns) -> List[str]:
+    """A flag per n where two non-floor forms returned different value fingerprints, or a form returned none."""
+    found: List[str] = []
+    for n in ns:
+        got = {f: outputs.get((f, n), "") for f in forms[:-1]}
+        missing = [f for f, v in got.items() if not v.startswith("v1:")]
+        if missing:
+            found.append(f"n={n}: no value fingerprint for {', '.join(missing)}")
+        vals = {v for v in got.values() if v.startswith("v1:")}
+        if len(vals) > 1:
+            found.append(
+                f"n={n}: OUTPUTS DIFFER: "
+                + ", ".join(f"{f}={v}" for f, v in got.items())
+            )
+    return found
 # the BNG scalar's forms are the grid-scalar family's
 SETS["grid-scalar"] = dataclasses.replace(
     SETS["S"],
@@ -960,7 +1054,11 @@ def _spark(with_jar: bool = True):
 
 
 def measure_runs(
-    spec: SetSpec, corpus: str, repeats: int = 1, spark=None
+    spec: SetSpec,
+    corpus: str,
+    repeats: int = 1,
+    spark=None,
+    outputs: Optional[Dict[Tuple[str, int], str]] = None,
 ) -> List[Dict[Tuple[str, int], float]]:
     """Run the set's forms at each n on local[8]: one dropped warmup pass at the smallest n (it only warms the JVM and
     the workers), then `repeats` measured passes over every n. One `{(form, n): seconds}` dict per measured pass.
@@ -1012,6 +1110,10 @@ def measure_runs(
                 runs[i][(r.form, n)] = (
                     r.iter_median_s if r.status == "ok" and not short else float("nan")
                 )
+            if outputs is not None and i is not None and r.status == "ok":
+                nulls = [p for p in (r.note or "").split() if p.startswith("nulls=")]
+                outputs[(r.form, n)] = r.output_fingerprint or ""
+                outputs[("nulls", r.form, n)] = nulls[0] if nulls else ""
             if r.status != "ok":
                 print(
                     f"  {r.form} n={n}{'' if i is None else f' run {i + 1}'}: {r.status} {r.failure_mode or r.note}",
@@ -1132,13 +1234,15 @@ def main(argv=None) -> int:
             traceback.print_exc()
             print("local timing failed (see the traceback above)", file=sys.stderr)
             return 3
+    names = expand_sets(a.set)
+    unknown = [n for n in names if n not in SETS]
+    if unknown or not names:
+        ap.error(
+            f"set {', '.join(unknown) or a.set!r} is not implemented (have: {', '.join(sorted(SETS))})"
+        )
     if a.needs:
-        if a.set not in SETS:
-            ap.error(
-                f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})"
-            )
-        jar, rust = needs(SETS[a.set])
-        print(f"jar={int(jar)} rust={int(rust)}")
+        got = [needs(SETS[n]) for n in names]
+        print(f"jar={int(any(j for j, _ in got))} rust={int(any(r for _, r in got))}")
         return 0
     if a.repeats is None:
         a.repeats = (
@@ -1150,16 +1254,29 @@ def main(argv=None) -> int:
         ap.error(
             f"--baseline-write needs at least {BASELINE_REPEATS} runs per n (one run is too noisy to store); got --repeats {a.repeats}"
         )
-    if a.set not in SETS:
-        ap.error(f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})")
-    spec = SETS[a.set]
-    if spec.corpus_src is None and (a.corpus_src or a.corpus_dir):
-        ap.error(
-            f"set {spec.mvp} times generated input and reads no corpus, so --corpus-src and --corpus-dir have no "
-            f"effect. Fix: drop them, or pick a set with a corpus (--set IO)"
-        )
+    for n in names:
+        if SETS[n].corpus_src is None and (a.corpus_src or a.corpus_dir):
+            ap.error(
+                f"set {n} times generated input and reads no corpus, so --corpus-src and --corpus-dir have no "
+                f"effect. Fix: drop them, or pick a set with a corpus (--set IO)"
+            )
+    if len(names) > 1:
+        # Several sets: each in its own process, one after the other, so a set that loses its JVM (a heap overflow)
+        # does not take the next sets with it. The exit code is the worst of theirs.
+        args = list(sys.argv[1:] if argv is None else argv)
+        at = args.index("--set")
+        codes: Dict[str, int] = {}
+        for n in names:
+            one = args[:at] + ["--set", n] + args[at + 2 :]
+            codes[n] = subprocess.run(
+                [sys.executable, "-m", "databricks.labs.gbx.bench.local_timing", *one]
+            ).returncode
+            print(f"[local-timing] set {n}: exit {codes[n]}", flush=True)
+        print("\nsets: " + ", ".join(f"{n}={c}" for n, c in codes.items()))
+        return max(codes.values())
+    a.set = names[0]
     try:
-        return _run(a, spec)
+        return _run(a, SETS[a.set])
     except PreconditionMissing as e:
         print(f"PRECONDITION MISSING: {e}; local timing not run", file=sys.stderr)
         return 2
@@ -1243,7 +1360,10 @@ def _run(a, spec: SetSpec) -> int:
     )
     if in_place:
         print(f"[local-timing {a.set}] {probe_readdir(rows)}", flush=True)
-    runs = measure_runs(spec, corpus, a.repeats)
+    outputs: Optional[Dict] = {} if spec.compare_outputs else None
+    runs = measure_runs(
+        spec, corpus, a.repeats, **({} if outputs is None else {"outputs": outputs})
+    )
     res = median_res(runs)
     print(
         f"\nseconds per form at n tiles (median of {len(runs)} measured run{'s' if len(runs) != 1 else ''})\n"
@@ -1257,6 +1377,17 @@ def _run(a, spec: SetSpec) -> int:
         reference=spec.reference,
         peer_exempt=spec.peer_exempt,
     )
+    if outputs is not None:
+        print("\noutputs (value fingerprint, NULL count) per form at n")
+        for f in spec.forms[:-1]:
+            print(
+                f"  {f:<14} "
+                + "  ".join(
+                    f"n={n}: {outputs.get((f, n), '-')} {outputs.get(('nulls', f, n), '')}".rstrip()
+                    for n in spec.ns
+                )
+            )
+        found += output_flags(outputs, forms=spec.forms, ns=spec.ns)
     per_tile = median_per_tile(runs, forms=spec.forms, ns=spec.ns)
     if len(runs) > 1:
         print("\n" + per_run_table(runs, forms=spec.forms, ns=spec.ns))

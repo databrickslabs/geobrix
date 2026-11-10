@@ -142,6 +142,8 @@ _SE_DEM_SETS = tuple(
 
 
 _DEM_SETS = ("DEM",)
+# one JV set per function whose JVM level is not yet measured (`bench.levels_jvm`)
+_JV_SETS = tuple(n for n in lt.SETS if n.startswith("JV-"))
 _HV_SETS = tuple(
     f"HV-{n}"
     for n in (
@@ -229,7 +231,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         *_SE_DEM_SETS,
         *_DEM_SETS,
         *_HV_SETS,
-    } - {
+    } - {*_JV_SETS} - {
         # no function of these families has a JVM level left: their sets time the light forms
         "raster-file-op",  # cog_convert
         "raster-generator",  # retile

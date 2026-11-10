@@ -3262,3 +3262,9 @@ def select_forms(mvp: str, names=()) -> List[Form]:
 from databricks.labs.gbx.bench import levels_probe as _levels_probe  # noqa: E402
 
 _levels_probe.install(__import__(__name__, fromlist=["x"]))
+
+
+# The functions whose JVM level is not yet measured against their light forms (`bench.levels_jvm`): the JV set
+from databricks.labs.gbx.bench import levels_jvm as _levels_jvm  # noqa: E402
+
+_levels_jvm.install(__import__(__name__, fromlist=["x"]))

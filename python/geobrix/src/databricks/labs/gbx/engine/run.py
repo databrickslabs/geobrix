@@ -1373,8 +1373,17 @@ def _pipe_start(gdal, sql_name: str, name: str, props, drivers):
     ds = _open_source(gdal, sql_name, name, drivers)
     try:
         sr = ds.GetSpatialRef() or (ds.GetGCPSpatialRef() if ds.GetGCPCount() else None)
-        gt = ds.GetGeoTransform()
-        known = not ds.GetGCPCount() and gt[2] == 0 and gt[4] == 0 and gt[1] and gt[5]
+        # a tile with no geotransform has GDAL's identity one (1-unit pixels), which GDAL's own steps refuse: not a size
+        raw = ds.GetGeoTransform(can_return_null=True)
+        gt = raw or (0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        known = (
+            raw is not None
+            and not ds.GetGCPCount()
+            and gt[2] == 0
+            and gt[4] == 0
+            and gt[1]
+            and gt[5]
+        )
         return argv_mod.PipeState(
             props.width,
             props.height,

@@ -639,6 +639,11 @@ def test_a_tile_in_a_file_is_read_by_its_path_with_the_virtual_tile_drivers(tmp_
     res = run.run(FN, [run.PathSource(str(path))], {"command": "slope --unit=percent"})
     assert res.error is None, res.error
     assert str(path) not in res.command
+
+
+# --- a viewshed with a distance limit writes a window; a CRS GDAL cannot rebuild; a tile with no geotransform ---------------
+
+
 @needs_engine
 def test_a_crs_gdal_cannot_rebuild_while_sizing_is_unbounded_not_a_crash(monkeypatch):
     def refuse(text):
@@ -649,5 +654,19 @@ def test_a_crs_gdal_cannot_rebuild_while_sizing_is_unbounded_not_a_crash(monkeyp
     state = argv.PipeState(8, 8, 1.0, 1.0, 0.0, 0.0, "EPSG:32633", 1, 4, False)
     assert geo.warp(state, "EPSG:3857") is None
     assert geo.envelope((0.0, 0.0, 1.0, 1.0), "EPSG:4326", "EPSG:3857") is None
+
+
+@needs_engine
+def test_a_tile_with_no_geotransform_has_no_pixel_size_to_size_a_resolution_by():
+    y, x = np.mgrid[0:40, 0:60]
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=60, height=40, count=1, dtype="float32"
+        ) as dst:
+            dst.write((x + y).astype("float32")[np.newaxis])
+        bare = mf.read()
+    res = _run("resize --resolution=0.001,0.001", bare)
+    # GDAL's identity transform is not 1-unit pixels: the budget does not size 60 x 40 pixels by it
+    assert res.error is not None and "MiB decoded" not in res.error, res.error
 
 

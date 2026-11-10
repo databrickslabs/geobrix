@@ -1,11 +1,13 @@
-"""Tests for gbx:test:databricks: the shards read from CI's files, the selection (`affected` included), the lanes, the plan,
-the runner notebook and the result files. No network and no workspace."""
+"""Tests for gbx:test:databricks: the shards read from CI's files, the selection (`affected` included), the plan, the queue
+and the runners that take shards from it, the notebooks and the result files. No network and no workspace."""
 
 import importlib.util
 import json
+import multiprocessing
 import subprocess
 import sys
 import textwrap
+import threading
 import zlib
 from pathlib import Path
 
@@ -28,6 +30,7 @@ def _load(name, path):
 
 sys.path.insert(0, str(TESTS))
 ts = _load("_test_shards", TESTS / "_test_shards.py")
+sr = _load("_shard_runner", TESTS / "_shard_runner.py")
 launcher = _load("push_and_run_tests_on_cluster", TESTS / "push_and_run_tests_on_cluster.py")
 
 
@@ -227,7 +230,8 @@ def test_the_plan_splits_light_and_heavy_shards_over_their_pools(shards):
     assert plan["shards"]["pyrx-1-2"]["env"] == {"GBX_SHARD": "0/2"}
     assert plan["shards"]["pyrx-1-2"]["args"] == ["test/pyrx", "-m", "not integration"]
     text = launcher.explain(plan, [s for s in shards if s.local_only], [])
-    assert "gbx-test-1n" in text and "lane 1" in text and "local only: scala" in text and "expected wall about" in text
+    assert "gbx-test-1n" in text and "queue (longest first" in text and "runner(s)" in text and "local only: scala" in text and "expected wall about" in text
+    assert plan["pools"]["gbx-test-1n"]["table"] == "`c`.`s`.`gbx_test_queue_t1_light`" and plan["pools"]["gbx-test-1n-jar"]["table"].endswith("_jar`")
 
 
 def test_oracle_tables_and_ignores_reach_the_pytest_args(shards):
@@ -244,9 +248,10 @@ def test_serverless_refuses_heavy_shards_and_explain_only_needs_no_purpose(capsy
     assert "pool gbx-test-1n" in capsys.readouterr().out
 
 
-def test_max_parallel_caps_the_lanes(shards):
+def test_max_parallel_caps_the_runners(shards):
     plan = _plan(_args("--max-parallel", "2"), ts.select(shards, "all-light"))
-    assert len(plan["pools"]["gbx-test-1n"]["lanes"]) == 2
+    assert plan["pools"]["gbx-test-1n"]["runners"] == 2
+    assert _plan(_args("--max-parallel", "8"), ts.select(shards, "ds"))["pools"]["gbx-test-1n"]["runners"] == 1, "never more runners than shards"
 
 
 # ---- the runner notebook
@@ -392,23 +397,23 @@ def test_slots_follow_the_cores_of_the_node():
     assert ts.slots_for(32) == 4 and ts.slots_for(64) == 8 and ts.slots_for(2) == 1
 
 
-def test_the_plan_sizes_its_lanes_to_clusters_times_slots(shards):
+def test_the_plan_sizes_its_runners_to_clusters_times_slots(shards):
     picked = ts.select(shards, "all-light")
     one = _plan(_args(), picked)["pools"]["gbx-test-1n"]
-    assert one["slots"] == 4 and len(one["lanes"]) == 4 and one["clusters"] == 1
+    assert one["slots"] == 4 and one["runners"] == 4 and one["clusters"] == 1
     two = _plan(_args("--clusters", "3", "--max-parallel", "4"), picked)["pools"]["gbx-test-1n"]
-    assert two["slots"] == 4 and two["clusters"] == 3 and len(two["lanes"]) == 12
+    assert two["slots"] == 4 and two["clusters"] == 3 and two["runners"] == 12
     assert one["longest_min"] <= one["expected_min"] <= one["serial_min"]
 
 
-def test_relane_respreads_the_shards_over_the_clusters_that_were_free(shards):
+def test_relane_sizes_the_runners_to_the_clusters_that_were_free(shards):
     a = _args("--clusters", "3")
     plan = _plan(a, ts.select(shards, "all-light"))
-    before = sorted(s for lane in plan["pools"]["gbx-test-1n"]["lanes"] for s in lane)
+    before = list(plan["pools"]["gbx-test-1n"]["queue"])
     launcher.relane(plan, "gbx-test-1n", a, 1, 16)  # only one cluster was free, a smaller node
     spec = plan["pools"]["gbx-test-1n"]
-    assert spec["clusters"] == 1 and spec["slots"] == 2 and len(spec["lanes"]) == 2
-    assert sorted(s for lane in spec["lanes"] for s in lane) == before
+    assert spec["clusters"] == 1 and spec["slots"] == 2 and spec["runners"] == 2
+    assert spec["queue"] == before, "the queue and its order stay as they were"
 
 
 def test_the_timings_file_keeps_the_seconds_per_test_file(tmp_path):
@@ -449,29 +454,28 @@ def test_the_target_gives_about_three_and_a_half_chunks_per_slot(shards):
     assert ts.auto_target_min(light[:1], REPO_ROOT, {}, 1) == round(light[0].expected_min / 3.5, 2)
 
 
-class _Task:
-    def __init__(self, key, start, end):
-        self.task_key, self.start_time, self.end_time = key, start * 1000, end * 1000
+def _rec(who, start, shards, end):
+    return {"runner": who, "start": start, "end": end, "shards": [{"slug": n, "start": a, "end": b} for n, a, b in shards]}
 
 
-class _Jobs:
-    def __init__(self, tasks):
-        self._t = tasks
-
-    def get_run(self, rid):
-        return type("R", (), {"tasks": self._t})()
-
-
-def test_pool_metrics_say_the_tail_and_the_idle_slot_time():
-    spec = {"lanes": [["a", "b"], ["c"]], "slots": 2}
-    tasks = [_Task("s_a", 1000, 1100), _Task("s_b", 1100, 1200), _Task("s_c", 1000, 1150)]
-    got = launcher.pool_metrics(type("W", (), {"jobs": _Jobs(tasks)})(), 1, spec)
-    assert got["chunks"] == 3 and got["task_longest_s"] == 150 and got["task_mean_s"] == 116
-    assert got["span_s"] == 200 and got["tail_s"] == 50 and got["ideal_s"] == 175
-    assert got["idle_slot_s"] == 2 * 200 - 350
+def test_pool_metrics_say_the_busy_waiting_and_idle_time_of_each_slot():
+    recs = [_rec("r0", 1000, [("a", 1000, 1100), ("b", 1100, 1200)], 1201), _rec("r1", 1000, [("c", 1010, 1150)], 1151)]
+    got = launcher.pool_metrics(recs)
+    assert got["chunks"] == 3 and got["slots"] == 2 and got["task_longest_s"] == 140 and got["task_mean_s"] == 113
+    assert got["span_s"] == 201 and got["tail_s"] == 50 and got["ideal_s"] == 170
+    assert got["idle_slot_s"] == 2 * 201 - 340
+    r0, r1 = got["per_slot"]
+    assert (r0["busy_s"], r0["waited_s"], r0["idle_end_s"]) == (200, 0, 0)
+    assert (r1["busy_s"], r1["waited_s"], r1["idle_end_s"]) == (140, 10, 50), "r1 claimed 10 s late while b was still queued"
     text = "\n".join(launcher.schedule_lines(got))
-    assert "3 chunks on 2 lane(s)" in text and "tail" in text and "ideal" in text
-    assert launcher.pool_metrics(type("W", (), {"jobs": _Jobs([])})(), 1, spec) == {}
+    assert "3 chunks on 2 slot(s)" in text and "slot r1: 1 chunk(s), busy 140 s, waited 10 s" in text and "idle 50 s at the end" in text
+    assert launcher.pool_metrics([]) == {} and launcher.schedule_lines({}) == []
+
+
+def test_a_slot_that_quit_while_shards_were_queued_counts_as_waiting():
+    recs = [_rec("r0", 0, [("a", 0, 10)], 10), _rec("r1", 0, [("b", 0, 50), ("c", 50, 90)], 90)]
+    got = launcher.pool_metrics(recs)
+    assert got["per_slot"][0]["waited_s"] == 40, "r0 left at 10 s; c was claimed only at 50 s"
 
 
 def test_the_default_is_the_pre_push_pass_of_the_affected_shards():
@@ -490,7 +494,7 @@ def test_a_plan_for_more_clusters_has_more_lanes_and_a_shorter_expected_wall(sha
     chunks = ts.auto_split(picked, REPO_ROOT, {}, 5.0)
     one = _plan(_args("--max-parallel", "4"), chunks)["pools"]["gbx-test-1n"]
     three = _plan(_args("--max-parallel", "4", "--clusters", "3"), chunks)["pools"]["gbx-test-1n"]
-    assert len(three["lanes"]) == 3 * len(one["lanes"]) and three["expected_min"] < one["expected_min"] / 2
+    assert three["runners"] == 3 * one["runners"] and three["expected_min"] < one["expected_min"] / 2
 
 
 def test_seconds_measured_at_eight_slots_are_brought_to_the_slots_of_the_plan():
@@ -693,3 +697,336 @@ def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):
     newer.write_bytes(b"PK")
     os.utime(jar, (1, 1))  # an older build, though its name sorts after the newer one
     assert launcher.jar_source(str(tmp_path)) == newer
+
+
+# ---- the queue and the runners that take shards from it
+
+
+def _picked_plan(shards, *extra):
+    return _plan(_args(*extra), ts.select(shards, "pyrx,ds,zarr,scripts/ci"))
+
+
+def test_the_planner_builds_runner_tasks_not_chained_shard_tasks(shards):
+    plan = _picked_plan(shards, "--clusters", "2", "--max-parallel", "2")
+    spec = plan["pools"]["gbx-test-1n"]
+    assert spec["runners"] == 4 and "lanes" not in spec
+    tasks = launcher.job_tasks(plan, "gbx-test-1n", {"runner": "/w/runner.ipynb", "shard": "/w/tests.ipynb"}, ["c1", "c2"])
+    assert [t["task_key"] for t in tasks] == ["q_seed", "r_0", "r_1", "r_2", "r_3"]
+    assert tasks[0]["depends_on"] == [] and tasks[0]["base_parameters"]["role"] == "seed"
+    for i, t in enumerate(tasks[1:]):
+        assert t["depends_on"] == ["q_seed"], "a runner waits for the queue only, never for another runner"
+        assert t["existing_cluster_id"] == ["c1", "c2"][i % 2]
+        assert t["base_parameters"] == {"pool": "gbx-test-1n", "role": "run", "runner": f"r{i}", "index": str(i), "shard_nb": "/w/tests.ipynb"}
+        assert t["notebook_path"] == "/w/runner.ipynb" and t["timeout_seconds"] == int(spec["cap_min"] * 60)
+    serverless = launcher.job_tasks(plan, "gbx-test-1n", {"runner": "/r", "shard": "/s"}, [])
+    assert all(t.get("environment_key") == "gbx_env6" and "existing_cluster_id" not in t for t in serverless)
+
+
+def test_the_queue_holds_every_shard_once_longest_first(shards):
+    plan = _picked_plan(shards)
+    spec = plan["pools"]["gbx-test-1n"]
+    assert sorted(spec["queue"]) == sorted(plan["shards"]) and len(set(spec["queue"])) == len(spec["queue"])
+    mins = [plan["shards"][s]["expected_min"] for s in spec["queue"]]
+    assert mins == sorted(mins, reverse=True)
+    assert sr.queue_order({"b": 2, "a": 2, "c": 9}) == ["c", "a", "b"], "ties by name, so the order is stable"
+    sql = sr.DeltaQueue.create_sql("`c`.`s`.`q`", spec["queue"], {s: plan["shards"][s]["expected_min"] for s in spec["queue"]})
+    assert sql.startswith("CREATE OR REPLACE TABLE `c`.`s`.`q` AS SELECT") and sql.count("('") == len(spec["queue"])
+    fake = _FakeDelta()
+    fake.sql(sql)
+    assert [r[0] for r in fake.sql("SELECT slug FROM `c`.`s`.`q` WHERE owner IS NULL ORDER BY rank")] == spec["queue"]
+
+
+class SimClock:
+    """Virtual time for ``n`` threads: ``sleep(d)`` returns when every live thread sleeps and its wake time is the earliest, so a
+    simulated hour takes milliseconds and the order of events is exact."""
+
+    def __init__(self, n):
+        self.now, self.live, self.sleepers, self.cv = 0.0, n, {}, threading.Condition()
+
+    def time(self):
+        return self.now
+
+    def _advance(self):
+        if self.sleepers and len(self.sleepers) == self.live:
+            ident, wake = min(self.sleepers.items(), key=lambda kv: (kv[1], kv[0]))
+            self.now = max(self.now, wake)
+            del self.sleepers[ident]
+            self.cv.notify_all()
+
+    def sleep(self, d):
+        me = threading.get_ident()
+        with self.cv:
+            self.sleepers[me] = self.now + d
+            self._advance()
+            while me in self.sleepers:
+                self.cv.wait(5)
+
+    def exit(self):
+        with self.cv:
+            self.live -= 1
+            self._advance()
+
+
+def _simulate(queue, n, actual):
+    clock = SimClock(n)
+    recs = [None] * n
+
+    def runner(i):
+        try:
+            recs[i] = sr.run_loop(queue, f"r{i}", lambda slug: (clock.sleep(actual[slug]), {"rc": 0})[1], clock=clock.time, offset=i)
+        finally:
+            clock.exit()
+
+    threads = [threading.Thread(target=runner, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert not any(t.is_alive() for t in threads), "the simulation hung"
+    return recs
+
+
+def test_no_slot_idles_while_the_queue_holds_a_shard_when_actual_times_differ_from_the_estimates(tmp_path):
+    # 32 shards estimated alike, 4 slots. The old static lanes balanced the estimates; the actual times then differed by lane,
+    # as on run 455320846339987 (lane busy times 42.9 / 41.4 / 30.2 / 19.9 min). Give each old lane's shards that lane's factor.
+    est = {f"s{i:02d}": 5.0 + (i % 3) * 0.1 for i in range(32)}
+    n = 4
+    old_lanes = ts.lanes([ts.Shard(name=s, kind="light", est_min=m) for s, m in est.items()], n)
+    factor = [42.9 / 33.6, 41.4 / 33.6, 30.2 / 33.6, 19.9 / 33.6]  # each lane's actual over the mean
+    actual = {s.name: est[s.name] * factor[k] * 60 for k, lane in enumerate(old_lanes) for s in lane}
+    static = [sum(actual[s.name] for s in lane) for lane in old_lanes]
+    recs = _simulate(sr.DirQueue(str(tmp_path / "q"), sr.queue_order(est)), n, actual)
+    ran = [x["slug"] for r in recs for x in r["shards"]]
+    assert sorted(ran) == sorted(est), "every shard ran exactly once"
+    m = sr.slot_metrics(recs)
+    assert all(p["waited_s"] == 0 for p in m["per_slot"]), m["per_slot"]
+    last_claim = max(x["start"] for r in recs for x in r["shards"])
+    assert all(r["end"] >= last_claim for r in recs), "no runner left while a shard was still queued"
+    dynamic = max(r["end"] for r in recs)
+    assert dynamic <= sum(actual.values()) / n + max(actual.values()), "list scheduling's bound: the mean load plus one shard"
+    assert max(static) - min(static) > 3 * max(actual.values()), ("the old lanes were uneven", static)
+    assert dynamic < max(static) * 0.85, ("the queue finishes well before the slowest old lane", dynamic, static)
+
+
+def test_the_claim_is_exclusive_under_concurrent_threads(tmp_path):
+    order = [f"s{i:03d}" for i in range(200)]
+    q = sr.DirQueue(str(tmp_path / "q"), order)
+    got, lock = [], threading.Lock()
+
+    def claimer(i):
+        while True:
+            slug = q.claim(f"t{i}", offset=i)
+            if slug is None:
+                return
+            with lock:
+                got.append(slug)
+
+    threads = [threading.Thread(target=claimer, args=(i,)) for i in range(16)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert sorted(got) == order
+
+
+CLAIMER = """
+import sys
+sys.path.insert(0, sys.argv[1])
+import _shard_runner as sr
+q = sr.DirQueue(sys.argv[2], sys.argv[3].split(","))
+sys.stdin.readline()  # start together
+while True:
+    s = q.claim(sys.argv[4], offset=int(sys.argv[5]))
+    if s is None:
+        break
+    print(s, flush=True)
+"""
+
+
+def test_the_claim_is_exclusive_under_concurrent_processes(tmp_path):
+    order = [f"s{i:03d}" for i in range(120)]
+    script = tmp_path / "claimer.py"
+    script.write_text(CLAIMER)
+    procs = [subprocess.Popen([sys.executable, str(script), str(TESTS), str(tmp_path / "q"), ",".join(order), f"p{i}", str(i)],
+                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True) for i in range(8)]
+    for p in procs:
+        p.stdin.write("go\n")
+        p.stdin.flush()
+    got = []
+    for p in procs:
+        out, _ = p.communicate(timeout=60)
+        assert p.returncode == 0
+        got += out.split()
+    assert sorted(got) == order, "each shard claimed by exactly one process"
+
+
+class _Conflict(Exception):
+    pass
+
+
+class _FakeDelta:
+    """A queue table with Delta's commit rule for UPDATE: the statement reads a snapshot, and its commit fails with a
+    Concurrent*Exception when the row changed after that snapshot (a pause between the two widens the race)."""
+
+    def __init__(self, pause=0.0):
+        self.rows, self.version, self.lock, self.pause, self.commits = {}, 0, threading.Lock(), pause, 0
+
+    def sql(self, q):
+        import random
+        import re
+        import time
+
+        q = " ".join(q.split())
+        if q.startswith("CREATE OR REPLACE TABLE"):
+            vals = re.findall(r"\('((?:[^'\\]|\\.)*)', (\d+), ([0-9.eE+-]+)\)", q)
+            with self.lock:
+                self.rows = {s: {"rank": int(r), "owner": None, "changed": 0} for s, r, _ in vals}
+            return []
+        if q.startswith("SELECT count(*)"):
+            return [(len(self.rows),)]
+        if q.startswith("SELECT slug"):
+            with self.lock:
+                return [(s,) for s, r in sorted(self.rows.items(), key=lambda kv: kv[1]["rank"]) if r["owner"] is None]
+        if q.startswith("SELECT owner"):
+            slug = re.search(r"slug = '([^']*)'", q).group(1)
+            return [(self.rows[slug]["owner"],)]
+        if q.startswith("UPDATE"):
+            who, slug = re.search(r"owner = '([^']*)'.*slug = '([^']*)'", q).groups()
+            with self.lock:
+                v0, owner0 = self.version, self.rows[slug]["owner"]
+            time.sleep(self.pause * random.random())
+            with self.lock:
+                if self.rows[slug]["changed"] > v0:
+                    raise _Conflict("[DELTA_CONCURRENT_DELETE_READ] ConcurrentDeleteReadException: a concurrent update changed the row")
+                if owner0 is not None:
+                    return [(0,)]
+                self.version += 1
+                self.commits += 1
+                self.rows[slug].update(owner=who, changed=self.version)
+                return [(1,)]
+        raise AssertionError(q)
+
+
+def test_the_delta_claim_is_exclusive_under_concurrent_runners_and_retries_a_lost_commit():
+    order = [f"s{i:02d}" for i in range(40)]
+    fake = _FakeDelta(pause=0.002)
+    fake.sql(sr.DeltaQueue.create_sql("t", order, {s: 1.0 for s in order}))
+    got, lock, queues = [], threading.Lock(), []
+
+    def claimer(i):
+        q = sr.DeltaQueue(fake.sql, "t", sleep=lambda s: None, attempts=10000)
+        queues.append(q)
+        first = True
+        while True:
+            slug = q.claim(f"r{i}", offset=i if first else 0)
+            first = False
+            if slug is None:
+                return
+            with lock:
+                got.append(slug)
+
+    threads = [threading.Thread(target=claimer, args=(i,)) for i in range(12)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(60)
+    assert sorted(got) == order and fake.commits == len(order)
+    assert sum(q.conflicts for q in queues) > 0, "the race was exercised: some commits lost and were retried"
+
+
+def test_the_delta_claim_raises_after_repeated_errors_that_are_not_conflicts():
+    calls = []
+
+    def sql(q):
+        calls.append(q)
+        if q.startswith("SELECT slug"):
+            return [("a",)]
+        raise RuntimeError("PERMISSION_DENIED")
+
+    with pytest.raises(RuntimeError, match="PERMISSION_DENIED"):
+        sr.DeltaQueue(sql, "t", sleep=lambda s: None).claim("r0")
+    assert sum(q.startswith("UPDATE") for q in calls) == 4
+
+
+def test_a_stalled_or_capped_shard_is_recorded_and_the_runner_goes_on(tmp_path):
+    def nb(slug):
+        if slug == "b":
+            raise Exception("com.databricks.WorkflowException: com.databricks.NotebookExecutionException: Notebook run timed out after 3300 seconds")
+        if slug == "c":
+            return json.dumps({"rc": 130, "reason": "no test finished for 10 min (last: test/x.py::t)", "pid": 7})
+        if slug == "d":
+            raise RuntimeError("The Python process exited with exit code 137 (SIGKILL: Killed)")
+        if slug == "e":
+            raise ValueError("a harness bug outside run_shard")
+        return json.dumps({"rc": 0, "reason": "", "pid": 1, "passed": 3})
+
+    def execute(slug):
+        if slug == "e":
+            return nb(slug)  # an exception that reaches the loop itself
+        return sr.run_shard(lambda: nb(slug), 3300)
+
+    rec = sr.run_loop(sr.DirQueue(str(tmp_path / "q"), ["a", "b", "c", "d", "e", "f"]), "r0", execute)
+    by = {x["slug"]: x for x in rec["shards"]}
+    assert [x["slug"] for x in rec["shards"]] == ["a", "b", "c", "d", "e", "f"], "the runner went on after each stop"
+    assert by["a"]["rc"] == 0 and by["a"]["passed"] == 3 and by["f"]["rc"] == 0
+    assert "no result within 3300 s" in by["b"]["reason"] and by["b"]["rc"] is None
+    assert by["c"]["rc"] == 130 and "no test finished" in by["c"]["reason"]
+    assert "ended without a result" in by["d"]["reason"] and "137" in by["d"]["reason"]
+    assert by["e"]["reason"].startswith("ValueError") and rec["done"] and not rec["error"]
+
+
+def test_a_shard_without_a_result_takes_its_runners_reason_and_one_nobody_ran_says_so(shards, monkeypatch, tmp_path):
+    plan = _picked_plan(shards)
+    queue = plan["pools"]["gbx-test-1n"]["queue"]
+    monkeypatch.setattr(launcher.mut, "download_dir", lambda w, remote, local: [])
+    recs = {"gbx-test-1n": [{"runner": "r0", "shards": [{"slug": queue[0], "start": 0, "end": 9, "reason": "no result within 3300 s (outer timeout)"}]}]}
+    rows = {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}
+    assert rows[queue[0]]["verdict"] == "INCOMPLETE" and "outer timeout" in rows[queue[0]]["reason"] and rows[queue[0]]["claims"] == 1
+    assert rows[queue[1]]["reason"].startswith("never claimed") and rows[queue[1]]["claims"] == 0
+    recs["gbx-test-1n"].append({"runner": "r1", "shards": [{"slug": queue[0], "start": 0, "end": 9}]})
+    assert "claimed 2 times" in {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}[queue[0]]["reason"]
+
+
+class _Exit(Exception):
+    pass
+
+
+def test_the_runner_notebook_seeds_the_queue_then_runs_every_shard_once(shards, tmp_path):
+    a = _args("--max-parallel", "2")
+    plan = launcher.make_plan(a, "a" * 40, ts.select(shards, "pyrx,ds"), None, None, str(tmp_path), REPO_ROOT)
+    stage = Path(plan["stage"])
+    stage.mkdir(parents=True)
+    (stage / "plan.json").write_text(json.dumps(plan))
+    nb = launcher.build_runner_notebook(plan, "gbx-test-1n")
+    assert "Monitoring:" in "".join(nb["cells"][0]["source"]) and len(nb["cells"]) == 2, "a header and the runner; no %pip"
+    src = "".join(nb["cells"][1]["source"])
+    assert "__STAGE__" not in src and "def run_loop" in src
+    fake = _FakeDelta()
+    ran = []
+
+    class Spark:
+        def sql(self, q):
+            rows = fake.sql(q)
+            return type("DF", (), {"collect": lambda _self: rows})()
+
+    def dbutils(widgets):
+        def run(path, timeout, args):
+            ran.append((widgets["runner"], args["shard"]))
+            return json.dumps({"rc": 0, "pid": 100 + len(ran)})
+
+        def exit_(v):
+            raise _Exit(v)
+
+        nbk = type("N", (), {"run": staticmethod(run), "exit": staticmethod(exit_)})
+        return type("D", (), {"widgets": type("W", (), {"get": staticmethod(widgets.__getitem__)}), "notebook": nbk})
+
+    def run_cell(widgets):
+        with pytest.raises(_Exit) as got:
+            exec(compile(src, "runner", "exec"), {"spark": Spark(), "dbutils": dbutils(widgets)})  # noqa: S102
+        return json.loads(str(got.value))
+
+    assert run_cell({"role": "seed", "pool": "gbx-test-1n"}) == {"queued": len(plan["shards"])}
+    out = [run_cell({"role": "run", "pool": "gbx-test-1n", "runner": f"r{i}", "index": str(i), "shard_nb": "/w/tests.ipynb"}) for i in range(2)]
+    assert sorted(s for _, s in ran) == sorted(plan["shards"]) and sum(o["shards"] for o in out) == len(plan["shards"])
+    rec = json.loads((stage / "runners" / "gbx-test-1n" / "r0.json").read_text())
+    assert rec["done"] and rec["pool"] == "gbx-test-1n" and rec["shards"], "the record reached the Volume folder"

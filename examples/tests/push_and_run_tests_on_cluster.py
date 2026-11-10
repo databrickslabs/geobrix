@@ -7,8 +7,10 @@ The shards are CI's: the `light` matrix of .github/workflows/build_main.yml, `sc
 the light tier leaves out. They are read from those files on every run (examples/tests/_test_shards.py), so CI and a
 cluster run cannot drift. The Scala suites stay local (`gbx:test:scala`); a cluster has no Maven build.
 
-Each shard is one task of a job on a leased pool cluster, so it runs in its own Python process; the tasks of a pool are
-spread over at most --max-parallel lanes that run side by side. The session is the cluster's own (test/_provided_spark.py).
+A pool's job has one runner task per slot (clusters x --max-parallel). Each runner claims the next shard from a queue the
+runners share (a Delta table, longest expected first; examples/tests/_shard_runner.py) and runs it as a notebook run of its own,
+so in its own Python process and Spark session, until the queue is empty: no slot idles while a shard waits. The session is
+the cluster's own (test/_provided_spark.py).
 Pools (DBR 19, single node, 60 idle minutes): gbx-test-1n has no JAR and runs the light shards and scripts/ci;
 gbx-test-1n-jar carries the staged JAR and runs the heavy shards. A run leases a cluster, keeps nothing on it, and gives
 it back: the pool stays warm for the next run (`gbx:bench:pool down` ends it).
@@ -31,7 +33,7 @@ Options:
   --sha <rev>            the commit to test (default HEAD)
   --wheel <path>         the env6 wheel (default dist/env6/); it carries dependencies and native payload, not the code under test
   --jar-path <path>      the JAR of the heavy shards, or its folder (default python/geobrix/lib/; copied out and sha-checked)
-  --max-parallel <n>     shards run side by side per pool (default 5; one 32 vCPU node)
+  --max-parallel <n>     runners per cluster, so shards side by side (default: the node's cores / 8; 4 on 32 vCPU)
   --serverless           run the selected light shards on Serverless env 6 (a fidelity leg; Spark-free dirs only)
   --fresh-cluster        use a new cluster that ends with the run, not the pools
   --pool-light <name>    default gbx-test-1n          --pool-jar <name>  default gbx-test-1n-jar
@@ -42,7 +44,7 @@ Options:
   --pool-wait-min <n>    wait this long for a free pool cluster (default 30)
   --pip-extra "<reqs>"   more pip requirements the tests import
   --run-id <id>          default tst-<date>-<time>-<4 hex>
-  --keep-stage           leave the Volume folder and the runner notebook
+  --keep-stage           leave the Volume folder, the notebooks and the queue table
   --explain-only         print the plan and exit; no network, nothing staged or started
 """
 
@@ -51,6 +53,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import math
 import os
 import re
 import shutil
@@ -70,6 +73,7 @@ except ImportError:  # pragma: no cover - the launcher venv may lack it
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
+import _shard_runner as sr  # sibling module: the runners' claim-and-run loop (its source rides in the runner notebook)
 import _test_shards as ts  # sibling module: the shards, read from CI's files
 import push_and_run_mutation_on_cluster as mut  # sibling module: staging, download and wheel helpers the guidance run uses
 
@@ -182,17 +186,10 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
     pools = {}
     slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
     for name, items in by_pool.items():
-        n_clusters = max(1, a.clusters)
-        lane_list = ts.lanes(items, slots * n_clusters)
-        pools[name] = {
-            "jar": bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless),
-            "lanes": [[s.slug for s in lane] for lane in lane_list],
-            "slots": slots, "clusters": n_clusters,
-            "serial_min": round(sum(s.expected_min for s in items), 1),
-            "longest_min": round(max(s.expected_min for s in items), 1),
-            "expected_min": round(max(sum(s.expected_min for s in lane) for lane in lane_list), 1),
-            "cap_min": max(len(lane) for lane in lane_list) * (a.shard_cap_min + 10),
-        }
+        jar_pool = bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless)
+        kind = "serverless" if name == "serverless" else ("jar" if jar_pool else "light")
+        pools[name] = {"jar": jar_pool, "table": queue_table(volroot, run_id, kind)}
+        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, max(1, a.clusters), a.shard_cap_min)
     return {
         "run_id": run_id, "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps,
         "wheel": {"local": str(wheel) if wheel else "", "name": wheel.name if wheel else "",
@@ -213,6 +210,30 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
     }
 
 
+def queue_table(volroot: str, run_id: str, kind: str) -> str:
+    """The Delta table that holds a pool's queue: in the schema of the run's Volume, named for the run and the pool's kind."""
+    parts = volroot.strip("/").split("/")
+    catalog, schema = (parts[1], parts[2]) if len(parts) >= 3 and parts[0] == "Volumes" else ("main", "default")
+    name = re.sub(r"[^A-Za-z0-9_]", "_", f"gbx_test_queue_{run_id}_{kind}")[:200]
+    return f"`{catalog}`.`{schema}`.`{name}`"
+
+
+def size_pool(spec: dict, expected: Dict[str, float], slots: int, n_clusters: int, shard_cap_min: float) -> None:
+    """Fill a pool's plan: the queue (longest expected first), the runners (clusters x slots, never more than the shards), and the
+    expected wall: the longest-first schedule onto the slot that frees first, which is what the runners do. The cap is the
+    runner task's timeout: every shard of the busiest runner at the shard cap, plus one more when the shards outnumber the runners."""
+    queue = sr.queue_order(expected)
+    runners = max(1, min(slots * n_clusters, len(queue)))
+    est = [ts.Shard(name=slug, kind="light", est_min=m) for slug, m in expected.items()]
+    load = [sum(s.expected_min for s in lane) for lane in ts.lanes(est, runners)]
+    per_runner = math.ceil(len(queue) / runners) + (1 if len(queue) > runners else 0)
+    spec.update(
+        queue=queue, slots=slots, clusters=n_clusters, runners=runners,
+        serial_min=round(sum(expected.values()), 1), longest_min=round(max(expected.values()), 1),
+        expected_min=round(max(load), 1), cap_min=per_runner * (shard_cap_min + 10),
+    )
+
+
 def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
     c = plan["caps"]
     lines = [f"gbx:test:databricks plan {plan['run_id']} for commit {plan['sha'][:10]}: {plan['purpose'] or '(no purpose given)'}"]
@@ -222,11 +243,11 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
         where = "Serverless env 6 (no cluster)" if pool == "serverless" else f"pool {pool} ({'with' if spec['jar'] else 'no'} JAR, single node {plan['node_type']})"
         if plan["fresh_cluster"] and pool != "serverless":
             where = f"a new single-node cluster {plan['node_type']} ({'with' if spec['jar'] else 'no'} JAR) that ends with the run"
-        n = sum(len(x) for x in spec["lanes"])
-        lines.append(f"  {where}: {n} task(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {len(spec['lanes'])} lane(s); expected wall about "
-                     f"{spec['expected_min']:g} min after the start (the longest task is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
-        for i, lane in enumerate(spec["lanes"], 1):
-            lines.append(f"    lane {i}: " + " -> ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} min)" for s in lane))
+        lines.append(f"  {where}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
+                     f"{spec['expected_min']:g} min after the start (the longest shard is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
+        lines.append(f"    queue (longest first; each runner takes the next when it is free): "
+                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g})" for s in spec["queue"]))
+        lines.append(f"    queue table: {spec['table']} (made by the job's first task, dropped at the end)")
     lines.append(f"  staging: {plan['stage']}/ (source tarball, plan.json); removed at the end")
     lines.append(f"  wheel: {plan['wheel']['name'] or '-'}"
                  + (f", built from {plan['wheel']['built_from'][:10]}" if plan["wheel"]["built_from"] else "")
@@ -252,10 +273,11 @@ def header_md(plan: dict, pool: str) -> str:
         f"**Test shards `{plan['run_id']}`** (commit `{plan['sha'][:10]}`): {plan['purpose']}  \n"
         f"**Output:** per shard, `junit.xml` and `pytest.log` in `{plan['stage']}/out/<shard>/` (the launcher downloads them); "
         f"the verdict per shard is passed / failed / errors / skipped, and the notebook's result is that count as JSON.  \n"
-        f"**Time:** each shard about {min(plan['shards'][x]['expected_min'] for lane in spec['lanes'] for x in lane):g}-{max(plan['shards'][x]['expected_min'] for lane in spec['lanes'] for x in lane):g} min "
-        f"(CI's times); the run about {spec['expected_min']} min after the start, at most {spec['cap_min']} min.  \n"
-        f"**Monitoring:** caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test (the shard then dumps its stacks and stops); "
-        f"heartbeat `{plan['stage']}/hb/<shard>.json` (the launcher cancels a run whose shards are all stale). "
+        f"**Time:** each shard about {min(plan['shards'][x]['expected_min'] for x in spec['queue']):g}-{max(plan['shards'][x]['expected_min'] for x in spec['queue']):g} min "
+        f"(recorded or CI's times); {spec['runners']} runner(s) take the shards from one queue, longest first; the run about {spec['expected_min']} min after the start, "
+        f"at most {spec['cap_min']} min.  \n"
+        f"**Monitoring:** caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test (the shard then dumps its stacks and stops; its runner "
+        f"takes the next); heartbeats `{plan['stage']}/hb/<shard>.json` and `{plan['stage']}/runners/<runner>.json` (the launcher cancels a run whose shards are all stale). "
         f"Cancel: `databricks jobs cancel-run <run id> --profile <profile>` (the id is printed at submit)."
     )
 
@@ -401,7 +423,15 @@ def watchdog():
                 os.kill(os.getpid(), signal.SIGKILL)
 threading.Thread(target=watchdog, daemon=True).start()
 
-print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| cores", os.cpu_count(), "| session", type(spark).__name__, flush=True)
+# Isolation probe: a shard before this one in the same runner leaves a temp view and a conf in its own session. Seeing
+# neither here shows this shard has a session (and a Python process) of its own, as a job task of its own had.
+iso = {"pid": os.getpid()}
+try:
+    iso["view_fresh"] = not spark.catalog.tableExists("gbx_isolation_probe")
+    iso["conf_fresh"] = spark.conf.get("gbx.isolation.probe", "") == ""
+except Exception as exc:  # the probe never decides a shard
+    iso["error"] = str(exc)[:200]
+print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| cores", os.cpu_count(), "| session", type(spark).__name__, "| isolation", iso, flush=True)
 args = S["args"] + ["-p", "no:cacheprovider", "-v", "--tb=short", "-rfE", "--durations=15", "--basetemp=" + root + "/tmp",
                     "--junitxml=" + root + "/out/junit.xml"]
 try:
@@ -412,7 +442,12 @@ except BaseException as exc:  # an interrupt from the watchdog, or a crash of th
 state["done"] = True
 sys.stdout, sys.stderr = sys.stdout.a, sys.stderr.a
 log.close()
-result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"],
+try:  # what the next shard's probe looks for
+    spark.range(1).createOrReplaceTempView("gbx_isolation_probe")
+    spark.conf.set("gbx.isolation.probe", SLUG)
+except Exception as exc:
+    iso["error"] = str(exc)[:200]
+result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"])
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
@@ -421,6 +456,89 @@ beat()
 print("shard rc:", rc, "after", result["wall_s"], "s", flush=True)
 dbutils.notebook.exit(json.dumps(result))
 ''' % {"stage": plan["stage"]}
+
+
+RUNNER_DRIVER = '''
+# ---- the runner task: seed the queue (role "seed"), or claim and run shards until it is empty (role "run")
+import json, os, shutil, tempfile, threading, time
+
+STAGE = __STAGE__
+ROLE = dbutils.widgets.get("role")
+POOL = dbutils.widgets.get("pool")
+PLAN = json.load(open(STAGE + "/plan.json"))
+SPEC = PLAN["pools"][POOL]
+TABLE = SPEC["table"]
+
+
+def sql(q):
+    return [tuple(r) for r in spark.sql(q).collect()]
+
+
+if ROLE == "seed":
+    sql(DeltaQueue.create_sql(TABLE, SPEC["queue"], {s: PLAN["shards"][s]["expected_min"] for s in SPEC["queue"]}))
+    n = sql("SELECT count(*) FROM " + TABLE)[0][0]
+    assert n == len(SPEC["queue"]), "the queue holds " + str(n) + " shard(s), the plan " + str(len(SPEC["queue"]))
+    print("queue", TABLE, "holds", n, "shard(s), longest first:", SPEC["queue"], flush=True)
+    dbutils.notebook.exit(json.dumps({"queued": n}))
+else:
+    WHO = dbutils.widgets.get("runner")
+    INDEX = int(dbutils.widgets.get("index"))
+    SHARD_NB = dbutils.widgets.get("shard_nb")
+    TIMEOUT_S = int((PLAN["caps"]["shard_min"] + 10) * 60)  # the shard's own watchdog stops it first; this is the backstop
+    T0 = time.time()
+    os.makedirs(STAGE + "/runners/" + POOL, exist_ok=True)
+    REC = STAGE + "/runners/" + POOL + "/" + WHO + ".json"
+    tmp_dir = tempfile.mkdtemp(prefix="gbx-runner-")  # local disk: the record is written here, then copied to the Volume whole
+    lock = threading.Lock()
+    box = {"rec": None}
+
+    def save(rec=None):  # the runner's record is its heartbeat too: the launcher reads which shard it is on
+        with lock:
+            if rec is not None:
+                box["rec"] = json.loads(json.dumps(rec))
+            if box["rec"] is None:
+                return
+            tmp = tmp_dir + "/" + WHO + ".json"
+            with open(tmp, "w") as f:
+                json.dump(dict(box["rec"], ts=time.time(), pool=POOL), f)
+            shutil.copy(tmp, REC)
+
+    def beat():
+        while not (box["rec"] or {}).get("done"):
+            time.sleep(15)
+            try:
+                save()
+            except OSError:
+                pass
+
+    threading.Thread(target=beat, daemon=True).start()
+
+    def execute(slug):
+        print("+%ds" % (time.time() - T0), WHO, "runs", PLAN["shards"][slug]["name"], flush=True)
+        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug}), TIMEOUT_S)
+        print("+%ds" % (time.time() - T0), WHO, "ran", PLAN["shards"][slug]["name"], "rc", res.get("rc"), res.get("reason") or "", flush=True)
+        return res
+
+    q = DeltaQueue(sql, TABLE)
+    rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save)
+    rec["conflicts"] = q.conflicts
+    save(rec)
+    print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s); the queue is empty", flush=True)
+    if rec["error"]:
+        raise RuntimeError(rec["error"])
+    dbutils.notebook.exit(json.dumps({"runner": WHO, "shards": len(rec["shards"])}))
+'''
+
+
+def runner_source(plan: dict) -> str:
+    """The runner task's cell: the claim-and-run loop (_shard_runner.py, inlined: the node has no copy of examples/) and the
+    code that seeds the queue or drives the loop. Needs no wheel: it runs the shards' own notebook, which installs it."""
+    return Path(sr.__file__).read_text() + RUNNER_DRIVER.replace("__STAGE__", repr(plan["stage"]))
+
+
+def build_runner_notebook(plan: dict, pool: str) -> dict:
+    cells = [cell(header_md(plan, pool), "markdown"), cell(runner_source(plan))]
+    return {"cells": cells, "metadata": {"language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
 
 
 def cell(source: str, kind: str = "code") -> dict:
@@ -489,47 +607,38 @@ def is_failure(row: dict) -> bool:
     return not (row["verdict"] == "EMPTY" and row["name"].endswith("]"))
 
 
-def pool_metrics(w, run_id: int, spec: dict) -> dict:
-    """What the schedule did, from the start and end of each task: the chunks and slots, the longest task against the mean,
-    when each lane ended (the tail is the last lane's end after the first lane's: slots that sat idle at the end), the
-    ideal wall (the sum of the tasks over the lanes) and the slot time left unused."""
-    try:
-        tasks = {t.task_key: t for t in (w.jobs.get_run(run_id).tasks or [])}
-    except Exception:  # noqa: BLE001
-        return {}
-    dur, lane_end, t_first = {}, [], None
-    for lane in spec["lanes"]:
-        ends = []
-        for slug in lane:
-            t = tasks.get(f"s_{slug}"[:100])
-            if t is None or not t.start_time or not t.end_time:
-                continue
-            dur[slug] = (t.end_time - t.start_time) / 1000.0
-            t_first = t.start_time if t_first is None else min(t_first, t.start_time)
-            ends.append(t.end_time)
-        if ends:
-            lane_end.append(max(ends))
-    if not dur or not lane_end:
-        return {}
-    lanes = len(spec["lanes"])
-    span = (max(lane_end) - t_first) / 1000.0
-    return {
-        "chunks": len(dur), "lanes": lanes, "slots": spec["slots"], "task_longest_s": int(max(dur.values())),
-        "task_mean_s": int(sum(dur.values()) / len(dur)), "task_sum_s": int(sum(dur.values())), "span_s": int(span),
-        "ideal_s": int(sum(dur.values()) / lanes), "tail_s": int((max(lane_end) - min(lane_end)) / 1000.0),
-        "idle_slot_s": int(max(0.0, lanes * span - sum(dur.values()))),
-    }
+def pool_metrics(records: List[dict]) -> dict:
+    """What the schedule did, from the runners' records (``_shard_runner.slot_metrics``): the chunks and slots, the longest shard
+    against the mean, the span, the ideal wall (the sum of the shards over the slots), the tail (the last slot ended after the
+    first), the slot time left unused, and per slot its busy time, the time it waited while the queue still held a shard, and
+    its idle time at the end."""
+    return sr.slot_metrics(records)
 
 
 def schedule_lines(info: dict) -> List[str]:
     if "chunks" not in info:
         return []
-    return [
-        f"  schedule: {info['chunks']} chunks on {info['lanes']} lane(s) ({info['slots']} slots per cluster); longest chunk {info['task_longest_s']} s, "
+    out = [
+        f"  schedule: {info['chunks']} chunks on {info['slots']} slot(s), taken from one queue; longest chunk {info['task_longest_s']} s, "
         f"mean {info['task_mean_s']} s (longest/mean {info['task_longest_s'] / max(1, info['task_mean_s']):.1f}x)",
-        f"  first task to last end {info['span_s']} s; ideal (sum of tasks over the lanes) {info['ideal_s']} s; tail (last lane ended after the first) "
-        f"{info['tail_s']} s; idle slot time {info['idle_slot_s']} s",
+        f"  first start to last end {info['span_s']} s; ideal (sum of chunks over the slots) {info['ideal_s']} s; tail (last slot ended after the first) "
+        f"{info['tail_s']} s; idle slot time {info['idle_slot_s']} s, of it {info['waited_s']} s while the queue still held a chunk",
     ]
+    for p in info.get("per_slot", []):
+        out.append(f"    slot {p['runner']}: {p['shards']} chunk(s), busy {p['busy_s']} s, waited {p['waited_s']} s while chunks were queued, "
+                   f"idle {p['idle_end_s']} s at the end (started +{p['start_offset_s']} s)" + (f"; {p['error']}" if p.get("error") else ""))
+    return out
+
+
+def isolation_line(rows: List[dict]) -> str:
+    """Whether every shard had a Python process and a Spark session of its own (the probe each shard notebook runs)."""
+    iso = [r.get("isolation") for r in rows if r.get("isolation")]
+    if not iso:
+        return ""
+    pids = [i.get("pid") for i in iso]
+    fresh = sum(1 for i in iso if i.get("view_fresh") and i.get("conf_fresh"))
+    return (f"isolation: {len(set(pids))} distinct Python process(es) for {len(iso)} shard(s); {fresh} of {len(iso)} saw no temp view or conf "
+            f"of an earlier shard")
 
 
 def speedup_line(info: dict) -> str:
@@ -546,7 +655,9 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
            f"- purpose: {plan['purpose']}"]
     for pool, info in pool_info.items():
         out.append(f"- {pool}: cluster(s) {info.get('cluster_id', '-')} ({info.get('node_type', '-')}), job run {info.get('job_run', '-')}; {speedup_line(info)}")
-        out += [x.replace("  schedule", "  - schedule", 1).replace("  first task", "  - first task", 1) for x in schedule_lines(info)]
+        out += ["  - " + x.strip() for x in schedule_lines(info)]
+    if isolation_line(rows):
+        out.append(f"- {isolation_line(rows)}")
     if plan["jar"]:
         out.append(f"- JAR `{plan['jar']['name']}` sha1 {plan['jar'].get('sha1', '')[:12]} sha256 {plan['jar']['sha256'][:16]}")
     out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | CI ~min |", "|---|---|---|---|---|---|---|---|---|"]
@@ -746,7 +857,7 @@ def main(argv=None) -> int:
 
 def planned_clusters(a) -> int:
     """How many clusters the plan is cut for: the light pool's cap, else the clusters it has (the launch leases the free ones, starts
-    stopped ones and makes new ones up to the cap, and spreads the lanes again over what it got). One when the pool cannot be read."""
+    stopped ones and makes new ones up to the cap, and sizes the runners again for what it got). One when the pool cannot be read."""
     try:
         from databricks.sdk import WorkspaceClient
         import _cluster_pool as cp
@@ -817,30 +928,43 @@ def lease_pool(w, a, plan: dict, pool_name: str, *, jar: Optional[dict], volroot
                 print(f"WARNING: could not delete {name}: {exc}", file=sys.stderr)
 
 
-def submit_pool_job(w, plan: dict, pool: str, nb_path: str, leases: list):
-    """One job for the pool: a task per shard, the tasks of a lane in a chain, the lanes side by side. Lane i runs on cluster
-    i % len(leases), so each cluster carries about the same number of lanes. With no lease the tasks run on Serverless."""
+def job_tasks(plan: dict, pool: str, nb_paths: dict, cluster_ids: List[str]) -> List[dict]:
+    """The pool job's tasks, as plain dicts: a seed task that fills the queue table, then one runner task per slot, each depending
+    on the seed only (a runner never waits for another). Runner i runs on cluster i % len(cluster_ids), so each cluster carries
+    --max-parallel runners; with no cluster the tasks run on Serverless."""
+    spec = plan["pools"][pool]
+    desc = f"{plan['purpose']} (commit {plan['sha'][:10]})"[:1000]
+
+    def task(key, params, timeout_s, i, depends=()):
+        t = {"task_key": key, "timeout_seconds": timeout_s, "description": desc, "notebook_path": nb_paths["runner"],
+             "base_parameters": {"pool": pool, **params}, "depends_on": list(depends)}
+        if cluster_ids:
+            t["existing_cluster_id"] = cluster_ids[i % len(cluster_ids)]
+        else:
+            t["environment_key"] = "gbx_env6"
+        return t
+
+    tasks = [task("q_seed", {"role": "seed"}, 15 * 60, 0)]
+    for i in range(spec["runners"]):
+        tasks.append(task(f"r_{i}", {"role": "run", "runner": f"r{i}", "index": str(i), "shard_nb": nb_paths["shard"]},
+                          int(spec["cap_min"] * 60), i, depends=["q_seed"]))
+    return tasks
+
+
+def submit_pool_job(w, plan: dict, pool: str, nb_paths: dict, leases: list):
+    """Submit the pool's job (``job_tasks``); the run id. A runner depends on the seed with ALL_SUCCESS: no queue, no runner."""
     from databricks.sdk.service import compute, jobs
     from _job_submit import submit_once
 
     spec = plan["pools"][pool]
-    cap_s = int(plan["caps"]["shard_min"] + 10) * 60
     tasks = []
-    for li, lane in enumerate(spec["lanes"]):
-        prev = None
-        for slug in lane:
-            kw = {}
-            if prev:
-                kw = dict(depends_on=[jobs.TaskDependency(task_key=prev)], run_if=jobs.RunIf.ALL_DONE)  # a failed shard must not skip the next
-            if leases:
-                kw["existing_cluster_id"] = leases[li % len(leases)].cluster_id
-            else:
-                kw["environment_key"] = "gbx_env6"
-            tasks.append(jobs.SubmitTask(
-                task_key=f"s_{slug}"[:100], max_retries=0, timeout_seconds=cap_s,
-                description=f"{plan['shards'][slug]['name']}: {plan['purpose']} (commit {plan['sha'][:10]})"[:1000],
-                notebook_task=jobs.NotebookTask(notebook_path=nb_path, source=jobs.Source.WORKSPACE, base_parameters={"shard": slug}), **kw))
-            prev = f"s_{slug}"[:100]
+    for t in job_tasks(plan, pool, nb_paths, [l.cluster_id for l in leases]):
+        kw = {k: t[k] for k in ("existing_cluster_id", "environment_key") if k in t}
+        if t["depends_on"]:
+            kw["depends_on"] = [jobs.TaskDependency(task_key=d) for d in t["depends_on"]]
+        tasks.append(jobs.SubmitTask(
+            task_key=t["task_key"], max_retries=0, timeout_seconds=t["timeout_seconds"], description=t["description"],
+            notebook_task=jobs.NotebookTask(notebook_path=t["notebook_path"], source=jobs.Source.WORKSPACE, base_parameters=t["base_parameters"]), **kw))
     extra = {}
     if not leases:
         deps = [f"geobrix[{plan['extras']}] @ file://{plan['wheel']['volume']}"] + plan["pins"] + plan["pip_extra"].split()
@@ -886,18 +1010,11 @@ def pool_name_of(a, pool: str, with_jar: bool = False) -> str:
 
 
 def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
-    """Spread the pool's shards again over the clusters actually leased and the cores they have."""
-    shards = [ts.Shard(name=plan["shards"][slug]["name"], kind=plan["shards"][slug]["kind"], est_min=plan["shards"][slug]["expected_min"]) for lane in plan["pools"][pool]["lanes"] for slug in lane]
-    by_slug = {sh.slug: sh for sh in shards}
-    slots = a.max_parallel or ts.slots_for(cores)
-    lane_list = ts.lanes(shards, slots * n_clusters)
+    """Size the pool's runners again for the clusters actually leased and the cores they have (the queue stays as it is)."""
     spec = plan["pools"][pool]
-    spec.update(
-        lanes=[[sh.slug for sh in lane] for lane in lane_list], slots=slots, clusters=n_clusters,
-        expected_min=round(max(sum(sh.expected_min for sh in lane) for lane in lane_list), 1),
-        cap_min=max(len(lane) for lane in lane_list) * (a.shard_cap_min + 10),
-    )
-    assert set(by_slug) == {slug for lane in spec["lanes"] for slug in lane}, "relane lost or invented a shard"
+    before = list(spec["queue"])
+    size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min)
+    assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"
 
 
 def load_timings(path: Path) -> dict:
@@ -968,7 +1085,7 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
     local_out = REPO_ROOT / plan["local_out"]
     local_out.mkdir(parents=True, exist_ok=True)
     base_dir = "/" + runner_dir(w).strip().removeprefix("/Workspace").lstrip("/")
-    nbs: Dict[str, str] = {}
+    nbs: List[str] = []
     rc = EXIT_FAILED
     ok = False
     pool_info: Dict[str, dict] = {}
@@ -1000,16 +1117,18 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                         pool_leases = lease_many(stack, w, a, plan, pool, volroot=volroot, me=me)
                         cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
                         relane(plan, pool, a, len(pool_leases), cores)
+                        put_text(w, plan["plan_file"], json.dumps(plan))  # the runners read the pool's queue and table from it
                         pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
                     spec = plan["pools"][pool]
-                    print(f"  {pool}: {sum(len(x) for x in spec['lanes'])} task(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots; expected wall about "
-                          f"{spec['expected_min']:g} min (longest task {spec['longest_min']:g}, serial sum {spec['serial_min']:g})", flush=True)
-                    nb_path = f"{base_dir}/tests_{run_id}_{pool}.ipynb"
-                    body = base64.b64encode(json.dumps(build_notebook(plan, pool), indent=1).encode()).decode()
-                    w.workspace.import_(nb_path, format=ImportFormat.JUPYTER, content=body, overwrite=True)
-                    nbs[pool] = nb_path
-                    print(f"Uploaded runner notebook {nb_path}", flush=True)
-                    job_run = submit_pool_job(w, plan, pool, nb_path, pool_leases)
+                    print(f"  {pool}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
+                          f"{spec['expected_min']:g} min (longest shard {spec['longest_min']:g}, serial sum {spec['serial_min']:g})", flush=True)
+                    paths = {"shard": f"{base_dir}/tests_{run_id}_{pool}.ipynb", "runner": f"{base_dir}/runner_{run_id}_{pool}.ipynb"}
+                    for kind, nb in (("shard", build_notebook(plan, pool)), ("runner", build_runner_notebook(plan, pool))):
+                        body = base64.b64encode(json.dumps(nb, indent=1).encode()).decode()
+                        w.workspace.import_(paths[kind], format=ImportFormat.JUPYTER, content=body, overwrite=True)
+                        nbs.append(paths[kind])
+                        print(f"Uploaded {kind} notebook {paths[kind]}", flush=True)
+                    job_run = submit_pool_job(w, plan, pool, paths, pool_leases)
                     runs[pool] = job_run
                     pool_info.setdefault(pool, {})["job_run"] = job_run
                     t_submit[pool] = time.monotonic()
@@ -1019,16 +1138,17 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                         print(f"  {pool}: run {job_run}  {w.jobs.get_run(job_run).run_page_url}", flush=True)
                     except Exception:  # noqa: BLE001
                         pass
-                print(f"  heartbeats: {stage}/hb/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
+                print(f"  heartbeats: {stage}/hb/ and {stage}/runners/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
                 rc = watch(w, runs, plan, pool_info)
                 finished.update(runs)
-                rows = collect(w, plan, runs, local_out)
+                records = runner_records(w, plan, local_out)
+                rows = collect(w, plan, runs, local_out, records)
                 for pool, info in pool_info.items():
                     walls = [r["wall_s"] for r in rows if r["pool"] == pool and isinstance(r["wall_s"], int)]
                     info["longest_s"] = max(walls) if walls else "-"
                     info["serial_s"] = sum(walls)
                     info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
-                    info.update(pool_metrics(w, runs[pool], plan["pools"][pool]))
+                    info.update(pool_metrics(records.get(pool, [])))
                 write_timings(REPO_ROOT / a.timings, plan, rows, local_out)
                 text = summary_md(plan, rows, pool_info)
                 (local_out / "summary.md").write_text(text)
@@ -1037,20 +1157,28 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     print(f"{pool}: {speedup_line(info)}")
                     for ln in schedule_lines(info):
                         print(ln)
+                if isolation_line(rows):
+                    print(isolation_line(rows))
                 for r in rows:
                     for n, m in r["failures"][:5]:
                         print(f"  FAIL [{r['name']}] {n}: {m}")
                 print(f"\nWrote {local_out / 'summary.md'}")
-                bad = [r for r in rows if is_failure(r)]
+                doubled = [r["name"] for r in rows if r.get("claims", 0) > 1]
+                if doubled:
+                    print(f"ERROR: shard(s) run more than once: {', '.join(doubled)}; the queue's claim was not exclusive", file=sys.stderr)
+                bad = [r for r in rows if is_failure(r) or r.get("claims", 0) > 1]
                 if rc == 0 and bad:
                     rc = EXIT_FAILED
                 ok = rc == 0
     finally:
+        tables = [spec["table"] for spec in plan["pools"].values()]
         if a.keep_stage:
-            print(f"Kept {stage} and {', '.join(nbs.values())} (--keep-stage).")
+            print(f"Kept {stage}, {', '.join(nbs)} and the queue table(s) {', '.join(tables)} (--keep-stage).")
         else:
             mut.rm_volume_dir(w, stage)
-            for pool, nb in nbs.items():
+            if nbs:  # a run was submitted: its queue tables may exist
+                drop_queue_tables(w, tables)
+            for nb in nbs:
                 if ok or rc in (EXIT_FAILED, EXIT_NO_START, EXIT_STALLED):
                     try:
                         w.workspace.delete(nb)
@@ -1060,6 +1188,31 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
         if plan["jar"]:
             shutil.rmtree(Path(plan["jar"]["local"]).parent, ignore_errors=True)  # the temporary copy and its folder
     return rc
+
+
+def drop_queue_tables(w, tables: List[str]) -> None:
+    for t in tables:
+        name = t.replace("`", "")
+        try:
+            w.tables.delete(name)
+            print(f"Dropped the queue table {name}")
+        except Exception as exc:  # noqa: BLE001
+            if "not found" not in str(exc).lower() and "does not exist" not in str(exc).lower():
+                print(f"WARNING: could not drop {name} ({exc}); drop it by hand.", file=sys.stderr)
+
+
+def runner_records(w, plan: dict, local_out: Path) -> Dict[str, List[dict]]:
+    """Download the runners' records (``runners/<pool>/r<i>.json``), per pool: each holds when its runner started and ended
+    and, per shard it ran, the claim, start and end times, rc and reason."""
+    out: Dict[str, List[dict]] = {}
+    for pool in plan["pools"]:
+        d = local_out / "_runners" / pool
+        for name in mut.download_dir(w, f"{plan['stage']}/runners/{pool}", d):
+            try:
+                out.setdefault(pool, []).append(json.loads((d / name).read_text()))
+            except ValueError:
+                continue
+    return out
 
 
 def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
@@ -1092,25 +1245,29 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
             if not say and now - last_beat.get(pool, -BEAT_EVERY_S) < BEAT_EVERY_S:
                 continue
             last_beat[pool] = now
+            spec = plan["pools"][pool]
+            recs = [r for r in (mut.read_json(w, f"{plan['stage']}/runners/{pool}/r{i}.json") for i in range(spec["runners"])) if r]
+            current = [r["current"] for r in recs if r.get("current") and not r.get("done")]  # the shards the runners are on now
             beats = {}
-            for lane in plan["pools"][pool]["lanes"]:
-                for slug in lane:
-                    b = mut.read_json(w, f"{plan['stage']}/hb/{slug}.json")
-                    if b:
-                        beats[slug] = b
-            running = [t for t in (run.tasks or []) if life_and_result(t)[0] == "RUNNING"]
+            for slug in current:
+                b = mut.read_json(w, f"{plan['stage']}/hb/{slug}.json")
+                if b:
+                    beats[slug] = b
+            ran = [x for r in recs for x in r.get("shards", [])]
+            started = bool(beats or ran)
             if say:
-                tot = sum(b.get("passed", 0) + b.get("failed", 0) + b.get("skipped", 0) for b in beats.values())
-                bad = sum(b.get("failed", 0) + b.get("errors", 0) for b in beats.values())
-                done = sum(1 for b in beats.values() if b.get("done"))
-                print(f"  [{pool}] {life} {int(now - t0)} s: {len(running)} task(s) running, {done}/{sum(len(x) for x in plan['pools'][pool]['lanes'])} shards done, "
-                      f"{tot} tests finished, {bad} failing/erroring", flush=True)
-            if not beats and now - t0 > c["start_min"] * 60:
+                tot = sum(x.get(k) or 0 for x in ran for k in ("passed", "failed", "skipped")) + sum(b.get("passed", 0) + b.get("failed", 0) + b.get("skipped", 0) for b in beats.values())
+                bad = sum(x.get(k) or 0 for x in ran for k in ("failed", "errors")) + sum(b.get("failed", 0) + b.get("errors", 0) for b in beats.values())
+                live = sum(1 for r in recs if not r.get("done"))
+                print(f"  [{pool}] {life} {int(now - t0)} s: {live} of {spec['runners']} runner(s) at work, {len(current)} shard(s) running, {len(ran)}/{len(spec['queue'])} shards done, "
+                      f"{len(spec['queue']) - len(ran) - len(current)} queued, {tot} tests finished, {bad} failing/erroring", flush=True)
+            running = current
+            if not started and now - t0 > c["start_min"] * 60:
                 print(f"No shard of {pool} has beaten {c['start_min']:g} min after the submit. Cancelling run {rid}.", file=sys.stderr)
                 _cancel(w, rid)
                 rc = rc or EXIT_NO_START
             elif beats and running:
-                if run_is_stuck([t.task_key[2:] for t in running], beats, changed.setdefault(pool, {}), now, (c["stall_min"] + 5) * 60.0):
+                if run_is_stuck(running, beats, changed.setdefault(pool, {}), now, (c["stall_min"] + 5) * 60.0):
                     print(f"Every running shard of {pool} has a heartbeat that has not moved for {c['stall_min'] + 5:g} min: a stuck run. Cancelling run {rid}.", file=sys.stderr)
                     _cancel(w, rid)
                     rc = rc or EXIT_STALLED
@@ -1163,16 +1320,43 @@ def _cancel(w, rid: int) -> None:
         print(f"cancel FAILED: {exc}; cancel run {rid} by hand", file=sys.stderr)
 
 
-def collect(w, plan: dict, runs: Dict[str, int], local_out: Path) -> List[dict]:
-    """Download each shard's files, and read its verdict; one row per shard, in plan order."""
-    rows = []
-    task_state = {}
+def task_failures(w, runs: Dict[str, int]) -> Dict[str, str]:
+    """Per pool, what its seed or runner tasks that did not succeed said (a shard nobody ran gets it as its reason)."""
+    out: Dict[str, str] = {}
     for pool, rid in runs.items():
         try:
-            for t in w.jobs.get_run(rid).tasks or []:
-                task_state[t.task_key] = t
+            bad = [t for t in (w.jobs.get_run(rid).tasks or []) if life_and_result(t)[1] not in ("SUCCESS", "")]
         except Exception as exc:  # noqa: BLE001
             print(f"WARNING: could not read run {rid}: {exc}", file=sys.stderr)
+            continue
+        msgs = []
+        for t in bad[:3]:
+            try:
+                err = (w.jobs.get_run_output(t.run_id).error or "")[:200]
+            except Exception:  # noqa: BLE001
+                err = ""
+            msgs.append(f"{t.task_key} {life_and_result(t)[1]}: {err or (t.state.state_message if t.state else '')}")
+        if msgs:
+            out[pool] = "; ".join(msgs)
+    return out
+
+
+def claims_of(records: Dict[str, List[dict]]) -> Dict[str, List[dict]]:
+    """Per shard, the runs the runners' records hold of it: one per shard when the claims were exclusive."""
+    out: Dict[str, List[dict]] = {}
+    for recs in records.values():
+        for r in recs:
+            for x in r.get("shards", []):
+                out.setdefault(x["slug"], []).append(dict(x, runner=r.get("runner")))
+    return out
+
+
+def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optional[Dict[str, List[dict]]] = None) -> List[dict]:
+    """Download each shard's files, and read its verdict; one row per shard, in queue order. A shard with no result takes its
+    reason from the runner that ran it, or (never claimed) from the tasks that did not succeed."""
+    rows = []
+    claims = claims_of(records or {})
+    failed_tasks = task_failures(w, runs)
     for slug, s in plan["shards"].items():
         d = local_out / slug
         got = mut.download_dir(w, f"{plan['stage']}/out/{slug}", d)
@@ -1185,20 +1369,22 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path) -> List[dict]:
                 junit = None
         verdict = shard_verdict(res, junit)
         reason = (res or {}).get("reason", "")
-        t = task_state.get(f"s_{slug}"[:100])
-        if res is None and t is not None:
-            try:
-                out = w.jobs.get_run_output(t.run_id)
-                reason = (out.error or "")[:300] or (t.state.state_message if t.state else "") or "the shard produced no result"
-            except Exception:  # noqa: BLE001
-                reason = "the shard produced no result"
+        mine = claims.get(slug, [])
+        if res is None:
+            if mine:
+                reason = mine[-1].get("reason") or f"runner {mine[-1]['runner']} ran it, but it left no result"
+            else:
+                reason = "never claimed: " + (failed_tasks.get(s["pool"]) or "the runners ended before it")
+        if len(mine) > 1:
+            reason = f"claimed {len(mine)} times (by {', '.join(str(x['runner']) for x in mine)}): the queue's claim was not exclusive. " + reason
         rows.append({
             "name": s["name"], "slug": slug, "pool": s["pool"], "verdict": verdict, "expected_min": s["expected_min"],
             "passed": (junit or {}).get("passed", (res or {}).get("passed", 0)),
             "failed": (junit or {}).get("failed", (res or {}).get("failed", 0)),
             "errors": (junit or {}).get("errors", (res or {}).get("errors", 0)),
             "skipped": (junit or {}).get("skipped", (res or {}).get("skipped", 0)),
-            "wall_s": (res or {}).get("wall_s", "-"), "reason": reason,
+            "wall_s": (res or {}).get("wall_s", "-"), "reason": reason, "claims": len(mine),
+            "isolation": (res or {}).get("isolation"),
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),
         })
         print(f"  downloaded {len(got)} file(s) for {s['name']}", flush=True)

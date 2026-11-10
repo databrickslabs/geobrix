@@ -1714,6 +1714,32 @@ def test_review_round_reviews_head_in_a_clean_worktree_when_the_checkout_is_dirt
     assert len(worktrees) == 1  # the scratch worktree is gone
 
 
+def test_review_round_survives_an_edit_of_its_own_script_mid_run(sandbox, tmp_path):
+    # bash reads a script as it runs, so a commit or an edit that changes the file during the minutes-long
+    # isaac step moved the read offset: the rest of the run died with "line 230: syntax error". The
+    # whole body is parsed before it runs now. The stub isaac rewrites the script (5 lines in front).
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    (sandbox.root / "change.txt").write_text("x\n")
+    subprocess.run([*git, "add", "change.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "change"], check=True)
+    script = sandbox.commands / "gbx-review-round.sh"
+    stub = sandbox.bin / "dbexec"
+    stub.write_text(
+        f'#!/bin/sh\n{{ printf "# a\\n# b\\n# c\\n# d\\n# e\\n"; cat "{script}"; }} > "{tmp_path}/new"\n'
+        f'cat "{tmp_path}/new" > "{script}"\necho reviewed\n'
+    )
+    stub.chmod(0o755)
+
+    res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1")
+
+    assert res.returncode == 0, res.output
+    assert "reviewed" in res.output
+    assert "syntax error" not in res.output and "command not found" not in res.output
+
+
 # ----------------------------------------- host venv curated to match the container (venv check)
 
 

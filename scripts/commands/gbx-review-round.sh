@@ -6,7 +6,11 @@
 # full-branch pass never fires by accident. Isaac Review is incremental
 # (session cache + PR-finding reuse), so per-round scoping is cheap and
 # cumulative across runs.
-
+#
+# The whole body is one brace group: bash reads a script as it runs, so an edit or a checkout of this
+# file during the minutes-long isaac step moved the read offset and killed the run with "syntax error".
+# A group is parsed completely before it starts.
+{
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
@@ -254,3 +258,4 @@ fi
 
 rm -f "$SCAN_FILE"
 exit "$rc"
+}; exit $?  # same line as the group: bash reads nothing after it

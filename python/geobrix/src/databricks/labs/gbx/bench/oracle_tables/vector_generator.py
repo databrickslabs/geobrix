@@ -212,6 +212,21 @@ VECTOR_GENERATOR = (
         "elev_points",
         CENTRES_4,
     ),
+    # The mode word is taken in any case: the kite with its break line gives each mode's own triangles.
+    Case(
+        "tri_mode_any_case_conforming",
+        TRI,
+        (KITE, LINE_P1P2, 0.0, 0.0, F, "CONFORMING"),
+        "triangles_exact",
+        R.KITE_CONFORMING,
+    ),
+    Case(
+        "tri_mode_any_case_constrained",
+        TRI,
+        (KITE, LINE_P1P2, 0.0, 0.0, F, "Constrained"),
+        "triangles",
+        KITE_FORCED,
+    ),
     # ---------------------------------------------------------------------------------------------- snap_tolerance
     # A point within snap_tolerance of a break line moves onto the nearest one BEFORE either mode triangulates.
     *(

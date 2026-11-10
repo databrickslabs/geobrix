@@ -229,4 +229,15 @@ class InterpolateElevationTest extends AnyFunSuite {
         val (kept, _) = InterpolateElevation.prepareSites(far, bl, 0.0, 1e-9)
         kept.map(_.getZ).toSeq shouldBe Seq(1.0, 2.0, 4.0)
     }
+
+    test("triangulate takes the mode word in any case, as the Python level does") {
+        val bl = Seq(line((0.0, 1.0, plane(0, 1)), (10.0, 9.5, plane(10, 9.5))))
+        def tris(mode: String) =
+            InterpolateElevation.triangulate(squarePoints(), bl, 0.0, 0.0, None, mode).map(_.toText).sorted
+        tris("CONFORMING") shouldBe tris("conforming")
+        tris("Constrained") shouldBe tris("constrained")
+        tris("CONFORMING") should not be tris("constrained")
+        val e = intercept[IllegalArgumentException](tris("Sideways"))
+        e.getMessage shouldBe "mode must be 'constrained' or 'conforming'; got 'Sideways'"
+    }
 }

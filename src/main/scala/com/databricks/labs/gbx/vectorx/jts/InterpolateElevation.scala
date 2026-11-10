@@ -67,6 +67,8 @@ object InterpolateElevation {
      *    - `"conforming"` — JTS `ConformingDelaunayTriangulator` (may insert Steiner points to make the
      *      triangulation conform to the constraints). Mirrors `pyvx/_conforming.py`.
      *
+     *  The mode word is taken in any case.
+     *
      *  Both modes first run [[prepareSites]] (Z of 2D coordinates, then the snap of `snapTolerance`), the steps
      *  documented once in `pyvx/_tin.py` `prepare_sites`.
      */
@@ -78,12 +80,14 @@ object InterpolateElevation {
         splitPointFinder: Option[TriangulationSplitPointTypeEnum.Value] = None,
         mode: String = "constrained"
     ): Seq[Geometry] = {
-        if (mode != "conforming" && mode != "constrained") {
+        // the word in any case, as the Python and UC levels take it (`pyvx/_tin.py` `validate_mode`)
+        val m = mode.toLowerCase(java.util.Locale.ROOT)
+        if (m != "conforming" && m != "constrained") {
             throw new IllegalArgumentException(s"mode must be 'constrained' or 'conforming'; got '$mode'")
         }
         val (points, lines) = prepareSites(multiPoint, breaklines, mergeTolerance, snapTolerance)
         val gf = multiPoint.getFactory
-        if (mode == "conforming") triangulateConforming(points, lines, mergeTolerance, splitPointFinder, gf)
+        if (m == "conforming") triangulateConforming(points, lines, mergeTolerance, splitPointFinder, gf)
         else triangulateConstrained(points, lines, mergeTolerance, gf)
     }
 

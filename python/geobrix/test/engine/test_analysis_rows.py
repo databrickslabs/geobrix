@@ -154,6 +154,20 @@ def test_a_json_row_returns_a_string_and_a_result_is_its_text():
 
 
 # --- the fill -----------------------------------------------------------------------------------------------------
+def test_the_fill_works_where_the_process_temp_directory_is_unusable(monkeypatch):
+    """GDAL's fill keeps its index and value files on disk, named from CPL_TMPDIR, else TMPDIR, else /tmp, with no check
+    that the directory is usable. On a cluster that gave every row of a fill "Could not create Y index work file" (an
+    error tile) while the same rows ran in the dev container. The engine names the canonical local temp for the call."""
+    z = _gradient()[np.newaxis]
+    z[0, 4, 4] = NODATA
+    monkeypatch.setenv("TMPDIR", "/gbx-no-such-directory/tmp")
+    monkeypatch.delenv("CPL_TMPDIR", raising=False)
+    res = run.run(FILL, [_tif(z)], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert res.error is None, res.error
+    out, _, _ = _read(res.raster)
+    assert out[0, 4, 4] != NODATA
+
+
 def test_every_band_is_filled_by_its_own_mask_and_the_rest_of_the_tile_is_the_inputs():
     z = np.stack([_gradient(), 100.0 + 2 * _gradient()])
     z[0, 4, 4] = NODATA

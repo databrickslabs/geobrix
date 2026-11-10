@@ -150,8 +150,14 @@ def decoded_budget() -> int:
 
 @contextlib.contextmanager
 def engine_settings():
-    """The engine's GDAL settings (``ENGINE_SETTINGS``) for this thread, for the duration of the block."""
-    with _gdal().config_options(ENGINE_SETTINGS, thread_local=True):
+    """The engine's GDAL settings (``ENGINE_SETTINGS``) for this thread, for the duration of the block, and ``CPL_TMPDIR``
+    set to the canonical local temp: an algorithm that keeps work files on disk (fill-nodata's index and value files) names
+    them from ``CPL_TMPDIR``, else ``TMPDIR``, else ``/tmp``, with no check that the directory exists, while Python's
+    temp directory is a checked one."""
+    from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+
+    settings = {**ENGINE_SETTINGS, "CPL_TMPDIR": local_temp_root()}
+    with _gdal().config_options(settings, thread_local=True):
         yield
 
 

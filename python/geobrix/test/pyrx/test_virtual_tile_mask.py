@@ -398,6 +398,31 @@ def test_the_centre_check_scans_past_the_representative_point_and_judges_the_gri
     assert not edit.holds_no_pixel_centre(leg, t, N, N)
 
 
+def test_a_window_wider_than_a_strip_is_scanned_block_by_block(monkeypatch):
+    """A cutline whose only centres sit past its first blocks of columns is found there, with every block no wider than a
+    strip; the same cutline without them holds none."""
+    import rasterio.features
+
+    t = from_origin(0, N, 1, 1)
+    leg = box(3.6, N - 2.3, 3.7, N - 1.0)  # the representative point's pixel: no centre
+    bar = box(3.6, N - 2.3, 12, N - 2.2)  # above the centres of row 2
+    low = box(
+        11, N - 2.55, 20.3, N - 2.2
+    )  # down onto the centres of row 2, columns 11 to 19
+    widths, mask = [], rasterio.features.geometry_mask
+
+    def recorded(geoms, out_shape, *a, **k):
+        widths.append(out_shape[1])
+        return mask(geoms, out_shape, *a, **k)
+
+    monkeypatch.setattr(rasterio.features, "geometry_mask", recorded)
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    assert not edit.holds_no_pixel_centre(leg.union(bar).union(low), t, N, N)
+    # row 1 holds no centre; row 2 finds one in its third block (columns 11 to 14)
+    assert widths == [4, 4, 4, 4, 2, 4, 4, 4]
+    assert edit.holds_no_pixel_centre(leg.union(bar), t, N, N)
+
+
 # ---------------------------------------------------------------------------
 # the materializers
 # ---------------------------------------------------------------------------

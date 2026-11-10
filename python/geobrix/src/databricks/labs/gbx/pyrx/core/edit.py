@@ -72,7 +72,7 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     as the whole raster does (a tile the cutline only grazes keeps nothing, not the pixels it touches). It looks at the
     pixel of the cutline's representative point first (most cutlines hold its centre), then rasterizes the window the
     cutline's bounds cover, a block at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found. A cutline whose window
-    is over ``_CENTRE_SCAN_PIXELS`` and holds no centre in that much of it keeps the caller's rule: the scan's cost is
+    is over ``_CENTRE_SCAN_PIXELS`` and holds no centre in the whole blocks that fit under it keeps the caller's rule: the scan's cost is
     bounded, and the fallback is never taken for a cutline that may hold a centre.
     """
     import math
@@ -84,7 +84,12 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
         return False
     inverse = ~transform
     x0, y0, x1, y1 = geom.bounds
-    corners = [inverse * (x, y) for x in (x0, x1) for y in (y0, y1)]
+    # a bound on a pixel edge is snapped to it, so float noise cannot move the window (or the scan's blocks) by a pixel
+    corners = [
+        tuple(round(v) if abs(v - round(v)) < 1e-6 else v for v in inverse * (x, y))
+        for x in (x0, x1)
+        for y in (y0, y1)
+    ]
     c0 = math.floor(min(c for c, _ in corners))
     c1 = math.ceil(max(c for c, _ in corners))
     r0 = math.floor(min(r for _, r in corners))
@@ -101,9 +106,10 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     scanned = 0
     for r in range(r0, r1, rows):
         for c in range(c0, c1, cols):
-            if scanned >= _CENTRE_SCAN_PIXELS:
-                return False
             shape_rc = (min(rows, r1 - r), min(cols, c1 - c))
+            scanned += shape_rc[0] * shape_rc[1]
+            if scanned > _CENTRE_SCAN_PIXELS:
+                return False
             held = geometry_mask(
                 [geom],
                 out_shape=shape_rc,
@@ -112,7 +118,6 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
             )
             if held.any():
                 return False
-            scanned += shape_rc[0] * shape_rc[1]
     return True
 
 

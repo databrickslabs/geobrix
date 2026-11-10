@@ -221,6 +221,25 @@ def test_a_transparent_pixel_is_left_out_and_the_alpha_is_read_a_strip_at_a_time
     assert reads and max(reads) <= 4  # no read of the whole tile
 
 
+def test_an_alpha_mask_gdal_cannot_make_is_an_error_tile(engine, monkeypatch):
+    import numpy as np
+
+    gdal = run._gdal()
+    create = gdal.Driver.Create
+
+    def refuse(self, name, *a, **k):
+        return (
+            None
+            if str(name).endswith("alpha_mask.tif")
+            else create(self, name, *a, **k)
+        )
+
+    monkeypatch.setattr(gdal.Driver, "Create", refuse)
+    values = np.ones((32, 32), "uint8")
+    res = run.run(POLY, [_tile(values, values * 255)], {"band": 1, "connectedness": 4})
+    assert res.features is None and "the alpha mask could not be made" in res.error
+
+
 def test_a_tile_whose_decoded_size_fits_the_budget_is_polygonized(engine, monkeypatch):
     """The output is features on local disk, not a raster: a tile is judged by its own decoded size, so one that fits
     the budget with little to spare is polygonized."""

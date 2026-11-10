@@ -382,6 +382,13 @@ def test_a_box_with_no_grid_from_gdal_is_sized_in_the_target_crss_units():
     # with no way to move the tile into the target CRS, the source's metres are not divided into degrees
     with pytest.raises(spec.DataError, match="give --size"):
         _peak(box, geo=argv.NoGeo())
+    # nor with no pixel size to move
+    unknown = argv.PipeState(64, 48, 0.0, 0.0, 0.0, 0.0, "EPSG:32633", 1, 4, True)
+    with pytest.raises(spec.DataError, match="give --size"):
+        _peak(box, unknown, _NoGrid())
+    # a box in the tile's own CRS keeps the tile's pixel size: 1280 x 960 m of 10 m pixels
+    same = "reproject --output-crs=EPSG:32633 --bbox=0,0,1280,960"
+    assert _peak(same, geo=argv.NoGeo()) == 128 * 96 * 4
 
 
 def test_a_step_whose_output_cannot_be_bounded_is_refused_with_a_fix():

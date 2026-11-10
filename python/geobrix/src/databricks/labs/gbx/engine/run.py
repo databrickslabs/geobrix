@@ -1055,7 +1055,7 @@ def _alpha_into_mask(gdal, src: str, band: int, prefix: str) -> None:
         )
         if mds is None:
             raise DataError(
-                gdal.GetLastErrorMsg() or "the alpha mask could not be made"
+                f"the alpha mask could not be made ({gdal.GetLastErrorMsg() or 'GDAL gave no reason'})"
             )
         valid_band, out = data.GetMaskBand(), mds.GetRasterBand(1)
         for y in range(0, h, rows):

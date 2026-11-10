@@ -4,6 +4,7 @@ import subprocess
 import sys
 
 import pytest
+from rasterio.errors import RasterioIOError
 
 from databricks.labs.gbx.pyrx import _env
 
@@ -469,10 +470,27 @@ def test_sidecars_alter_open_retries_a_transient_miss_on_each_open(
     def flaky_data(p, *a, **kw):
         if fails["alone"]:
             fails["alone"] -= 1
-            raise OSError("not there yet")
+            # rasterio's form of a miss on the mount: GDAL's "No such file or directory"
+            raise RasterioIOError(f"{p}: No such file or directory")
         return real_data(p, *a, **kw)
 
     monkeypatch.setattr(_env, "open_raster", flaky_open)
     monkeypatch.setattr("databricks.labs.gbx._gdal_policy.open_data", flaky_data)
     assert _env.sidecars_alter_open(path) is False
     assert fails == {"with": 0, "alone": 0}
+
+
+def test_sidecars_alter_open_fails_a_corrupt_raster_at_once(tmp_path, monkeypatch):
+    """A file GDAL opens and cannot read is no transient miss: rasterio raises it as an OSError too, and the ten retries
+    with their waits (about twenty seconds) would only delay the same failure."""
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.pyrx import _env
+
+    path = tmp_path / "bad.tif"
+    path.write_bytes(b"II*\x00" + b"\x00" * 12)  # a TIFF magic and no readable header
+    (tmp_path / "bad.tif.aux.xml").write_text("<PAMDataset/>")
+    waits = []
+    monkeypatch.setattr(_retry.time, "sleep", waits.append)
+    with pytest.raises(RasterioIOError):
+        _env.sidecars_alter_open(str(path))
+    assert waits == []

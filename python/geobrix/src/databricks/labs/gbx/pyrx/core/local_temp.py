@@ -7,6 +7,7 @@ scratch in `ds/_scratch.py` (which stages under a UC Volume). See
 """
 
 import atexit
+import hashlib
 import os
 import shutil
 import tempfile
@@ -81,13 +82,56 @@ def new_local_temp_file(suffix: str = "", prefix: str = "gbx_") -> str:
     return path
 
 
+# A file name holds at most 255 bytes (NAME_MAX on Linux and macOS). A staged copy is named ``<uuid hex>_`` (33) plus, for
+# new_staged_local_file, mkstemp's 8 random characters, plus the source's name, and a sidecar staged with it is longer by
+# its own ending (``.aux.xml``, the longest GDAL looks for, or a PAM file GDAL writes beside the copy): a source name
+# kept under this many bytes leaves room for all of them.
+_STAGED_NAME_MAX = 255 - 33 - 8 - 16
+_DIGEST_CHARS = 16
+
+
+def staged_name(source_name: str) -> str:
+    """The name a staged copy of the file *source_name* takes after its prefix: the name itself, or for a name too long
+    to stage under NAME_MAX (``_STAGED_NAME_MAX``) its start, a ``~``, a digest of the whole name and its extension. The
+    same name always gives the same result, and two long names that share their start differ by the digest.
+    """
+    raw = source_name.encode("utf-8", "surrogateescape")
+    if len(raw) <= _STAGED_NAME_MAX:
+        return source_name
+    digest = hashlib.sha256(raw).hexdigest()[:_DIGEST_CHARS]
+    stem, dot, ext = source_name.rpartition(".")
+    if not (dot and stem and 0 < len(ext.encode("utf-8", "surrogateescape")) <= 16):
+        stem, ext = source_name, ""
+    tail = f"~{digest}" + (f".{ext}" if ext else "")
+    room = _STAGED_NAME_MAX - len(tail.encode("utf-8", "surrogateescape"))
+    head = stem.encode("utf-8", "surrogateescape")[:room].decode("utf-8", "ignore")
+    return head + tail
+
+
+def staged_sidecar_name(source_name: str, sidecar_name: str) -> Optional[str]:
+    """The name after its prefix of the staged copy of *sidecar_name*, a sidecar of the file *source_name*, so that GDAL
+    finds it beside the staged file by the rule it found it by at the source: ``<name><ending>`` (an ``.aux.xml``) or
+    ``<stem><ending>`` (a world file, an ESRI ``.hdr``) of :func:`staged_name`. None for a name made by neither rule.
+    """
+    staged = staged_name(source_name)
+    if sidecar_name.startswith(source_name):
+        return staged + sidecar_name[len(source_name) :]
+    stem = source_name.rpartition(".")[0] or source_name
+    if sidecar_name.startswith(stem):
+        return (staged.rpartition(".")[0] or staged) + sidecar_name[len(stem) :]
+    return None
+
+
 def new_staged_local_file(source_name: str) -> str:
-    """Atomically create a unique empty local-disk file named ``<uuid hex>_<random><source_name>`` under
+    """Atomically create a unique empty local-disk file named ``<uuid hex>_<random><name>`` under
     local_temp_root(), the name :func:`copy_source_with_sidecars` stages a file and its sidecars under (the shared
-    prefix is how :func:`remove_staged` finds the sidecars). Returns its path; the caller owns removal.
+    prefix is how :func:`remove_staged` finds the sidecars). ``<name>`` is :func:`staged_name` of *source_name*: a
+    source name too long for NAME_MAX is shortened, the same way each time. Returns its path; the caller owns removal.
     """
     fd, path = tempfile.mkstemp(
-        prefix=f"{uuid.uuid4().hex}_", suffix=source_name, dir=local_temp_root()
+        prefix=f"{uuid.uuid4().hex}_",
+        suffix=staged_name(source_name),
+        dir=local_temp_root(),
     )
     os.close(fd)
     return path
@@ -269,13 +313,17 @@ def _copy_sidecars(source_path: str, local_path: str) -> List[str]:
     from databricks.labs.gbx.pyrx import _env
 
     src_name, local_name = os.path.basename(source_path), os.path.basename(local_path)
-    if not local_name.endswith(src_name):
+    staged = staged_name(src_name)
+    if not local_name.endswith(staged):
         return []
-    prefix = local_name[: len(local_name) - len(src_name)]
+    prefix = local_name[: len(local_name) - len(staged)]
     folder = os.path.dirname(local_path)
     copied: List[str] = []
     for side in _env.copied_sidecar_files(source_path):
-        dest = os.path.join(folder, prefix + os.path.basename(side))
+        name = staged_sidecar_name(src_name, os.path.basename(side))
+        if name is None:
+            continue
+        dest = os.path.join(folder, prefix + name)
 
         def _do_copy(side=side, dest=dest) -> None:
             with open(side, "rb") as src, open(dest, "wb") as dst:
@@ -289,11 +337,13 @@ def _copy_sidecars(source_path: str, local_path: str) -> List[str]:
 def raster_source_signature(path: str) -> tuple:
     """:func:`source_signature` of a raster file together with the identity (name, size, mtime) of each sidecar a staged
     copy carries (``_env.copied_sidecar_files``): an ``.aux.xml`` or ``.hdr`` edited beside an unchanged file changes
-    the CRS or NoData GDAL reads from the copy, so the copy has to be staged again."""
+    the CRS or NoData GDAL reads from the copy, so the copy has to be staged again. It runs at every use of a staged
+    copy, so the sidecars are found in the folder's listing, held for the process (``_env.sidecar_files`` with
+    ``listed``), not by a stat of each name GDAL could read."""
     from databricks.labs.gbx.pyrx import _env
 
     sides = []
-    for side in _env.copied_sidecar_files(path):
+    for side in _env.copied_sidecar_files(path, listed=True):
         st = os.stat(side)
         sides.append((os.path.basename(side), st.st_size, st.st_mtime_ns))
     return (source_signature(path), tuple(sides))
@@ -356,19 +406,24 @@ class StageCache:
         )  # source -> local (LRU order)
         self._sizes: Dict[str, int] = {}
         self._sigs: Dict[str, Hashable] = {}
-        # local -> the sidecar copies staged with it (what a ``copy_fn`` returned), so sizing and removing a copy
-        # needs no listing of the folder under the lock
+        # local -> the sidecar copies staged with it (what a ``copy_fn`` returned), so sizing a copy needs no listing
+        # of the folder under the lock (removing one lists it: see _remove)
         self._sidecars: Dict[str, List[str]] = {}
         self._in_use: Dict[str, int] = {}  # local -> active users
         self._retired: List[str] = []  # superseded copies still in use
+        # copies out of the books, to remove once the lock is released (see _remove)
+        self._doomed: List[tuple] = []
 
     @contextmanager
     def use(self, source_path: str):
         """Yield a local copy of ``source_path``; it is not evicted while in use."""
         sig = self._signature(source_path) if self._signature else None
-        with self._lock:
-            local = self._get_or_stage(source_path, sig)
-            self._in_use[local] = self._in_use.get(local, 0) + 1
+        try:
+            with self._lock:
+                local = self._get_or_stage(source_path, sig)
+                self._in_use[local] = self._in_use.get(local, 0) + 1
+        finally:
+            self._remove_doomed()
         try:
             yield local
         finally:
@@ -379,6 +434,7 @@ class StageCache:
                     if local in self._retired:
                         self._retired.remove(local)
                         self._remove(local)
+            self._remove_doomed()
 
     def _get_or_stage(self, source_path: str, sig: Hashable = None) -> str:
         if source_path in self._entries:
@@ -387,7 +443,7 @@ class StageCache:
                 return self._entries[source_path]
             self._supersede(source_path)
         cache_dir = self._ensure_dir()
-        basename = os.path.basename(source_path.rstrip("/")) or "source"
+        basename = staged_name(os.path.basename(source_path.rstrip("/")) or "source")
         # uuid keeps two sources that share a basename apart on disk.
         local = os.path.join(cache_dir, f"{uuid.uuid4().hex}_{basename}")
         # Only copy_fn touches the source (readers wrap it in their transient
@@ -425,7 +481,19 @@ class StageCache:
             self._remove(local)
 
     def _remove(self, local: str) -> None:
-        _remove_local(local, self._sidecars.pop(local, ()))
+        """Take a copy out of the books (with the lock held) and mark it for removal once the lock is released
+        (``_remove_doomed``): its name is unique, so no reader can be handed it again meanwhile."""
+        self._doomed.append((local, self._sidecars.pop(local, ())))
+
+    def _remove_doomed(self) -> None:
+        """Remove the copies ``_remove`` marked, each with its sidecars: the ones staged with it, and the files GDAL wrote
+        beside it since under the copy's own name (a PAM ``.aux.xml`` with statistics, a ``.msk``, a GeoPackage's
+        ``-wal`` and ``-shm``), found by a listing of the copy's ``<uuid hex>_`` prefix in the cache's folder, which is
+        this process's own. Called without the lock: the listing never holds up the other readers."""
+        with self._lock:
+            doomed, self._doomed = self._doomed, []
+        for local, recorded in doomed:
+            _remove_local(local, {*recorded, *_staged_sidecars(local)})
 
     def _ensure_dir(self) -> str:
         if self._dir is None:
@@ -464,3 +532,4 @@ class StageCache:
         self._sidecars.clear()
         self._in_use.clear()
         self._retired.clear()
+        self._doomed.clear()

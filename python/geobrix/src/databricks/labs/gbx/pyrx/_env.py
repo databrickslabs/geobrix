@@ -817,11 +817,14 @@ class _FolderListings:
             return _UNLISTABLE_LISTING_RETRY_S
         return max(self.relist_interval_s, _RELIST_COST_FACTOR * took)
 
-    def names(self, folder: str, must_hold: str):
+    def names(self, folder: str, must_hold: str, now: bool = False):
         """The names held for *folder* (a frozenset), ``_TOO_LARGE``, or None (not listed
         yet, or cannot be listed). Lists the folder at the ``list_after_opens``-th distinct
-        file of it this worker opens, and again when *must_hold* is missing from the names
-        held and the folder was listed at least ``relist_interval_s`` ago."""
+        file of it this worker opens (with *now*, at the first: a caller that looks the
+        same file up again and again, see sidecar_files), and again when *must_hold* is
+        missing from the names held and the folder was listed at least
+        ``relist_interval_s`` ago (with *now*, once that wait is over whatever the names
+        hold, so a file written beside *must_hold* is seen within it)."""
         key = self._key(folder)
         with self._lock:
             if key in self._too_large:
@@ -843,7 +846,7 @@ class _FolderListings:
                     self._opened.popitem(last=False)
                 distinct = len(opened)
         if held is None:
-            if distinct < self.list_after_opens:
+            if distinct < self.list_after_opens and not now:
                 return None
             if dropped is not None:
                 # listed before and dropped to stay in budget: the wait for a relisting
@@ -859,9 +862,10 @@ class _FolderListings:
                 return None
             names = self._store(key, folder, seen=held)
             return names if names is _TOO_LARGE or names else None
-        if must_hold in names:
+        due = _now() - listed_at >= self._wait(took, False)
+        if must_hold in names and not (now and due):
             return names
-        if _now() - listed_at >= self._wait(took, False):
+        if due:
             relisted = self._store(key, folder, seen=held)
             if relisted is _TOO_LARGE or relisted:
                 return relisted
@@ -984,7 +988,7 @@ _COMPANION_SUFFIXES = (".hdr", ".prj", ".stx", ".clr", ".rrd", ".ige")
 _COMPANION_STEM_EXTS = ("prj", "sgrd", "mgrd", "stx", "clr", "rrd", "ige")
 
 
-def sidecar_files(path) -> list:
+def sidecar_files(path, listed: bool = False) -> list:
     """The sidecar files that exist beside the raster file *path*, as full paths (sorted, the file itself left out).
 
     A sidecar is a file GDAL reads with the main one: ``<name>.aux.xml``, ``.ovr`` and ``.msk``, a world file, and
@@ -992,6 +996,14 @@ def sidecar_files(path) -> list:
     They are looked up by name, as GDAL does with ``GDAL_DISABLE_READDIR_ON_OPEN=TRUE``, so a Volume's folder is not
     listed. A file the reader stamped as having none (note_sidecar_free) and a path that is not a local or Volume file
     have none.
+
+    With *listed* the folder's names are taken from its listing (``_FolderListings``, listed at the first call and held
+    for the process, within the listing bound), and only the names in it are looked up: about fifty names are checked
+    one by one otherwise, each a stat that a Volume's FUSE answers in milliseconds, for a caller that asks again at
+    every use of the same file (``raster_source_signature``). A folder held as too large, one that cannot be listed,
+    and a file missing from the names held (written since the listing) are checked by name. The listing is taken again
+    once its wait is over (``relist_interval_s``, 10 s, or ten times what it took), so a sidecar written beside the file
+    is seen within that wait; one changed in place is seen at once (its size and mtime are a stat of a listed name).
     """
     try:
         p = os.fspath(path)
@@ -1010,6 +1022,16 @@ def sidecar_files(path) -> list:
     for ext in _COMPANION_STEM_EXTS:
         names.update((f"{stem}.{ext}", f"{stem}.{ext.upper()}"))
     names.discard(name)
+    if listed:
+        held = _LISTINGS.names(folder, name, now=True)
+        if isinstance(held, _IndexedNames) and name in held:
+            # the folder's own spellings of the names looked for (case-blind: a case-blind folder answers a stat of
+            # either spelling), the rest of them known absent
+            # (every sidecar name starts with the file's stem and a dot: the candidates of the file)
+            wanted = {n.lower() for n in names}
+            names = {
+                n for n in held.candidates(stem.lower(), name) if n.lower() in wanted
+            }
     found, seen = [], set()
     for n in sorted(
         names, key=lambda x: (x != x.lower(), x)
@@ -1030,7 +1052,7 @@ def sidecar_files(path) -> list:
     return found
 
 
-def copied_sidecar_files(path) -> list:
+def copied_sidecar_files(path, listed: bool = False) -> list:
     """The sidecar files a worker-local copy of the raster *path* carries: :func:`sidecar_files` without the ``.ovr``.
 
     An external overview file holds reduced-resolution copies of the pixels, which no read of the staged copy needs (a
@@ -1038,13 +1060,45 @@ def copied_sidecar_files(path) -> list:
     which can be a large part of the file's size. The staged copy of a raster (``StageCache``), the Volume fallback copy
     (``_stage_local_if_needed``) and ``rst_fromfile`` all take this list, so they agree on what is copied.
     """
-    return [f for f in sidecar_files(path) if not f.lower().endswith(".ovr")]
+    return [f for f in sidecar_files(path, listed) if not f.lower().endswith(".ovr")]
 
 
 def _same_value(a, b) -> bool:
     if isinstance(a, float) and isinstance(b, float) and a != a and b != b:
         return True
     return a == b
+
+
+class _Unreadable(Exception):
+    """A file GDAL opened and could not read: it leaves the transient retry at once (see _retry_miss)."""
+
+    def __init__(self, exc: BaseException):
+        super().__init__(str(exc))
+        self.exc = exc
+
+
+def _retry_miss(fn):
+    """``_retry_transient(fn)`` for the failures a Volume's FUSE gives for a while (a missing file, a failed system
+    call), not for a raster GDAL reads and refuses: rasterio raises that as an ``OSError`` too (``RasterioIOError``,
+    "not recognized as being in a supported file format", a truncated header), and ten tries with their waits would make
+    a corrupt file fail after about twenty seconds instead of at once."""
+    from databricks.labs.gbx._gdal_policy import _MISSING
+    from databricks.labs.gbx.core._retry import _retry_transient
+
+    def attempt():
+        try:
+            return fn()
+        except FileNotFoundError:
+            raise
+        except OSError as exc:
+            if exc.errno is not None or _MISSING in str(exc):
+                raise
+            raise _Unreadable(exc) from None
+
+    try:
+        return _retry_transient(attempt)
+    except _Unreadable as unreadable:
+        raise unreadable.exc from None
 
 
 def sidecars_alter_open(path) -> bool:
@@ -1056,14 +1110,14 @@ def sidecars_alter_open(path) -> bool:
     geotransform, and for each band the NoData, scale, offset, colour interpretation, colour table and mask flags (an
     external ``.msk`` shows as a per-dataset mask). Not compared: metadata tags, band descriptions, units, category
     names, statistics and RPCs. They are descriptive, and a tile that holds the pixels, CRS, NoData and georeferencing
-    is the raster as every operation reads it. Both opens retry a transient miss, as every Volume read does.
+    is the raster as every operation reads it. Both opens retry a transient miss, as every Volume read does; a file
+    GDAL opens and cannot read (corrupt, or not a raster) fails at once, as no retry reads it.
     """
     if not any(not f.lower().endswith(".ovr") for f in sidecar_files(path)):
         return False
     from rasterio import Env
 
     from databricks.labs.gbx._gdal_policy import open_data
-    from databricks.labs.gbx.core._retry import _retry_transient
 
     def view(ds):
         palettes = []
@@ -1096,7 +1150,7 @@ def sidecars_alter_open(path) -> bool:
             with open_data(path) as ds:
                 return view(ds)
 
-    a, b = _retry_transient(with_sidecars), _retry_transient(alone)
+    a, b = _retry_miss(with_sidecars), _retry_miss(alone)
 
     def same(x, y):
         if isinstance(x, tuple):

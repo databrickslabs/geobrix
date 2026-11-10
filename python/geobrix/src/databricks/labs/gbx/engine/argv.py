@@ -923,6 +923,27 @@ def _unbounded(step: str, why: str) -> DataError:
     )
 
 
+def _windowed_viewshed(step: Sequence[str]) -> bool:
+    """A viewshed step with a distance limit: it writes the window around the observer, not the grid it reads."""
+    if step[0] != "viewshed":
+        return False
+    reach, at = _token_value(step, "max-distance"), _numbers(
+        _token_value(step, "position")
+    )
+    return (
+        reach is not None
+        and math.isfinite(float(reach))
+        and float(reach) > 0
+        and len(at) >= 2
+        and all(math.isfinite(v) for v in at)
+    )
+
+
+def writes_window(tokens: Sequence[str]) -> bool:
+    """Whether a command has a step that writes a window around the observer (see ``_windowed_viewshed``)."""
+    return any(_windowed_viewshed(st) for st in command_mod.steps_of(tokens)[1:-1])
+
+
 def _numbers(text: Optional[str]) -> List[float]:
     return [] if text is None else [float(v) for v in text.split(",")]
 
@@ -1100,6 +1121,27 @@ def _clip(step, st: PipeState, geo) -> PipeState:
     return dataclasses.replace(out, bands=out.bands + ("--add-alpha" in step))
 
 
+def _viewshed_window(step, st: PipeState) -> PipeState:
+    """The state after a viewshed with a distance limit: one band, the window around the observer (the distance each way,
+    in pixels, as ``_output_pixels`` sizes the row), placed by the observer's x and y in the state's CRS.
+    """
+    if st.extent is None:
+        return st  # no pixel size to measure the distance in: the whole grid bounds it
+    reach = float(_token_value(step, "max-distance"))
+    x, y = _numbers(_token_value(step, "position"))[:2]
+    w = max(1, min(st.width, 2 * math.ceil(reach / st.px_x) + 1))
+    h = max(1, min(st.height, 2 * math.ceil(reach / st.px_y) + 1))
+    return dataclasses.replace(
+        st,
+        width=w,
+        height=h,
+        ox=x - (w // 2) * st.px_x,
+        oy=y + (h // 2) * st.px_y,
+        bands=1,
+        fresh=False,
+    )
+
+
 def _advance(step, st: PipeState, geo) -> PipeState:
     """The state after one step of a command."""
     name = step[0]
@@ -1112,6 +1154,8 @@ def _advance(step, st: PipeState, geo) -> PipeState:
         out = _clip(step, st, geo)
     elif name == "nodata-to-alpha":
         out = dataclasses.replace(st, bands=st.bands + 1)
+    elif _windowed_viewshed(step):
+        out = _viewshed_window(step, st)
     elif name == "select":
         listed = len(_token_value(step, "band").split(","))
         out = dataclasses.replace(

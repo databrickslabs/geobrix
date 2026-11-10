@@ -644,6 +644,17 @@ def test_a_tile_in_a_file_is_read_by_its_path_with_the_virtual_tile_drivers(tmp_
 # --- a viewshed with a distance limit writes a window; a CRS GDAL cannot rebuild; a tile with no geotransform ---------------
 
 
+def test_a_viewshed_with_a_distance_limit_leaves_the_window_for_the_steps_after_it():
+    window = 11 * 11 * 4  # 50 m each way over 10 m pixels, one band
+    state = 64 * 48 * 4
+    at = "viewshed --position=300,300,10"
+    assert _peak(f"{at} --max-distance=50") == window + state  # held with its input
+    assert _peak(f"{at} --max-distance=50 ! resize --size=200%,200%") == window + state
+    assert (
+        _peak(f"{at} ! resize --size=200%,200%") == 128 * 96 * 4
+    )  # no limit: the whole grid
+
+
 @needs_engine
 def test_a_crs_gdal_cannot_rebuild_while_sizing_is_unbounded_not_a_crash(monkeypatch):
     def refuse(text):
@@ -670,3 +681,32 @@ def test_a_tile_with_no_geotransform_has_no_pixel_size_to_size_a_resolution_by()
     assert res.error is not None and "MiB decoded" not in res.error, res.error
 
 
+@needs_engine
+def test_a_reprojection_then_a_windowed_viewshed_keeps_no_footprint_and_is_not_an_error():
+    """The mask is carried over the grid steps only: a viewshed with a distance limit writes another grid."""
+    from pyproj import Transformer
+
+    y, x = np.mgrid[0:60, 0:80]
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=80,
+            height=60,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=from_origin(10.0, 50.0, 0.001, 0.001),
+        ) as dst:
+            dst.write((np.sin(x / 6.0) * 30 + y).astype("float32")[np.newaxis])
+            mask = np.full((60, 80), 255, "uint8")
+            mask[:5, :] = 0
+            dst.write_mask(mask)  # a mask band, not a NoData value
+        src = mf.read()
+    cx, cy = Transformer.from_crs(4326, 3857, always_xy=True).transform(10.04, 49.97)
+    res = _run(
+        f"reproject --output-crs=EPSG:3857 ! viewshed --position={cx},{cy},10 --max-distance=800",
+        src,
+    )
+    assert res.error is None, res.error
+    with _open(res) as out:
+        assert out.width < 80 * 2  # the window, not the reprojected grid

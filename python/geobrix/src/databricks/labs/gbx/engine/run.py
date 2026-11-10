@@ -1596,11 +1596,16 @@ def run(
                 _remask_zero_for_flat(gdal, names[0], out)
             if block.alg == "raster reproject":
                 _carry_mask(gdal, tokens, names[0], out, prefix, shown)
-            elif block.alg == command_mod.PIPELINE_ALG and any(
-                st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]
+            elif (
+                block.alg == command_mod.PIPELINE_ALG
+                and any(
+                    st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]
+                )
+                and not argv_mod.writes_window(tokens)
             ):
                 # a command that reprojects keeps the footprint, as gbx_rst_transformcrs does: GDAL fills what no source
-                # pixel reaches with 0, a value the tile never held
+                # pixel reaches with 0, a value the tile never held. A command that ends on a window around an observer
+                # (a viewshed with --max-distance) has an output of another grid than the mask's: it keeps no footprint
                 _carry_mask(
                     gdal, tokens, names[0], out, prefix, shown, command_mod.PIPELINE_ALG
                 )

@@ -156,3 +156,11 @@ def test_a_part_times_one_floor_per_input_and_every_form_of_its_functions():
     assert {n.split(":")[0] for n in names} == set(jv.PARTS["acc1"])
     assert all(lf.form_named(f, names) for fn in jv.PARTS["acc1"] for f in _of(fn)[:-1])
     assert not [n for n in jv.part_forms(jv.PARTS["acc1"], floors=False) if ":floor@" in n]
+
+
+def test_the_custom_aggregates_take_the_grid_as_a_constant():
+    """The JVM custom aggregates evaluate the grid once, with no row: a grid column raises there (dedicated DBR 19)."""
+    for fn in ("gbx_custom_cellfill", "gbx_rst_custom_rasterize_agg"):
+        call = jv.spec_of(fn).call
+        assert jv._G not in call and "named_struct('bound_x_min', 0L" in call, fn
+    assert jv._GRID_SQL.count("CAST(") == 8  # the column form of the same grid (the scalars and explodes read it)

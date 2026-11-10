@@ -99,6 +99,11 @@ class Spec:
 
 
 _G = "jv_custom_grid"  # the custom grid column of the custom-grid inputs
+# the same grid as a literal struct (what `gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)` folds to)
+_GRID_LIT = (
+    "named_struct('bound_x_min', 0L, 'bound_x_max', 1000000L, 'bound_y_min', 0L, 'bound_y_max', 1000000L, "
+    "'cell_splits', 2, 'root_cell_size_x', 1000, 'root_cell_size_y', 1000, 'srid', 27700)"
+)
 _NULLS_D, _NULLS_I = "CAST(NULL AS DOUBLE)", "CAST(NULL AS INT)"
 
 SPECS: List[Spec] = [
@@ -170,8 +175,10 @@ SPECS: List[Spec] = [
     ),  # fmt: skip
     # -- the grid-cell aggregates and the cell rasterize aggregates, over (key, cell, value) rows in 200 keys
     Spec("gbx_h3_cellfill", "jv_h3_cells", "h3", "agg", "{fn}(cellid, value, 1, 'mean', 2.0)", "hash", "scan:cellid"),
+    # the custom aggregates take the grid as a constant (the JVM level evaluates it once, with no row: a grid column
+    # raises INTERNAL_ERROR "Cannot evaluate expression" there), as a user's `gbx_custom_grid(...)` literal is
     Spec(
-        "gbx_custom_cellfill", "jv_custom_cells", "cg", "agg", "{fn}(cellid, value, " + _G + ", 1, 'mean', 2.0)",
+        "gbx_custom_cellfill", "jv_custom_cells", "cg", "agg", "{fn}(cellid, value, " + _GRID_LIT + ", 1, 'mean', 2.0)",
         "hash", "scan:cellid",
     ),  # fmt: skip
     Spec(
@@ -186,7 +193,7 @@ SPECS: List[Spec] = [
     ),  # fmt: skip
     Spec(
         "gbx_rst_custom_rasterize_agg", "jv_custom_cells", "cg", "agg",
-        "{fn}(cellid, value, " + _G + ", 27700, " + ", ".join([_NULLS_D] * 5 + [_NULLS_I] * 2) + ", 'centroids', 1)",
+        "{fn}(cellid, value, " + _GRID_LIT + ", 27700, " + ", ".join([_NULLS_D] * 5 + [_NULLS_I] * 2) + ", 'centroids', 1)",
         "png", "scan:cellid",
     ),  # fmt: skip
     # -- the BNG cell scalars (1 km cells in TQ), the point one over points in Great Britain, the chip ones over chip pairs

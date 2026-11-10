@@ -40,6 +40,18 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; most `gbx:*` commands run inside that container.
 
+### Testing the JVM level
+
+The JVM level (L1) needs a built JAR. [Functions the JAR speeds up](./api/jar-functions.mdx) lists the functions that run on the JVM by default. Compiled classes alone are not enough: the tests load the assembly JAR from `python/geobrix/lib/`.
+
+- **Force or favour a level.** `register(spark, only=[...], _levels=..., _prefer=...)` lets a test compare levels. `_levels` maps a SQL name to a forced `(level, variant)` pair, for example `{"gbx_st_triangulate": ("L1", "-")}`. `_prefer` maps a SQL name to a level to try first, with the usual fallback. Use them in tests and benches only. They carry no compatibility promise.
+- **Cross-tier parity.** `gbx:test:parity` builds the JAR, stages it in `python/geobrix/lib/` and runs the parity suites. `--skip-build` reuses the staged JAR.
+- **The family harness.** `python/geobrix/test/manager/test_family_cross_tier.py` runs every oracle table at every level. Set `GBX_ORACLE_TABLES=<TABLE>[,<TABLE2>]` to pick tables. With a staged JAR, run it through `gbx:test:python --path <file> --with-integration`. Without `--with-integration`, its parity rows skip.
+- **Scala suites.** `gbx:test:scala --suite '<pattern>'` runs one suite, and `--suites 'A,B'` runs several.
+- **Timing.** `gbx:bench:local-timing --set <family>` times one function of a family at its JVM level against each Python form, on `local[8]` in the dev container.
+
+The keep rule: the JVM level is the default only where it measured at least 1.2x faster than the best Python form, with the same output. The test runs on dedicated compute at 4x or 16x rows. Otherwise its Scala is removed.
+
 ### Testing on a Databricks cluster
 
 You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster. This way, Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).

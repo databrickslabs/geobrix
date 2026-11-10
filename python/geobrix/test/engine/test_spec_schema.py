@@ -627,7 +627,9 @@ def test_a_row_whose_l3_is_null_is_judged_like_one_without_l3():
     """A manifest row that writes ``"L3": null`` has no L3 keys: the check reads none, it does not fail on the null."""
     import dataclasses
 
-    spec.validate(dataclasses.replace(SLOPE, levels={**SLOPE.levels, "L3": None}), MAN.gdal)
+    spec.validate(
+        dataclasses.replace(SLOPE, levels={**SLOPE.levels, "L3": None}), MAN.gdal
+    )
 
 
 @pytest.mark.parametrize(

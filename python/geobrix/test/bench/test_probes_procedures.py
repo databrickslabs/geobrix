@@ -597,7 +597,8 @@ def test_the_mosaic_reference_merges_at_most_one_call_of_tiles_at_a_time(spark):
 
 def test_the_zonal_stats_case_compares_the_two_summary_shapes_by_what_both_hold():
     """The procedure writes the UC level's summary (GeoBrix's earlier shape), the session reference GDAL's own JSON: the
-    case compares their size and band statistics, so the same statistics match and different ones do not."""
+    case compares their size and band statistics, so the same statistics match and different ones do not.
+    """
     import json
 
     case = next(c for c in _defs() if c["name"] == "gbx_zonal_stats")
@@ -612,8 +613,16 @@ def test_the_zonal_stats_case_compares_the_two_summary_shapes_by_what_both_hold(
         "cornerCoordinates": {}, "bands": [{"band": 1, "type": "Float32", "noDataValue": -9999.0,
                                            "minimum": 2.0, "maximum": 12.0, "mean": 7.0, "stdDev": 3.162}],
     }  # fmt: skip
-    rows = lambda info: [_Row(zone_id=1, tile_id=1, summary=json.dumps(info))]  # noqa: E731
+
+    def rows(info):
+        return [_Row(zone_id=1, tile_id=1, summary=json.dumps(info))]
+
     assert probes._proc_rows(rows(uc), case) == probes._proc_rows(rows(gdal), case)
     gdal["bands"][0]["maximum"] = 11.0
     assert probes._proc_rows(rows(uc), case) != probes._proc_rows(rows(gdal), case)
-    assert probes._proc_rows([_Row(zone_id=1, tile_id=1, summary=None)], case)[0]["summary"] is None
+    assert (
+        probes._proc_rows([_Row(zone_id=1, tile_id=1, summary=None)], case)[0][
+            "summary"
+        ]
+        is None
+    )

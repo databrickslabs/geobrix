@@ -40,8 +40,16 @@ def _big_tile(path=None):
     from affine import Affine
 
     kw = dict(
-        driver="GTiff", width=5120, height=5120, count=1, dtype="float32", crs="EPSG:3857",
-        transform=Affine(1, 0, 0, 0, -1, 5120), compress="deflate", tiled=True, nodata=-1.0,
+        driver="GTiff",
+        width=5120,
+        height=5120,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3857",
+        transform=Affine(1, 0, 0, 0, -1, 5120),
+        compress="deflate",
+        tiled=True,
+        nodata=-1.0,
     )
     z = np.zeros((1, 5120, 5120), "float32")
     if path is not None:
@@ -62,20 +70,26 @@ def test_a_standard_access_worker_judges_the_call_by_the_carried_cap(monkeypatch
     _standard_access_worker(monkeypatch)
     raw = _big_tile()
     alone = run.run(SUMMARY, [raw], {})
-    assert alone.error and "(64 MiB)" in alone.error  # nothing carried: the worker's own read cap, 64 MiB
+    assert (
+        alone.error and "(64 MiB)" in alone.error
+    )  # nothing carried: the worker's own read cap, 64 MiB
     with _gdal_policy.carried(None, 1536 << 20):
         res = run.run(SUMMARY, [raw], {})
     assert res.error is None and json.loads(res.text)["size"] == [5120, 5120]
 
 
-def test_a_standard_access_worker_reads_a_virtual_tile_under_the_carried_cap(monkeypatch, tmp_path):
+def test_a_standard_access_worker_reads_a_virtual_tile_under_the_carried_cap(
+    monkeypatch, tmp_path
+):
     from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     _standard_access_worker(monkeypatch)
     tile = VirtualTile(cellid=0, path=_big_tile(str(tmp_path / "big.tif"))).to_row()
     with pytest.raises(run.DataError, match="read cap"):
-        l3._inputs(SUMMARY, tile, 64 << 20)  # the driver's connect-aware cap, nothing carried
+        l3._inputs(
+            SUMMARY, tile, 64 << 20
+        )  # the driver's connect-aware cap, nothing carried
     with _gdal_policy.carried(None, 1536 << 20):
         rasters, _p, _c = l3._inputs(SUMMARY, tile, 64 << 20)
     assert rasters and bytes(rasters[0][:4]) in run._TIFF_MAGIC

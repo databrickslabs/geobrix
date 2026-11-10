@@ -192,7 +192,8 @@ def call_decoded_budget() -> int:
 
 def carried_or(cap: Optional[int]) -> Optional[int]:
     """Worker side: the cap the registration carried (:func:`session_read_cap`) when one is carried, else *cap* (a cap the
-    function was built with on the driver). A virtual tile's window is judged by the same read cap as a tile's bytes."""
+    function was built with on the driver). A virtual tile's window is judged by the same read cap as a tile's bytes.
+    """
     from databricks.labs.gbx._gdal_policy import carried_read_cap
 
     carried = carried_read_cap()

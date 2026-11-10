@@ -482,14 +482,16 @@ class StageCache:
 
     def _remove(self, local: str) -> None:
         """Take a copy out of the books (with the lock held) and mark it for removal once the lock is released
-        (``_remove_doomed``): its name is unique, so no reader can be handed it again meanwhile."""
+        (``_remove_doomed``): its name is unique, so no reader can be handed it again meanwhile.
+        """
         self._doomed.append((local, self._sidecars.pop(local, ())))
 
     def _remove_doomed(self) -> None:
         """Remove the copies ``_remove`` marked, each with its sidecars: the ones staged with it, and the files GDAL wrote
         beside it since under the copy's own name (a PAM ``.aux.xml`` with statistics, a ``.msk``, a GeoPackage's
         ``-wal`` and ``-shm``), found by a listing of the copy's ``<uuid hex>_`` prefix in the cache's folder, which is
-        this process's own. Called without the lock: the listing never holds up the other readers."""
+        this process's own. Called without the lock: the listing never holds up the other readers.
+        """
         with self._lock:
             doomed, self._doomed = self._doomed, []
         for local, recorded in doomed:

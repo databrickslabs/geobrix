@@ -1066,7 +1066,8 @@ def _fill_bands(
 def _work_copy(gdal, src: str, prefix: str):
     """``(name, open dataset)`` of a copy of the engine's GeoTIFF `src` under `prefix` that the per-band fill writes into,
     one band at a time: uncompressed and band-interleaved (``compression.engine_work_options``), so a band written is
-    its own blocks, written once. ``_finish_copy`` gives it the call's creation options."""
+    its own blocks, written once. ``_finish_copy`` gives it the call's creation options.
+    """
     from databricks.labs.gbx.pyrx.core.compression import engine_work_options
 
     work = f"{prefix}/work.tif"
@@ -1137,7 +1138,9 @@ def _fill_under_alpha(
         own = sds.GetRasterBand(1).GetMaskFlags() == gdal.GMF_PER_DATASET
     finally:
         sds = None
-    opaque = a > 0  # 0, negative and NaN are transparent, as _alpha_into_mask reads them
+    opaque = (
+        a > 0
+    )  # 0, negative and NaN are transparent, as _alpha_into_mask reads them
     reached = np.ones(w * h, bool)
     mask_in, cover = f"{prefix}/fill_mask.tif", f"{prefix}/fill_cover.tif"
     work, copy = _work_copy(gdal, src, prefix)
@@ -1201,7 +1204,8 @@ def _fill_under_alpha(
 
 def _reached(gdal, alg: str, tokens, mask_in: str, cover: str, shown, refused, w, h):
     """The pixels GDAL's fill reaches from the valid pixels of the Byte raster `mask_in` (1 valid, NoData 0): the same
-    fill (same ``--max-distance``, no smoothing) over that raster, read back as a flat bool array."""
+    fill (same ``--max-distance``, no smoothing) over that raster, read back as a flat bool array.
+    """
     import numpy as np
 
     toks = [
@@ -1842,7 +1846,15 @@ def run(
             if alpha is not None:
                 # the tile's alpha band is its mask: it is never filled as a band of values
                 _fill_under_alpha(
-                    gdal, block.alg, tokens, names[0], out, prefix, shown, refused, alpha
+                    gdal,
+                    block.alg,
+                    tokens,
+                    names[0],
+                    out,
+                    prefix,
+                    shown,
+                    refused,
+                    alpha,
                 )
                 return Result(_read(gdal, out), None, command)
             with _streaming_cache(on_path):

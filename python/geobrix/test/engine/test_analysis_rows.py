@@ -100,7 +100,8 @@ def test_a_virtual_tile_is_summarized_as_the_geotiff_of_its_window_and_a_virtual
     tmp_path,
 ):
     """A virtual tile is read into a GeoTIFF of its window first, so its summary reports GTiff whatever its file's
-    driver; a virtual tile of a container with no band has no window to read, and says so with a Fix."""
+    driver; a virtual tile of a container with no band has no window to read, and says so with a Fix.
+    """
     import pathlib
 
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -350,15 +351,25 @@ def _rgba(nodata=None, n=9):
     from rasterio.enums import ColorInterp
 
     z = np.zeros((4, n, n), "uint8")
-    z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype("uint8")
+    z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype(
+        "uint8"
+    )
     z[3] = (100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)).astype("uint8")
     z[3, 3:6, 3:6] = 0
     z[:3, 4, 4] = 0
     z[3, 0, 0] = 0
     with MemoryFile() as mf:
         with mf.open(
-            driver="GTiff", width=n, height=n, count=4, dtype="uint8", crs="EPSG:3857",
-            transform=Affine(1, 0, 0, 0, -1, n), nodata=nodata, photometric="RGB", ALPHA="YES",
+            driver="GTiff",
+            width=n,
+            height=n,
+            count=4,
+            dtype="uint8",
+            crs="EPSG:3857",
+            transform=Affine(1, 0, 0, 0, -1, n),
+            nodata=nodata,
+            photometric="RGB",
+            ALPHA="YES",
         ) as ds:
             ds.write(z)
             assert ds.colorinterp[3] == ColorInterp.alpha
@@ -366,7 +377,9 @@ def _rgba(nodata=None, n=9):
 
 
 @pytest.mark.parametrize("nodata", [None, 0], ids=["no-nodata", "nodata-0"])
-def test_an_rgba_fill_fills_the_transparent_pixels_and_never_fills_the_alpha_as_data(nodata):
+def test_an_rgba_fill_fills_the_transparent_pixels_and_never_fills_the_alpha_as_data(
+    nodata,
+):
     raw, z = _rgba(nodata)
     res = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
     assert res.error is None
@@ -385,11 +398,15 @@ def test_a_transparent_pixel_the_search_does_not_reach_stays_transparent():
     raw, z = _rgba()
     res = run.run(FILL, [raw], {"max_search_dist": 1, "smoothing_iter": 0})
     out = _read(res.raster)[0]
-    assert out[3, 4, 4] == 0  # two pixels from the nearest opaque one: no value is shown that the fill did not make
+    assert (
+        out[3, 4, 4] == 0
+    )  # two pixels from the nearest opaque one: no value is shown that the fill did not make
     assert (out[3, 3:6, 3:6] == 255).sum() == 8
 
 
-def test_the_per_band_fill_writes_into_a_band_interleaved_uncompressed_copy(monkeypatch):
+def test_the_per_band_fill_writes_into_a_band_interleaved_uncompressed_copy(
+    monkeypatch,
+):
     seen = []
     real = run._copy_band
 
@@ -437,7 +454,6 @@ def test_the_props_of_a_tile_say_when_a_fill_runs_a_mask_step():
     assert got == {"rgba": True, "plain": False}
 
 
-
 def test_the_summary_keeps_a_tag_of_the_tiles_own_that_names_the_engines_folder():
     """Only the call's own names and its own /vsimem folder are rewritten in GDAL's text: a value of the tile's that
     happens to name the engine's prefix is the user's, and comes back as it was."""
@@ -446,7 +462,12 @@ def test_the_summary_keeps_a_tag_of_the_tiles_own_that_names_the_engines_folder(
     tag = "/vsimem/gbx-spec/theirs/a.tif"
     with MemoryFile() as mf:
         with mf.open(
-            driver="GTiff", width=4, height=4, count=1, dtype="float32", crs="EPSG:3857",
+            driver="GTiff",
+            width=4,
+            height=4,
+            count=1,
+            dtype="float32",
+            crs="EPSG:3857",
             transform=Affine(1, 0, 0, 0, -1, 4),
         ) as ds:
             ds.write(_gradient(4)[np.newaxis].astype("float32"))
@@ -492,10 +513,14 @@ def test_the_fill_mask_check_names_each_way_a_result_can_fail():
     full = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0}).raster
     assert oracles._check_fill_mask(_fill_case(None), full, [raw, 100.0]) is None
     # a reference that reaches every pixel proves nothing for a row that expects a partial fill
-    assert "leaves no pixel masked" in oracles._check_fill_mask(case, full, [raw, 100.0])
+    assert "leaves no pixel masked" in oracles._check_fill_mask(
+        case, full, [raw, 100.0]
+    )
     # a tile with nothing masked: a reference that fills nothing proves nothing either
     whole = _tif(_gradient()[np.newaxis], nodata=None)
-    assert "fills no masked pixel" in oracles._check_fill_mask(_fill_case(None), whole, [whole, 1.0])
+    assert "fills no masked pixel" in oracles._check_fill_mask(
+        _fill_case(None), whole, [whole, 1.0]
+    )
 
 
 def test_the_json_ref_check_names_a_null_a_non_json_and_a_different_text():

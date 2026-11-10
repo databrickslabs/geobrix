@@ -524,7 +524,9 @@ def test_a_removed_copy_takes_the_files_gdal_wrote_beside_it(monkeypatch, tmp_pa
         assert sorted(os.listdir(folder)) == [os.path.basename(p2)]
 
 
-_LONG = "s" * 236 + ".tif"  # 240 bytes: with the staged prefix and an .aux.xml it is over NAME_MAX
+_LONG = (
+    "s" * 236 + ".tif"
+)  # 240 bytes: with the staged prefix and an .aux.xml it is over NAME_MAX
 
 
 def test_a_source_name_too_long_to_stage_is_shortened_the_same_way_with_its_sidecars(
@@ -543,7 +545,9 @@ def test_a_source_name_too_long_to_stage_is_shortened_the_same_way_with_its_side
     short = lt.staged_name(_LONG)
     assert short == lt.staged_name(_LONG) != _LONG and short.endswith(".tif")
     assert lt.staged_name("a.tif") == "a.tif"
-    assert lt.staged_name("s" * 236 + "x.tif") != short  # the digest tells names with one start apart
+    assert (
+        lt.staged_name("s" * 236 + "x.tif") != short
+    )  # the digest tells names with one start apart
     tmp = lt.new_staged_local_file(_LONG)
     lt.copy_source_with_sidecars(a, tmp)
     names = os.listdir(tmp_path / "root")
@@ -554,7 +558,11 @@ def test_a_source_name_too_long_to_stage_is_shortened_the_same_way_with_its_side
     with cache.use(a) as p:
         assert os.path.basename(p).endswith(short)
         assert sorted(os.listdir(Path(p).parent)) == sorted(
-            [os.path.basename(p), os.path.basename(p) + ".aux.xml", os.path.basename(p)[:-4] + ".hdr"]
+            [
+                os.path.basename(p),
+                os.path.basename(p) + ".aux.xml",
+                os.path.basename(p)[:-4] + ".hdr",
+            ]
         )
 
 
@@ -614,8 +622,15 @@ def _gtiff_source(tmp_path, name="g.tif"):
     p = tmp_path / "src" / name
     p.parent.mkdir(exist_ok=True)
     with rasterio.open(
-        p, "w", driver="GTiff", width=4, height=4, count=1, dtype="uint8",
-        crs="EPSG:3857", transform=Affine(1, 0, 0, 0, -1, 4),
+        p,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=Affine(1, 0, 0, 0, -1, 4),
     ) as ds:
         ds.write(np.arange(16, dtype="uint8").reshape(1, 4, 4))
     return str(p)

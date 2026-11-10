@@ -814,7 +814,11 @@ def test_a_reproject_with_a_size_reads_no_warp_grid(engine, monkeypatch):
 
     monkeypatch.setattr(run, "_warp_grid", no_grid)
     raw = _osgeo_tile()
-    res = engine.run(M["gbx_rst_resample_to_size"], [raw], {"width_px": 10, "height_px": 5, "algorithm": "nearest"})
+    res = engine.run(
+        M["gbx_rst_resample_to_size"],
+        [raw],
+        {"width_px": 10, "height_px": 5, "algorithm": "nearest"},
+    )
     assert res.error is None
 
 

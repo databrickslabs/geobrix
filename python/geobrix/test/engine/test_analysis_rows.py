@@ -168,6 +168,36 @@ def test_the_fill_works_where_the_process_temp_directory_is_unusable(monkeypatch
     assert out[0, 4, 4] != NODATA
 
 
+@pytest.mark.parametrize(
+    "fn_name,values",
+    [
+        ("gbx_rst_fillnodata", {"max_search_dist": 100.0, "smoothing_iter": 0}),
+        ("gbx_rst_tri", {}),
+        ("gbx_rst_resample", {"factor": 0.5, "algorithm": "bilinear"}),
+        ("gbx_rst_summary", {}),
+    ],
+)
+def test_every_engine_algorithm_runs_with_the_local_temp_as_gdals_temp_directory(
+    monkeypatch, fn_name, values
+):
+    """The temp directory is set for every engine call in the shared run path, not for the fill alone: any algorithm may
+    keep work files on disk (a warp's, a viewshed's), and GDAL does not check the directory it is told."""
+    from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+
+    seen = []
+    real = run._execute
+
+    def spy(gdal, *a, **kw):
+        seen.append(gdal.GetThreadLocalConfigOption("CPL_TMPDIR"))
+        return real(gdal, *a, **kw)
+
+    monkeypatch.setattr(run, "_execute", spy)
+    z = _gradient()[np.newaxis]
+    res = run.run(MAN.functions[fn_name], [_tif(z)], dict(values))
+    assert res.error is None, res.error
+    assert seen and set(seen) == {local_temp_root()}
+
+
 def test_every_band_is_filled_by_its_own_mask_and_the_rest_of_the_tile_is_the_inputs():
     z = np.stack([_gradient(), 100.0 + 2 * _gradient()])
     z[0, 4, 4] = NODATA

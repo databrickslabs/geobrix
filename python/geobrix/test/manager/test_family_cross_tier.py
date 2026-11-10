@@ -328,19 +328,23 @@ def test_the_light_forms_give_the_same_pixels(request, tmp_path):
     assert differ == []
 
 
-def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(
-    request, tmp_path, monkeypatch
-):
-    """The read cap (the driver's, captured when the engine registers) is applied to a virtual tile's decoded window
-    from its header, before its pixels are read: over it, an error tile with a Fix, not a failed query.
+def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(request, tmp_path):
+    """The read cap (the driver's, captured when the engine registers and carried to the workers) is applied to a
+    virtual tile's decoded window from its header, before its pixels are read: over it, an error tile with a Fix, not a
+    failed query.
     """
+    from databricks.labs.gbx.pyrx.core.budget import READ_CAP_KEY
+
     spark = _engine_session(request)
-    monkeypatch.setenv(
-        "GBX_STREAM_MAX_BYTES", "1024"
-    )  # the 64 x 64 Float32 DEM is 16 KiB decoded
-    register(
-        spark, only=["gbx_rst_slope"], _levels={"gbx_rst_slope": ("L3", "engine-c0")}
-    )
+    spark.conf.set(READ_CAP_KEY, "1024")  # the 64 x 64 Float32 DEM is 16 KiB decoded
+    try:
+        register(
+            spark,
+            only=["gbx_rst_slope"],
+            _levels={"gbx_rst_slope": ("L3", "engine-c0")},
+        )
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
     tile = oracles._build("dem_vrt", str(tmp_path))
     df = spark.createDataFrame([(tile,)], f"tile {manifest.TILE_SQL}")
     (r,) = df.selectExpr("gbx_rst_slope(tile) AS s").collect()

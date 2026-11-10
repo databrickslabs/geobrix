@@ -687,3 +687,33 @@ def test_rst_fromfile_materialized_removes_the_staged_copy_and_its_sidecars(
     row = prx._fromfile_impl(_gtiff_source(tmp_path), None, True)
     assert row is not None and row["raster"]
     assert os.listdir(root) == []
+
+
+def test_a_sidecar_is_staged_by_the_rule_gdal_finds_it_by():
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    assert lt.staged_sidecar_name("a.tif", "a.tif.aux.xml") == "a.tif.aux.xml"
+    assert lt.staged_sidecar_name("a.tif", "a.hdr") == "a.hdr"
+    assert lt.staged_sidecar_name("a.tif", "b.hdr") is None
+    short = lt.staged_name(_LONG)
+    assert lt.staged_sidecar_name(_LONG, _LONG + ".aux.xml") == short + ".aux.xml"
+    assert lt.staged_sidecar_name(_LONG, _LONG[:-4] + ".tfw") == short[:-4] + ".tfw"
+
+
+def test_the_listed_signature_counts_only_the_names_gdal_looks_up(
+    monkeypatch, tmp_path
+):
+    """A listed folder answers for the exact names GDAL checks: another spelling (``A.TIF.aux.xml`` beside ``a.tif``) is
+    not one, as no by-name stat on a case-sensitive folder would find it."""
+    from databricks.labs.gbx.pyrx import _env
+
+    monkeypatch.setattr(_env, "_LISTINGS", _env._FolderListings())
+    a = _src(tmp_path, "a.tif", 10)
+    Path(a + ".aux.xml").write_bytes(b"<PAMDataset/>")
+    names = {os.path.basename(p) for p in _env.sidecar_files(a, listed=True)}
+    assert names == {"a.tif.aux.xml"}
+    other = _env._IndexedNames(["a.tif", "a.tif.aux.xml", "A.TIF.AUX.XML"])
+    monkeypatch.setattr(_env._LISTINGS, "names", lambda *a, **k: other)
+    assert {os.path.basename(p) for p in _env.sidecar_files(a, listed=True)} == {
+        "a.tif.aux.xml"
+    }

@@ -93,3 +93,19 @@ def test_a_standard_access_worker_reads_a_virtual_tile_under_the_carried_cap(
     with _gdal_policy.carried(None, 1536 << 20):
         rasters, _p, _c = l3._inputs(SUMMARY, tile, 64 << 20)
     assert rasters and bytes(rasters[0][:4]) in run._TIFF_MAGIC
+
+
+def test_a_worker_that_knows_its_memory_keeps_its_own_budget(monkeypatch):
+    """A read cap raised on the driver does not raise what one call may hold where the worker can tell its budget."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx.core import budget
+
+    _standard_access_worker(monkeypatch)
+    monkeypatch.setenv(budget.CLASSIC_MEMORY_ENV[0], "16g")
+    with _gdal_policy.carried(None, 4096 << 20):
+        assert budget.call_decoded_budget() == budget.decoded_budget_bytes("classic")
+    monkeypatch.delenv(budget.CLASSIC_MEMORY_ENV[0])
+    with _gdal_policy.carried(None, 4096 << 20):
+        assert (
+            budget.call_decoded_budget() == 4096 << 20
+        )  # standard access: the carried cap

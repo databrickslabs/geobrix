@@ -1027,11 +1027,9 @@ def sidecar_files(path, listed: bool = False) -> list:
         if isinstance(held, _IndexedNames) and name in held:
             # the folder's own spellings of the names looked for (case-blind: a case-blind folder answers a stat of
             # either spelling), the rest of them known absent
-            # (every sidecar name starts with the file's stem and a dot: the candidates of the file)
-            wanted = {n.lower() for n in names}
-            names = {
-                n for n in held.candidates(stem.lower(), name) if n.lower() in wanted
-            }
+            # (every sidecar name starts with the file's stem and a dot: the candidates of the file). Only the exact
+            # names GDAL looks up count, as the by-name stats below find them on a case-sensitive folder
+            names = {n for n in held.candidates(stem.lower(), name) if n in names}
     found, seen = [], set()
     for n in sorted(
         names, key=lambda x: (x != x.lower(), x)
@@ -1069,6 +1067,18 @@ def _same_value(a, b) -> bool:
     return a == b
 
 
+# GDAL's texts (in rasterio's ``RasterioIOError``, which carries no errno) for a failure of the file system rather than of
+# the file: a miss on the mount, and the I/O failures a Volume's FUSE gives for a while. They are retried.
+_TRANSIENT_TEXTS = (
+    "No such file or directory",
+    "I/O error",
+    "Input/output error",
+    "Transport endpoint is not connected",
+    "Stale file handle",
+    "Resource temporarily unavailable",
+)
+
+
 class _Unreadable(Exception):
     """A file GDAL opened and could not read: it leaves the transient retry at once (see _retry_miss)."""
 
@@ -1082,7 +1092,6 @@ def _retry_miss(fn):
     call), not for a raster GDAL reads and refuses: rasterio raises that as an ``OSError`` too (``RasterioIOError``,
     "not recognized as being in a supported file format", a truncated header), and ten tries with their waits would make
     a corrupt file fail after about twenty seconds instead of at once."""
-    from databricks.labs.gbx._gdal_policy import _MISSING
     from databricks.labs.gbx.core._retry import _retry_transient
 
     def attempt():
@@ -1091,7 +1100,8 @@ def _retry_miss(fn):
         except FileNotFoundError:
             raise
         except OSError as exc:
-            if exc.errno is not None or _MISSING in str(exc):
+            text = str(exc)
+            if exc.errno is not None or any(t in text for t in _TRANSIENT_TEXTS):
                 raise
             raise _Unreadable(exc) from None
 

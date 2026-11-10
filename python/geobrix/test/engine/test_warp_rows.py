@@ -842,3 +842,20 @@ def test_a_resolution_without_a_grid_takes_the_extent_from_the_pixel_size_else_t
     assert argv._output_pixels(["--resolution=4,4"], sized, None) == 32 * 24
     # no pixel size (a rotated or GCP tile, no geotransform): the input's own size
     assert argv._output_pixels(["--resolution=4,4"], PROPS, None) == 64 * 48
+
+
+def test_a_virtual_container_read_at_its_target_size_is_refused_with_a_fix(engine):
+    """A row that reads a virtual tile decimated (a factor below 1) refuses a file with no band, as the plain read does."""
+    import pathlib
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    nc = sorted(
+        (
+            pathlib.Path(__file__).resolve().parents[4]
+            / "src/test/resources/binary/netcdf-coral"
+        ).glob("*.nc")
+    )[0]
+    tile = VirtualTile(cellid=0, path=str(nc)).to_row()
+    with pytest.raises(run.DataError, match="no band to read.*Fix:"):
+        l3._inputs(M[RS], tile, None, None, [], {"factor": 0.5, "algorithm": "average"})

@@ -160,6 +160,14 @@ def _fail(fn, arg, message: str):
 _COUNT_MAX = 2**31 - 1
 
 
+def _is_bool(v) -> bool:
+    """A Python bool or a numpy bool scalar (``numpy.True_`` is no ``bool``, and compares equal to 1 as True does)."""
+    return isinstance(v, bool) or (
+        getattr(v, "ndim", None) == 0
+        and getattr(getattr(v, "dtype", None), "kind", "") == "b"
+    )
+
+
 def _count(fn, arg, value) -> int:
     """`value` as a whole number from 0 to 2^31 - 1 (a count of pixels or passes), else a refusal naming the parameter and
     the value: GDAL reads the argument as an integer, and a fraction cut to its whole part would run another search.
@@ -168,7 +176,7 @@ def _count(fn, arg, value) -> int:
         x = float(value)
         # a bool is no count: True would pass as 1 (a search of one pixel, one smoothing pass)
         ok = (
-            not isinstance(value, bool)
+            not _is_bool(value)
             and math.isfinite(x)
             and x == int(x)
             and 0 <= x <= _COUNT_MAX
@@ -1544,9 +1552,9 @@ def _hashable(v):
     from the number it equals (True == 1): a binder that refuses a bool must not be handed the template of a 1.
     """
     if isinstance(v, list) or getattr(v, "ndim", 0) > 0:
-        return tuple(v)
-    if isinstance(v, bool):
-        return (bool, v)
+        return tuple(_hashable(x) for x in v)
+    if _is_bool(v):
+        return (bool, bool(v))
     return v
 
 

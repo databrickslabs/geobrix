@@ -803,7 +803,12 @@ def _proc_summary(text) -> Optional[list]:
     info = json.loads(text)
 
     def r(v):
-        return None if v is None else round(float(v), 3)
+        if v is None:
+            return None
+        x = float(v)
+        return (
+            "nan" if x != x else round(x, 3)
+        )  # a NaN NoData is one value on both sides
 
     return [
         list(info.get("size", ())),

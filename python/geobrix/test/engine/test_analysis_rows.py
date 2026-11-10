@@ -344,17 +344,19 @@ def test_a_masked_multi_band_tile_keeps_its_mask_through_the_per_band_fill():
 
 
 # --- an RGBA tile: the alpha band is the mask, never a band of values ----------------------------------------------
-def _rgba(nodata=None, n=9):
-    """A Byte RGBA tile: a gradient, opaque at alpha 100 to 255, with a transparent 3x3 hole in the middle (its RGB
-    values valid, or NoData at the centre) and one transparent pixel in a corner."""
+def _rgba(nodata=None, n=9, dtype="uint8", top=255, masked=None):
+    """An RGBA tile: a gradient, opaque at alpha 100 to 255 (scaled to `top`), with a transparent 3x3 hole in the middle
+    (its RGB values valid, or NoData at the centre) and one transparent pixel in a corner. `masked` is a pixel left out
+    by a mask band of the tile's own."""
     from affine import Affine
     from rasterio.enums import ColorInterp
 
-    z = np.zeros((4, n, n), "uint8")
+    z = np.zeros((4, n, n), dtype)
     z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype(
-        "uint8"
+        dtype
     )
-    z[3] = (100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)).astype("uint8")
+    alpha = 100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)
+    z[3] = (alpha * (top / 255)).astype(dtype)
     z[3, 3:6, 3:6] = 0
     z[:3, 4, 4] = 0
     z[3, 0, 0] = 0
@@ -364,7 +366,7 @@ def _rgba(nodata=None, n=9):
             width=n,
             height=n,
             count=4,
-            dtype="uint8",
+            dtype=dtype,
             crs="EPSG:3857",
             transform=Affine(1, 0, 0, 0, -1, n),
             nodata=nodata,
@@ -372,6 +374,10 @@ def _rgba(nodata=None, n=9):
             ALPHA="YES",
         ) as ds:
             ds.write(z)
+            if masked is not None:
+                own = np.full((n, n), 255, "uint8")
+                own[masked] = 0
+                ds.write_mask(own)
             assert ds.colorinterp[3] == ColorInterp.alpha
         return mf.read(), z
 
@@ -385,13 +391,38 @@ def test_an_rgba_fill_fills_the_transparent_pixels_and_never_fills_the_alpha_as_
     assert res.error is None
     out = _read(res.raster)[0]
     clear = z[3] == 0
-    # every transparent pixel was reached: it is opaque now, at the alpha type's top, and every other alpha is the input's
+    # every transparent pixel was reached: it is opaque now, at the tile's own largest alpha, and every other alpha is the input's
     assert (out[3][clear] == 255).all() and np.array_equal(out[3][~clear], z[3][~clear])
     # its values come from the opaque pixels around it (the gradient's range), not from its own transparent value
     for b in range(3):
         lo, hi = z[b][~clear].min(), z[b][~clear].max()
         assert lo <= out[b][clear].min() and out[b][clear].max() <= hi
         assert np.array_equal(out[b][~clear], z[b][~clear])
+
+
+@pytest.mark.parametrize(
+    "dtype,top", [("float32", 0.8), ("uint16", 255)], ids=["float", "uint16-of-255"]
+)
+def test_a_filled_pixel_takes_the_tiles_own_opacity_not_the_types_top(dtype, top):
+    raw, z = _rgba(dtype=dtype, top=top)
+    out = _read(
+        run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0}).raster
+    )[0]
+    clear = z[3] == 0
+    assert np.allclose(out[3][clear], z[3].max()) and np.array_equal(
+        out[3][~clear], z[3][~clear]
+    )
+
+
+def test_an_rgba_tile_with_its_own_mask_gets_the_filled_pixels_added_to_it():
+    raw, z = _rgba(masked=(0, 8))
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        assert (
+            ds.read_masks(1)[0, 8] == 0
+        )  # the own mask band, not the alpha, is what GDAL reads
+    res = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    with MemoryFile(res.raster) as mf, mf.open() as ds:
+        assert ds.read_masks(1).all() and (ds.read(4)[z[3] == 0] == 255).all()
 
 
 def test_a_transparent_pixel_the_search_does_not_reach_stays_transparent():
@@ -534,6 +565,31 @@ def test_the_json_ref_check_names_a_null_a_non_json_and_a_different_text():
     assert oracles._check_json_ref(case, good, [raw]) is None
     other = run.run(SUMMARY, [_tif(_gradient()[np.newaxis] + 1)], {}).text
     assert oracles._check_json_ref(case, other, [raw])
+
+
+def test_a_bool_count_is_refused_after_the_number_it_equals_was_bound():
+    """The template of a 1 is cached; True equals 1 and hashes alike, and must not be handed that template."""
+    raw = _tif(_gradient()[np.newaxis])
+    assert (
+        run.run(FILL, [raw], {"max_search_dist": 1, "smoothing_iter": 0}).error is None
+    )
+    for bad in (True, np.True_):
+        with pytest.raises(ParamError, match=r"max_search_dist must be a whole number"):
+            run.run(FILL, [raw], {"max_search_dist": bad, "smoothing_iter": 0})
+
+
+def test_a_fill_whose_output_cannot_be_written_is_an_error_tile(monkeypatch):
+    gdal = run._gdal()
+    real = gdal.Translate
+
+    def no_output(dst, src, *a, **kw):
+        return None if str(dst).endswith("/out.tif") else real(dst, src, *a, **kw)
+
+    monkeypatch.setattr(gdal, "Translate", no_output)
+    z = np.stack([_gradient()] * 2)
+    z[:, 4, 4] = NODATA
+    res = run.run(FILL, [_tif(z)], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert res.raster is None and "could not be written" in res.error
 
 
 def test_a_fill_whose_work_copy_cannot_be_made_is_an_error_tile(monkeypatch):

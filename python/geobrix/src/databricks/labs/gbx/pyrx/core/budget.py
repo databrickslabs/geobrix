@@ -177,17 +177,31 @@ def tile_read_cap() -> int:
     return carried if carried is not None else process_read_cap()
 
 
+def _worker_knows_its_memory() -> bool:
+    """Whether this process has a memory signal of its own: a classic worker's memory environment, the Serverless flag,
+    or a task cgroup limit. A worker of standard access mode (Spark Connect over classic compute) has none.
+    """
+    return (
+        any(os.environ.get(k) for k in CLASSIC_MEMORY_ENV)
+        or os.environ.get("IS_SERVERLESS", "").lower() in ("true", "1")
+        or _cgroup_task_limit_bytes() is not None
+    )
+
+
 def call_decoded_budget() -> int:
     """Worker side: the decoded bytes one call may hold, its inputs and its output together (the GDAL spec engine's
-    budget): the cap the registration carried (:func:`session_read_cap`), else this process's decoded budget
-    (``decoded_budget_bytes("auto")``). A worker of standard access mode (Spark Connect over classic compute) reads
-    neither ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so its own budget would be Serverless's 64 MiB: the carried cap,
-    the classic budget there, is the one that holds, as it is for :func:`tile_read_cap`.
+    budget): this process's decoded budget (``decoded_budget_bytes("auto")``) where it has a memory signal of its own,
+    else the cap the registration carried (:func:`session_read_cap`). A worker of standard access mode (Spark Connect
+    over classic compute) reads neither ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so its own budget would be
+    Serverless's 64 MiB: the carried cap, the classic budget there, is the one that holds. Where the worker can tell
+    its own budget, a read cap raised on the driver does not raise what one call may hold.
     """
     from databricks.labs.gbx._gdal_policy import carried_read_cap
 
     carried = carried_read_cap()
-    return carried if carried is not None else decoded_budget_bytes("auto")
+    if carried is None or _worker_knows_its_memory():
+        return decoded_budget_bytes("auto")
+    return carried
 
 
 def carried_or(cap: Optional[int]) -> Optional[int]:

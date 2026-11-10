@@ -198,8 +198,8 @@ def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
 
     A last band that is an alpha band (with another band before it) is the tile's mask, never a band of values: each
     other band is filled where it is not valid or is transparent, from its valid, opaque pixels, and the alpha band
-    keeps its values, except that a transparent pixel the search reached in every band becomes opaque (the alpha type's
-    largest value, for a floating-point alpha the tile's own largest). A pixel not reached in every band stays
+    keeps its values, except that a transparent pixel the search reached in every band becomes opaque (the largest
+    alpha of the tile's opaque pixels). A pixel not reached in every band stays
     transparent. The GDAL spec engine's fill does the same (``engine.run._fill_under_alpha``).
     """
     from rasterio.enums import ColorInterp
@@ -230,10 +230,8 @@ def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
             )
         )
     if alpha:
-        if a.dtype.kind in "iu":
-            top = np.iinfo(a.dtype).max
-        else:
-            top = a[opaque].max() if opaque.any() else 1.0
+        # the tile's own full opacity: the largest alpha of its opaque pixels (a filled pixel is reached from one)
+        top = a[opaque].max() if opaque.any() else 0
         bands.append(np.where(reached & ~opaque, top, a).astype(a.dtype))
     data = np.stack(bands)
     return write_gtiff(profile, data, alpha_like=ds.colorinterp)

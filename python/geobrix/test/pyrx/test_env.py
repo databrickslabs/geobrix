@@ -494,3 +494,26 @@ def test_sidecars_alter_open_fails_a_corrupt_raster_at_once(tmp_path, monkeypatc
     with pytest.raises(RasterioIOError):
         _env.sidecars_alter_open(str(path))
     assert waits == []
+
+
+def test_sidecars_alter_open_retries_an_io_error_of_the_mount(tmp_path, monkeypatch):
+    """GDAL's I/O failure of a Volume's FUSE (no errno in rasterio's error) is retried; only an unreadable file fails
+    at once."""
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.pyrx import _env
+
+    path = str(tmp_path / "r.tif")
+    _gtiff(path)
+    (tmp_path / "r.tif.aux.xml").write_text("<PAMDataset/>")
+    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    fails = {"n": 2}
+    real_open = _env.open_raster
+
+    def flaky_open(p, *a, **kw):
+        if fails["n"]:
+            fails["n"] -= 1
+            raise RasterioIOError(f"{p}: I/O error")
+        return real_open(p, *a, **kw)
+
+    monkeypatch.setattr(_env, "open_raster", flaky_open)
+    assert _env.sidecars_alter_open(path) is False and fails["n"] == 0

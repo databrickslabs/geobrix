@@ -51,7 +51,7 @@ def test_fillnodata_fills_hole():
 
 def test_fillnodata_reads_the_alpha_band_as_the_mask_never_as_values():
     """The UC level's fill on an RGBA tile with a declared NoData: the transparent pixels are the holes, the alpha is
-    never interpolated (a filled pixel becomes opaque at the type's top, any other keeps its alpha), and a pixel the
+    never interpolated (a filled pixel becomes opaque at the tile's largest alpha, any other keeps its alpha), and a pixel the
     search does not reach stays transparent."""
     from affine import Affine
     from rasterio.io import MemoryFile
@@ -88,3 +88,33 @@ def test_fillnodata_reads_the_alpha_band_as_the_mask_never_as_values():
         assert out.read(1)[4, 4] != 0
     with _serde.open_tile(near) as out:
         assert out.read(4)[4, 4] == 0 and (out.read(4)[3:6, 3:6] == 255).sum() == 8
+
+
+def test_fillnodata_gives_a_filled_pixel_the_tiles_own_float_opacity():
+    from affine import Affine
+    from rasterio.io import MemoryFile
+
+    n = 9
+    z = np.zeros((4, n, n), "float32")
+    z[:3] = 50 + np.arange(n)[None, None, :]
+    z[3] = 0.5 + 0.3 * np.arange(n * n).reshape(n, n) / (n * n - 1)
+    z[3, 3:6, 3:6] = 0
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=n,
+            height=n,
+            count=4,
+            dtype="float32",
+            crs="EPSG:3857",
+            transform=Affine(1, 0, 0, 0, -1, n),
+            photometric="RGB",
+            ALPHA="YES",
+        ) as ds:
+            ds.write(z)
+        with mf.open() as ds:
+            out = features.fill_nodata(ds, 100, 0)
+    with _serde.open_tile(out) as ds:
+        a = ds.read(4)
+    clear = z[3] == 0
+    assert np.allclose(a[clear], z[3].max()) and np.array_equal(a[~clear], z[3][~clear])

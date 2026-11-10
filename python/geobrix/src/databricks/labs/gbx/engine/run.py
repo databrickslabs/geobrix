@@ -1126,8 +1126,8 @@ def _fill_under_alpha(
 
     Each data band `k` is filled with GDAL's ``--mask`` set to ``valid for the band AND opaque``, so a transparent pixel
     is a hole to fill and only opaque, valid pixels are sources. The alpha band is copied as it is, except that a
-    transparent pixel the search reached in every data band becomes opaque (the alpha type's largest value, for a
-    floating-point alpha the tile's own largest): where a band was not reached the pixel stays transparent, so no
+    transparent pixel the search reached in every data band becomes opaque (the largest alpha of the tile's opaque
+    pixels): where a band was not reached the pixel stays transparent, so no
     value is shown that the fill did not make. Which pixels the search reaches is found by GDAL, as in
     ``_unmask_filled``: the same fill over the mask itself. A tile with its own mask band besides gets the reached pixels
     added to it. The bands are written into a work copy (``_work_copy``) and then given the call's creation options.
@@ -1189,10 +1189,8 @@ def _fill_under_alpha(
             gdal.Unlink(part)
             reached &= _reached(gdal, alg, tokens, mask_in, cover, shown, refused, w, h)
             gdal.Unlink(mask_in)
-        if a.dtype.kind in "iu":
-            top = np.iinfo(a.dtype).max
-        else:
-            top = a[opaque].max() if opaque.any() else 1.0
+        # the tile's own full opacity: the largest alpha of its opaque pixels (a filled pixel is reached from one)
+        top = a[opaque].max() if opaque.any() else 0
         made = reached & ~opaque
         if made.any():
             a[made] = top

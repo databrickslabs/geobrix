@@ -626,3 +626,23 @@ def test_the_zonal_stats_case_compares_the_two_summary_shapes_by_what_both_hold(
         ]
         is None
     )
+
+
+def test_a_nan_nodata_compares_equal_in_both_summary_shapes():
+    import json
+
+    case = next(c for c in _defs() if c["name"] == "gbx_zonal_stats")
+    band = {"band": 1, "type": "Float32", "noDataValue": float("nan")}
+    one = [
+        _Row(
+            zone_id=1, tile_id=1, summary=json.dumps({"size": [1, 1], "bands": [band]})
+        )
+    ]
+    two = [
+        _Row(
+            zone_id=1,
+            tile_id=1,
+            summary=json.dumps({"size": [1, 1], "bands": [dict(band)]}),
+        )
+    ]
+    assert probes._proc_rows(one, case) == probes._proc_rows(two, case)

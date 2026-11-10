@@ -1362,6 +1362,13 @@ class _PipeGeo:
             drivers,
         )
 
+    def _reference(self, crs_text: str):
+        """The OSR reference of a CRS the estimate re-reads: a DataError, with the Fix, where GDAL cannot build it."""
+        try:
+            return argv_mod._osr_reference(crs_text)
+        except ValueError as exc:
+            raise DataError(f"{self.sql_name}: {exc}") from None
+
     def warp(self, st, target):
         gdal = self.gdal
         if st.fresh:
@@ -1399,13 +1406,6 @@ class _PipeGeo:
                 ]
         except RuntimeError:
             return None
-    def _reference(self, crs_text: str):
-        """The OSR reference of a CRS the estimate re-reads: a DataError, with the Fix, where GDAL cannot build it."""
-        try:
-            return argv_mod._osr_reference(crs_text)
-        except ValueError as exc:
-            raise DataError(f"{self.sql_name}: {exc}") from None
-
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         if not all(map(math.isfinite, xs + ys)):
             return None

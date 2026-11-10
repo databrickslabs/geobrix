@@ -1,8 +1,7 @@
 """The merge aggregate's finalize forms time the level they are labelled with.
 
-The JVM finalize and the light ones share the SQL name `gbx_rst_merge`; the JVM setup replaces the light function in the
-session. A setup that is judged only by having run once left the JVM merge under the light forms that followed it: they
-timed it, and a virtual tile raised VirtualTileException.
+The finalize forms run `gbx_rst_merge`, which has the light level alone (its JVM form is gone): every finalize form is
+light, and its setup leaves the light function under the name.
 """
 
 from types import SimpleNamespace
@@ -64,15 +63,14 @@ def _finalizes():
 def test_each_finalize_form_finds_its_own_level_under_the_merge_name(session):
     spark, state = session
     forms = _finalizes()
-    # the order a run takes: the light forms of the bytes input, the JVM one, then the forms that follow it
+    # the order a run takes; there is no JVM finalize
     order = [
         ("L3", "finalize"),
-        ("L1", "finalize"),
         ("L3", "finalize-skew"),
-        ("L1", "finalize-skew"),
         ("L3", "finalize-virt"),
         ("L3", "finalize-virt-skew"),
     ]
+    assert set(forms) == set(order)
     ctx = levels._Ctx(spark, 0, 1, "", None, None, {})
     for key in order:
         form = forms[key]

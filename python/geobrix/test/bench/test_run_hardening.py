@@ -628,8 +628,24 @@ def test_the_preflight_does_not_run_the_gdal_engine_forms_when_this_interpreter_
     assert len([x for x in skipped if "not checkable here" in x]) == 2, skipped
 
 
-def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here():
+def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here(
+    monkeypatch,
+):
     """No stand-in for a form whose own setup registers JVM names, nor for one whose JVM level returns another shape."""
+    import dataclasses
+
+    from databricks.labs.gbx import manifest
+
+    # No row ships a JVM level of another shape now: give one generator a `tile`-column L1 block for the check.
+    real = manifest.load()
+    gen = real.functions["gbx_rst_maketiles"]
+    shaped = dataclasses.replace(
+        gen, levels={**gen.levels, "L1": {"session_returns": "ROWS(tile TILE)"}}
+    )
+    fake = dataclasses.replace(
+        real, functions={**real.functions, "gbx_rst_maketiles": shaped}
+    )
+    monkeypatch.setattr(manifest, "load", lambda: fake)
     ok = form("L2", lf._BNG.replace("{fn}", B), "-")
     with_setup = lf.Form(
         "S", B, "L2", "-", "bng_points", sql=ok.sql + " ", setup="m:register_jvm"

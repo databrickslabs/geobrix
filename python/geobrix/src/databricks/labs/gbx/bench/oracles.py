@@ -138,7 +138,6 @@ def uc_view(
 # pass must be dropped from here.
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
-_VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
 # H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
 # is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
 # read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
@@ -156,7 +155,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         )
     },
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
-    "isoband_virtual": {"L1": _VIRTUAL_RAISES_L1},
     **{
         cid: {"L1": _XYZ_ERROR_L1}
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
@@ -182,7 +180,6 @@ HEAVY_PENDING.update(
                 "cgr_null_beside_big_id",
             )
         },
-        "ca_agg_virtual": {"L1": _L1_NO_VIRTUAL},
     }
 )
 
@@ -200,21 +197,6 @@ HEAVY_PENDING.update(
         "tri_multipoint_element": {
             "L1": "the JVM triangulates the points of an array and takes a MULTIPOINT element as no point; the lightweight level flattens it"
         },
-    }
-)
-
-# The JVM companions of two Task 15 / 18b names that refuse a group the light level handles, and are not the default.
-# `gbx_rst_derivedband_agg` has a `session_returns: TILE` L1 block, so it is not selected: a member over the cap is an
-# error tile (a NULL raster, the reason and its Fix in the metadata), not a raise. `gbx_rst_merge` (the array form)
-# refuses a group over the memory budget the same way, where light streams it: a member over the read cap names `merge_by_key(method="vrt")` in the Fix, a mosaic or result over the cap names `mint_vrt`.
-_DERIVEDBAND_AGG_L1 = (
-    "the non-selectable JVM tile aggregate returns an error tile; Task 21 deletes it"
-)
-_MERGE_ARRAY_L1 = "the JVM array merge refuses a group over the budget with its error tile; light streams; Task 29 decides the level"
-HEAVY_PENDING.update(
-    {
-        "db_agg_member_over_cap_refused": {"L1": _DERIVEDBAND_AGG_L1},
-        "merge_array_streams_under_budget": {"L1": _MERGE_ARRAY_L1},
     }
 )
 

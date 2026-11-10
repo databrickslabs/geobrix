@@ -1640,9 +1640,7 @@ def setup_a_probes(spark):
     register(spark, only=["gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"])
 
 
-# What each of the two setups below leaves under the name `gbx_rst_merge`. The JVM merge replaces the light one in the
-# session, and a setup that is not judged by what is installed runs once: the light finalize that came after the JVM
-# one then timed the JVM merge (and, given a reference, raised VirtualTileException), whatever level it was labelled.
+# What the setup leaves under the name `gbx_rst_merge`: the light finalize, the one merge level (it has no JVM form).
 setup_a_probes.installs = {"gbx_rst_merge": ("L3", "-")}
 
 
@@ -1657,23 +1655,6 @@ def setup_a_udaf(spark):
     why = jvm.install_companion(spark, companion, _BR)
     if why:
         raise RuntimeError(f"{_BR}: L1 install gave {why}")
-
-
-def setup_a_l1_merge(spark):
-    """The Catalyst `gbx_rst_merge` over an array of tiles (needs the JAR; replaces the light finalize)."""
-    inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
-    got = str(
-        inst.install(
-            spark._jsparkSession,
-            "gbx_rst_merge",
-            "com.databricks.labs.gbx.rasterx.expressions.RST_Merge",
-        )
-    )
-    if got != "ok":
-        raise RuntimeError(f"gbx_rst_merge: L1 install gave {got}")
-
-
-setup_a_l1_merge.installs = {"gbx_rst_merge": ("L1", "-")}
 
 
 def _a(fn, level, variant, inp, inner, *, setup="", register=False, **kw):
@@ -1732,21 +1713,6 @@ def _a_light(fn, shapes, inputs):
 def _a_jvm(fn, shapes, inputs):
     out = []
     for inp, sfx in inputs:
-        if (
-            fn == _MA
-        ):  # the merge aggregate has no JVM form; the Catalyst finalize over an array of tiles does
-            out.append(
-                _a(
-                    fn,
-                    "L1",
-                    "finalize" + sfx,
-                    inp,
-                    shapes["finalize"],
-                    setup="setup_a_l1_merge",
-                    computes=("dedicated",),
-                )
-            )
-            continue
         out.append(
             _a(
                 fn,
@@ -1763,7 +1729,7 @@ def _a_jvm(fn, shapes, inputs):
 
 _A_MERGE = (_MA, _ma_shapes(), (("tiles_grouped", ""), ("tiles_grouped_skew", "-skew")))
 # The light shapes again over the same plans as references (a path each): `c0` on the bytes stays as the documented cliff,
-# `c0-virt` is the by-reference form of it. The Catalyst finalize has no by-reference form to time.
+# `c0-virt` is the by-reference form of it.
 _A_MERGE_VIRT = (
     _MA,
     _ma_shapes(),
@@ -1774,7 +1740,7 @@ FORMS["A"] = (
     _a_light(*_A_MERGE)
     + _a_light(*_A_MERGE_VIRT)
     + _a_light(*_A_RASTERIZE)
-    + _a_jvm(*_A_MERGE)
+    # the merge aggregate and its array finalize have no JVM form; the BNG rasterize aggregate has one
     + _a_jvm(*_A_RASTERIZE)
 )
 

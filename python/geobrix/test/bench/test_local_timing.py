@@ -230,7 +230,11 @@ def test_only_the_known_sets_are_implemented(capsys):
         *_DEM_SETS,
         *_HV_SETS,
     } - {
-        "raster-file-op",  # no function of the family has a JVM level left (it times cog_convert's light forms)
+        # no function of these families has a JVM level left: their sets time the light forms
+        "raster-file-op",  # cog_convert
+        "raster-generator",  # retile
+        "raster-stat",  # avg
+        "raster-vectorize",  # isoband
     } == {
         f.family
         for f in __import__("databricks.labs.gbx.manifest", fromlist=["x"])

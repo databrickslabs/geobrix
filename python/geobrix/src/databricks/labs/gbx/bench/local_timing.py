@@ -392,7 +392,8 @@ def _family_sets() -> Dict[str, SetSpec]:
         # align_to, cog_convert, binpoints and asmvt have no JVM level (it measured slower than light): light and floor only
         "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to", l1=False),
         "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert", l1=False),
-        "raster-vectorize": tile_fn("raster-vectorize", "gbx_rst_isoband"),
+        # isoband has no JVM level (the JVM cannot read a virtual tile, and no wrapper can sit under explode)
+        "raster-vectorize": tile_fn("raster-vectorize", "gbx_rst_isoband", l1=False),
         "raster-constructor": tile_fn(
             "raster-constructor", "gbx_rst_fromcontent", "bytes"
         ),

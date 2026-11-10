@@ -4,12 +4,12 @@ raster-grid functions.
 Both tiers are run on the SAME in-memory sample raster + resolution and their
 outputs compared against the design §4.1 parity bar:
 
-  * ``rst_quadbin_tessellate`` (and h3) — identical emitted cell-id set + identical chip
-    count, for both ``covering`` and ``centroid`` modes; under ``centroid`` the chips
-    also match per cell (size, geotransform and source pixels).
-  * ``rst_bng_tessellate`` has only the lightweight level, so there is no second tier:
-    its cases assert the light result on its own (the expected cell, the chips' NoData,
-    no warp fill, masked and fallback pixels never valid).
+  * The raster tessellates (``rst_h3_tessellate``, ``rst_quadbin_tessellate``,
+    ``rst_bng_tessellate``) have only the lightweight level, so there is no second tier:
+    their cases assert the light result on its own (the expected cell, the chips' NoData,
+    no warp fill, masked and fallback pixels never valid). A grid that gains a JVM level
+    again (``_tiers``) is compared across the tiers: the same cell-id set and chip count,
+    and under ``centroid`` the same chips per cell.
   * ``rst_quadbin_rasterize_agg`` / ``rst_bng_rasterize_agg`` — same output
     raster on a shared explicit grid: band NoData == -9999 both tiers, and the
     covered-pixel mask + burned values identical (NoData-aware).
@@ -19,9 +19,8 @@ outputs compared against the design §4.1 parity bar:
     pixels equal to the NoData are never valid data, in either tier.
 
 HARNESS REUSE (no new comparison framework invented):
-  * Tessellate reuses the ``test/pyvx/test_parity_h3_tessellate.py``
-    pattern — register ONE tier, collect its rows, then register the other and
-    collect (both tiers register the same ``gbx_rst_*`` SQL name, so collection
+  * Tessellate registers ONE tier, collects its rows, then registers the other and
+    collects (both tiers register the same ``gbx_rst_*`` SQL name, so collection
     must be sequential; ``.collect()`` materialises before re-registration).
   * rasterize_agg reuses ``test/rasterx/test_h3_rasterize_parity.py`` — the
     shared grid comes from the light ``cellraster.compute_gridspec`` and both
@@ -276,36 +275,6 @@ def _heavy_tessellate_ids(
 
 
 @pytest.mark.parametrize("mode", ["covering", "centroid"])
-def test_quadbin_tessellate_cellset_parity(spark_with_jar, mode):
-    """quadbin tessellate: identical Long cell-id set + chip count, both modes."""
-    spark = spark_with_jar
-    raster = _quadbin_raster_4326()
-    resolution = 12
-
-    light_ids, light_n = _light_tessellate_ids(
-        spark, raster, "gbx_rst_quadbin_tessellate", resolution, mode, bng=False
-    )
-    heavy_ids, heavy_n = _heavy_tessellate_ids(
-        spark, raster, "rst_quadbin_tessellate", resolution, mode, bng=False
-    )
-
-    assert light_ids, f"light emitted no quadbin chips (mode={mode})"
-    assert heavy_ids, f"heavy emitted no quadbin chips (mode={mode})"
-
-    if light_ids != heavy_ids:
-        pytest.fail(
-            f"quadbin tessellate mode={mode} cell-set MISMATCH: "
-            f"|light|={len(light_ids)} |heavy|={len(heavy_ids)} "
-            f"light_only={sorted(light_ids - heavy_ids)[:8]} "
-            f"heavy_only={sorted(heavy_ids - light_ids)[:8]}"
-        )
-    assert light_n == heavy_n, (
-        f"quadbin tessellate mode={mode} chip-count mismatch: "
-        f"light={light_n} heavy={heavy_n}"
-    )
-
-
-@pytest.mark.parametrize("mode", ["covering", "centroid"])
 def test_bng_tessellate_cellset(spark_with_jar, mode):
     """BNG tessellate (lightweight level only): the BNG-String cell ids of the footprint, both modes.
 
@@ -503,8 +472,9 @@ _TESS_CONFIG = {
 
 
 def _tiers(grid):
-    """The tiers that run a grid's raster tessellate: the manifest keeps ``gbx_rst_bng_tessellate`` at the
-    lightweight level only, so a BNG case has no heavy tier to compare against."""
+    """The tiers that run a grid's raster tessellate: the manifest keeps the raster tessellates at the
+    lightweight level only, so a case has no heavy tier to compare against unless a grid gains a JVM level.
+    """
     from databricks.labs.gbx import manifest
 
     levels = manifest.load().functions[_TESS_CONFIG[grid][0]].levels
@@ -1148,21 +1118,19 @@ def test_tessellate_covering_masked_source_parity(
 # ---------------------------------------------------------------------------
 
 
-def test_default_h3_tessellate_2arg_parity(spark_with_jar):
-    """2-arg gbx_rst_h3_tessellate(tile, res) is centroid+complete in BOTH tiers.
+def test_default_h3_tessellate_2arg_is_centroid_complete(spark_with_jar):
+    """2-arg gbx_rst_h3_tessellate(tile, res) is centroid+complete.
 
-    The light tier's default matches heavy: both default to
-    ``assignment="centroid"`` and ``coverage="complete"``.  This test is the
-    regression gate for that alignment: if either tier's default diverges, the
-    cell sets produced by the 2-arg call will differ.
+    The tessellate has the lightweight level only: this is the regression gate for its
+    default (``assignment="centroid"``, ``coverage="complete"``): the 2-arg call gives the
+    cell set of the explicit call.
     """
     from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
     raster = _quadbin_raster_4326()  # 16×16 4326 raster, valid for H3
-    resolution = 5  # matches test_parity_h3_tessellate.py fixture
+    resolution = 5
 
-    # Light: 2-arg SQL (no explicit assignment/coverage) — collect FIRST.
     from pyspark.sql import functions as f
 
     from databricks.labs.gbx.pyrx import functions as prx
@@ -1178,38 +1146,9 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     ).collect()
     light_2arg_ids = {r["cid"] for r in light_2arg_rows}
     light_2arg_n = len(light_2arg_rows)
-
-    # Heavy: 2-arg Python wrapper (no explicit assignment/coverage) — register AFTER light.
-
-    heavy_register(spark, ("gbx_rst_",))
-    heavy_2arg_rows = (
-        df2.select(
-            f.call_function(
-                "gbx_rst_h3_tessellate", f.col("tile"), f.lit(resolution)
-            ).alias("tt")
-        )
-        .select(f.col("tt.cellid").alias("cid"))
-        .collect()
-    )
-    heavy_2arg_ids = {r["cid"] for r in heavy_2arg_rows}
-    heavy_2arg_n = len(heavy_2arg_rows)
-
     assert light_2arg_ids, "light 2-arg emitted no cells"
-    assert heavy_2arg_ids, "heavy 2-arg emitted no cells"
 
-    if light_2arg_ids != heavy_2arg_ids:
-        pytest.fail(
-            f"2-arg default parity FAILED: "
-            f"|light|={len(light_2arg_ids)} |heavy|={len(heavy_2arg_ids)} "
-            f"light_only={sorted(light_2arg_ids - heavy_2arg_ids)[:8]} "
-            f"heavy_only={sorted(heavy_2arg_ids - light_2arg_ids)[:8]}"
-        )
-    assert (
-        light_2arg_n == heavy_2arg_n
-    ), f"2-arg default chip-count mismatch: light={light_2arg_n} heavy={heavy_2arg_n}"
-
-    # Cross-check: the 2-arg defaults equal the explicit centroid+complete call (light).
-    # This proves the light tier's default is centroid+complete and not some other combo.
+    # The 2-arg defaults equal the explicit centroid+complete call.
     light_explicit_ids, light_explicit_n = _light_tessellate_ids(
         spark,
         raster,

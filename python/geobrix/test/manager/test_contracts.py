@@ -2688,26 +2688,6 @@ def test_file_ref_forms_fold_or_refuse_an_over_cap_group_with_an_error_tile(
         assert _refused_tile(tile), (name, tile)
 
 
-@pytest.mark.integration
-def test_heavy_aggregates_refuse_an_over_cap_member_not_drop_it(jvm_spark, tmp_path):
-    """The one raster aggregate with a heavy level (`combineavg`; the merge aggregate is light-only) refuses."""
-    from databricks.labs.gbx.manager import jvm
-
-    def install():
-        jvm._point_jvm_at_payload(jvm_spark)
-        inst = jvm_spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
-        base = "com.databricks.labs.gbx.rasterx.expressions.agg.RST_"
-        sql, cls = "gbx_rst_combineavg_agg", "CombineAvgAgg"
-        assert str(inst.install(jvm_spark._jsparkSession, sql, base + cls)) == "ok"
-
-    got = _over_cap_group(
-        jvm_spark, tmp_path, install, "gbx_rst_combineavg_agg(tile) AS c"
-    )
-    assert _refused_tile(got["c"]), got
-    # the cell id of a group refusal is the light tier's (an aggregate has no group key to name)
-    assert got["c"]["cellid"] == 0, got
-
-
 # --- review of the read cap's carriage: the Column-API wrappers, the keyed helpers, the session value -------------
 
 

@@ -465,8 +465,8 @@ _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 _AGG_LIGHT = (_PYRX + "agg.py",)
 # bucket B, group B-grid (DGGS). raster->grid lives in core/gridagg.py; H3
 # tessellation in core/tessellate.py (which delegates the per-cell clip to
-# core/edit.py). The shared GridX index helpers the heavy tessellate calls are
-# gridx/grid/{H3,Quadbin}.scala (RST_H3_Tessellate -> RasterTessellate -> H3).
+# core/edit.py). The GridX index helpers of the H3 and quadbin cells are
+# gridx/grid/{H3,Quadbin}.scala.
 # Neither light module imports _nodata (grep-confirmed).
 _GRIDX = "src/main/scala/com/databricks/labs/gbx/gridx/grid/"
 _GRIDAGG_LIGHT = (_PYRX + "gridagg.py",)
@@ -1169,12 +1169,12 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        # Coerce the bool to 1.0/0.0 so the scalar fingerprint matches the heavy
-        # side, which serializes RST_IsEmpty as ofScalar(1.0/0.0).
+        # Coerce the bool to 1.0/0.0 so the scalar fingerprint is numeric.
         core_fn=lambda ds, a: 1.0 if accessors.isempty(ds) else 0.0,
         col_fn=lambda t, a: rx.rst_isempty(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "RST_IsEmpty.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_getnodata": FnSpec(
         "rst_getnodata",
@@ -1944,9 +1944,10 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda b, a: 1.0 if ops.try_open(b) else 0.0,
         col_fn=lambda t, a: rx.rst_tryopen(t),
-        sources=_OPS_LIGHT + (_HEAVY + "RST_TryOpen.scala",),
+        sources=_OPS_LIGHT,
         core=False,
         input_kind="bytes",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_fromcontent (bytes): build a tile from raster bytes + driver. The
     # comparable output is the decoded raster grid, so core_fn returns the bytes
@@ -2224,13 +2225,10 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_merge(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_Merge.scala",
-            _OPS + "MergeRasters.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
         input_kind="tile_array",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- bucket C, group C4: tiling fns -> a COLLECTION of tiles (5) ----------
     # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands /
@@ -2255,13 +2253,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_MakeTiles.scala",
-            _OPS + "BalancedSubdivision.scala",
-            _OPS + "ReTile.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_retile": FnSpec(
         "rst_retile",
@@ -2272,7 +2266,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.retile(ds, a["tile_width"], a["tile_height"]),
         col_fn=lambda t, a: prx._light_rst_retile(t, a["tile_width"], a["tile_height"]),
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT + (_OPS + "ReTile.scala",),
+        sources=_TILING_LIGHT,
         core=False,
         heavy=False,
     ),
@@ -2288,13 +2282,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_ToOverlappingTiles.scala",
-            _OPS + "OverlappingTiles.scala",
-            _OPS + "ReTile.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_separatebands": FnSpec(
         "rst_separatebands",
@@ -2305,12 +2295,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.separate_bands(ds),
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TILING_LIGHT
-        + (
-            _HEAVY + "generators/RST_SeparateBands.scala",
-            _OPS + "SeparateBands.scala",
-        ),
+        sources=_TILING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_xyzpyramid is a tile-in / collection-out generator, but every emitted
     # tile is one rst_tilexyz render — the pyramid just loops RST_TileXYZ.execute
@@ -2385,13 +2372,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TESSELLATE_LIGHT
-        + (
-            _HEAVY + "generators/RST_H3_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_TESSELLATE_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # The default assignment (centroid + complete coverage) as its own case: the
     # entry above times covering in pure-core. Same drain + id-only fingerprint;
@@ -2417,13 +2400,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid",
         udtf=True,
-        sources=_TESSELLATE_LIGHT
-        + (
-            _HEAVY + "generators/RST_H3_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _GRIDX + "H3.scala",
-        ),
+        sources=_TESSELLATE_LIGHT + (_GRIDX + "H3.scala",),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         variant_of="rst_h3_tessellate",
     ),
     # --- H3 raster->grid aggregates (gridagg.py): {avg,count,max,median,min} ---
@@ -2961,11 +2940,10 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TESSELLATE_LIGHT
         + (
             _QUADBIN_LIB,
-            _HEAVY + "generators/RST_Quadbin_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
             _GRIDX + "Quadbin.scala",
         ),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_bng_tessellate": FnSpec(
         "rst_bng_tessellate",
@@ -3210,13 +3188,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx._light_rst_combineavg_agg(t),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "agg/RST_CombineAvgAgg.scala",
-            _OPS + "CombineAVG.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_merge_agg": FnSpec(
         "rst_merge_agg",
@@ -3227,12 +3201,7 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx._light_rst_merge_agg(t),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_Merge.scala",
-            _OPS + "MergeRasters.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
         heavy=False,
     ),
@@ -3246,14 +3215,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a, bi: prx._light_rst_frombands_agg(t, bi),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "constructor/RST_FromBands.scala",
-            _HEAVY + "agg/RST_FromBandsAgg.scala",
-            _OPS + "MergeBands.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_derivedband_agg": FnSpec(
         "rst_derivedband_agg",
@@ -3268,14 +3232,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
-        sources=_DERIVEDBAND_LIGHT
-        + _AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "RST_DerivedBand.scala",
-            _HEAVY + "agg/RST_DerivedBandAgg.scala",
-        ),
+        sources=_DERIVEDBAND_LIGHT + _AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_rasterize_agg": FnSpec(
         "rst_rasterize_agg",
@@ -3290,12 +3249,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,
         input_kind="geometry_aggregate",
-        sources=_AGG_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "agg/RST_RasterizeAgg.scala",
-        ),
+        sources=_AGG_LIGHT + (_PYRX_SERDE,),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # max_pts is the same large sentinel as the non-agg rst_gridfrompoints (see the
     # comment there): heavy gdal_grid ``invdist`` with no radius uses ALL points, so
@@ -3604,13 +3560,9 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
-        sources=_TESSELLATE_LIGHT
-        + (
-            _HEAVY + "generators/RST_Custom_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _PYGX + "_custom.py",
-        ),
+        sources=_TESSELLATE_LIGHT + (_PYGX + "_custom.py",),
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_custom_rasterize_agg: like rst_bng_rasterize_agg/rst_quadbin_rasterize_agg,
     # a GRID aggregator that needs a custom-grid struct.  The col_fn passes the
@@ -4155,8 +4107,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="geometry_aggregate",
-        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPointsAgg.scala",),
+        sources=_BINNING_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         geometry_set="srid_4326",
     ),
     "rst_isoband": FnSpec(
@@ -4171,8 +4124,9 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         fingerprint_kind="vector",
         virtual_disposition="materialized",
-        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Isoband.scala",),
+        sources=_FEATURES_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_chm": FnSpec(
         "rst_chm",

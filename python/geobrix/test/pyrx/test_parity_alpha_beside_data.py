@@ -172,7 +172,7 @@ def _both_tiers(spark, raster, fn):
 def test_alpha_statistics_parity(spark_with_jar, name):
     """pixel count, min, max and mean per band agree with the pixels valid for each band (an RGBA
     raster included: heavy's multi-dimensional statistics used to count its transparent pixels), and
-    isempty agrees between the tiers.
+    isempty (the light level alone) reads the raster as not empty.
 
     The pattern's data bands hold 7 over rows 0 and 3 and 0 over rows 1 and 2 (mean 3.5 over the
     pixels valid for them); the last band holds 255 over rows 1 and 3 and 0 over the others, and it is
@@ -189,28 +189,22 @@ def test_alpha_statistics_parity(spark_with_jar, name):
         )
         is False
     )
-    assert (
-        _scalar(
-            spark, raster, "heavy", lambda m, t: f.call_function("gbx_rst_isempty", t)
-        )
-        is False
-    )
 
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba"])
-def test_an_entirely_transparent_raster_is_empty_in_both_tiers(spark_with_jar, name):
+def test_an_entirely_transparent_raster_is_empty(spark_with_jar, name):
+    """isempty has the light level alone: a raster whose alpha is 0 everywhere is empty."""
     count = len(al.LAYOUTS[name][0])
     data = np.full((count, 4, 4), 9, dtype="uint8")
     data[-1] = 0
     raster = al.layout_bytes(name, data=data)
-    for tier in ("light", "heavy"):
-        got = _scalar(
-            spark_with_jar,
-            raster,
-            tier,
-            lambda m, t: f.call_function("gbx_rst_isempty", t),
-        )
-        assert got is True, f"{name}: {tier} reads a fully transparent raster as data"
+    got = _scalar(
+        spark_with_jar,
+        raster,
+        "light",
+        lambda m, t: f.call_function("gbx_rst_isempty", t),
+    )
+    assert got is True, f"{name}: light reads a fully transparent raster as data"
 
 
 def _chip_valid_rows(chips):
@@ -230,14 +224,14 @@ def _chip_valid_rows(chips):
 @pytest.mark.parametrize("grid", ["h3", "quadbin"])
 @pytest.mark.parametrize("assignment", ["covering", "centroid"])
 @pytest.mark.parametrize("name", ["rgba", "gray_x_alpha", "rgb_nir"])
-def test_tessellate_alpha_and_own_mask_parity(spark_with_jar, name, assignment, grid):
-    """A source with an alpha band AND its own mask band: the chips of both tiers are valid
+def test_tessellate_alpha_and_own_mask(spark_with_jar, name, assignment, grid):
+    """A source with an alpha band AND its own mask band: the chips (the light level alone) are valid
     on exactly the source rows that are neither masked (rows 3-4) nor transparent (row 8).
     """
     from rasterio.transform import from_origin
 
     spark = spark_with_jar
-    sql_name, fn_name, bng = _TESS_CONFIG[grid]
+    sql_name, _, bng = _TESS_CONFIG[grid]
     raster = al.row_coded(
         name,
         height=12,
@@ -254,14 +248,10 @@ def test_tessellate_alpha_and_own_mask_parity(spark_with_jar, name, assignment, 
     light = tp.light_chips(
         spark, raster, sql_name, resolution, assignment, "sparse", _id
     )
-    heavy = tp.heavy_chips(
-        spark, raster, fn_name, resolution, assignment, "sparse", _id
-    )
-    assert light and heavy, f"{label}: a tier emitted no chips"
-    assert not tp.error_rows(light) and not tp.error_rows(heavy), f"{label}: errors"
+    assert light, f"{label}: no chips"
+    assert not tp.error_rows(light), f"{label}: errors"
     want = set(al.valid_rows(name, 12, (3, 4), (8,)))
     assert _chip_valid_rows(light) == want, f"{label}: light"
-    assert _chip_valid_rows(heavy) == want, f"{label}: heavy"
 
 
 # ---------------------------------------------------------------------------
@@ -372,13 +362,11 @@ def _vector_rows(spark, raster, tier, kind):
 
 @pytest.mark.parametrize("kind", ["isoband"])
 @pytest.mark.parametrize("name", _STRIPED)
-def test_isoband_parity_leave_out_transparent_and_masked_pixels(
-    spark_with_jar, name, kind
-):
+def test_isoband_leaves_out_transparent_and_masked_pixels(spark_with_jar, name, kind):
+    """isoband has the light level alone: the transparent and masked rows stay out of its polygons."""
     raster = _striped(name)
     light = _vector_rows(spark_with_jar, raster, "light", kind)
-    heavy = _vector_rows(spark_with_jar, raster, "heavy", kind)
-    assert light == heavy, (light, heavy)
+    assert light, "isoband gave no polygon"
     assert sum(a for a, _ in light) == 24.0, "the hidden rows must stay out"
 
 

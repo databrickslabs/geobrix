@@ -49,8 +49,8 @@ def test_a_tile_function_served_from_the_jvm_has_a_virtual_dispatch(fn):
     "name", ["gbx_rst_contour", "gbx_rst_isoband", "gbx_rst_merge"]
 )
 def test_the_functions_the_jvm_cannot_serve_by_default_are_light_first(name):
-    """contour and isoband return an array a dispatch wrapper cannot sit in front of; the array merge is refused by the
-    JVM over the memory budget, where light streams it."""
+    """contour and isoband return an array a dispatch wrapper cannot sit in front of, and the array merge measured no
+    faster on the JVM: none of the three has a JVM level, so each is served by light."""
     assert _first_available(MAN.functions[name]) == "L3"
 
 

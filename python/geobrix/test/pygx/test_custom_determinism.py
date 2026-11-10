@@ -14,11 +14,9 @@ Out-of-bounds behaviour (heavy tier, integration)
     Out-of-bounds behaviour is NOT uniform across the custom raster surface, and
     the honest statement of it is:
 
-      * ``gbx_rst_custom_rastertogrid*`` and ``gbx_rst_custom_tessellate`` wrap
-        their eval in ``RST_ErrorHandler.safeEval`` (RST_Custom_RasterToGrid.scala,
-        RST_Custom_Tessellate.scala:45), so an out-of-bounds grid DEGRADES to a
-        null tile + WARN — the repo's standard rst_* error-degradation policy.
-        They do NOT raise on the LATERAL/SQL path.  This is accepted behaviour.
+      * ``gbx_rst_custom_rastertogrid*`` and ``gbx_rst_custom_tessellate`` have the
+        lightweight level only (no JVM form), so they are not part of this heavy-tier
+        check.
       * ``gbx_rst_custom_rasterize_agg`` (RST_Custom_RasterizeAgg) has NO safeEval
         wrapper: ``RasterizeBurn.burn`` calls ``CustomGridSystem.pointToCellID``
         per canvas pixel, whose ``require`` guard throws an

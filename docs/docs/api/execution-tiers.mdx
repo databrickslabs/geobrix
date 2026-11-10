@@ -117,8 +117,7 @@ Limits today:
 
 - It runs on dedicated access mode on DBR 19 only, for Graviton (arm64) and x86.
 - There is no DBR 17.3 or 18 image. Install the env5 wheel and the JAR as [cluster libraries](../installation.mdx#heavyweight).
-- On standard access mode the image runs the Python level only, and GeoBrix has not tested it there yet. See the [DCS page](../installation/dcs.mdx#standard-and-serverless).
-- Serverless cannot use a custom image today. Use the [env wheel](../installation.mdx#whl-only).
+- GeoBrix recommends it for dedicated access mode only today. On standard access mode and Serverless, use the [env wheel](../installation.mdx#whl-only). Standard and Serverless support is [coming soon](../installation/dcs.mdx#standard-and-serverless).
 - The image passes its in-image checks but has not yet run on a cluster. The env wheel and JAR route is the one verified on clusters.
 - STAC search and the sample-data downloaders are not in the image. Add them with `%pip`, as the [DCS page](../installation/dcs.mdx#the-image) describes.
 :::

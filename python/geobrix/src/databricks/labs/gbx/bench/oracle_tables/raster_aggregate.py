@@ -799,9 +799,10 @@ def _group(prefix, kind):
     return _members(prefix, kind)  # the custom grid is the first constant, not a column
 
 
-def _pixels(prefix, kind):
+def _pixels(prefix, kind, canvas=None):
     """The canvas as numpy gives it: each pixel centre's cell (by the library) looked up in the largest value of the
-    group's cells."""
+    group's cells. `canvas` (a function giving xmin, ymin, xmax, ymax, width, height) replaces the row's own.
+    """
 
     def expect():
         import numpy as np
@@ -817,6 +818,8 @@ def _pixels(prefix, kind):
             if cur == "unset" or (v is not None and (cur is None or v > cur)):
                 best[c] = v
         out_srid, _px, x0, y0, x1, y1, w, h, _m, _k = _CELLS[prefix][3]
+        if canvas is not None:
+            x0, y0, x1, y1, w, h = canvas()
         cx = x0 + (np.arange(w) + 0.5) * (x1 - x0) / w
         cy = y1 - (np.arange(h) + 0.5) * (y1 - y0) / h
         gx, gy = np.meshgrid(cx, cy)
@@ -910,6 +913,65 @@ def _cells_cases(prefix):
 
 for _p in _CELLS:
     RASTER_AGGREGATE += _cells_cases(_p)
+
+
+def _h3_derived_canvas(kind, kring_pad=1):
+    """The canvas the documented rule gives a group whose canvas arguments are all NULL, from the h3 library: the
+    centres of the cells padded by `kring_pad` rings, square pixels of the resolution's average hexagon edge (metres
+    over 111320 m a degree at the mid-latitude), the box snapped outward to that pixel lattice.
+    """
+
+    def canvas():
+        import math
+
+        import h3
+
+        cells = {h3.int_to_str(c) for c, _v in _members("h3", kind) if c is not None}
+        res = h3.get_resolution(next(iter(cells)))
+        padded = set()
+        for c in cells:
+            padded.update(h3.grid_disk(c, kring_pad))
+        lats, lons = zip(*(h3.cell_to_latlng(c) for c in padded))
+        midlat = (min(lats) + max(lats)) / 2.0
+        px = h3.average_hexagon_edge_length(res, unit="m") / (
+            111320.0 * max(math.cos(math.radians(midlat)), 1e-6)
+        )
+        xmin = math.floor(min(lons) / px) * px
+        ymax = math.ceil(max(lats) / px) * px
+        w = max(1, math.ceil((max(lons) - xmin) / px))
+        h = max(1, math.ceil((ymax - min(lats)) / px))
+        return (xmin, ymax - h * px, xmin + w * px, ymax, w, h)
+
+    return canvas
+
+
+# NULL canvas arguments: the aggregate derives the canvas from the cells (the documented call), the same on every level
+_H3_DERIVED = _h3_derived_canvas("dup_max")
+RASTER_AGGREGATE += (
+    Case(
+        "h3r_derived_canvas",
+        H3A,
+        (
+            Build("h3r_dup_max"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "centroids",
+            1,
+        ),
+        "pixels_canvas",
+        lambda: {
+            "canvas": _H3_DERIVED(),
+            "pixels": _pixels("h3", "dup_max", _H3_DERIVED)(),
+        },
+        ONLY,
+    ),
+)
 
 # out_crs: the output CRS asked for by its name when out_srid is NULL (the trailing 13th argument of H3 and quadbin)
 RASTER_AGGREGATE += (

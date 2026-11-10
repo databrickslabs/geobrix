@@ -73,8 +73,10 @@ class Case:
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     # wkb_bytes: `expect` is the exact bytes of a geometry output (WKB, no decoding).
-    # Aggregates use merged_equals | pixels | error_group | null | cellfill | mvt_layer | geom_equals | exact;
-    # `args[0]` is the group's rows. cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
+    # Aggregates use merged_equals | pixels | pixels_canvas | error_group | null | cellfill | mvt_layer | geom_equals |
+    # exact; `args[0]` is the group's rows. pixels_canvas: a canvas the function derives (its canvas arguments NULL):
+    # `expect` is {"canvas": (xmin, ymin, xmax, ymax, width, height), "pixels": [...]}, judged as pixels on that canvas.
+    # cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
     # documented layout. mvt_layer: `expect` is {"layer": name, "features": [(WKT in tile coordinates, properties)]}.
     kind: str
     # exact: the value. raises: a substring (or a tuple of alternatives) the error message must contain
@@ -4477,6 +4479,12 @@ def check(case: Case, out, args) -> Optional[str]:
         return _check_merged(case, out)
     if case.kind == "pixels":
         return _check_pixels(case, out)
+    if case.kind == "pixels_canvas":
+        return _check_pixels(
+            replace(case, expect=case.expect["pixels"]),
+            out,
+            canvas=case.expect["canvas"],
+        )
     raise ValueError(case.kind)
 
 
@@ -4534,10 +4542,11 @@ def _check_merged(case: Case, out) -> Optional[str]:
         )
 
 
-def _check_pixels(case: Case, out) -> Optional[str]:
+def _check_pixels(case: Case, out, canvas=None) -> Optional[str]:
     """The first band of the raster (bytes or a tile) is `case.expect`, pixel by pixel (NaN equals NaN), and it sits
     where the canvas of the case puts it: its transform, its CRS and its NoData value. A canvas aggregate's
-    arguments are the group, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, ...
+    arguments are the group, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, ...; `canvas`
+    (xmin, ymin, xmax, ymax, width, height) stands for them when the row leaves them NULL for the function to derive.
     """
     import numpy as np
     from affine import Affine
@@ -4573,8 +4582,11 @@ def _check_pixels(case: Case, out) -> Optional[str]:
     ):  # a NULL out_srid: the custom grid's CRS, else the lon/lat default of the cell rasterizers
         grid = const("grid")
         srid = grid["srid"] if isinstance(grid, dict) else 4326
-    xmin, ymin, xmax, ymax = (const(n) for n in ("xmin", "ymin", "xmax", "ymax"))
-    width, height = const("width", "width_px"), const("height", "height_px")
+    if canvas is not None:
+        xmin, ymin, xmax, ymax, width, height = canvas
+    else:
+        xmin, ymin, xmax, ymax = (const(n) for n in ("xmin", "ymin", "xmax", "ymax"))
+        width, height = const("width", "width_px"), const("height", "height_px")
     want_transform = Affine(
         (xmax - xmin) / width, 0.0, xmin, 0.0, -(ymax - ymin) / height, ymax
     )

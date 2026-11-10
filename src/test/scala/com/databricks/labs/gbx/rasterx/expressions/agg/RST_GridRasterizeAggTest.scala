@@ -259,4 +259,16 @@ class RST_GridRasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         // a blank out_crs is unset, so the out_srid alone is the answer
         RasterizeBurn.outSrid("f", Some("  "), Some(3857), 4326) shouldBe 3857
     }
+
+    test("NULL canvas arguments derive the Python level's canvas") {
+        // the cells of the oracle row h3r_derived_canvas; the canvas the Python level (h3 v4) derives for them
+        val cells = Seq(613196570331971583L, 613196570340360191L, 613196570344554495L, 613196570336165887L)
+        val (xmin, ymin, xmax, ymax, w, h) =
+            RST_H3_RasterizeAgg.computeGridspec(cells.iterator, 4326, None, "centroids", 1, 8)
+        (w, h) shouldBe ((7, 5))
+        xmin shouldBe -122.43741257861514 +- 1e-9
+        ymin shouldBe 37.7566688093865 +- 1e-9
+        xmax shouldBe -122.39513863720987 +- 1e-9
+        ymax shouldBe 37.786864481818824 +- 1e-9
+    }
 }

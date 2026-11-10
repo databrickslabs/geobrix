@@ -1039,7 +1039,7 @@ The JSON is GDAL's, not the earlier GeoBrix shape. A query that reads its keys m
 - `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`.
 - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
 - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` values with more digits.
-- A band with no valid pixel has no statistics. A tile in another driver reports its own driver. A tile with no band, such as a netCDF container, has an empty `bands` list.
+- A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`, and a virtual tile of a container with no band gives NULL.
 - On Unity Catalog the function still returns the earlier shape.
 :::
 
@@ -6032,6 +6032,7 @@ A pixel with no valid pixel in range stays NoData: the function adds no value be
 Both numbers must be whole, from 0 to 2147483647. A fraction or a negative number raises and names the value.
 A tile that declares no NoData value and has no mask band comes back as it is.
 A tile whose validity is its own mask band keeps it. The filled pixels become valid, and the pixels the search did not reach stay masked.
+An alpha band (the last band of an RGBA or gray-alpha tile) is the tile's mask, not a band of values. Its transparent pixels are filled from the opaque ones, and each becomes opaque where every band was reached. A transparent pixel the search did not reach stays transparent.
 
 <FunctionExamples
   name="rst_fillnodata"

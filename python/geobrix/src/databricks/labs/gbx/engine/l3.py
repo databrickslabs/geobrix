@@ -339,6 +339,7 @@ def _decimated_window(fn, src, window, decimate, read_cap):
     from databricks.labs.gbx.pyrx.core import open_tile as ot
     from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
 
+    _refuse_no_band(fn, src.count)
     if has_own_mask(src):
         return ot.NOT_PLAIN
     factor, resampling = decimate
@@ -361,6 +362,16 @@ def _decimated_window(fn, src, window, decimate, read_cap):
         transform=src.window_transform(window) * Affine.scale(w / tw, h / th),
     )
     return comp.write_gtiff(profile, data, alpha_like=src.colorinterp), (w, h)
+
+
+def _refuse_no_band(fn, count: int) -> None:
+    """DataError when a virtual tile's file has no band (a netCDF or HDF container of subdatasets): a virtual tile is
+    read into a GeoTIFF of its window, and a container has no window to read."""
+    if count == 0:
+        raise run.DataError(
+            f"{fn.sql_name}: the virtual tile's file has no band to read (a container of subdatasets). "
+            "Fix: take one of its subdatasets first (gbx_rst_getsubdataset)"
+        )
 
 
 def _read_virtual(
@@ -389,6 +400,7 @@ def _read_virtual(
                 sizes_out.append(got[1])
                 return got[0]
         with ot.open_header(vt, file_ref=file_ref) as h:
+            _refuse_no_band(fn, h.count)
             dtype = str(h.dtypes[0])
             size = (
                 h.width

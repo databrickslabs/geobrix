@@ -200,7 +200,7 @@ These changes affect callers that pass keywords or named arguments.
   - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
   - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` strings with more digits.
   - The JSON adds `description`, `files`, `cornerCoordinates`, `wgs84Extent`, `stac` and, for each band, `block`, `colorInterpretation` and `metadata`. The input is shown as `<input>`.
-  - A band with no valid pixel has no statistics. A tile in another driver reports its own driver. A tile with no band, such as a netCDF container, has an empty `bands` list.
+  - A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`, and a virtual tile of a container with no band gives NULL.
   - On Unity Catalog the function still returns the earlier shape.
 - **The four cell-fill aggregates return the `BINARY` payload,** not `ARRAY<STRUCT<cellid, value>>`.
 - **`gbx_rst_merge_agg` has no JVM level.** It runs in Python on every compute.

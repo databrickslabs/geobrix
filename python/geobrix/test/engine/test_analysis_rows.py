@@ -96,6 +96,28 @@ def test_a_container_tile_with_no_band_is_summarized_with_no_bands_and_a_fill_re
     assert refused.raster is None and "no band" in refused.error
 
 
+def test_a_virtual_tile_is_summarized_as_the_geotiff_of_its_window_and_a_virtual_container_is_refused(
+    tmp_path,
+):
+    """A virtual tile is read into a GeoTIFF of its window first, so its summary reports GTiff whatever its file's
+    driver; a virtual tile of a container with no band has no window to read, and says so with a Fix."""
+    import pathlib
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    png = oracles._build("dem_png", str(tmp_path))
+    rasters, _p, _c = l3._inputs(SUMMARY, png)
+    assert json.loads(run.run(SUMMARY, rasters, {}).text)["driverShortName"] == "GTiff"
+    nc = sorted(
+        (
+            pathlib.Path(__file__).resolve().parents[4]
+            / "src/test/resources/binary/netcdf-coral"
+        ).glob("*.nc")
+    )[0]
+    with pytest.raises(run.DataError, match="no band to read.*Fix:"):
+        l3._inputs(SUMMARY, VirtualTile(cellid=0, path=str(nc)).to_row())
+
+
 def test_the_summary_computes_its_statistics_from_the_pixels_not_from_stored_tags():
     z = np.arange(1, 13, dtype="float64").reshape(1, 3, 4)
     with MemoryFile() as mf:

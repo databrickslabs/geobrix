@@ -151,12 +151,6 @@ SPECS: List[Spec] = [
         "{fn}(tile, array(array(0D, 0.125D, 0D), array(0.125D, 0.5D, 0.125D), array(0D, 0.125D, 0D)))",
         "raster", "tile",
     ),  # fmt: skip
-    Spec(
-        "gbx_rst_derivedband", "dem_1024_mem", "dem", "tile",
-        "{fn}(tile, 'def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, "
-        "**kwargs):\\n    out_ar[:] = in_ar[0] * 2\\n', 'double')",
-        "raster", "tile",
-    ),  # fmt: skip
     Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
     Spec("gbx_rst_initnodata", "dem_1024_mem", "dem", "tile", "{fn}(tile)", "raster", "tile"),
     Spec("gbx_rst_setcrs", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'EPSG:32633')", "raster", "tile"),
@@ -168,10 +162,6 @@ SPECS: List[Spec] = [
     Spec(
         "gbx_rst_tilexyz", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 12, 2088, 1384, 'PNG', 256, 'bilinear', 'auto')",
         "png", "udf:binary", "tile",
-    ),  # fmt: skip
-    Spec(
-        "gbx_rst_xyzpyramid", "dem_1024_mem", "dem", "gen", "{fn}(s.tile, 11, 12, 'PNG', 256, 'bilinear', 'auto')",
-        "png", "scan:tile.raster", gen_value="t.bytes",
     ),  # fmt: skip
     Spec(
         "gbx_pmtiles_agg", "jv_pm_tiles", "pm", "agg", "{fn}(bytes, z, x, y, '{{\"name\": \"bench\"}}')", "pmtiles",
@@ -925,11 +915,11 @@ PARTS: Dict[str, Tuple[str, ...]] = {
         f"gbx_rst_{n}"
         for n in (
             "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoordx", "worldtorastercoordy",
-            "tilexyz", "xyzpyramid", "band",
+            "tilexyz", "band",
         )
     ),  # fmt: skip
     "dem2": tuple(
-        f"gbx_rst_{n}" for n in ("asformat", "convolve", "derivedband", "initnodata", "setcrs", "setsrid", "updatetype")
+        f"gbx_rst_{n}" for n in ("asformat", "convolve", "initnodata", "setcrs", "setsrid", "updatetype")
     ),
     "tiles": ("gbx_rst_getsubdataset", "gbx_rst_frombands", "gbx_pmtiles_agg"),
     "cells": (

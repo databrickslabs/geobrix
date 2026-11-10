@@ -377,9 +377,10 @@ _FIRST_FUNC = (
 
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "masked_rgb_nir"])
-def test_derivedband_parity_is_invalid_where_the_input_is(spark_with_jar, name):
-    """The single band derived from a raster has no alpha band of its own: both tiers write the input's
-    validity as its own mask band, and the same values."""
+def test_derivedband_is_invalid_where_the_input_is(spark_with_jar, name):
+    """The single band derived from a raster has no alpha band of its own: the light level (the only one)
+    writes the input's validity as its own mask band, and the input's values where it is valid.
+    """
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core._nodata import valid_mask
@@ -393,19 +394,11 @@ def test_derivedband_parity_is_invalid_where_the_input_is(spark_with_jar, name):
             "gbx_rst_derivedband", t, f.lit(_FIRST_FUNC), f.lit("first")
         )
 
-    outs = {
-        tier: _single_tile(spark_with_jar, raster, tier, derive)
-        for tier in ("light", "heavy")
-    }
-    valids, datas = {}, {}
-    for tier, out in outs.items():
-        with MemoryFile(out) as mf, mf.open() as ds:
-            valids[tier], datas[tier] = valid_mask(ds), ds.read(1)
-    assert (valids["light"] == valids["heavy"]).all()
-    # the heavyweight derived band keeps the input's data type, the lightweight one is Float64; the values
-    # of the pixels that are invalid are not compared (GDAL's VRT reads a pixel its own mask hides as 0)
-    ok = valids["light"]
-    assert (
-        datas["light"].astype("float64")[ok] == datas["heavy"].astype("float64")[ok]
-    ).all()
-    assert valids["light"].any() and not valids["light"].all()
+    out = _single_tile(spark_with_jar, raster, "light", derive)
+    with MemoryFile(out) as mf, mf.open() as ds:
+        valid, data = valid_mask(ds), ds.read(1)
+    with MemoryFile(raster) as mf, mf.open() as src:
+        want_valid, first = valid_mask(src), src.read(1)
+    assert (valid == want_valid).all()
+    assert (data.astype("float64")[valid] == first.astype("float64")[valid]).all()
+    assert valid.any() and not valid.all()

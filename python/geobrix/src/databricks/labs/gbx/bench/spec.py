@@ -433,7 +433,6 @@ _NODATA = _PYRX + "_nodata.py"
 # have no dedicated core module; their behavior is the _serde tile round-trip.
 _PYRX_SERDE = "python/geobrix/src/databricks/labs/gbx/pyrx/_serde.py"
 _DEM_HELPER = _HEAVY + "dem/RST_DEMProcessingHelper.scala"
-_PIXEL_COMBINE = _OPS + "PixelCombineRasters.scala"
 _GDAL_BLOCK = _GDAL + "GDALBlock.scala"
 
 # pyrx core module + shared _nodata, by module (added to per-function sources
@@ -1832,9 +1831,7 @@ REGISTRY: Dict[str, FnSpec] = {
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- derived band (derivedband.py): full comparison ---
-    # Both engines exec the SAME Python VRT pixel-function source in-process and
-    # fill out_ar identically, so this is a genuine algorithmic match.
+    # --- derived band (derivedband.py) ---
     "rst_derivedband": FnSpec(
         "rst_derivedband",
         "gbx_rst_derivedband",
@@ -1847,8 +1844,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_derivedband(
             t, _DERIVEDBAND_PYFUNC, _DERIVEDBAND_FUNC_NAME
         ),
-        sources=_DERIVEDBAND_LIGHT + (_HEAVY + "RST_DerivedBand.scala", _PIXEL_COMBINE),
+        sources=_DERIVEDBAND_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- proximity (analysis.py): full comparison ---
     # No geometry; value-set + distunits are CRS-independent. GDAL ComputeProximity
@@ -2324,20 +2322,10 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
-    # rst_xyzpyramid is a tile-in / collection-out generator, but every emitted
-    # tile is one rst_tilexyz render — the pyramid just loops RST_TileXYZ.execute
-    # over the intersecting (z,x,y) set. Like rst_tilexyz, the rendered bytes are
-    # render-engine-specific: the heavyweight pipes raw source values through
-    # gdal_translate -of PNG, while the lightweight tier emits a rescaled RGBA
-    # web-map tile via rio-tiler/PIL. The slippy-map / web-mercator convention
-    # (this whole section is "Web-Mercator Tile Output") makes the RGBA display
-    # tile the canonical output, so the lightweight render is the correct one;
-    # the heavy gdal_translate path is non-canonical (deferred Scala follow-up:
-    # heavy RST_TileXYZ should rescale to RGBA before encoding). Either way the
-    # two stacks cannot be made pooled-pixel-identical, so — exactly as
-    # rst_tilexyz already is — this runs pure-core-only with its fingerprint
-    # suppressed. The intersecting tile COUNT already agrees across tiers; the
-    # render bytes are timed but never compared.
+    # rst_xyzpyramid is a tile-in / collection-out generator: every emitted tile is
+    # one rst_tilexyz render over the intersecting (z,x,y) set. Like rst_tilexyz,
+    # the rendered bytes are render-engine-specific, so it runs pure-core-only with
+    # its fingerprint suppressed: the render bytes are timed but never compared.
     "rst_xyzpyramid": FnSpec(
         "rst_xyzpyramid",
         "gbx_rst_xyzpyramid",
@@ -2355,14 +2343,10 @@ REGISTRY: Dict[str, FnSpec] = {
             d["bytes"] for d in xyz.pyramid(ds, a["min_z"], a["max_z"])
         ],
         col_fn=_lateral_only,  # a table function with no spark-path leg: kept callable, and naming the cause if called
-        sources=_XYZ_LIGHT
-        + (
-            _HEAVY + "web/RST_XYZPyramid.scala",
-            _HEAVY + "web/RST_TileXYZ.scala",
-            "src/main/scala/com/databricks/labs/gbx/rasterx/tile/TileMath.scala",
-        ),
+        sources=_XYZ_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- bucket B, group B-grid: DGGS functions (11) --------------------------
     # rst_h3_tessellate + the 10 rst_{h3,quadbin}_rastertogrid{avg,count,max,

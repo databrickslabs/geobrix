@@ -139,27 +139,8 @@ def uc_view(
 # pass must be dropped from here.
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
-# H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
-# is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
-# read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
-_DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the source's data type, and a wrong function is not an error at the call (H20; companion deleted in the decision sweep)"
-# The L3-first web-tile and file functions keep their JVM companion for a restore on measured numbers; these rows are
-# where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
-_XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
-    **{
-        cid: {"L1": _DERIVEDBAND_L1}
-        for cid in (
-            "derivedband_float64",
-            "derivedband_unknown_function",
-            "derivedband_syntax_error",
-        )
-    },
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
-    **{
-        cid: {"L1": _XYZ_ERROR_L1}
-        for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
-    },
     "cg_grid_null_arg": {
         "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
     },

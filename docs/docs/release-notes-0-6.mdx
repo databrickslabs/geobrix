@@ -127,6 +127,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - A float band is grouped by its exact value. Before, each pixel was rounded to a whole number first, so 1.2 and 1.4 joined one region and `value` was the rounded number, 1.
   - A NoData pixel, a transparent pixel and a pixel hidden by the tile's own mask band still give no polygon. So does a NaN or infinite pixel in a tile with no NoData value.
   - The regions of a tile stream through a temporary file on the worker's local disk. Memory grows by about 30 bytes for each region.
+  - A read of that file that fails after the first row fails the task, and Spark retries it. The result is never partial.
   - A `band` outside the tile raises and names the band. A `connectedness` other than 4 or 8 raises and names the value.
   - The JAR no longer holds `RST_Polygonize`. It had no SQL form, so no call changes.
 - **`gbx_rst_fillnodata` runs GDAL's `raster fill-nodata`.** It used rasterio before. The filled pixels equal the earlier results, with a few differences.

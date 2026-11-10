@@ -348,3 +348,21 @@ def test_a_stream_that_fails_before_its_first_row_is_null_and_one_that_fails_lat
     with pytest.raises(RuntimeError, match="failed after 3 of 10 features"):
         engine_uc._feature_rows(fn, late)
     assert late.closed
+
+
+def test_a_required_argument_left_out_raises_and_a_result_over_the_cap_is_refused(
+    tmp_path, monkeypatch
+):
+    """A UC function never answers NULL for a call that is short of a required argument. A result is also judged after
+    GDAL ran, from its header, in case the estimate before the run was short."""
+    dem = _dem(tmp_path)
+    with pytest.raises(TypeError, match="takes at least 2 arguments, got 1"):
+        engine_uc.rst_resample(dem)
+    monkeypatch.setattr(
+        run, "_judge_budget", lambda *a, **k: None
+    )  # an estimate that lets the call run
+    monkeypatch.setattr(engine_uc, "DECODED_CAP", 2 * 1024 * 1024)
+    with pytest.raises(
+        ValueError, match="the result would be .* decoded, over the 2 MiB.*Fix: "
+    ):
+        engine_uc.rst_resample_to_size(dem, 1000, 1000, "nearest")

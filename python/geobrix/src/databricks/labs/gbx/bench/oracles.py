@@ -2845,8 +2845,10 @@ def _ref_slope(args):
 
     unit = args[1] if len(args) > 1 else "degrees"
     xs, ys = (args[2], args[3]) if len(args) > 3 else (None, None)
+    if (xs is None) != (ys is None):
+        raise ValueError("the slope reference takes both scales or neither")
     z, nodata, xres, yres = _dem_band(args)
-    if xs is None or ys is None:
+    if xs is None:
         with _ref_dataset(args) as ds:
             xs, ys = _gdaldem_scale(ds)
     return oracle_refs.slope(z, nodata, xres, yres, unit, xs, ys)

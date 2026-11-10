@@ -100,6 +100,10 @@ def _values(fn, args) -> dict:
         raise TypeError(
             f"{fn.sql_name} takes {len(params) + 1} arguments, got {len(args) + 1}"
         )
+    if len(args) + 1 < fn.min_args:
+        raise TypeError(
+            f"{fn.sql_name} takes at least {fn.min_args} arguments, got {len(args) + 1}"
+        )
     raw = list(args) + [sql_default(p.default) for p in params[len(args) :]]
     values = {}
     for p, v in zip(params, raw):
@@ -159,6 +163,22 @@ def _feature_rows(fn, features) -> Optional[list]:
     return rows
 
 
+def _check_result(fn, raster: bytes) -> None:
+    """Refuse a result decoded over the cap, from its header: the engine judged its estimate before GDAL ran, and this
+    holds the cap on what the function returns if the estimate was short (``uc.tier_b.tile_row`` does the same).
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.pyrx.core.budget import decoded_bytes
+    from databricks.labs.gbx.uc.tier_b import result_refusal
+
+    with MemoryFile(raster) as mf, open_bytes(mf) as ds:
+        decoded = decoded_bytes(ds)
+    if decoded > DECODED_CAP:
+        raise result_refusal(fn.sql_name, decoded, DECODED_CAP)
+
+
 def _call(fn, first, args):
     """The engine's answer as the session gives it (a tile, a list of feature dicts, a JSON text), or None; an error
     tile (``(None, tile)``) for a tile-returning row given one."""
@@ -176,6 +196,7 @@ def _call(fn, first, args):
             raise _over_cap(fn, res)
         return None  # a data error: a UC function has no error tile
     if fn.gdal.out_kind == "raster":
+        _check_result(fn, res.raster)
         return tile_checks.engine_tile(res, cellid)
     if fn.gdal.out_kind == "json":
         return res.text

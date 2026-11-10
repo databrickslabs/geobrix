@@ -187,6 +187,10 @@ def check_features_ref(case, out, args) -> Optional[str]:
     from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.bench.oracles import _ref_contours
 
+    if case.expect != "exact":
+        raise ValueError(
+            f"{case.cid}: features_ref takes the rule 'exact', not {case.expect!r}"
+        )
     if out is None:
         return f"{case.cid}: got NULL, want contour lines"
     got = {}
@@ -197,10 +201,6 @@ def check_features_ref(case, out, args) -> Optional[str]:
     want, px = _ref_contours(args)
     if sorted(got) != sorted(want):
         return f"{case.cid}: levels {sorted(got)}, reference {sorted(want)}"
-    if case.expect != "exact":
-        raise ValueError(
-            f"{case.cid}: features_ref takes the rule 'exact', not {case.expect!r}"
-        )
     for lv in sorted(want):
         g, w = got[lv], want[lv]
         away = shapely.hausdorff_distance(unary_union(g), unary_union(w)) / px

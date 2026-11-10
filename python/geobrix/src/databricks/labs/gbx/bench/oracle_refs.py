@@ -65,9 +65,12 @@ def slope(z, nodata, xres, yres, unit="degrees", xscale=1.0, yscale=1.0):
     """The slope of Horn's gradients: degrees from the horizontal, or ``percent`` (100 x rise over run), the unit in any
     case. ``xscale`` and ``yscale`` are the vertical units in one horizontal unit, as GDAL's options.
     """
+    word = str(unit).strip().lower()
+    if word not in ("degrees", "percent"):
+        raise ValueError(f"the slope reference takes degrees or percent, not {unit!r}")
     dzdx, dzdy, mask = horn(z, nodata, xres, yres, xscale, yscale)
     rise = np.hypot(dzdx, dzdy)
-    if str(unit).strip().lower() == "percent":
+    if word == "percent":
         return rise * 100.0, mask
     return np.degrees(np.arctan(rise)), mask
 

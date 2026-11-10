@@ -805,3 +805,19 @@ def test_the_slope_reference_takes_gdals_default_scale_for_the_crs():
     assert scale("EPSG:3857") == pytest.approx((1.0, 1.0))
     assert scale(None) == (1.0, 1.0)
     assert scale("EPSG:3857", "ft") == pytest.approx((1 / 0.3048, 1 / 0.3048))
+
+
+def test_a_contour_reference_row_takes_the_exact_rule_only():
+    """The scikit-image 'equivalent' rule is gone: a row that still names it is refused before it is judged."""
+    from databricks.labs.gbx.bench import oracle_checks
+    from databricks.labs.gbx.bench.oracles import Build, Case
+
+    case = Case(
+        "stale",
+        "gbx_rst_contour",
+        (Build("dem_3857"), [110.0]),
+        "features_ref",
+        "equivalent",
+    )
+    with pytest.raises(ValueError, match="takes the rule 'exact'"):
+        oracle_checks.check_features_ref(case, [], case.args)

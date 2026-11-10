@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
-import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.expressions.CrsExpressionUtil.{CrsOutcome, encodeAdaptive, encodeBinary}
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -24,17 +25,20 @@ import org.apache.spark.unsafe.types.UTF8String
   * - The Scala core [[ST_SetCrs.eval]] stays medium-preserving (WKB/EWKB in →
   *   EWKB out; WKT/EWKT in → EWKT out) for callers working in text.
   *
+  * The trailing [[ExpressionConfigExpr]] child (not a user argument) carries the GDAL config, so the
+  * SQL path starts GDAL in the executor JVM before the first OSR call, as [[ST_TransformCrs]] does.
+  *
   * Registered as: `gbx_st_setcrs`
   */
 case class ST_SetCrs(geom: Expression, crs: Expression) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(geom, crs)
+    override def children: Seq[Expression] = Seq(geom, crs, ExpressionConfigExpr())
     // Fixed BINARY return type — the SQL surface always hands back EWKB.
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = ST_SetCrs.name
-    override def replacement: Expression = invoke(ST_SetCrs, methodName = "evalSql")
+    override def replacement: Expression = invoke(ST_SetCrs, methodName = "evalSqlWithConf")
     // Pin the crs argument to StringType so integer SRIDs (e.g. 32633) are coerced by Catalyst.
-    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType)
+    override def inputTypes: Seq[DataType] = Seq(geom.dataType, StringType, StringType)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 }
@@ -76,6 +80,13 @@ object ST_SetCrs extends WithExpressionInfo {
 
     /** SQL surface: always BINARY (EWKB), regardless of the input encoding. */
     def evalSql(geom: Any, crs: UTF8String): Array[Byte] = encodeBinary(core(geom, crs))
+
+    /** SQL invoke target: starts GDAL in this JVM from the injected config (idempotent per JVM), then
+      * runs [[evalSql]]. `conf` is the config literal, never user-supplied, decoded once per JVM. */
+    def evalSqlWithConf(geom: Any, crs: UTF8String, conf: UTF8String): Array[Byte] = {
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
+        evalSql(geom, crs)
+    }
 
     override def name: String = "gbx_st_setcrs"
 

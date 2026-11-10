@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
-import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types.{DataType, StringType}
@@ -18,14 +19,19 @@ import scala.util.Try
   * null inputs, and unresolvable SRIDs (never-error: an unrecognized code
   * returns null, not an exception).
   *
+  * The trailing [[ExpressionConfigExpr]] child (not a user argument) carries the GDAL config, so the
+  * SQL path starts GDAL in the executor JVM before the first OSR call, as [[ST_TransformCrs]] does.
+  * Without it a fresh executor's first call fails with an `UnsatisfiedLinkError` (a `LinkageError`,
+  * which `Try` does not catch).
+  *
   * Registered as: `gbx_st_crs`
   */
 case class ST_Crs(geom: Expression) extends InvokedExpression {
-    override def children: Seq[Expression] = Seq(geom)
+    override def children: Seq[Expression] = Seq(geom, ExpressionConfigExpr())
     override def dataType: DataType = StringType
     override def nullable: Boolean = true
     override def prettyName: String = ST_Crs.name
-    override def replacement: Expression = invoke(ST_Crs)
+    override def replacement: Expression = invoke(ST_Crs, methodName = "evalSqlWithConf")
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 }
 
@@ -45,6 +51,13 @@ object ST_Crs extends WithExpressionInfo {
         } finally {
             sr.delete()
         }
+    }
+
+    /** SQL invoke target: starts GDAL in this JVM from the injected config (idempotent per JVM), then
+      * runs [[eval]]. `conf` is the config literal, never user-supplied, decoded once per JVM. */
+    def evalSqlWithConf(geom: Any, conf: UTF8String): UTF8String = {
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
+        eval(geom)
     }
 
     override def name: String = "gbx_st_crs"

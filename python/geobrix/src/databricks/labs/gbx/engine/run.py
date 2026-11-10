@@ -1093,9 +1093,13 @@ def _finish_copy(gdal, work: str, out: str, tokens) -> None:
     """The work copy `work` written as the output `out` with the call's creation options, then removed."""
     co = [t.split("=", 1)[1] for t in tokens if t.startswith("--creation-option=")]
     gdal.ErrorReset()
-    done = gdal.Translate(
-        out, work, options=gdal.TranslateOptions(format="GTiff", creationOptions=co)
-    )
+    wds = _open_geotiff(gdal, work)
+    try:
+        done = gdal.Translate(
+            out, wds, options=gdal.TranslateOptions(format="GTiff", creationOptions=co)
+        )
+    finally:
+        wds = None
     if done is None:
         raise DataError(gdal.GetLastErrorMsg() or "the tile could not be written")
     done = None

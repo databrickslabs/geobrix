@@ -269,7 +269,12 @@ OPEN_SITES = {
     ("engine/run.py", "copy = gdal.Translate("): (
         1,
         "the per-band fill copies the engine's own input GeoTIFF (the dataset object _open_geotiff opened just above, GTiff only) "
-        "to the call's /vsimem output; no name is opened here",
+        "to its /vsimem work copy; no name is opened here",
+    ),
+    ("engine/run.py", "done = gdal.Translate("): (
+        1,
+        "the per-band fill writes its /vsimem work copy (the dataset object _open_geotiff opened just above, GTiff only) "
+        "as the call's /vsimem output; no name is opened here",
     ),
     ("bench/oracles.py", 'info = gdal.Info(name, format="json", stats=True)'): (
         1,

@@ -209,9 +209,11 @@ from databricks.labs.gbx.bench import preflight  # noqa: E402
 
 
 def _jvm_tile_forms():
+    # the JV set (`bench.levels_jvm`) is installed after the twins: its accessors are timed against light, not probed
     return [
         (family, f)
         for family, forms in lf.FORMS.items()
+        if family != "JV"
         for f in forms
         if f.level in ("L1", "L2") and f.input == "tiles_n" and f.sql and not f.opt_in
     ]

@@ -682,6 +682,46 @@ def test_a_mask_that_does_not_warp_onto_the_output_grid_is_a_data_error(engine):
             run._remove(g, prefix)
 
 
+def _output_grid(gdal, name, width, height, origin, px):
+    out = gdal.GetDriverByName("GTiff").Create(name, width, height, 1, gdal.GDT_Byte)
+    out.SetGeoTransform((origin[0], px, 0.0, origin[1], 0.0, -px))
+    out = None
+
+
+def test_the_mask_is_cut_to_the_window_of_its_grid_and_a_misfit_is_a_data_error(engine):
+    import numpy as np
+    from osgeo import gdal
+
+    from databricks.labs.gbx.engine.run import _gdal_status
+
+    prefix = "/vsimem/gbx-test-cut"
+    wd = gdal.GetDriverByName("MEM").Create("", 20, 15, 1, gdal.GDT_Byte)
+    wd.SetGeoTransform((100.0, 1.0, 0.0, 50.0, 0.0, -1.0))
+    mask = np.arange(20 * 15, dtype="u1")
+    grid = mask.reshape(15, 20)
+    try:
+        with _gdal_status() as g:
+            _output_grid(g, f"{prefix}/win.tif", 4, 4, (103.0, 48.0), 1.0)
+            cut = run._cut_to_output(g, f"{prefix}/win.tif", wd, mask)
+            assert (cut == grid[2:6, 3:7].ravel()).all()  # column 3, row 2
+            _output_grid(g, f"{prefix}/same.tif", 20, 15, (100.0, 50.0), 1.0)
+            assert run._cut_to_output(g, f"{prefix}/same.tif", wd, mask) is mask
+            for name, (w, h, origin, px) in {
+                "half": (4, 4, (103.5, 48.0), 1.0),  # half a pixel off the grid
+                "coarse": (4, 4, (103.0, 48.0), 2.0),  # another pixel size
+                "past": (4, 4, (118.0, 48.0), 1.0),  # runs past the right edge
+            }.items():
+                _output_grid(g, f"{prefix}/{name}.tif", w, h, origin, px)
+                with pytest.raises(
+                    spec.DataError, match="does not warp onto the output grid"
+                ):
+                    run._cut_to_output(g, f"{prefix}/{name}.tif", wd, mask)
+    finally:
+        wd = None
+        with _gdal_status() as g:
+            run._remove(g, prefix)
+
+
 # --- a virtual tile read at its target size: the own-mask fallback and the read cap -------------------------------------
 def _virtual_file(tmp_path, mask=False):
     import rasterio

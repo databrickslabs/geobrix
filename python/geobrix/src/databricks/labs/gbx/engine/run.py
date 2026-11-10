@@ -707,7 +707,12 @@ def _carry_mask(
             return
         with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
             od = _open_geotiff(gdal, out, update=True)
-            if out_valid.size != od.RasterXSize * od.RasterYSize:
+            if (
+                out_valid.size != od.RasterXSize * od.RasterYSize
+                if window  # cut to the output's pixels already
+                else (od.RasterXSize, od.RasterYSize)
+                != (wd.RasterXSize, wd.RasterYSize)
+            ):
                 raise DataError(
                     "the source's mask band does not warp onto the output grid"
                 )
@@ -895,9 +900,9 @@ class FeatureStream:
                     row = next(rows)
                 except StopIteration:
                     break
-                except (
-                    RuntimeError
-                ) as exc:  # GDAL's read of a feature, not the conversion after it
+                except RuntimeError as exc:  # GDAL's read of a feature
+                    if type(exc) is not RuntimeError:  # RecursionError and the like
+                        raise
                     raise DataError(
                         f"GDAL's output could not be read back ({exc})"
                     ) from None

@@ -1,0 +1,120 @@
+---
+title: Functions the JAR speeds up
+sidebar_label: With the JAR
+---
+
+# Functions the JAR speeds up
+
+The GeoBrix JAR adds a JVM level (L1) to some functions. On a dedicated cluster with the JAR, these functions run in the JVM instead of in a Python worker.
+
+The env wheel alone runs every function. The JAR is optional: install it only where you want the JVM level.
+
+## Where the JAR loads
+
+- **Dedicated access mode** loads the JAR. The functions on this page run on the JVM there.
+- **Standard access mode** runs Spark Connect, so no function has a JVM level there. GeoBrix runs the Python level and says why.
+- **Serverless** cannot load the JAR. Every function runs at its Python level.
+- **A SQL warehouse** runs Unity Catalog functions only. See [Unity Catalog functions](./uc-functions).
+
+[What needs dedicated compute](./execution-tiers#dedicated-compute) compares the computes feature by feature.
+
+## Which functions run on the JVM
+
+GeoBrix makes the JVM level the default where it measured at least 1.2x faster than the best Python form, with the same output. A few functions are not measured yet. They run the JVM level until a measurement says otherwise.
+
+[Performance](./performance#heavy-level-with-the-jar) has the measured speed-ups. Every function not listed here runs at its Python level, with or without the JAR.
+
+A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
+
+{/* BEGIN GENERATED jar-functions: edit manifest/functions.json, then run gbx:manifest:gen */}
+55 functions run on the JVM when the JAR is present.
+
+### RasterX
+
+| Function | Package | Notes |
+|---|---|---|
+| `gbx_rst_bng_rasterize_agg` | RasterX |  |
+| `gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_crs` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_format` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_frombands` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_fromcontent` | RasterX |  |
+| `gbx_rst_height` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_memsize` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_numbands` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_pixelheight` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_pixelwidth` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_rastertoworldcoordx` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_rastertoworldcoordy` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_rotation` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_scalex` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_scaley` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_skewx` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_skewy` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_srid` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_tri` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_upperleftx` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_upperlefty` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_width` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_worldtorastercoordx` | RasterX | A virtual tile runs in Python. |
+| `gbx_rst_worldtorastercoordy` | RasterX | A virtual tile runs in Python. |
+
+### GridX
+
+| Function | Package | Notes |
+|---|---|---|
+| `gbx_bng_aswkb` | GridX |  |
+| `gbx_bng_aswkt` | GridX |  |
+| `gbx_bng_cellarea` | GridX |  |
+| `gbx_bng_cellfill` | GridX |  |
+| `gbx_bng_cellintersection` | GridX |  |
+| `gbx_bng_cellunion` | GridX |  |
+| `gbx_bng_centroid` | GridX |  |
+| `gbx_bng_distance` | GridX |  |
+| `gbx_bng_euclideandistance` | GridX |  |
+| `gbx_bng_geomkloopexplode` | GridX |  |
+| `gbx_bng_geomkringexplode` | GridX |  |
+| `gbx_bng_kloopexplode` | GridX |  |
+| `gbx_bng_kring` | GridX |  |
+| `gbx_bng_kringexplode` | GridX |  |
+| `gbx_bng_pointascell` | GridX |  |
+| `gbx_bng_tessellate` | GridX |  |
+| `gbx_bng_tessellateexplode` | GridX |  |
+| `gbx_custom_cellaswkb` | GridX |  |
+| `gbx_custom_cellaswkt` | GridX |  |
+| `gbx_custom_centroid` | GridX |  |
+| `gbx_custom_distance` | GridX |  |
+| `gbx_custom_grid` | GridX |  |
+| `gbx_custom_pointascell` | GridX |  |
+| `gbx_h3_cell_bbox` | GridX |  |
+| `gbx_h3_cellfill` | GridX |  |
+
+### VectorX
+
+| Function | Package | Notes |
+|---|---|---|
+| `gbx_st_crs` | VectorX |  |
+| `gbx_st_interpolateelevationbbox` | VectorX |  |
+| `gbx_st_setcrs` | VectorX |  |
+| `gbx_st_transformcrs` | VectorX |  |
+| `gbx_st_triangulate` | VectorX |  |
+{/* END GENERATED jar-functions */}
+
+## Check the level GeoBrix picked
+
+`register` returns the level it chose for each name:
+
+```python
+from databricks.labs.gbx import register
+
+chosen = register(spark)
+chosen["gbx_rst_width"].level   # 'L1' on dedicated compute with the JAR, else 'L3'
+```
+
+When the JVM level cannot run, `register` prints one line that names the level and the reason. See [GeoBrix says why](./execution-tiers#geobrix-says-why).
+
+## Install the JAR
+
+- [Choose an install path](../installation.mdx#choose-an-install-path) compares the env wheel alone, the env wheel and the JAR, and a container image.
+- `databricks.labs.gbx.stage_jar(vol_dir)` copies the JAR of the env wheel to a Volume folder. See [Stage the JAR](../installation.mdx#stage-jar).
+- A [DCS image](../installation/dcs.mdx) starts a dedicated DBR 19 cluster with the JAR in place.

@@ -641,6 +641,69 @@ def render_uc_routes(man) -> str:
     return "\n".join(rows) + "\n"
 
 
+_PACKAGE_ORDER = ("RasterX", "GridX", "VectorX", "PMTiles")
+
+
+def jvm_by_default(fn) -> bool:
+    """True when `register(spark)` picks the row's L1 (JVM) level on dedicated compute with the JAR.
+
+    The order is the manager's own (`levels.order`). L1 runs when it is the first level of that order the row has and
+    `levels.available` accepts it under dedicated-with-JAR capabilities.
+    """
+    from databricks.labs.gbx.manager import levels
+    from databricks.labs.gbx.manager.capabilities import Capabilities, JarIdentity
+
+    caps = Capabilities(
+        connect=False,
+        serverless=False,
+        jar=JarIdentity("", ""),
+        jar_reason="",
+        gdal_reason="",
+        sql_functions=True,
+    )
+    for level in levels.order(fn):
+        if level == "L1" and level in fn.levels:
+            if levels.available(fn, level, caps) is None:
+                return True
+        elif level in fn.levels:
+            return False
+    return False
+
+
+def render_jar_functions(man) -> str:
+    """The functions that run on the JVM when the JAR is present, by package then name.
+
+    The one note is the row's own fact: a tile function behind the SQL dispatch wrapper sends a virtual tile to Python.
+    """
+    fns = [
+        f for f in man.functions.values() if f.status == "stable" and jvm_by_default(f)
+    ]
+    out = [f"{len(fns)} functions run on the JVM when the JAR is present.", ""]
+    by_pkg: Dict[str, list] = {}
+    for f in fns:
+        by_pkg.setdefault(BADGE_OF_PREFIX[f.sql_name.split("_")[1]], []).append(f)
+    for pkg in sorted(by_pkg, key=lambda p: (_PACKAGE_ORDER + (p,)).index(p)):
+        group = sorted(by_pkg[pkg], key=lambda f: f.sql_name)
+        out += [f"### {pkg}", ""]
+        out += _table(
+            ["Function", "Package", "Notes"],
+            [
+                [
+                    f"`{f.sql_name}`",
+                    pkg,
+                    (
+                        "A virtual tile runs in Python."
+                        if f.accepts_virtual_tile and f.kind != "generator"
+                        else ""
+                    ),
+                ]
+                for f in group
+            ],
+        )
+        out.append("")
+    return "\n".join(out)
+
+
 def all_sql_names(man) -> List[str]:
     return sorted(f.sql_name for f in man.functions.values() if f.status == "stable")
 

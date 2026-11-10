@@ -359,3 +359,18 @@ def test_an_aggregate_example_needs_literal_per_group_arguments():
     )
     with pytest.raises(ValueError, match="not a literal"):
         surfaces.example_sql(fn, bad)
+
+
+def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
+    surfaces = _tool("surfaces")
+    out = surfaces.render_jar_functions(manifest.load())
+    rows = [line for line in out.splitlines() if line.startswith("| `gbx_")]
+    assert out.startswith(
+        f"{len(rows)} functions run on the JVM when the JAR is present."
+    )
+    assert "| `gbx_rst_width` | RasterX | A virtual tile runs in Python. |" in rows
+    assert "| `gbx_bng_kringexplode` | GridX |  |" in rows
+    # an L1 block the level table orders after L3, and one whose JVM form returns another shape, are not listed
+    assert not any(
+        n in out for n in ("`gbx_rst_merge`", "`gbx_bng_kloop`", "`gbx_rst_maketiles`")
+    )

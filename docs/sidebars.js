@@ -149,6 +149,7 @@ const sidebars = {
       items: [
         'api/overview',
         'api/execution-tiers',
+        'api/jar-functions',
         'api/coordinate-reference-systems',
         'api/error-handling',
         'api/language-bindings',

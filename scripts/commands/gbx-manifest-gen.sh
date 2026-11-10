@@ -14,7 +14,7 @@ show_help() {
     echo "                   generated file names a machine path, or when a replacement gate fails"
     echo "                   (scripts/manifest/check_surfaces.py; skipped with --only): per-surface"
     echo "                   completeness, session/UC overlap, parameter names on every surface, docs tabs"
-    echo "  --only <surface> manifest | python | docs | function-info | availability | examples | counts | drivers"
+    echo "  --only <surface> manifest | python | docs | function-info | availability | jar-functions | examples | counts | drivers"
     echo "  --log <path>     Write output to a log file (filename -> test-logs/<name>)"
     echo "  --help           Show this help"
     echo ""

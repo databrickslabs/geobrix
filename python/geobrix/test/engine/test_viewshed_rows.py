@@ -176,3 +176,36 @@ def test_a_file_read_by_path_that_cannot_be_read_is_an_error_tile_not_zeros(tmp_
         )
         res = run.run(fn, rasters, values)
     assert res.raster is None and "cut_short.tif" in res.error
+
+
+def test_the_read_cap_judges_bytes_and_the_decoded_budget_judges_a_file_read_by_path(
+    tmp_path, monkeypatch
+):
+    """The engine holds a bytes tile, so the read cap refuses one over it (ccaaad072 dropped that check for every row).
+    A file GDAL reads by its path holds nothing, so the cap skips it, but the decoded budget still judges its output.
+    """
+    import contextlib
+
+    from databricks.labs.gbx.engine import l3
+    from databricks.labs.gbx.pyrx.core import budget
+
+    fn = manifest.load().functions[FN]
+    dem = tmp_path / "dem.tif"
+    dem.write_bytes(_flat_dem(256))  # 256 KiB decoded
+    values = {
+        "observer_geom": "POINT(128.5 127.5)",
+        "observer_height": 10.0,
+        "target_height": 0.0,
+        "max_distance": None,
+        "crs": None,
+    }
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: 4096)
+    res = run.run(fn, [dem.read_bytes()], values)
+    assert res.raster is None and "read cap (4 KiB)" in res.error, res
+    with contextlib.ExitStack() as stack:
+        rasters, _, _ = l3._inputs(fn, _file_tile(dem), 4096, None, None, values, stack)
+        assert isinstance(rasters[0], run.PathSource)
+        assert run.run(fn, rasters, values).error is None  # under the cap: not read
+        monkeypatch.setattr(run, "decoded_budget", lambda: 1000)
+        res = run.run(fn, rasters, values)
+    assert res.raster is None and "decoded" in res.error, res

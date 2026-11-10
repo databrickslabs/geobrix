@@ -1331,6 +1331,19 @@ def _pipe_start(gdal, sql_name: str, name: str, props, drivers):
         ds = None
 
 
+def _judge_read_cap(fn, sizes) -> None:
+    """DataError (with a Fix) when an input the engine holds is decoded over the read cap: the cap of every tile read from
+    bytes (light's ``_serde.open_tile``), judged from its header. A ``PathSource`` holds nothing (size 0): GDAL reads it
+    block by block, so only the decoded budget (``_judge_budget``) judges it, by its output.
+    """
+    from databricks.labs.gbx.pyrx.core.budget import read_cap_refusal, tile_read_cap
+
+    cap = tile_read_cap()
+    for size in sizes:
+        if size > cap:
+            raise DataError(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
+
+
 def _judge_budget(
     gdal, fn, tokens, props, names, sources, drivers, decoded, budget
 ) -> None:
@@ -1402,6 +1415,7 @@ def run(
                 gdal, fn, rasters, names, prefix, shown, section, src_sizes
             )
             sizes = _held_sizes(rasters, props)
+            _judge_read_cap(fn, sizes)
             decoded = sum(sizes)
             budget = decoded_budget()
             # the texts of the call's text arguments (a color table) are files of their own under the prefix

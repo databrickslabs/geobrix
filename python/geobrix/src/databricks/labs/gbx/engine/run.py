@@ -32,14 +32,17 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import functools
+import math
+import shutil
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
-from typing import Mapping, Optional, Sequence
+from typing import Iterable, Mapping, Optional, Sequence
 
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import argv as argv_mod
-from databricks.labs.gbx.engine.spec import OUTPUT_FORMAT_OF, DataError, ParamError
+from databricks.labs.gbx.engine.spec import DataError, ParamError, output_format
 
 PREFIX = "/vsimem/gbx-spec"
 _TIFF_MAGIC = (
@@ -78,8 +81,9 @@ class Result:
     raster: Optional[bytes]
     error: Optional[str]
     command: Optional[str]
-    # a features output: one tuple per feature, in layer order: (WKB or None, the declared fields' values...)
-    features: Optional[list] = None
+    # a features output: one tuple per feature, in layer order: (WKB or None, the declared fields' values...). A list, or for
+    # a streamed output (``FeatureStream``) an iterator that reads them from a file on local disk; the caller closes it.
+    features: Optional[Iterable] = None
     # a JSON output: GDAL's text, with the engine's /vsimem names shown as <input>
     text: Optional[str] = None
 
@@ -614,6 +618,23 @@ def _remove(gdal, prefix: str) -> None:
     )  # nothing left to remove is not an error here (exceptions are off)
 
 
+def _output_name(block, prefix: str):
+    """``(the output's name, the folder it needs removed or None)``: a GeoTIFF under the call's /vsimem prefix, or for a
+    streamed features output a GeoPackage in a new folder on local disk, which holds what GDAL has written so memory does
+    not."""
+    if block.out_kind == "features" and block.out_stream:
+        scratch = tempfile.mkdtemp(prefix="gbx-spec-")
+        return f"{scratch}/out.gpkg", scratch
+    return f"{prefix}/out.tif", None
+
+
+def _cleanup(gdal, prefix: str, scratch: Optional[str]) -> None:
+    """Remove the call's /vsimem files and its local folder (None when a stream took it over)."""
+    _remove(gdal, prefix)
+    if scratch is not None:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def _shown(text: str, names: Mapping[str, str]) -> str:
     for real, placeholder in names.items():
         text = text.replace(real, placeholder)
@@ -637,28 +658,86 @@ def _features(gdal, alg, fields, snap=None) -> list:
     if lyr is None:
         raise DataError("GDAL returned no output layer")
     lyr.ResetReading()
-    read = {
-        "DOUBLE": "GetFieldAsDouble",
-        "INT": "GetFieldAsInteger",
-        "BIGINT": "GetFieldAsInteger64",
-        "STRING": "GetFieldAsString",
-    }
-    out = []
-    for f in lyr:
-        g = f.GetGeometryRef()
-        out.append(
-            (None if g is None else bytes(g.ExportToIsoWkb()),)
-            + tuple(
-                (
-                    fix.get(src, _same)(getattr(f, read[t])(src))
-                    if f.IsFieldSetAndNotNull(src)
-                    else None
-                )
-                for _name, t, src in fields
-            )
-        )
+    out = list(_layer_rows(lyr, fields, fix))
     del lyr, ds
     return out
+
+
+_READ = {
+    "DOUBLE": "GetFieldAsDouble",
+    "INT": "GetFieldAsInteger",
+    "BIGINT": "GetFieldAsInteger64",
+    "STRING": "GetFieldAsString",
+}
+
+
+def _layer_rows(lyr, fields, fix=None):
+    """The features of the layer `lyr` one at a time, as (ISO WKB, field values...) tuples."""
+    fix = fix or {}
+    for f in lyr:
+        g = f.GetGeometryRef()
+        yield (None if g is None else bytes(g.ExportToIsoWkb()),) + tuple(
+            (
+                fix.get(src, _same)(getattr(f, _READ[t])(src))
+                if f.IsFieldSetAndNotNull(src)
+                else None
+            )
+            for _name, t, src in fields
+        )
+
+
+class FeatureStream:
+    """The features of a streamed output, read one at a time from the GeoPackage GDAL wrote on this worker's local disk.
+
+    A feature whose value is NaN or infinite is left out, as a NoData pixel is: a NaN pixel is not data, and its polygon is
+    a hole in its neighbours', as a masked pixel's would be. (The file stores a NaN as NULL.) The file and its folder are
+    removed when the stream ends, is closed or is collected: the caller iterates it once and calls ``close``.
+    """
+
+    def __init__(self, gdal, path: str, scratch: str, fields):
+        self._gdal, self._path, self._scratch, self._fields = (
+            gdal,
+            path,
+            scratch,
+            fields,
+        )
+        self._used = False
+
+    def __iter__(self):
+        if self._used:
+            raise RuntimeError("a feature stream is read once")
+        self._used = True
+        gdal = self._gdal
+        ds = gdal.OpenEx(
+            self._path,
+            gdal.OF_VECTOR | gdal.OF_READONLY,
+            allowed_drivers=["GPKG"],
+        )
+        try:
+            lyr = ds.GetLayer(0) if ds is not None else None
+            if lyr is None:
+                raise DataError(
+                    gdal.GetLastErrorMsg() or "GDAL's output could not be read back"
+                )
+            doubles = [
+                i + 1 for i, (_n, t, _s) in enumerate(self._fields) if t == "DOUBLE"
+            ]
+            for row in _layer_rows(lyr, self._fields):
+                # the file stores a NaN as NULL
+                if all(row[i] is not None and math.isfinite(row[i]) for i in doubles):
+                    yield row
+        finally:
+            lyr = ds = None
+            self.close()
+
+    def close(self) -> None:
+        """Remove the file and its folder (safe to call again)."""
+        scratch, self._scratch = self._scratch, None
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+    def __del__(self):
+        self.close()
 
 
 def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None):
@@ -991,7 +1070,7 @@ def run(
     block = fn.gdal
     prefix = f"{PREFIX}/{uuid.uuid4().hex}"
     names = [f"{prefix}/in{i}.tif" for i in range(len(rasters))]
-    out = f"{prefix}/out.tif"
+    out, scratch = _output_name(block, prefix)
     placeholders = (
         ["<input>"]
         if block.inputs[0][1] == "raster"
@@ -1035,7 +1114,7 @@ def run(
             fmt = next(
                 t.split("=", 1)[1] for t in tokens if t.startswith("--output-format=")
             )
-            if fmt != OUTPUT_FORMAT_OF.get(block.out_kind):
+            if fmt != output_format(block):
                 raise ParamError(
                     f"{fn.sql_name}: the engine does not write {fmt} for a {block.out_kind} output"
                 )
@@ -1076,6 +1155,11 @@ def run(
                     lambda alg: str(alg["output-string"]),
                 )
                 return Result(None, None, command, text=_shown(text, shown))
+            if block.out_kind == "features" and block.out_stream:
+                _execute(gdal, block.alg, tokens, shown, refused)
+                stream = FeatureStream(gdal, out, scratch, block.out_fields)
+                scratch = None  # the stream removes it
+                return Result(None, None, command, features=stream)
             if block.out_kind == "features":
                 feats = _execute(
                     gdal,
@@ -1116,4 +1200,4 @@ def run(
         except DataError as exc:
             return Result(None, _shown(str(exc), shown), command)
         finally:
-            _remove(gdal, prefix)
+            _cleanup(gdal, prefix, scratch)

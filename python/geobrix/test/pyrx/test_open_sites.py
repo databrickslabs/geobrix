@@ -257,9 +257,10 @@ OPEN_SITES = {
         "the bench harness reads the rasters its own _synth step wrote (GeoBrix's outputs, never user data)",
     ),
     ("engine/run.py", "ds = gdal.OpenEx("): (
-        3,
+        4,
         "each open names allowed_drivers: the virtual tile's VRT header (VRT only, after the remote-path refusal), "
-        "the tile properties read, and the non-GeoTIFF-to-GeoTIFF conversion (the drivers that read from tile bytes)",
+        "the tile properties read, the non-GeoTIFF-to-GeoTIFF conversion (the drivers that read from tile bytes), "
+        "and the engine's own streamed output (GPKG only, the file GDAL wrote in the engine's temporary folder)",
     ),
     ("engine/run.py", 'out = gdal.Translate(dst, ds, options=["-of", "GTiff"])'): (
         1,

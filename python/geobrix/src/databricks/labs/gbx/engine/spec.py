@@ -34,7 +34,16 @@ ENGINE_FILE_BINDERS = frozenset({"text_vsimem"})
 # Output formats the engine writes: GTiff for rasters, MEM for features, GDAL's JSON text for a JSON output. Never VRT or
 # GDALG (both can reference other files or run a stored pipeline when opened).
 OUTPUT_FORMAT_OF = {"raster": "GTiff", "features": "MEM", "json": "json"}
-OUTPUT_FORMATS = frozenset(OUTPUT_FORMAT_OF.values())
+# A streamed features output is written to a GeoPackage file on the worker's local disk and read back a feature at a time.
+STREAM_FORMAT = "GPKG"
+OUTPUT_FORMATS = frozenset(list(OUTPUT_FORMAT_OF.values()) + [STREAM_FORMAT])
+
+
+def output_format(block) -> str:
+    """The format the engine tells GDAL to write `block`'s output in."""
+    if block.out_kind == "features" and block.out_stream:
+        return STREAM_FORMAT
+    return OUTPUT_FORMAT_OF[block.out_kind]
 
 
 class SpecError(ValueError):

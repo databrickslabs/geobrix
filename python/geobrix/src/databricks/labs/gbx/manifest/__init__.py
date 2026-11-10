@@ -320,6 +320,9 @@ class GdalSpec:
     # A features output: (struct field, SQL type, layer field) for each value read from the output layer beside the
     # geometry; the output is `ARRAY<STRUCT<geom_wkb BINARY, <fields>>>`, one element per feature in layer order.
     out_fields: Tuple[Tuple[str, str, str], ...] = ()
+    # A features output read back from a file on the worker's local disk, one feature at a time, not from GDAL's in-memory
+    # layer (`out.stream`): for an algorithm whose features are as many as its regions.
+    out_stream: bool = False
     # The algorithm reads and writes one band (its `band` argument, a const of 1): the engine runs it once for each band of
     # the input and writes every result into the output's band of the same number.
     per_band: bool = False
@@ -595,7 +598,7 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
     mistyped key can never be read as absent."""
     _closed(raw, GDAL_KEYS, "block")
     out = raw.get("out") or {}
-    _closed(out, frozenset({"kind", "dtype", "fields"}), "out")
+    _closed(out, frozenset({"kind", "dtype", "fields", "stream"}), "out")
     inputs = tuple(
         (p, _one_of(k, GDAL_IN_KINDS, f"input kind of {p!r}"))
         for p, k in (raw.get("in") or {}).items()
@@ -613,6 +616,8 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
         raise ValueError(
             "gdal spec: a features output declares at least one field, and no other output declares any"
         )
+    if bool(out.get("stream", False)) and kind != "features":
+        raise ValueError("gdal spec: only a features output can be streamed")
     if (kind == "raster") != ("write" in raw):
         raise ValueError(
             "gdal spec: a raster output needs a write profile, and a features or JSON output has none"
@@ -641,6 +646,7 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
             else None
         ),
         out_fields=fields,
+        out_stream=bool(out.get("stream", False)),
         per_band=bool(raw.get("per_band", False)),
     )
 

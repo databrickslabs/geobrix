@@ -397,6 +397,12 @@ def _pg_nan(tmpdir):
     return _pg_tile([[1, 1, 1], [1, float("nan"), 1], [1, 1, 1]], nodata=float("nan"))
 
 
+@builder("pg_nan_undeclared")
+def _pg_nan_undeclared(tmpdir):
+    """A Float32 raster of 1 whose middle pixel is NaN and a corner is infinite, with no NoData value declared."""
+    return _pg_tile([[float("inf"), 1, 1], [1, float("nan"), 1], [1, 1, 1]])
+
+
 @builder("pg_noise")
 def _pg_noise(tmpdir):
     """40 x 40 pixels of five classes, in clumps, so regions touch at corners and have holes: Int16."""
@@ -582,6 +588,16 @@ SPEC_ANALYSIS += (
         (Build("pg_nan"),),
         "polygons",
         [(1.0, 800.0)],
+        ONLY,
+    ),
+    # a NaN or infinite pixel is NoData where the tile declares none, as in the other engine functions: no polygon, and a hole
+    # in its neighbours' (7 of the 9 pixels remain in one region of 700 m2)
+    Case(
+        "polygonize_nan_undeclared",
+        PG,
+        (Build("pg_nan_undeclared"),),
+        "polygons",
+        [(1.0, 700.0)],
         ONLY,
     ),
     # transparent pixels and pixels a tile's own mask hides are no data: 24 of 36 pixels, 100 m2 each, in two regions

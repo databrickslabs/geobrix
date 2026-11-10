@@ -505,7 +505,8 @@ def udtf(
     registered as an Arrow-optimized UDTF (the same class and schema).
 
     A table function cannot sit behind a SQL wrapper, so it has no FILE form: a virtual tile is read through its path.
-    It holds the tile's features in memory, as the algorithm's in-memory layer does, and hands them out one row at a time.
+    The features come from a file GDAL wrote on the worker's local disk, read back one row at a time: only what GDAL itself holds
+    stays in memory, a few bytes for each region.
     """
     fn = _function(sql_name, None)
     if fn.kind != "generator" or fn.gdal is None or fn.gdal.out_kind != "features":
@@ -542,7 +543,12 @@ def udtf(
             if res.error is not None:
                 _log_once(fn.sql_name, res.error)
                 return
-            yield from res.features
+            try:
+                yield from res.features
+            finally:
+                close = getattr(res.features, "close", None)
+                if close is not None:  # a streamed output removes its file
+                    close()
 
     params = [
         inspect.Parameter("self", inspect.Parameter.POSITIONAL_OR_KEYWORD),

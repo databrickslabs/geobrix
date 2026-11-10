@@ -856,6 +856,15 @@ def _output_tokens(fn, inputs: Sequence[RasterProps]) -> List[str]:
         return ["--output=<output>", "--output-format=GTiff"] + [
             f"--creation-option={o}" for o in creation
         ]
+    if block.out_kind == "features" and block.out_stream:
+        # a file on local disk with no spatial index and a commit every 10,000 features: what GDAL holds while it writes
+        # stays small however many features there are
+        return [
+            "--output=<output>",
+            "--output-format=GPKG",
+            "--layer-creation-option=SPATIAL_INDEX=NO",
+            "--commit-interval=10000",
+        ]
     if block.out_kind == "features":
         return ["--output=<output>", "--output-format=MEM"]
     if block.out_kind == "json":

@@ -5348,10 +5348,12 @@ Runs GDAL's `raster polygonize` in the worker. Each row is one region: `geom_wkb
 :::
 
 `gbx_rst_polygonize` is a table function: call it with `LATERAL`. It gives one row per region.
-GDAL builds the regions of one tile in memory, and the function hands them out one row at a time.
-A tile with very many regions, such as a noisy float band, needs memory for all of them. Retile it first (`gbx_rst_retile`) or classify it into a few values.
+GDAL writes the regions to a temporary file on the worker's local disk, and the function reads them back one row at a time.
+Memory grows by about 30 bytes for each region, however large the polygons are. A tile of one million regions adds about 30 MB.
+The file is removed when the query ends. A tile with very many regions needs local disk for them.
 Pixels are grouped by their exact value. A float band is not rounded to whole numbers, and `value` is the pixel value itself.
 A NoData pixel gives no polygon. Nor does a pixel the tile's own mask band hides, or one that is transparent in its alpha band.
+A NaN or infinite pixel is NoData too, even when the tile declares no NoData value.
 A NULL, error or unreadable tile gives no rows.
 A `band` outside the tile raises and names the band. A `connectedness` other than `4` or `8` raises and names the value.
 A NULL `band` or `connectedness` takes its default. A virtual tile whose file is missing is retried, and then raises.

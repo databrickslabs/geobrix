@@ -207,11 +207,15 @@ def test_orphan_records_empty_store(tmp_path):
 
 def test_affected_functions_against_real_registry():
     # Smoke check the helpers tie into the real FnSpec.sources contract: editing
-    # the shared _nodata.py affects more than one function.
+    # the shared _nodata.py affects more than one function, and editing the GDAL spec
+    # engine affects the functions it runs.
     from databricks.labs.gbx.bench import spec as s
 
     specs = s.select(set="full")
     nodata_path = "python/geobrix/src/databricks/labs/gbx/pyrx/core/_nodata.py"
     affected = store.affected_functions([nodata_path], specs)
-    assert "rst_slope" in affected and "rst_ndvi" in affected
+    assert "rst_avg" in affected and "rst_convolve" in affected
     assert len(affected) > 2
+    engine_path = "python/geobrix/src/databricks/labs/gbx/engine/run.py"
+    affected = store.affected_functions([engine_path], specs)
+    assert "rst_slope" in affected and "rst_ndvi" in affected

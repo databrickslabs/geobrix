@@ -22,6 +22,12 @@ CLUSTER = "0000-000000-abcdefgh"
 
 @pytest.fixture(scope="module")
 def plan():
+    from databricks.labs.gbx.engine import run
+
+    # the warehouse files hold the UC rows of the GDAL spec engine's functions, and some of their tiles are made by the
+    # engine (the masked fill input): the plan is built where the engine runs (the dev container, CI, a cluster)
+    if run.unavailable_reason():
+        pytest.skip(run.unavailable_reason())
     p = t28.Params(cluster_id=CLUSTER)
     files, runs = t28.build(p)
     return p, files, runs
@@ -133,11 +139,16 @@ def test_only_selects_runs_and_their_files_and_refuses_an_unknown_run(plan):
         t28.select(files, runs, ["S6-Z"])
 
 
-# Three rows embed a netCDF or VRT that GDAL stamps with the time it was written: their bytes differ per build.
+# These rows embed a netCDF, GeoPackage or VRT that GDAL stamps with the time it was written: their bytes differ per
+# build. The engine rows of SPEC_SE run on UC too, and four of them hold such a tile.
 STAMPED = {
     "getsubdataset_bytes",
     "uc_getsubdataset_missing",
     "uc_fromcontent_vrt_refused",
+    "se_bytes_netcdf",
+    "se_bytes_gpkg",
+    "uc_se_bytes_refused_light",
+    "uc_se_tcrs_vrt_bytes",
 }
 
 

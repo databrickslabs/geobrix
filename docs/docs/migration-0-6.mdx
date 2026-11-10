@@ -53,12 +53,14 @@ Function names do not change. Only these arguments and shapes do:
 
 | Function | Change |
 |---|---|
-| `rst_mapalgebra` | `json_spec` is now `expression`. |
+| `rst_mapalgebra` | `json_spec` is now `expression`. The expression uses GDAL's `muparser` grammar, not NumExpr. |
 | `rst_transformcrs` | `crs` is now `target_crs`. |
 | `rst_align_to` | The second argument is `reference_tile`. |
 | `rst_color_relief` | `color_table_path` is now `color_table`: the color table's text, not a file path. |
 | `rst_summary` | The JSON is GDAL's own: `bands[].min` and `max` are `minimum` and `maximum`, and `coordinateSystem.epsg` and `crs` are `coordinateSystem.wkt`. |
 | `rst_fillnodata` | `max_search_dist` and `smoothing_iter` must be whole numbers. |
+| `rst_clip` | The pixels outside the cutline are NoData, not valid zeros. |
+| `rst_contour` | The type is the same. The lines run to the tile's edge, and a NoData pixel is never traced. |
 | `rst_land_cover` | `rst_land_cover(tile, method, n_clusters, smooth)`. `classes` is gone. |
 | `rst_bng_rasterize_agg` | Twelve required arguments, then an optional `out_crs`. |
 | `rst_custom_rasterize_agg` | `(cellid, value, grid, …)`. |

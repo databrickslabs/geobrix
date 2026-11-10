@@ -508,6 +508,14 @@ _PYVX_VALIDITY_LIGHT = (_PYVX + "_validity.py",)
 _PYVX_CLEANING_LIGHT = (_PYVX + "_cleaning.py",)
 _PYVX_COVERAGE_LIGHT = (_PYVX + "_coverage.py",)
 _PYVX_MVT_LIGHT = (_PYVX + "_mvt.py", _PYVX + "_serde.py")
+# The TIN functions' conforming mode and shared snap, on both levels.
+_TIN_CONFORMING = (
+    _PYVX + "_conforming.py",
+    _PYVX + "_quadedge.py",
+    _PYVX + "_jmath.py",
+    "src/main/scala/com/databricks/labs/gbx/vectorx/jts/InterpolateElevation.scala",
+    "src/main/scala/com/databricks/labs/gbx/vectorx/jts/JTSConformingDelaunayTriangulationBuilder.scala",
+)
 
 # --- rst_h3_rasterize_agg: fixed deterministic cell set + EXPLICIT grid --------
 # PARITY CONTRACT (must stay byte-for-byte in sync with the Scala BenchDispatch
@@ -3753,7 +3761,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_Triangulate.scala"),
+        sources=(_PYVX + "_tin.py",)
+        + _TIN_CONFORMING
+        + (_VECTORX + "ST_Triangulate.scala",),
     ),
     "st_interpolateelevationgeom": FnSpec(
         "st_interpolateelevationgeom",
@@ -3766,7 +3776,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py",),
+        sources=(_PYVX + "_tin.py",) + _TIN_CONFORMING,
     ),
     "st_interpolateelevationbbox": FnSpec(
         "st_interpolateelevationbbox",
@@ -3779,7 +3789,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationBBox.scala"),
+        sources=(_PYVX + "_tin.py",)
+        + _TIN_CONFORMING
+        + (_VECTORX + "ST_InterpolateElevationBBox.scala",),
     ),
     # 16 new vector function benchmarks: 1 heavy+light (asmvt_pyramid), 15 light-only
     # st_asmvt_pyramid is a per-feature MVT tiling UDTF (one geometry -> many

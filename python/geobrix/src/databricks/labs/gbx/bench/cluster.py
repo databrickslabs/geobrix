@@ -1672,24 +1672,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "TIN INTERP BBOX PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("TIN INTERP BBOX PARITY: PASS"), _v
-    # geom
-    try:
-        _lg2 = _grid_dict(_light_rows("geom"), "p")
-        _hg2 = _grid_dict(_tdf.select(_F_tin.call_function(
-            "gbx_st_interpolateelevationgeom", _F_tin.col("pts"), _F_tin.col("bl"),
-            _F_tin.col("mt"), _F_tin.col("st"), _F_tin.col("spf"), _F_tin.col("origin"),
-            _F_tin.col("cols"), _F_tin.col("rows_n"), _F_tin.col("cell_x"),
-            _F_tin.col("cell_y"), _F_tin.lit("constrained")
-        ).alias("p")).collect(), "p")
-        _gg_ok = (_lg2.keys() == _hg2.keys() and len(_lg2) > 0
-                  and all(abs(_lg2[_k] - _hg2[_k]) < 1e-6 for _k in _lg2))
-        _v = ("TIN INTERP GEOM PARITY: PASS (%d cells, |dz|<1e-6)" % len(_lg2)
-              if _gg_ok else "TIN INTERP GEOM PARITY: FAIL -- cell/Z mismatch (light=%d heavy=%d)"
-              % (len(_lg2), len(_hg2)))
-    except Exception as _pe:
-        _v = "TIN INTERP GEOM PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("TIN INTERP GEOM PARITY: PASS"), _v
+    # geom: no JVM form (gbx_st_interpolateelevationgeom runs its Python level), so no parity leg
 if _tin_rows:
     _df_tin = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('tin','legacy')"

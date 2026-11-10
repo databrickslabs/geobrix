@@ -1265,6 +1265,26 @@ def _tin_mode(fn: str, mode) -> None:
         )
 
 
+def _tin_finder(fn: str, split_point_finder) -> None:
+    """'NONENCROACHING' or 'MIDPOINT', in any case; any other word is wrong (in both modes, as in the session)."""
+    from databricks.labs.gbx.pyvx import _tin
+
+    try:
+        _tin.validate_finder(split_point_finder)
+    except ValueError as exc:
+        raise _parameter(fn, str(exc)) from None
+
+
+def _tin_rows(fn: str, rows, what: str):
+    """The rows within the cap; a conforming triangulation that gives up raises with the function's name and its Fix."""
+    from databricks.labs.gbx.pyvx._conforming import ConformingError
+
+    try:
+        return _rows_within_cap(fn, rows, what)
+    except ConformingError as exc:
+        raise _parameter(fn, str(exc)) from None
+
+
 def _tin_sites(fn: str, points, breaklines):
     """``(coords, break lines)`` of the two Geometry arrays, once their WKB fits the cap."""
     from databricks.labs.gbx.pyvx import _tin
@@ -1313,6 +1333,7 @@ def st_triangulate_rows(
         or split_point_finder is None
     ):
         return None
+    _tin_finder(fn, split_point_finder)
     parsed = _tin_sites(fn, points_array, breaklines_array)
     coords, bls = parsed
     if coords is None:
@@ -1325,7 +1346,7 @@ def st_triangulate_rows(
         lower="pass fewer points",
         cap=DECODED_CAP,
     )
-    return _rows_within_cap(
+    return _tin_rows(
         fn,
         _tin.triangle_wkbs(
             None,
@@ -1347,6 +1368,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     _tin_mode(fn, mode)
     if mt is None or st is None or spf is None:
         return None
+    _tin_finder(fn, spf)
     _check_bytes(
         fn,
         cells * _POINT_ROW_BYTES,
@@ -1359,7 +1381,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     parsed = _tin_sites(fn, points, breaklines)
     if parsed[0] is None:
         return None
-    return _rows_within_cap(
+    return _tin_rows(
         fn,
         _tin.elevation_wkbs(
             None,

@@ -363,6 +363,32 @@ def test_the_triangle_array_is_estimated_from_the_point_count(monkeypatch):
         )
 
 
+def test_a_bad_split_point_finder_and_crossing_break_lines_raise_with_the_function_name():
+    with pytest.raises(
+        ValueError, match="gbx_st_triangulate: split_point_finder must be"
+    ):
+        forms.st_triangulate_rows(
+            _geoms(SQUARE), None, 0.0, 0.0, "SIDEWAYS", "constrained"
+        )
+    box = [
+        "POINT Z (0 -5 0)",
+        "POINT Z (10 -5 0)",
+        "POINT Z (10 5 0)",
+        "POINT Z (0 5 0)",
+    ]
+    crossing = [
+        "LINESTRING Z (1 -0.5 0, 9 0.5 0)",
+        "LINESTRING Z (2 0.5 0, 8.63 -0.5 0)",
+    ]
+    with pytest.raises(
+        ValueError,
+        match="gbx_st_triangulate: mode 'conforming' could not fit .* Fix: split crossing",
+    ):
+        forms.st_triangulate_rows(
+            _geoms(box), _geoms(crossing), 0.0, 0.0, "NONENCROACHING", "conforming"
+        )
+
+
 def test_the_conforming_mode_runs_here():
     # no break lines: the conforming triangulation is the Delaunay one, the four triangles round the centre
     rows = forms.st_triangulate_rows(

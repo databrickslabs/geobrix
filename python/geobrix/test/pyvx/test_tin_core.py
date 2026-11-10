@@ -247,3 +247,36 @@ def test_interpolate_known_plane_and_outside_hull():
     z = _tin.interpolate_z(tris, 0.5, 0.5)
     assert abs(z - 1.0) < 1e-9
     assert _tin.interpolate_z(tris, 5.0, 5.0) is None
+
+
+def test_a_multilinestring_break_line_gives_one_line_per_part():
+    # as JTS's LinearComponentExtracter: each line of a multi-line string, then a polygon's shell and holes, in order
+    coords, lines = _tin.sites(
+        ["POINT Z (50 50 0)"],
+        [
+            "MULTILINESTRING Z ((0 0 1, 5 0 1), (0 5 2, 5 5 2))",
+            "POLYGON Z ((10 10 3, 20 10 3, 20 20 3, 10 20 3, 10 10 3), (12 12 4, 12 14 4, 14 14 4, 12 12 4))",
+        ],
+    )
+    assert [ln.tolist() for ln in lines] == [
+        [[0.0, 0.0, 1.0], [5.0, 0.0, 1.0]],
+        [[0.0, 5.0, 2.0], [5.0, 5.0, 2.0]],
+        [
+            [10.0, 10.0, 3.0],
+            [20.0, 10.0, 3.0],
+            [20.0, 20.0, 3.0],
+            [10.0, 20.0, 3.0],
+            [10.0, 10.0, 3.0],
+        ],
+        [[12.0, 12.0, 4.0], [12.0, 14.0, 4.0], [14.0, 14.0, 4.0], [12.0, 12.0, 4.0]],
+    ]
+
+
+def test_merge_tolerance_0_merges_only_the_same_x_and_y_at_any_magnitude():
+    # a key scaled by a tiny grid once wrapped int64 above about 9.2e6, so distinct far points merged
+    pts = np.array(
+        [[2.0e7, 1.0e7, 1.0], [2.0e7 + 4.0, 1.0e7, 2.0], [2.0e7, 1.0e7, 3.0]]
+    )
+    assert _tin._merge_vertices(pts, 0.0).tolist() == pts[:2].tolist()
+    assert _tin._jlong_floor(float("inf")) == 2**63 - 1
+    assert _tin._jlong_floor(float("nan")) == 0

@@ -364,10 +364,10 @@ Each TIN function takes a trailing `mode` argument (default `'constrained'`):
 
 | Mode | Levels | Behavior |
 |---|---|---|
-| `constrained` *(default)* | Every level | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your input mass points plus breakline vertices. The algorithm is the same at every level. |
+| `constrained` *(default)* | Every level | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your mass points, after the snap, plus breakline vertices. The algorithm is the same at every level. |
 | `conforming` | Every level | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
 
-Both modes give the same vertices and triangles at every level, Unity Catalog included. The Python level reproduces JTS 1.20, the library the JVM level runs.
+The `conforming` mode gives the same vertices and triangles at every level, Unity Catalog included. The Python level reproduces JTS 1.20, the library the JVM level runs. In the `constrained` mode, the levels can pick different edges where several triangulations are equally valid, such as four points on one circle.
 
 In the `conforming` mode, `split_point_finder` places the extra points. `'NONENCROACHING'` projects the point that breaks the Delaunay rule onto the break line. `'MIDPOINT'` splits the segment in half. An extra point takes the Z of its break line.
 

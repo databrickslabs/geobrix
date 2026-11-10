@@ -185,4 +185,35 @@ class InterpolateElevationTest extends AnyFunSuite {
         // with merge_tolerance 0 the same point is a new vertex
         InterpolateElevation.prepareSites(pts, bl, 0.0, 0.05)._2(0).length shouldBe 3
     }
+
+    test("prepareSites takes each part of a multi-line break line and each ring of a polygon, in order") {
+        val pts = JTS.multiPoint(Array(JTS.point(new Coordinate(50.0, 50.0, 0.0))))
+        val mls = gf.createMultiLineString(Array(
+          gf.createLineString(Array(new Coordinate(0.0, 0.0, 1.0), new Coordinate(5.0, 0.0, 1.0))),
+          gf.createLineString(Array(new Coordinate(0.0, 5.0, 2.0), new Coordinate(5.0, 5.0, 2.0)))
+        ))
+        val shell = Array((10.0, 10.0), (20.0, 10.0), (20.0, 20.0), (10.0, 20.0), (10.0, 10.0)).map { case (x, y) => new Coordinate(x, y, 3.0) }
+        val hole = Array((12.0, 12.0), (12.0, 14.0), (14.0, 14.0), (12.0, 12.0)).map { case (x, y) => new Coordinate(x, y, 4.0) }
+        val poly = gf.createPolygon(gf.createLinearRing(shell), Array(gf.createLinearRing(hole)))
+        val (_, lines) = InterpolateElevation.prepareSites(pts, Seq(mls, poly), 0.0, 0.0)
+        lines.map(_.map(c => (c.x, c.y, c.getZ)).toSeq) shouldBe Seq(
+          Seq((0.0, 0.0, 1.0), (5.0, 0.0, 1.0)),
+          Seq((0.0, 5.0, 2.0), (5.0, 5.0, 2.0)),
+          shell.map(c => (c.x, c.y, 3.0)).toSeq,
+          hole.map(c => (c.x, c.y, 4.0)).toSeq
+        )
+    }
+
+    test("conforming: a point location that does not converge raises with a Fix") {
+        // 50 points and 9 crossing break lines on which JTS's incremental triangulation fails to locate a point
+        val rows = scala.io.Source.fromResource("text/tin_locate_failure.txt").getLines().filterNot(_.startsWith("#")).toSeq
+        def coords(r: String) = r.split(" ").drop(1).map(_.toDouble).grouped(3).map(a => new Coordinate(a(0), a(1), a(2))).toArray
+        val pts = JTS.multiPoint(rows.filter(_.startsWith("P ")).map(r => JTS.point(coords(r).head)).toArray)
+        val bl = rows.filter(_.startsWith("L ")).map(r => gf.createLineString(coords(r)))
+        val e = intercept[IllegalArgumentException] {
+            InterpolateElevation.triangulate(pts, bl, 0.0, 0.0, None, "conforming")
+        }
+        e.getMessage should include("locating a point did not converge")
+        e.getMessage should include("Fix: split crossing break lines where they cross")
+    }
 }

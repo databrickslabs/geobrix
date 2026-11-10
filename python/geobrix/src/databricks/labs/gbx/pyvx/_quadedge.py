@@ -126,7 +126,6 @@ class Subdivision:
         ec = self._new_edge(2, 0)
         _splice(_sym(eb), ec)
         _splice(_sym(ec), ea)
-        self.first = ea
         self.last = ea
 
     def _new_edge(self, o, d):
@@ -161,8 +160,8 @@ class Subdivision:
     def _locate(self, v):
         """``LastFoundQuadEdgeLocator`` + ``locateFromEdge``: walk from the last edge found."""
         e = self.last
-        if e.rot is None:
-            e = self.first
+        if e.rot is None:  # LastFoundQuadEdgeLocator.init: the first live edge
+            e = next(q for q in self.edges if q.rot is not None)
         X, Y = self.X, self.Y
         vx, vy = X[v], Y[v]
         it = 0

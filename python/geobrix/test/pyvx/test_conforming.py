@@ -119,3 +119,92 @@ def test_hashmap_order_follows_java_buckets():
     h = [_conforming._java_coord_hash(x, y) for x, y in keys]
     buckets = [(v ^ (v >> 16)) & 31 for v in h]
     assert [buckets[i] for i in order] == sorted(buckets)
+
+
+def test_hashmap_order_matches_java_when_a_full_bucket_resizes_the_table():
+    # 9 of these 11 keys share the low 4 bits of their spread hash: the 9th in one bucket below capacity 64 makes Java
+    # resize the table (treeifyBin), before the load factor would. The order is the one Java 17's HashMap gave.
+    keys = [
+        (131.0, 22.5),
+        (797.0, 422.0),
+        (373.0, 339.5),
+        (122.0, 435.0),
+        (768.0, 7.0),
+        (1.25, 7.5),
+        (3.5, 2.25),
+        (871.0, 42.5),
+        (197.0, 337.0),
+        (171.0, 470.5),
+        (734.0, 158.5),
+    ]
+    assert _conforming.hashmap_order(keys) == [5, 0, 1, 3, 4, 7, 9, 10, 6, 2, 8]
+
+
+def test_a_repeated_break_line_vertex_keeps_its_slot_and_takes_the_last_z():
+    # java.util.HashMap.put replaces the value of a key it holds: the shared vertex (5, 0) carries the second Z
+    pts = _sites([(0, 3), (10, 3)])
+    bl = [
+        np.array([[0.0, 0.0, 1.0], [5.0, 0.0, 1.0]]),
+        np.array([[5.0, 0.0, 9.0], [10.0, 0.0, 9.0]]),
+    ]
+    verts, _ = _conforming.conforming_vertices(pts, bl, 0.0)
+    assert [v for v in verts if v[:2] == (5.0, 0.0)] == [(5.0, 0.0, 9.0)]
+
+
+def test_a_point_location_that_does_not_converge_raises_with_a_fix(monkeypatch):
+    from databricks.labs.gbx.pyvx import _quadedge
+
+    # a walk that never finds its triangle: every edge has the point on its right
+    monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
+    pts = _sites([(0, 0), (1, 0), (0, 1), (1, 1.2)])
+    verts, env = _conforming.conforming_vertices(pts, [], 0.0)
+    with pytest.raises(
+        _conforming.ConformingError, match="locating a point did not converge"
+    ):
+        _conforming.jts_delaunay(verts, env, 0.0)
+
+
+def test_the_port_takes_a_point_on_an_edge_with_a_merge_tolerance(monkeypatch):
+    # with merge_tolerance > 0 JTS deletes the edge a new point lies on and connects the point to the quadrilateral:
+    # the break line vertex (5, 0) lands on the edge (0, 0)-(10, 0). The triangles are the ones JTS 1.20 gave.
+    from databricks.labs.gbx.pyvx import _quadedge
+
+    hits = []
+    on_edge = _quadedge.Subdivision._on_edge
+
+    def spy(self, e, v):
+        hits.append(on_edge(self, e, v))
+        return hits[-1]
+
+    monkeypatch.setattr(_quadedge.Subdivision, "_on_edge", spy)
+    pts = _sites([(0, 0), (10, 0), (5, 6), (5, -6), (2, 9), (8, -9)])
+    bl = [np.array([[5.0, 0.0, 1.0], [5.0, -3.0, 1.0]])]
+    port = _conforming.triangulate(pts, bl, 0.01, delaunay="jts")
+    assert any(hits)
+    a, b, c, d = (0.0, 0.0), (10.0, 0.0), (5.0, 6.0), (5.0, -6.0)
+    m, n = (5.0, 0.0), (5.0, -3.0)
+    want = [
+        (a, (2.0, 9.0), c),
+        (a, d, n),
+        (a, n, m),
+        (a, m, c),
+        (d, n, b),
+        (d, (8.0, -9.0), b),
+        (n, m, b),
+        (m, c, b),
+    ]
+    assert _key(port) == {frozenset(t) for t in want}
+
+
+def test_the_certificate_refuses_a_hull_triangle_whose_circle_holds_a_frame_vertex():
+    # (0, 0), (5, 0.001), (10, 0) is a hull triangle with a circle of radius 12500: it holds a frame vertex of JTS's
+    # subdivision, so the hybrid takes the port's triangles
+    pts = _sites([(0, 0), (10, 0), (5, 5), (2, 3), (7, 2.5), (5, 0.001)])
+    verts, env = _conforming.conforming_vertices(pts, [], 0.0)
+    xy = np.array(verts)[:, :2]
+    assert _conforming.unique_delaunay(xy) is not None
+    assert _conforming.unique_delaunay(xy, _conforming.frame_vertices(env)) is None
+    stats = {}
+    hybrid = _conforming.triangulate(pts, [], 0.0, stats=stats)
+    assert stats["fallback"] is True
+    assert _key(hybrid) == _key(_conforming.triangulate(pts, [], 0.0, delaunay="jts"))

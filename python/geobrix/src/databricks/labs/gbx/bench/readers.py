@@ -3760,9 +3760,9 @@ def run_interp_geom(
     """Time gbx_st_interpolateelevationgeom over ``n_rows`` synthetic point arrays.
 
     Light = SQL ``LATERAL`` UDTF (arg order: pts, bl, mt, st, spf, origin, cols,
-    rows, cell_x, cell_y, mode); heavy = JVM generator-Column (same arg order).
-    Records ``rows`` = number of interpolated grid points. Returns one ResultRow
-    (mode="spark-path", category="tin").
+    rows, cell_x, cell_y, mode). The function has no JVM form, so the heavyweight leg is a
+    ``na_by_design`` row. Records ``rows`` = number of interpolated grid points. Returns one
+    ResultRow (mode="spark-path", category="tin").
     """
     from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
@@ -3770,6 +3770,18 @@ def run_interp_geom(
     env = capture_env(where)
     fn = "st_interpolateelevationgeom"
     cat = "tin"
+    if api != "lightweight":
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=0,
+            status="na_by_design",
+            note="gbx_st_interpolateelevationgeom has no JVM form",
+            warmup=warmup,
+        )
     try:
         if api == "lightweight":
 

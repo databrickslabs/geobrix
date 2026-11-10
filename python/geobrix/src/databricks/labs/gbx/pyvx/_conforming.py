@@ -68,27 +68,38 @@ def _java_coord_hash(x: float, y: float) -> int:
 def hashmap_order(keys: Sequence[Tuple[float, float]]) -> List[int]:
     """The indices of ``keys`` (distinct, put in this order) in the iteration order of a ``java.util.HashMap`` (default
     capacity 16, load factor 0.75): by bucket at the final capacity, then by insertion (a resize keeps the order of a
-    bucket's nodes). A bucket that reaches 9 nodes below capacity 64 doubles the table, as ``treeifyBin`` does. A
-    tree bin (9 nodes at capacity 64 or more) is not modelled: its order is taken as its insertion order, which only
-    matters on an exact distance tie."""
+    bucket's nodes). As in ``putVal``, a bucket that reaches 9 nodes below capacity 64 doubles the table
+    (``treeifyBin``), and then a size over the threshold doubles it again.
+
+    Not modelled: a tree bin (9 nodes in one bucket at capacity 64 or more), whose iteration order is not its insertion
+    order. Its order here is the insertion order, so the constraint vertices could then enter the KdTree in another
+    order than on the JVM. That changes the result only where the order matters: an exact distance tie, a
+    ``merge_tolerance`` snap between constraint vertices, or co-circular points. Java's own notes put a bucket of 8 at
+    6e-8 of buckets for well-spread hashes; the keys are the break line vertices, rarely more than a few thousand.
+    """
     spread = []
     for x, y in keys:
         h = _java_coord_hash(x, y)
         spread.append(h ^ (h >> 16))
     cap = 16
     counts = {}
+
+    def recount(n):
+        out = {}
+        for hh in spread[:n]:
+            bb = hh & (cap - 1)
+            out[bb] = out.get(bb, 0) + 1
+        return out
+
     for i, h in enumerate(spread):
         b = h & (cap - 1)
         counts[b] = counts.get(b, 0) + 1
-        resize = counts[b] >= 9 and cap < 64
-        if i + 1 > int(cap * 0.75):
-            resize = True
-        if resize:
+        if counts[b] >= 9 and cap < 64:  # treeifyBin resizes a small table
             cap *= 2
-            counts = {}
-            for hh in spread[: i + 1]:
-                bb = hh & (cap - 1)
-                counts[bb] = counts.get(bb, 0) + 1
+            counts = recount(i + 1)
+        if i + 1 > int(cap * 0.75):  # ++size > threshold
+            cap *= 2
+            counts = recount(i + 1)
     return sorted(range(len(keys)), key=lambda i: (spread[i] & (cap - 1), i))
 
 
@@ -365,35 +376,10 @@ _ICC_ERR = (10.0 + 96.0 * _EPS) * _EPS  # Shewchuk's incircle error bound
 _CCW_ERR = (3.0 + 16.0 * _EPS) * _EPS  # and orientation
 
 
-def unique_delaunay(xy: np.ndarray) -> Optional[np.ndarray]:
-    """scipy's (Qhull's) Delaunay simplices of ``xy`` when they are PROVABLY its unique Delaunay triangulation (every
-    vertex used, every triangle oriented beyond the floating-point error bound, every interior edge strictly locally
-    Delaunay beyond it), else None. The incircle expression is JTS's ``isInCircleNormalized``, so a certified sign is
-    the sign JTS computes for the final configuration."""
-    from scipy.spatial import Delaunay, QhullError
-
-    try:
-        tri = Delaunay(xy)
-    except QhullError:
-        return None
-    s = tri.simplices
-    if len(getattr(tri, "coplanar", [])) or len(np.unique(s)) != len(xy):
-        return None
-    a, b, c = xy[s[:, 0]], xy[s[:, 1]], xy[s[:, 2]]
-    left = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
-    right = (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
-    if np.any(np.abs(left - right) <= _CCW_ERR * (np.abs(left) + np.abs(right))):
-        return None
-    nb = tri.neighbors
-    ti, k = np.nonzero(nb >= 0)
-    once = ti < nb[ti, k]  # each interior edge once
-    ti, k = ti[once], k[once]
-    tj = nb[ti, k]
-    p = xy[
-        s[ti, k]
-    ]  # the vertex of ti across the shared edge, tested against the circle of tj
-    opp = s[tj]
-    A, B, C = xy[opp[:, 0]], xy[opp[:, 1]], xy[opp[:, 2]]
+def _incircle(A, B, C, p):
+    """``(det, error bound)`` of JTS's ``isInCircleNormalized(A, B, C, p)`` for rows of triangles (any orientation:
+    each is put counter-clockwise first) and points: ``det > bound`` is surely inside, ``det < -bound`` surely
+    outside."""
     ori = (B[:, 0] - A[:, 0]) * (C[:, 1] - A[:, 1]) - (B[:, 1] - A[:, 1]) * (
         C[:, 0] - A[:, 0]
     )
@@ -418,9 +404,59 @@ def unique_delaunay(xy: np.ndarray) -> Optional[np.ndarray]:
         + (np.abs(cdxady) + np.abs(adxcdy)) * blift
         + (np.abs(adxbdy) + np.abs(bdxady)) * clift
     )
-    # p strictly OUTSIDE the neighbour's circle (det < 0), by more than the error bound
-    if np.any(det > -_ICC_ERR * perm):
+    return det, _ICC_ERR * perm
+
+
+def frame_vertices(env) -> np.ndarray:
+    """The three frame vertices JTS's subdivision is built in (``QuadEdgeSubdivision.createFrame``)."""
+    minx, miny, maxx, maxy = env
+    offset = max(maxx - minx, maxy - miny) * 10.0
+    return np.array(
+        [
+            [(maxx + minx) / 2.0, maxy + offset],
+            [minx - offset, miny - offset],
+            [maxx + offset, miny - offset],
+        ]
+    )
+
+
+def unique_delaunay(xy: np.ndarray, frame: Optional[np.ndarray] = None):
+    """scipy's (Qhull's) Delaunay simplices of ``xy`` when they are PROVABLY the triangles JTS makes, else None: every
+    vertex used, every triangle oriented beyond the floating-point error bound, every interior edge strictly locally
+    Delaunay beyond it (so the triangulation is unique), and, given the ``frame`` vertices, no frame vertex inside
+    or near the circle of a hull triangle (where JTS's frame and its convex-hull repair could choose otherwise). The
+    incircle expression is JTS's ``isInCircleNormalized``, so a certified sign is the sign JTS computes.
+    """
+    from scipy.spatial import Delaunay, QhullError
+
+    try:
+        tri = Delaunay(xy)
+    except QhullError:
         return None
+    s = tri.simplices
+    if len(getattr(tri, "coplanar", [])) or len(np.unique(s)) != len(xy):
+        return None
+    a, b, c = xy[s[:, 0]], xy[s[:, 1]], xy[s[:, 2]]
+    left = (b[:, 0] - a[:, 0]) * (c[:, 1] - a[:, 1])
+    right = (b[:, 1] - a[:, 1]) * (c[:, 0] - a[:, 0])
+    if np.any(np.abs(left - right) <= _CCW_ERR * (np.abs(left) + np.abs(right))):
+        return None
+    nb = tri.neighbors
+    ti, k = np.nonzero(nb >= 0)
+    once = ti < nb[ti, k]  # each interior edge once
+    ti, k = ti[once], k[once]
+    opp = s[nb[ti, k]]
+    # the vertex of ti across the shared edge must be strictly OUTSIDE the circle of its neighbour
+    det, bound = _incircle(xy[opp[:, 0]], xy[opp[:, 1]], xy[opp[:, 2]], xy[s[ti, k]])
+    if np.any(det > -bound):
+        return None
+    if frame is not None:
+        hull = s[np.any(nb < 0, axis=1)]
+        for f in frame:
+            p = np.broadcast_to(f, (len(hull), 2))
+            det, bound = _incircle(xy[hull[:, 0]], xy[hull[:, 1]], xy[hull[:, 2]], p)
+            if np.any(det > -bound):
+                return None
     return s
 
 
@@ -457,7 +493,11 @@ def triangulate(
     if len(verts) < 3:
         return []
     va = np.array(verts, dtype=float)
-    simplices = unique_delaunay(va[:, :2]) if delaunay == "hybrid" else None
+    simplices = (
+        unique_delaunay(va[:, :2], frame_vertices(env))
+        if delaunay == "hybrid"
+        else None
+    )
     if stats is not None:
         stats["fallback"] = simplices is None
     if simplices is None:

@@ -17,18 +17,35 @@ from ._jmath import hypot
 MODES = ("constrained", "conforming")
 
 
-def _merge_vertices(pts: np.ndarray, tol: float) -> np.ndarray:
-    """Drop coincident XY vertices, keeping the first occurrence.
+_I64_MAX = 2**63 - 1
 
-    With ``tol > 0`` near-coincident vertices (within tol) snap to one
-    representative; with ``tol <= 0`` only EXACT duplicates (rounded at machine
-    eps) are dropped so coincident breakline/mass-point coords don't double-site
-    the Delaunay input. Keep-first preserves the Z of whichever row comes first.
+
+def _saturating_int64(q: np.ndarray) -> np.ndarray:
+    """Java's ``(long)`` cast of each double: NaN is 0, and a value out of range saturates (numpy's cast is undefined
+    there, so a large coordinate over a small tolerance would wrap)."""
+    out = np.zeros(q.shape, dtype=np.int64)
+    hi = q >= 9.223372036854775807e18
+    lo = q <= -9.223372036854775808e18
+    mid = ~(hi | lo | np.isnan(q))
+    out[mid] = q[mid].astype(np.int64)
+    out[hi] = _I64_MAX
+    out[lo] = -_I64_MAX - 1
+    return out
+
+
+def _merge_vertices(pts: np.ndarray, tol: float) -> np.ndarray:
+    """Drop coincident XY vertices, keeping the first occurrence (``InterpolateElevation.dedupByXY``).
+
+    With ``tol > 0`` vertices in one cell of the ``tol`` grid (each coordinate over ``tol``, rounded half to even)
+    merge to one; with ``tol <= 0`` only vertices with the same X and Y do. Keep-first preserves the Z of whichever
+    row comes first.
     """
     if len(pts) == 0:
         return pts
-    scale = tol if tol > 0.0 else 1e-12
-    keys = np.round(pts[:, :2] / scale).astype(np.int64)
+    if tol > 0.0:
+        keys = _saturating_int64(np.round(pts[:, :2] / tol))
+    else:
+        keys = pts[:, :2] + 0.0  # -0.0 is 0.0
     _, idx = np.unique(keys, axis=0, return_index=True)
     return pts[np.sort(idx)]
 
@@ -80,6 +97,17 @@ def _project(p, a, b):
     )
 
 
+def _jlong_floor(q: float) -> int:
+    """Java's ``Math.floor(q).toLong``: NaN is 0, out of range saturates."""
+    if q != q:
+        return 0
+    if q >= 9.223372036854775807e18:
+        return _I64_MAX
+    if q <= -9.223372036854775808e18:
+        return -_I64_MAX - 1
+    return int(math.floor(q))
+
+
 class _VertexIndex:
     """The break line vertices, to ask whether a point is within ``tol`` of one (``tol <= 0``: the same X and Y)."""
 
@@ -89,7 +117,7 @@ class _VertexIndex:
         self.exact = set()
 
     def _cell(self, x, y):
-        return math.floor(x / self.tol), math.floor(y / self.tol)
+        return _jlong_floor(x / self.tol), _jlong_floor(y / self.tol)
 
     def add(self, c):
         if self.tol > 0.0:

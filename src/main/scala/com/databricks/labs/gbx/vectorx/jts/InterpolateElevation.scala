@@ -308,14 +308,15 @@ object InterpolateElevation {
     }
 
     /** Drop coincident XY coordinates, keeping the first occurrence (preserves breakline Z).
-     *  `tol > 0` snaps near-coincident coords to one representative; `tol <= 0` drops only exact
-     *  duplicates (machine-eps grid). Mirrors light `_merge_vertices`. */
+     *  `tol > 0` merges the coordinates in one cell of the `tol` grid (rounded half to even; `toLong`
+     *  saturates); `tol <= 0` drops only coordinates with the same X and Y. Mirrors light `_merge_vertices`. */
     private def dedupByXY(coords: Seq[Coordinate], tol: Double): Array[Coordinate] = {
-        val scale = if (tol > 0.0) tol else 1e-12
-        val seen = scala.collection.mutable.HashSet[(Long, Long)]()
+        val seen = scala.collection.mutable.HashSet[(Any, Any)]()
         val out = scala.collection.mutable.ArrayBuffer[Coordinate]()
         coords.foreach { c =>
-            val key = (math.rint(c.x / scale).toLong, math.rint(c.y / scale).toLong)
+            val key: (Any, Any) =
+                if (tol > 0.0) (math.rint(c.x / tol).toLong, math.rint(c.y / tol).toLong)
+                else (c.x + 0.0, c.y + 0.0)
             if (!seen.contains(key)) {
                 seen += key
                 out += c

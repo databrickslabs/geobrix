@@ -529,8 +529,11 @@ def test_a_locate_failure_raises_the_constrained_error():
     # 12 sites within a few units of one line: JTS's DelaunayTriangulationBuilder fails to locate a point, and the JVM
     # level raises the same text (InterpolateElevationTest)
     from databricks.labs.gbx.bench.oracle_tables import _tin_rows
+    from databricks.labs.gbx.pyvx import _conforming
 
     pts = np.array(_tin_rows.NEAR_LINE)
     with pytest.raises(_tin.ConstrainedError) as e:
         _tin.triangulate(pts, [], 0.0, 0.0)
     assert str(e.value) == _tin.CONSTRAINED_LOCATE_FAILED
+    # the port's conforming error does not leak out of the constrained mode
+    assert not isinstance(e.value, _conforming.ConformingError)

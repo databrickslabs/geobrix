@@ -595,6 +595,10 @@ def udtf(
                 return
             try:
                 yield from res.features
+            except (
+                run.DataError
+            ) as exc:  # the file GDAL wrote could not be read back: the rows so far are all there are
+                _log_once(fn.sql_name, str(exc))
             finally:
                 close = getattr(res.features, "close", None)
                 if close is not None:  # a streamed output removes its file

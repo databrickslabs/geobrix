@@ -824,13 +824,21 @@ class FeatureStream:
             raise RuntimeError("a feature stream is read once")
         self._used = True
         gdal = self._gdal
-        ds = gdal.OpenEx(
-            self._path,
-            gdal.OF_VECTOR | gdal.OF_READONLY,
-            allowed_drivers=["GPKG"],
-        )
+        ds = lyr = None
         try:
-            lyr = ds.GetLayer(0) if ds is not None else None
+            # the file is read back outside the engine's call, where GDAL may raise: a read that fails is the call's
+            # DataError (the table function ends the stream), not a RuntimeError out of the task
+            try:
+                ds = gdal.OpenEx(
+                    self._path,
+                    gdal.OF_VECTOR | gdal.OF_READONLY,
+                    allowed_drivers=["GPKG"],
+                )
+                lyr = ds.GetLayer(0) if ds is not None else None
+            except RuntimeError as exc:
+                raise DataError(
+                    f"GDAL's output could not be read back ({exc})"
+                ) from None
             if lyr is None:
                 raise DataError(
                     gdal.GetLastErrorMsg() or "GDAL's output could not be read back"
@@ -838,10 +846,17 @@ class FeatureStream:
             doubles = [
                 i + 1 for i, (_n, t, _s) in enumerate(self._fields) if t == "DOUBLE"
             ]
-            for row in _layer_rows(lyr, self._fields):
-                # the file stores a NaN as NULL
-                if all(row[i] is not None and math.isfinite(row[i]) for i in doubles):
-                    yield row
+            try:
+                for row in _layer_rows(lyr, self._fields):
+                    # the file stores a NaN as NULL
+                    if all(
+                        row[i] is not None and math.isfinite(row[i]) for i in doubles
+                    ):
+                        yield row
+            except RuntimeError as exc:
+                raise DataError(
+                    f"GDAL's output could not be read back ({exc})"
+                ) from None
         finally:
             lyr = ds = None
             self.close()

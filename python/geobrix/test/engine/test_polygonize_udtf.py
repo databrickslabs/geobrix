@@ -158,6 +158,40 @@ def test_the_polygonize_row_is_the_engines_alone():
     assert levels.engine_form(POLY) == "engine-c0"
 
 
+def test_a_stream_that_fails_to_read_back_ends_the_rows_and_logs_once(
+    monkeypatch, caplog
+):
+    """The file GDAL wrote is read back after the engine's call: a read that fails there is no task failure, the rows
+    already given are all there are."""
+
+    def broken():
+        yield ROWS[0]
+        raise run.DataError("GDAL's output could not be read back (boom)")
+
+    monkeypatch.setattr(
+        run, "run", lambda *a, **k: run.Result(None, None, "cmd", features=broken())
+    )
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.engine"):
+        assert list(_handler().eval(TILE)) == [ROWS[0]]
+    assert any("could not be read back" in r.getMessage() for r in caplog.records)
+
+
+def test_a_stream_of_a_file_gdal_cannot_open_raises_a_data_error_not_a_runtime_error(
+    tmp_path,
+):
+    """GDAL raises (exceptions are on in a worker) where the call itself saw a failing return."""
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    gdal = run._gdal()
+    bad = tmp_path / "out.gpkg"
+    bad.write_bytes(b"not a geopackage")
+    stream = run.FeatureStream(gdal, str(bad), str(tmp_path), POLY.gdal.out_fields)
+    with gdal.ExceptionMgr(useExceptions=True):
+        with pytest.raises(run.DataError, match="could not be read back"):
+            list(stream)
+
+
 # --- the run (needs the engine) ------------------------------------------------------------------------------------------
 @pytest.fixture
 def engine():

@@ -1318,7 +1318,7 @@ def _staged_view(vt: VirtualTile, src) -> Optional[_PieceView]:
         with MemoryFile(piece(Window(0, 0, 1, 1))) as mf, open_bytes(mf) as ref:
             if geom is not None:
                 shape = _edit.clip_shape(ref.crs, geom)
-                touch = _edit.is_subpixel(shape, transform)
+                touch = _edit.holds_no_pixel_centre(shape, transform, out_w, out_h)
                 try:
                     crop = rasterio.features.geometry_window(
                         _GridHeader(transform, out_w, out_h), [shape]

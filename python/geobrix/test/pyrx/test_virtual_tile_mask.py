@@ -354,6 +354,25 @@ def test_a_subpixel_cutline_keeps_its_pixel_in_a_virtual_tile_as_in_the_eager_cl
     assert (got[1] == eager[1]).all()
 
 
+def test_a_thin_cutline_that_holds_pixel_centres_keeps_just_those_pixels(tmp_path):
+    """A sliver under one pixel's area that still holds the centres of ten pixels of row 20 keeps those ten with the
+    centre rule: it does not turn to the pixels it touches (twelve), in the eager clip or in the virtual tile.
+    """
+    p = write_masked(tmp_path / "m.tif", nodata=None)
+    x0, y0 = ORIGIN
+    cut = box(x0 + 4.6 * PX, y0 - 20.525 * PX, x0 + 15.4 * PX, y0 - 20.475 * PX)
+    assert cut.area < PX * PX
+    with rasterio.open(p) as src:
+        assert not edit.holds_no_pixel_centre(cut, src.transform, N, N)
+        eager = decode(edit.clip_to_geom(src, cut, all_touched=False))
+        want = src.read(1)[20, 5:15]
+    got = read_tile(virtual(p, clip_polygon=shapely.to_wkb(cut), clip_crs="EPSG:4326"))
+    for data, valid, _nd in (eager, got):
+        kept = valid[0]
+        assert int(kept.sum()) == 10, f"{int(kept.sum())} pixels kept"
+        assert (data[0][kept] == want).all()
+
+
 # ---------------------------------------------------------------------------
 # the materializers
 # ---------------------------------------------------------------------------

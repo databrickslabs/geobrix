@@ -56,13 +56,53 @@ def clip_shape(ds_crs, geom, geom_crs=None):
     return mask_shape
 
 
-def is_subpixel(shape, transform) -> bool:
-    """True when the cutline *shape* (in the raster's CRS, a shapely geometry or its GeoJSON-like dict) has an area under
-    one pixel's. Such a cutline holds no pixel centre, so a clip that keeps the pixels whose centre it holds would keep
-    only NoData: a clip keeps the pixels it touches instead (``all_touched``), the pixel it stands in.
+# the pixels `holds_no_pixel_centre` rasterizes at a time: what it holds, not the size of the cutline's window
+_CENTRE_STRIP_PIXELS = 1 << 20
+
+
+def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
+    """True when the cutline *shape* (in the raster's CRS, a shapely geometry or its GeoJSON-like dict) holds the centre of
+    no pixel of the ``width`` x ``height`` raster on *transform*, though it reaches the raster. A clip that keeps the pixels
+    whose centre it holds would keep only NoData, so a clip keeps the pixels it touches instead (``all_touched``): the
+    pixels it stands in. A cutline that holds a centre keeps the caller's rule, however small or thin it is.
+
+    It looks at the pixel of the cutline's representative point first (most cutlines hold its centre), then rasterizes
+    the window the cutline's bounds cover, a strip of rows at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found.
     """
+    import math
+
+    from rasterio.features import geometry_mask
+
     geom = shapely.geometry.shape(shape) if isinstance(shape, dict) else shape
-    return bool(not geom.is_empty and geom.area < abs(transform.a) * abs(transform.e))
+    if geom.is_empty:
+        return False
+    inverse = ~transform
+    p = geom.representative_point()
+    col, row = (math.floor(v) for v in inverse * (p.x, p.y))
+    if 0 <= col < width and 0 <= row < height:
+        cx, cy = transform * (col + 0.5, row + 0.5)
+        if geom.contains(shapely.Point(cx, cy)):
+            return False
+    x0, y0, x1, y1 = geom.bounds
+    corners = [inverse * (x, y) for x in (x0, x1) for y in (y0, y1)]
+    c0 = max(0, math.floor(min(c for c, _ in corners)))
+    c1 = min(width, math.ceil(max(c for c, _ in corners)))
+    r0 = max(0, math.floor(min(r for _, r in corners)))
+    r1 = min(height, math.ceil(max(r for _, r in corners)))
+    if c1 <= c0 or r1 <= r0:
+        return False  # it misses the raster: the clip has nothing to keep either way
+    rows = max(1, _CENTRE_STRIP_PIXELS // (c1 - c0))
+    for r in range(r0, r1, rows):
+        k = min(rows, r1 - r)
+        held = geometry_mask(
+            [geom],
+            out_shape=(k, c1 - c0),
+            transform=transform * transform.translation(c0, r),
+            invert=True,
+        )
+        if held.any():
+            return False
+    return True
 
 
 def clip_fill(ds):
@@ -96,8 +136,8 @@ def clip_to_geom(
 
     ``nodata``, when given, fills the pixels outside the geometry and is declared
     on the output. Otherwise the fill is the source NoData, else the dtype's fallback NoData, declared on the output
-    (:func:`clip_fill`): the pixels the clip leaves out are never valid zeros. A cutline smaller than a pixel keeps the
-    pixel it touches (:func:`is_subpixel`).
+    (:func:`clip_fill`): the pixels the clip leaves out are never valid zeros. A cutline that holds no pixel centre keeps
+    the pixels it touches (:func:`holds_no_pixel_centre`).
 
     ``crop=False`` keeps the raster's own grid (the output is as large as the raster, the pixels outside the geometry
     filled): the clip of one window of a raster that is cropped as a whole (see :func:`clip_masked`).
@@ -105,7 +145,9 @@ def clip_to_geom(
     if isinstance(geom, (bytes, bytearray)):
         geom = shapely.wkb.loads(bytes(geom))  # handles WKB and EWKB
     shape = clip_shape(ds.crs, geom, geom_crs)
-    all_touched = bool(all_touched) or is_subpixel(shape, ds.transform)
+    all_touched = bool(all_touched) or holds_no_pixel_centre(
+        shape, ds.transform, ds.width, ds.height
+    )
     return clip_masked(ds, shape, all_touched=all_touched, nodata=nodata, crop=crop)
 
 

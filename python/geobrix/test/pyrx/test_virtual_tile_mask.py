@@ -451,6 +451,9 @@ def test_a_bound_on_a_pixel_edge_is_snapped_and_the_cap_is_exact(monkeypatch):
         assert len(shapes) == calls
     monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", 1 << 24)
     assert edit.holds_no_pixel_centre(box(4 - 1e-8, N - 10, 4 + 1e-8, N - 2), t, N, N)
+    # on the raster's right edge too: the column left of it is the raster's
+    on_edge = box(N - 1e-8, N - 10, N + 1e-8, N - 2)
+    assert edit.holds_no_pixel_centre(on_edge, t, N, N)
 
 
 # ---------------------------------------------------------------------------

@@ -94,8 +94,12 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     c1 = math.ceil(max(c for c, _ in corners))
     r0 = math.floor(min(r for _, r in corners))
     r1 = math.ceil(max(r for _, r in corners))
-    # a cutline thinner than the snap, on a pixel edge, still has the pixels on one side of it to scan
-    c1, r1 = max(c1, c0 + 1), max(r1, r0 + 1)
+    # a cutline thinner than the snap, on a pixel edge, has the pixels on both sides of the edge to scan: which of them
+    # the raster holds is not a matter of the side
+    if c1 == c0:
+        c0, c1 = c0 - 1, c0 + 1
+    if r1 == r0:
+        r0, r1 = r0 - 1, r0 + 1
     if min(c1, width) <= max(c0, 0) or min(r1, height) <= max(r0, 0):
         return False  # it misses the raster: the clip has nothing to keep either way
     p = geom.representative_point()

@@ -5040,7 +5040,18 @@ def run_session(
             else:
                 from pyspark.sql import functions as F
 
-                fcols = [F.col(f"c{i}") for i in range(len(args))]
+                # a str_only parameter takes the Python value itself: the API refuses a Column for it, so it is
+                # one value for every row of the case
+                for i in range(min(len(args), len(params))):
+                    if params[i].str_only and any(r[i] != args[i] for r in rows):
+                        raise TypeError(
+                            f"{case.cid}: {params[i].name} of {case.fn} differs between the rows, but the Python API "
+                            "takes it as one Python str. Fix: give the variant rows one value for it."
+                        )
+                fcols = [
+                    args[i] if i < len(params) and params[i].str_only else F.col(f"c{i}")
+                    for i in range(len(args))
+                ]
                 call_py = column_of(case.fn)(*fcols, **dict(case.py_kw))
                 got = df.select(call_py.alias("out")).collect()
             outs = [r["out"] for r in got]
@@ -5659,7 +5670,10 @@ def run_groups(
 
                 call = column_of(case.fn)(
                     *[None if i in omitted else F.col(f"c{i}") for i in range(n0)],
-                    *[F.expr(lit) for lit in literals],
+                    *[
+                        v if params[i + first_const].str_only else F.expr(lit)
+                        for i, (v, lit) in enumerate(zip(consts, literals))
+                    ],
                 )
                 df = src.groupBy("key").agg(call.alias("out"))
             got = df.collect()

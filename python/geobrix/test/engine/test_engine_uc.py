@@ -218,7 +218,9 @@ def test_a_polygonize_over_the_cap_is_refused_before_its_stream_is_read_out(
     import numpy as np
 
     board = (np.indices((64, 64)).sum(axis=0) % 2 + 1).astype("float64")
-    tile = oracles._tile(oracles._gtiff(board[np.newaxis], "EPSG:3857", dtype="uint8"))
+    tile = oracles._tile(
+        oracles._gtiff(board[np.newaxis], "EPSG:3857", nodata=None, dtype="uint8")
+    )
     seen = []
     real_run = run.run
 

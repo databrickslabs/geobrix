@@ -154,7 +154,11 @@ def test_the_polygonize_row_is_the_engines_alone():
     from databricks.labs.gbx.manager import levels
 
     assert POLY.gdal.out_kind == "features" and POLY.kind == "generator"
-    assert set(POLY.levels) == {"L3"} and POLY.levels["L3"].get("engine") == "gdal"
+    # the session runs the engine's table function; Unity Catalog's form is a table function over the engine's array
+    assert (
+        set(POLY.levels) == {"L3", "L4"} and POLY.levels["L3"].get("engine") == "gdal"
+    )
+    assert POLY.levels["L4"] == {"tvf_over": "gbx__rst_polygonize_features"}
     assert levels.engine_only(POLY, "L3")
     assert levels.engine_form(POLY) == "engine-c0"
 

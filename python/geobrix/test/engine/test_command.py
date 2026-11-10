@@ -360,6 +360,14 @@ def test_a_clip_shrinks_the_state_and_a_type_step_changes_the_bytes():
     assert _peak("clip --bbox=0,0,64000,48000") == 64 * 48 * 4
 
 
+def test_a_band_or_type_step_changes_the_bands_or_the_bytes_of_a_pixel():
+    three = _start(bands=3, item=2)
+    assert _peak("nodata-to-alpha", three) == 64 * 48 * 4 * 2  # an alpha band more
+    assert _peak("select --band=1,2", three) == 64 * 48 * 2 * 2  # the bands listed
+    assert _peak("select --band=1 --exclude", three) == 64 * 48 * 2 * 2  # the rest
+    assert _peak("unscale", three) == 64 * 48 * 3 * 8  # unscaled to Float64
+
+
 class _NoGrid(argv.NoGeo):
     """GDAL gives no output grid, and a box moves from metres into a CRS whose unit is 10 km (as a degree is ~111 km)."""
 

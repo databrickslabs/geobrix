@@ -239,3 +239,33 @@ def test_a_tile_whose_decoded_size_fits_the_budget_is_polygonized(engine, monkey
     res = run.run(POLY, [_tile(values)], {"band": 1, "connectedness": 4})
     assert res.error is None, res.error
     assert sorted(row[1] for row in res.features) == [1.0, 3.0]
+
+
+def test_the_first_streamed_call_of_a_process_sweeps_the_stale_folders_once(
+    monkeypatch, tmp_path
+):
+    """A worker ended with os._exit leaves its folder: the first streamed call of a process removes the old ones, and
+    keeps a recent one (another call's)."""
+    import os
+    import time
+
+    from databricks.labs.gbx.pyrx.core import local_temp
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(run, "_swept", False)
+    stale, recent = tmp_path / "gbx_spec_stale", tmp_path / "gbx_spec_recent"
+    stale.mkdir()
+    recent.mkdir()
+    old = time.time() - local_temp.DEFAULT_STALE_TTL_SECONDS - 60
+    os.utime(stale, (old, old))
+    sweeps, sweep = [], local_temp.gc_stale_local_temp
+    monkeypatch.setattr(
+        local_temp,
+        "gc_stale_local_temp",
+        lambda prefix: (sweeps.append(prefix), sweep(prefix)),
+    )
+    names = [run._output_name(POLY.gdal, "/vsimem/x") for _ in range(2)]
+    assert sweeps == [run.SCRATCH_PREFIX]
+    assert not stale.exists() and recent.exists()
+    for out, scratch in names:
+        assert out == f"{scratch}/out.gpkg" and os.path.isdir(scratch)

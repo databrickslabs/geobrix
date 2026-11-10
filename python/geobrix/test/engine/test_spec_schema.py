@@ -335,6 +335,11 @@ REFUSED_BLOCKS = [
         ),
         "at least one field",
     ),
+    (
+        "a streamed raster output",
+        _row(out={"kind": "raster", "dtype": "Byte", "stream": True}),
+        "only a features output can be streamed",
+    ),
     ("an in_read outside the vocabulary", _row(in_read="rows"), "rows"),
     ("a same_crs outside the vocabulary", _row(same_crs="reproject"), "reproject"),
     (

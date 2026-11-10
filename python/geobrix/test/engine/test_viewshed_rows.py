@@ -209,3 +209,89 @@ def test_the_read_cap_judges_bytes_and_the_decoded_budget_judges_a_file_read_by_
         monkeypatch.setattr(run, "decoded_budget", lambda: 1000)
         res = run.run(fn, rasters, values)
     assert res.raster is None and "decoded" in res.error, res
+
+
+_VALUES = {
+    "observer_geom": "POINT(64.5 63.5)",
+    "observer_height": 10.0,
+    "target_height": 0.0,
+    "max_distance": None,
+    "crs": None,
+}
+
+
+def test_an_observer_that_cannot_be_moved_into_the_rasters_crs_is_an_error_tile():
+    """A latitude past the pole has no place in British National Grid: the tile's error, not a failed task."""
+    values = {**_VALUES, "observer_geom": "SRID=4326;POINT(0 95)"}
+    res = run.run(manifest.load().functions[FN], [_flat_dem(128)], values)
+    assert res.raster is None and "cannot be moved into the raster" in res.error
+
+
+def test_a_vrt_read_by_its_path_is_named_by_its_own_driver(tmp_path):
+    """A virtual tile whose file is a VRT goes to GDAL by its path as a VRT (the argv names GeoTIFF, the format of the
+    bytes the engine writes), and gives the mask the GeoTIFF gives; a file no driver reads is refused by name.
+    """
+    import contextlib
+
+    from databricks.labs.gbx.engine import l3
+
+    fn = manifest.load().functions[FN]
+    gdal = run._gdal()
+    dem, vrt = tmp_path / "dem.tif", tmp_path / "dem.vrt"
+    dem.write_bytes(_flat_dem(128))
+    assert gdal.Translate(str(vrt), str(dem), format="VRT") is not None
+    out = {}
+    for name, path in (("vrt", vrt), ("tif", dem)):
+        with contextlib.ExitStack() as stack:
+            rasters, _, _ = l3._inputs(
+                fn, _file_tile(path), 1 << 30, None, None, _VALUES, stack
+            )
+            assert isinstance(rasters[0], run.PathSource)
+            out[name] = run.run(fn, rasters, _VALUES)
+            assert out[name].error is None, out[name].error
+    assert "--input-format=VRT" in out["vrt"].command
+    with (
+        MemoryFile(out["vrt"].raster) as a,
+        a.open() as x,
+        MemoryFile(out["tif"].raster) as b,
+        b.open() as y,
+    ):
+        assert (x.read(1) == y.read(1)).all()
+    junk = tmp_path / "notes.txt"
+    junk.write_text("not a raster")
+    with pytest.raises(run.DataError, match="is not a raster GeoBrix reads"):
+        run._path_input_format(gdal, ["--input-format=GTiff"], str(junk), True)
+
+
+def test_the_block_cache_is_capped_while_gdal_reads_a_file_by_its_path(
+    tmp_path, monkeypatch
+):
+    """GDAL reads a file by its path block by block, so its block cache is what it holds: capped to
+    ``block_cache_bytes`` during the run and put back after. A bytes tile in /vsimem runs with the cache as it is.
+    """
+    import contextlib
+
+    from databricks.labs.gbx.engine import l3
+    from databricks.labs.gbx.pyrx.core import budget
+
+    fn = manifest.load().functions[FN]
+    gdal = run._gdal()
+    dem = tmp_path / "dem.tif"
+    dem.write_bytes(_flat_dem(128))
+    seen, execute = [], run._execute
+
+    def recorded(*a, **k):
+        seen.append(gdal.GetCacheMax())
+        return execute(*a, **k)
+
+    monkeypatch.setattr(run, "_execute", recorded)
+    before = gdal.GetCacheMax()
+    monkeypatch.setattr(budget, "block_cache_bytes", lambda: before // 2)
+    with contextlib.ExitStack() as stack:
+        rasters, _, _ = l3._inputs(
+            fn, _file_tile(dem), 1 << 30, None, None, _VALUES, stack
+        )
+        assert run.run(fn, rasters, _VALUES).error is None
+    assert run.run(fn, [dem.read_bytes()], _VALUES).error is None
+    assert seen == [before // 2, before]
+    assert gdal.GetCacheMax() == before

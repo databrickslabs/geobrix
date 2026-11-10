@@ -91,6 +91,49 @@ class SetSpec:
     )
 
 
+# The remaining JVM companions (`HV-<function>`): the warps over the corpus tiles (4-band, 16 MiB: n stays small for a local[8]
+# heap), the others over tiles replicated in memory. The companion (`today`) is what the pass measures, so it is not a peer of the
+# light forms.
+_HV_WARPS = frozenset(
+    "gbx_rst_" + n
+    for n in (
+        "transform",
+        "to_webmercator",
+        "resample",
+        "resample_to_size",
+        "resample_to_res",
+    )
+)
+_HV_OTHERS = ("gbx_rst_fillnodata", "gbx_rst_summary", "gbx_rst_proximity")
+_HV_LIGHT = {  # the light variants of a function with fewer than the engine's two UDFs
+    "gbx_rst_summary": ("engine-c0",),
+    "gbx_rst_proximity": ("c0",),
+}
+
+
+def _hv_set(fn: str) -> SetSpec:
+    warp = fn in _HV_WARPS
+    label = "mat" if warp else "mem"
+    light = _HV_LIGHT.get(fn, ("engine-c0", "engine-c1"))
+    corpus = (
+        dict(
+            corpus_src="/Volumes/main/default/bench-corpus/rows",
+            corpus_dir="/tmp/gbx-local-timing/IO",
+        )
+        if warp
+        else {}
+    )
+    return SetSpec(
+        mvp="DEM",
+        forms=tuple(f"{v}@{label}" for v in ("today", *light, "floor-c0")),
+        reference=f"{light[0]}@{label}",
+        ns=(4, 8, 16) if warp else (24, 96, 384),
+        fn=fn,
+        peer_exempt=(f"today@{label}", f"engine-c1@{label}"),
+        **corpus,
+    )
+
+
 SETS: Dict[str, SetSpec] = {
     "IO": SetSpec(
         mvp="IO",
@@ -287,6 +330,9 @@ SETS: Dict[str, SetSpec] = {
         corpus_dir="/tmp/gbx-local-timing/IO",
     ),
 }
+
+
+SETS.update({f"HV-{fn[len('gbx_rst_'):]}": _hv_set(fn) for fn in (*sorted(_HV_WARPS), *_HV_OTHERS)})
 
 
 def _family_sets() -> Dict[str, SetSpec]:

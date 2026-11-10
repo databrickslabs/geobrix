@@ -142,6 +142,19 @@ _SE_DEM_SETS = tuple(
 
 
 _DEM_SETS = ("DEM",)
+_HV_SETS = tuple(
+    f"HV-{n}"
+    for n in (
+        "transform",
+        "to_webmercator",
+        "resample",
+        "resample_to_size",
+        "resample_to_res",
+        "fillnodata",
+        "summary",
+        "proximity",
+    )
+)
 
 
 def test_every_form_of_the_dem_sets_exists_for_its_function():
@@ -159,6 +172,25 @@ def test_every_form_of_the_dem_sets_exists_for_its_function():
             assert len(picked) == 1, (name, variant)
     assert lt.SETS["DEM"].fn == "gbx_rst_tri"
     assert not [n for n in lt.SETS if n.startswith("DEM-")]
+
+
+def test_every_form_of_the_hv_sets_exists_for_its_function():
+    """Each name of an HV set picks exactly one form of its function: the companion first, the floor last."""
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    for name in _HV_SETS:
+        spec = lt.SETS[name]
+        label = spec.forms[0].split("@")[1]
+        assert spec.mvp == "DEM" and spec.forms[0] == f"today@{label}"
+        assert spec.forms[-1] == f"floor-c0@{label}"
+        assert spec.fn in lf.HV_FUNCTIONS
+        for variant in spec.forms:
+            picked = [
+                f for f in lf.FORMS["DEM"] if f.variant == variant and f.fn == spec.fn
+            ]
+            assert len(picked) == 1, (name, variant)
+        # the warps read the corpus tiles (a small n: 16 MiB tiles); the rest are replicated in memory
+        assert (label == "mat") == bool(spec.corpus_src)
 
 
 def test_every_form_of_the_se_set_exists_for_its_function():
@@ -184,6 +216,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         "SE-transformcrs",
         *_SE_DEM_SETS,
         *_DEM_SETS,
+        *_HV_SETS,
     } <= set(lt.SETS)
     # a second function of a family has a set of its own, named `<family>-<function>`
     assert set(lt.SETS) - {
@@ -194,6 +227,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         "SE-transformcrs",
         *_SE_DEM_SETS,
         *_DEM_SETS,
+        *_HV_SETS,
     } - {
         "raster-file-op",  # no function of the family has a JVM level left (it times cog_convert's light forms)
     } == {

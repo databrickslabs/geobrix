@@ -2640,6 +2640,170 @@ for _fn in DEM_FUNCTIONS:
         )
     )
 
+# --- HV, the remaining JVM companions under the keep rule -------------------------------------------------------------------
+#
+# The five warp functions, fill-NoData, summary and proximity each keep a JVM companion beside their light form. Each is timed
+# on one input per function with its JVM form (`today`), the engine's row-wise UDF (c0) and its batch UDF (c1) (proximity has the
+# one light UDF, c0), and a floor: the warps on the corpus tiles (4 bands, 16 MiB, in four CRSs), the rest on tiles replicated
+# on the executors (128 at 1x, 512 at 4x, 2048 at 16x, over 32 partitions as the DEM forms). Every form carries a decoded-value
+# fingerprint and a NULL report; the JVM form's report names the distinct `last_error` texts with their counts.
+HV_WARP_FUNCTIONS = (
+    "gbx_rst_transform",
+    "gbx_rst_to_webmercator",
+    "gbx_rst_resample",
+    "gbx_rst_resample_to_size",
+    "gbx_rst_resample_to_res",
+)
+HV_OTHER_FUNCTIONS = ("gbx_rst_fillnodata", "gbx_rst_summary", "gbx_rst_proximity")
+HV_FUNCTIONS = HV_WARP_FUNCTIONS + HV_OTHER_FUNCTIONS
+_RX_PKG = "com.databricks.labs.gbx.rasterx.expressions."
+_HV_COMPANION = {
+    "gbx_rst_transform": _RX_PKG + "RST_Transform",
+    "gbx_rst_to_webmercator": _RX_PKG + "web.RST_ToWebMercator",
+    "gbx_rst_resample": _RX_PKG + "resample.RST_Resample",
+    "gbx_rst_resample_to_size": _RX_PKG + "resample.RST_ResampleToSize",
+    "gbx_rst_resample_to_res": _RX_PKG + "resample.RST_ResampleToRes",
+    "gbx_rst_fillnodata": _RX_PKG + "pixel.RST_FillNodata",
+    "gbx_rst_summary": _RX_PKG + "accessors.RST_Summary",
+    "gbx_rst_proximity": _RX_PKG + "analysis.RST_Proximity",
+}
+# the pixel size of a corpus tile in its own CRS units: degrees in 4326, metres in the other three; the tile struct carries the
+# CRS, so the resolution is a cheap CASE and no function reads the tile
+_HV_RES = "CASE WHEN tile.crs = 'EPSG:4326' THEN 0.0002D ELSE 20D END"
+# `{n}` is the function's name at the level (the SQL name, or the private name of the JVM companion)
+_HV_CALLS = {
+    "gbx_rst_transform": "{n}(tile, 3857)",
+    "gbx_rst_to_webmercator": "{n}(tile, 'bilinear')",
+    "gbx_rst_resample": "{n}(tile, 0.5D, 'bilinear')",
+    "gbx_rst_resample_to_size": "{n}(tile, 512, 512, 'bilinear')",
+    "gbx_rst_resample_to_res": "{n}(tile, " + _HV_RES + ", " + _HV_RES + ", 'bilinear')",
+    "gbx_rst_fillnodata": "{n}(tile, 100.0D, 0)",
+    "gbx_rst_summary": "{n}(tile)",
+    # the two classes 1 and 2 are the sources: a DEM tile's pixels are all non-zero, which makes every pixel a source
+    "gbx_rst_proximity": "{n}(tile, '1,2', 'GEO', CAST(NULL AS DOUBLE))",
+}
+_HV_INPUT = {
+    **{fn: "tiles_mat" for fn in HV_WARP_FUNCTIONS},
+    "gbx_rst_fillnodata": "hv_warp_1024_mem",
+    "gbx_rst_summary": "dem_1024_mem",
+    "gbx_rst_proximity": "hv_classes_1024_mem",
+}
+BASE_ROWS["hv_warp_1024_mem"] = 128
+BASE_ROWS["hv_classes_1024_mem"] = 128
+INPUTS["hv_warp_1024_mem"] = _se_dems_replicated(
+    1024, _se_warp_tile, "warp32", parts=32
+)
+INPUTS["hv_classes_1024_mem"] = _se_dems_replicated(
+    1024, _se_class_tile, "classes32", parts=32
+)
+
+
+def setup_hv_l1(spark):
+    """Install every HV companion under its private name (dedicated compute; a Connect session refuses)."""
+    from databricks.labs.gbx.manager import jvm
+
+    for fn, fqn in _HV_COMPANION.items():
+        why = jvm.install_private_l1(spark, fqn, dem_l1_name(fn))
+        if why:
+            raise RuntimeError(why)
+
+
+# The decoded pixels of the corpus tiles whose path hashes to 0 mod 8 (a filter by path: every form reads the same tiles, and no
+# sort carries 16 MiB rows).
+_HV_VFP_CORPUS = (
+    "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM {{src}} WHERE pmod(xxhash64(tile.path), 8) = 0)"
+)
+# the summary's text: the number of rows and the sum of the text lengths (the two levels write different JSON by design)
+_HV_VFP_TEXT = (
+    "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM "
+    "(SELECT first(tile) AS tile FROM {{src}} GROUP BY xxhash64(tile.raster)))"
+)
+_HV_ERR_TEXT = (
+    "substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), ';,', '  '), 1, 160)"
+)
+
+
+def _hv_nulls(call: str, *, text_output: bool = False, paths: bool = False) -> str:
+    """How many outputs are NULL, a digest of the input paths of the NULL ones, and the first few: `<count> x <last_error text>`
+    per distinct text, then three paths. One pass over the input; a NULL string (the summary) has no tile to carry a text."""
+    what = "'<NULL text>'" if text_output else _HV_ERR_TEXT
+    nul = "t IS NULL" if text_output else "t.raster IS NULL"
+    p = "tile.path" if paths else "''"
+    return (
+        "SELECT n_null, s, concat(slice(array_sort(transform(array_distinct(l), x -> "
+        "concat(size(filter(l, y -> y = x)), ' x ', x))), 1, 6), slice(array_sort(ps), 1, 3)) AS first FROM "
+        "(SELECT count(*) AS n_null, md5(concat_ws('|', array_sort(collect_list(p)))) AS s, collect_list(txt) AS l, "
+        "collect_list(p) AS ps FROM "
+        f"(SELECT p, {what} AS txt FROM (SELECT {p} AS p, {call} AS t FROM {{src}}) WHERE {nul}))"
+    )
+
+
+def _hv(fn, level, variant, sql, **kw):
+    return Form("DEM", fn, level, variant, _HV_INPUT[fn], sql, **kw)
+
+
+for _fn in HV_FUNCTIONS:
+    _label = "mat" if _fn in HV_WARP_FUNCTIONS else "mem"
+    _text = _fn == "gbx_rst_summary"
+    _corpus = _fn in HV_WARP_FUNCTIONS
+    _call = _HV_CALLS[_fn]
+    _l1, _l3 = _call.format(n=dem_l1_name(_fn)), _call.format(n=_fn)
+    _fp = (
+        "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM {{src}})"
+        if _text
+        else _SE_FP
+    )
+
+    def _v(call, _text=_text, _corpus=_corpus):
+        if _corpus:
+            return _HV_VFP_CORPUS.format(call=call)
+        return (_HV_VFP_TEXT if _text else _DEM_VFP).format(call=call)
+
+    def _n(call, _text=_text, _corpus=_corpus):
+        return _hv_nulls(call, text_output=_text, paths=_corpus)
+
+    _l3_variants = ("c0",) if _fn == "gbx_rst_proximity" else ("engine-c0", "engine-c1")
+    if _fn == "gbx_rst_summary":
+        _l3_variants = ("engine-c0",)  # a JSON row has no batch form: engine-c1 would be the same UDF
+    FORMS["DEM"].append(
+        _hv(
+            _fn,
+            "L1",
+            f"today@{_label}",
+            _fp.format(call=_l1),
+            setup="databricks.labs.gbx.bench.levels_forms:setup_hv_l1",
+            register=False,
+            computes=("dedicated",),
+            allows_null=True,  # an error tile under load is reported, not a lost row
+            vsql=_v(_l1),
+            nullsql=_n(_l1),
+        )
+    )
+    for _v3 in _l3_variants:
+        FORMS["DEM"].append(
+            _hv(
+                _fn,
+                "L3",
+                f"{_v3}@{_label}",
+                _fp.format(call=_l3),
+                allows_null=_corpus,
+                vsql=_v(_l3),
+                nullsql=_n(_l3),
+            )
+        )
+    FORMS["DEM"].append(
+        _hv(
+            _fn,
+            "L3",
+            f"floor-c0@{_label}",
+            _SE_FP.format(call="gbx_bench_floor_c0(tile)"),
+            setup="databricks.labs.gbx.bench.levels_forms:setup_se_floor",
+            register=False,
+        )
+    )
+
+
 # Probe: do the heavy-first functions that are kept return silent NULLs under load? One form runs four accessors (width,
 # bounding box, memory size, SRID) in a single scan of the corpus tiles, each through its JVM level under a private name;
 # an accessor's NULL has no text, so the report names how many NULLs each gave and which tiles. `fromcontent`, which

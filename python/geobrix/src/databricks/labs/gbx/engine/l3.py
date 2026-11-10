@@ -554,6 +554,11 @@ def udtf(
     A table function cannot sit behind a SQL wrapper, so it has no FILE form: a virtual tile is read through its path.
     The features come from a file GDAL wrote on the worker's local disk, read back one row at a time: only what GDAL itself holds
     stays in memory, a few bytes for each region.
+
+    The result is never silently partial. Before the first row the file is opened and its feature count read; a file that
+    fails that check gives no rows and logs its reason once. A read that fails after that, or a file that ends short of its
+    count, raises (naming the function and the features read) so that the Spark task fails and is retried; the file is
+    removed either way. Any other error propagates as it is.
     """
     fn = _function(sql_name, None)
     if fn.kind != "generator" or fn.gdal is None or fn.gdal.out_kind != "features":
@@ -593,14 +598,19 @@ def udtf(
             if res.error is not None:
                 _log_once(fn.sql_name, res.error)
                 return
+            stream = res.features
             try:
-                yield from res.features
+                yield from stream
             except run.DataError as exc:
-                # a table function has no error row: the rows given are all there are, and the log says they are not all
-                _log_once(
-                    fn.sql_name,
-                    f"{exc}; the output stops here and the rows after it are missing",
-                )
+                if getattr(stream, "expected", None) is None:
+                    # the output file failed its check before any row: the tile gives no rows, as an unreadable tile does
+                    _log_once(fn.sql_name, str(exc))
+                    return
+                # rows are out: a result is never silently partial, so the task fails and Spark retries it
+                raise RuntimeError(
+                    f"{fn.sql_name}: the read of its local output failed after "
+                    f"{stream.read} of {stream.expected} features ({exc}); the task is retried"
+                ) from exc
             finally:
                 close = getattr(res.features, "close", None)
                 if close is not None:  # a streamed output removes its file

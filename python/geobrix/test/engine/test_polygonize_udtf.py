@@ -6,6 +6,7 @@ failed call. The engine run is replaced by a stub, so those rows run on the host
 
 import inspect
 import logging
+import os
 
 import pytest
 
@@ -156,24 +157,6 @@ def test_the_polygonize_row_is_the_engines_alone():
     assert set(POLY.levels) == {"L3"} and POLY.levels["L3"].get("engine") == "gdal"
     assert levels.engine_only(POLY, "L3")
     assert levels.engine_form(POLY) == "engine-c0"
-
-
-def test_a_stream_that_fails_to_read_back_ends_the_rows_and_logs_once(
-    monkeypatch, caplog
-):
-    """The file GDAL wrote is read back after the engine's call: a read that fails there is no task failure, the rows
-    already given are all there are."""
-
-    def broken():
-        yield ROWS[0]
-        raise run.DataError("GDAL's output could not be read back (boom)")
-
-    monkeypatch.setattr(
-        run, "run", lambda *a, **k: run.Result(None, None, "cmd", features=broken())
-    )
-    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.engine"):
-        assert list(_handler().eval(TILE)) == [ROWS[0]]
-    assert any("could not be read back" in r.getMessage() for r in caplog.records)
 
 
 def test_a_stream_of_a_file_gdal_cannot_open_raises_a_data_error_not_a_runtime_error(
@@ -345,6 +328,92 @@ def test_a_feature_gdal_fails_to_read_mid_stream_is_a_data_error_after_the_rows_
         for row in res.features:
             got.append(row)
     assert len(got) == 1
+
+
+def _two_regions():
+    """The real result of a tile of two regions: two features in the file GDAL wrote."""
+    import numpy as np
+
+    values = np.ones((8, 8), "uint8")
+    values[:, 4:] = 2
+    res = run.run(POLY, [_tile(values)], {"band": 1, "connectedness": 4})
+    assert res.error is None, res.error
+    return res
+
+
+def _serve(monkeypatch, res):
+    monkeypatch.setattr(run, "run", lambda *a, **k: res)
+    return _handler()
+
+
+def test_a_file_that_fails_its_check_before_the_first_row_gives_no_rows_and_logs(
+    engine, monkeypatch, tmp_path, caplog
+):
+    (tmp_path / "out.gpkg").write_bytes(b"not a geopackage")
+    stream = run.FeatureStream(
+        run._gdal(), str(tmp_path / "out.gpkg"), str(tmp_path), POLY.gdal.out_fields
+    )
+    res = run.Result(None, None, "cmd", features=stream)
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.engine"):
+        assert list(_serve(monkeypatch, res).eval(TILE)) == []
+    assert stream.expected is None and not tmp_path.exists()
+    msgs = [r.getMessage() for r in caplog.records if "polygonize" in r.getMessage()]
+    assert len(msgs) == 1 and "could not be read back" in msgs[0]
+    assert "missing" not in msgs[0]
+
+
+def test_a_read_that_fails_after_rows_went_out_raises_and_the_file_is_removed(
+    engine, monkeypatch
+):
+    res = _two_regions()
+    scratch, real = res.features._scratch, run._layer_rows
+
+    def fails_after_one(lyr, fields, fix=None):
+        yield next(real(lyr, fields, fix))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(run, "_layer_rows", fails_after_one)
+    got = []
+    with pytest.raises(
+        RuntimeError, match=r"gbx_rst_polygonize.*after 1 of 2 features.*retried"
+    ):
+        for row in _serve(monkeypatch, res).eval(TILE):
+            got.append(row)
+    assert len(got) == 1 and not os.path.exists(scratch)
+
+
+def test_a_file_that_ends_short_of_its_feature_count_raises(engine, monkeypatch):
+    res = _two_regions()
+    scratch, real = res.features._scratch, run._layer_rows
+
+    def stops_after_one(lyr, fields, fix=None):
+        yield next(real(lyr, fields, fix))
+
+    monkeypatch.setattr(run, "_layer_rows", stops_after_one)
+    with pytest.raises(RuntimeError, match=r"after 1 of 2 features.*retried"):
+        list(_serve(monkeypatch, res).eval(TILE))
+    assert not os.path.exists(scratch)
+
+
+def test_a_complete_read_gives_every_feature_and_removes_the_file(engine, monkeypatch):
+    res = _two_regions()
+    scratch = res.features._scratch
+    rows = list(_serve(monkeypatch, res).eval(TILE))
+    assert sorted(r[1] for r in rows) == [1.0, 2.0]
+    assert (res.features.read, res.features.expected) == (2, 2)
+    assert not os.path.exists(scratch)
+
+
+def test_an_error_that_is_not_gdals_propagates_unchanged(monkeypatch):
+    def buggy():
+        yield ROWS[0]
+        raise ValueError("a bug")
+
+    monkeypatch.setattr(
+        run, "run", lambda *a, **k: run.Result(None, None, "cmd", features=buggy())
+    )
+    with pytest.raises(ValueError, match="a bug"):
+        list(_handler().eval(TILE))
 
 
 def test_the_sweep_keeps_the_folder_of_a_live_process_however_old_and_removes_a_dead_ones(

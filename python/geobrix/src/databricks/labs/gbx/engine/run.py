@@ -856,6 +856,11 @@ class FeatureStream:
     A feature whose value is NaN or infinite is left out, as a NoData pixel is: a NaN pixel is not data, and its polygon is
     a hole in its neighbours', as a masked pixel's would be. (The file stores a NaN as NULL.) The file and its folder are
     removed when the stream ends, is closed or is collected: the caller iterates it once and calls ``close``.
+
+    Before the first row the file is opened and its feature count read (``expected``); a file that fails that check is a
+    ``DataError`` with ``expected`` still ``None``. After it, ``read`` counts the features read from the file (a skipped NaN
+    one too), and a read that fails or a file that ends short of ``expected`` is a ``DataError`` with ``expected`` set: a
+    caller that must not give a partial result tells the two apart by it.
     """
 
     def __init__(self, gdal, path: str, scratch: str, fields):
@@ -866,6 +871,8 @@ class FeatureStream:
             fields,
         )
         self._used = False
+        self.expected: Optional[int] = None
+        self.read = 0
 
     def __iter__(self):
         if self._used:
@@ -883,6 +890,7 @@ class FeatureStream:
                     allowed_drivers=["GPKG"],
                 )
                 lyr = ds.GetLayer(0) if ds is not None else None
+                count = lyr.GetFeatureCount() if lyr is not None else None
             except RuntimeError as exc:
                 raise DataError(
                     f"GDAL's output could not be read back ({exc})"
@@ -891,6 +899,9 @@ class FeatureStream:
                 raise DataError(
                     gdal.GetLastErrorMsg() or "GDAL's output could not be read back"
                 )
+            if count is None or count < 0:
+                raise DataError("GDAL's output has no readable feature count")
+            self.expected = count
             doubles = [
                 i + 1 for i, (_n, t, _s) in enumerate(self._fields) if t == "DOUBLE"
             ]
@@ -906,9 +917,12 @@ class FeatureStream:
                     raise DataError(
                         f"GDAL's output could not be read back ({exc})"
                     ) from None
+                self.read += 1
                 # the file stores a NaN as NULL
                 if all(row[i] is not None and math.isfinite(row[i]) for i in doubles):
                     yield row
+            if self.read < count:
+                raise DataError("GDAL's output ended before its last feature")
         finally:
             lyr = ds = None
             self.close()

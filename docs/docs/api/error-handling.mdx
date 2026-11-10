@@ -106,6 +106,7 @@ Functions that turn one tile into many rows (tessellation, tiling, pyramids) beh
 
 - A generator that returns tiles emits one error row for a tile it cannot read. Filter or audit that row like any other.
 - A generator that returns no tile column (the cell explodes, the TIN functions, `gbx_rst_polygonize`) gives no rows for any `NULL` or unreadable input.
+- `gbx_rst_polygonize` never gives a partial result: if reading its output fails after the first row, the task fails and Spark retries it.
 - `gbx_rst_xyzpyramid` gives no rows for a `NULL` or unreadable tile. An unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a `max_z` above the cap, or too many tiles for the zoom range raises its message.
 - A `NULL` size, resolution or grid gives one error tile.
 

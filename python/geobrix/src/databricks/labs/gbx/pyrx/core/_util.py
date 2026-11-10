@@ -5,8 +5,8 @@ import math
 import numpy as np
 from rasterio.enums import Resampling
 
-# The resampling words of gdalwarp -r that the functions accept, as the heavy tier's RST_ResampleHelper allows them
-# (plus ``nearest``, GDAL's ``near``), each with the rasterio member that does the same work.
+# The resampling words of gdalwarp -r that the functions accept (plus ``nearest``, GDAL's ``near``), each with the
+# rasterio member that does the same work.
 _GDAL_WORDS = {
     "near": "nearest",
     "nearest": "nearest",

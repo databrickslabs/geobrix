@@ -7,7 +7,6 @@ import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.generators._
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
-import com.databricks.labs.gbx.rasterx.expressions.resample._
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
@@ -293,14 +292,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordy(tile, lit(x), lit(y))
 
-    // Web-mercator tile output (Column form)
-    def rst_to_webmercator(tile: Column): Column =
-        ColumnAdapter(RST_ToWebMercator.name, Seq(tile, lit("bilinear")))
-    def rst_to_webmercator(tile: Column, resampling: Column): Column =
-        ColumnAdapter(RST_ToWebMercator.name, Seq(tile, resampling))
-    def rst_to_webmercator(tile: Column, resampling: String): Column =
-        rst_to_webmercator(tile, lit(resampling))
-
     def rst_tilexyz(tile: Column, z: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_TileXYZ.name, Seq(tile, z, x, y, lit("PNG"), lit(256), lit("bilinear")))
     def rst_tilexyz(
@@ -337,17 +328,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Terrain analysis (DEM processing) - Column form
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
-
-    // Resample to size - gdal.Warp -ts wrapper
-    def rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column): Column =
-        ColumnAdapter(RST_ResampleToSize.name, Seq(tile, widthPx, heightPx, lit("bilinear")))
-    def rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column =
-        ColumnAdapter(RST_ResampleToSize.name, Seq(tile, widthPx, heightPx, algorithm))
-    def rst_resample_to_size(tile: Column, widthPx: Int, heightPx: Int): Column =
-        rst_resample_to_size(tile, lit(widthPx), lit(heightPx))
-    def rst_resample_to_size(tile: Column, widthPx: Int, heightPx: Int, algorithm: String): Column =
-        rst_resample_to_size(tile, lit(widthPx), lit(heightPx), lit(algorithm))
-
 
     // Bin one (x,y,z) point per row — aggregator form
     def rst_binpoints_agg(

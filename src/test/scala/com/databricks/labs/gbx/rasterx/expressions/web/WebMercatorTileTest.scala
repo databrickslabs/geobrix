@@ -10,7 +10,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** End-to-end tests for the 3 web-tile expressions.
+/** End-to-end tests for the web-tile expressions.
  *
  *  Uses a tiny in-memory 8×8 EPSG:4326 raster covering (-1,-1)..(1,1) to keep wall-clock low.
  *  We exercise the public `execute(...)` methods directly — that's the integration boundary
@@ -43,21 +43,6 @@ class WebMercatorTileTest extends AnyFunSuite with BeforeAndAfterAll {
 
     override def afterAll(): Unit = {
         if (srcDs != null) srcDs.delete()
-    }
-
-    test("RST_ToWebMercator returns a raster in EPSG:3857 with web-mercator extent") {
-        val (resultDs, _) = RST_ToWebMercator.execute(srcDs, Map.empty[String, String], "bilinear")
-        try {
-            val srs = resultDs.GetSpatialRef
-            srs should not be null
-            // PROJ may report authority code as a String or null depending on the GDAL version;
-            // fall back to checking that the WKT mentions "Mercator" if the auth code is absent.
-            val authCode = Option(srs.GetAuthorityCode(null)).getOrElse("")
-            val wkt = srs.ExportToWkt()
-            (authCode == "3857" || wkt.contains("Mercator")) shouldBe true
-        } finally {
-            resultDs.delete()
-        }
     }
 
     test("RST_TileXYZ returns valid PNG magic bytes for an in-extent tile") {

@@ -62,7 +62,6 @@ com.databricks.labs.gbx.rasterx.expressions.constructor.*
 com.databricks.labs.gbx.rasterx.expressions.dem.*
 com.databricks.labs.gbx.rasterx.expressions.grid.*
 com.databricks.labs.gbx.rasterx.expressions.pixel.*
-com.databricks.labs.gbx.rasterx.expressions.resample.*
 com.databricks.labs.gbx.rasterx.expressions.vector.RST_IsobandTest
 com.databricks.labs.gbx.rasterx.expressions.vector.VectorRasterBridgeTest
 com.databricks.labs.gbx.rasterx.expressions.web.*

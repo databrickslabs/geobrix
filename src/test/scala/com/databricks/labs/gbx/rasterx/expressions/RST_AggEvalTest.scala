@@ -48,14 +48,25 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         def runQuery(df: DataFrame): Unit = {
             df
-                // Resample down to reduce data size for faster, more stable testing
-                .withColumn("raster", rst_resample_to_size(col("raster"), 128, 128))
+                // Cut each raster to its upper-left 128 x 128 window to reduce data size for faster, more stable
+                // testing. The windows of the rasters share one grid, as the combine requires.
+                .withColumn("ulx", rst_upperleftx(col("raster")))
+                .withColumn("uly", rst_upperlefty(col("raster")))
+                .select(col("ulx"), col("uly"), rst_tooverlappingtiles(col("raster"), 128, 128, 0).as("raster"))
+                .where(rst_upperleftx(col("raster")) === col("ulx") && rst_upperlefty(col("raster")) === col("uly"))
                 .groupBy(lit(1))
                 .agg(
-                  rst_combineavg_agg(col("raster")),
-                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
+                  rst_combineavg_agg(col("raster")).as("avg"),
+                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc").as("derived")
                 )
                 .collect()
+                .foreach { row =>
+                    // the aggregates answer a real tile each, not an error tile: the members were aligned
+                    for (name <- Seq("avg", "derived")) {
+                        val tile = row.getAs[org.apache.spark.sql.Row](name)
+                        assert(tile != null && tile.getAs[Array[Byte]]("raster") != null, s"$name must be a tile with pixels")
+                    }
+                }
         }
 
         val df: DataFrame = Seq(
@@ -292,7 +303,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
           s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
         ).toDF("path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("raster", rst_resample_to_size(when(lit(false), col("raster")), 128, 128))
+            .withColumn("raster", rst_updatetype(when(lit(false), col("raster")), "Byte"))
 
         noException should be thrownBy {
             df.groupBy(lit(1))
@@ -355,11 +366,16 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
             .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
         // two error tiles with different reasons, computed once so both aggregates see the same rows
-        // a tile with no CRS cannot be reprojected ("the tile has no CRS"); bytes that are no raster fail when read:
-        // two different reasons
-        val bad1 = good.select(rst_to_webmercator(rst_setsrid(col("tile"), 0)).as("tile")).cache()
-        val bad2 = Seq(Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)).toDF("content")
-            .select(rst_to_webmercator(rst_fromcontent(col("content"), lit("GTiff"))).as("tile")).cache()
+        // two error tiles with different reasons, built as a failed op leaves them: no pixels, no path, the reason in the metadata
+        def errorTile(reason: String) = {
+            import org.apache.spark.sql.Row
+            val md = Map("error_message" -> reason, "last_error" -> reason)
+            val schema = StructType(Seq(StructField("tile", com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil.v2TileType)))
+            spark.createDataFrame(
+              java.util.Arrays.asList(Row(Row(0L, null, null, null, null, null, null, null, md))), schema).cache()
+        }
+        val bad1 = errorTile("the tile has no CRS")
+        val bad2 = errorTile("the bytes are no raster")
         def metadata(df: org.apache.spark.sql.DataFrame) =
             df.select(col("tile.metadata").as("md")).head().getAs[Map[String, String]]("md")
         val (md1, md2) = (metadata(bad1), metadata(bad2))

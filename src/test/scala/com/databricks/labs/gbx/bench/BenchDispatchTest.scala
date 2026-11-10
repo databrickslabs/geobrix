@@ -70,8 +70,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_viewshed left with its expression (its light level is the GDAL spec engine): 65 - 1 = 64.
     // rst_clip left with its expression (it was never registered; its light level is lightweight only): 64 - 1 = 63.
     // rst_transform, resample, resample_to_res, fillnodata, proximity and summary left with their companions (measured under
-    // 1.2x of light, or a different output): 63 - 6 = 57.
-    assert(BenchDispatch.all.size == 57)
+    // 1.2x of light, or a different output): 63 - 6 = 57. rst_to_webmercator and rst_resample_to_size left too (0.98x): 57 - 2 = 55.
+    assert(BenchDispatch.all.size == 55)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -107,7 +107,6 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_separatebands") == "format")
     assert(BenchDispatch.minBands("rst_band") == 2)
     assert(BenchDispatch.minBands("rst_width") == 1)
-    assert(BenchDispatch.category("rst_resample_to_size") == "resample")
     assert(BenchDispatch.category("rst_tri") == "terrain")
     assert(BenchDispatch.category("rst_srid") == "accessor")
     // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_setcrs is an edit/relabel (like rst_setsrid).

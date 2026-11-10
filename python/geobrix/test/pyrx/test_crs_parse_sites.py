@@ -121,10 +121,6 @@ SCALA_SITES = {
         "rasterx/expressions/web/RST_TileXYZ.scala",
         'command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"',
     ): WARP_CONST,
-    (
-        "rasterx/expressions/web/RST_ToWebMercator.scala",
-        'command = s"gdalwarp -t_srs EPSG:3857 -r $resampling"',
-    ): WARP_CONST,
     ("rasterx/gdal/GDAL.scala", "wsg84.ImportFromEPSG(4326)"): CONST_CRS,
     ("rasterx/gdal/GDAL.scala", "epsg3857.ImportFromEPSG(3857)"): CONST_CRS,
     (

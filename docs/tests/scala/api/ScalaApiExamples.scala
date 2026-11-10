@@ -779,26 +779,6 @@ result.show()
 (tile with NoData initialized)
 """.trim
 
-  val rst_resample_to_size_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_resample_to_size(col("tile"), lit(100), lit(100), lit("near")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_resample_to_size_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(resampled tile forced to 100x100 pixels)
-""".trim
-
   val rst_setcrs_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1261,26 +1241,6 @@ result.show(truncate = false)
 |5490     |
 +---------+
 """
-
-  val rst_to_webmercator_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_to_webmercator(col("tile")).alias("tile"))
-result.show(truncate = false)
-""".trim
-
-  val rst_to_webmercator_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(reprojected to Web Mercator, EPSG:3857)
-""".trim
 
   val rst_tilexyz_scala_example: String =
     """

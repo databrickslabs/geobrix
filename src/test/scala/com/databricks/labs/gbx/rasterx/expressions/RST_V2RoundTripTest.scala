@@ -54,9 +54,9 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
 
-        // Run a tile-returning op that has a JVM form (rst_resample_to_size).
+        // Run a tile-returning op that has a JVM form (rst_updatetype).
         val out = df
-            .select(rst_resample_to_size(col("tile"), 100, 100).as("t"))
+            .select(rst_updatetype(col("tile"), "Float32").as("t"))
 
         // Output schema must be the v2 9-field struct.
         val tileType = out.schema("t").dataType.asInstanceOf[StructType]
@@ -78,13 +78,13 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
-        // Stage 1: build a v2 materialized tile via rst_fromcontent + rst_resample_to_size (v1 → v2).
+        // Stage 1: build a v2 materialized tile via rst_fromcontent + rst_updatetype (v1 → v2).
         val stage1 = spark.read
             .format("binaryFile")
             .load(tifPath)
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-            .select(rst_resample_to_size(col("tile"), 100, 100).as("t"))
+            .select(rst_updatetype(col("tile"), "Float32").as("t"))
             .cache()
 
         stage1.count() // materialise
@@ -149,9 +149,9 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         )
     }
 
-    // ---- 3b. rst_resample_to_size on VIRTUAL tile raises error through tile-returning (3-arg) overload ----
+    // ---- 3b. rst_updatetype on VIRTUAL tile raises error through tile-returning (3-arg) overload ----
 
-    test("heavy rst_resample_to_size on a VIRTUAL tile raises the materialize-first error (3-arg overload)") {
+    test("heavy rst_updatetype on a VIRTUAL tile raises the materialize-first error (3-arg overload)") {
         // This test covers the gap fixed by Task 9b: tile-returning ops use the 3-arg
         // safeEval(eval, row, rasterType) overload. Pre-fix it swallowed the VirtualTileException
         // as an error-row and .collect() would NOT throw. Post-fix it re-throws.
@@ -176,7 +176,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             tileSchema)
 
         val ex = intercept[Exception] {
-            dfVirtual.select(rst_resample_to_size(col("tile"), 100, 100)).collect()
+            dfVirtual.select(rst_updatetype(col("tile"), "Float32")).collect()
         }
 
         assert(
@@ -240,7 +240,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .load(tifPath)
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-            .select(rst_resample_to_size(col("tile"), 100, 100).as("t"))
+            .select(rst_updatetype(col("tile"), "Float32").as("t"))
 
         val heavyType = heavyOutDF.schema("t").dataType.asInstanceOf[StructType]
         val canonical = RST_ExpressionUtil.v2TileType

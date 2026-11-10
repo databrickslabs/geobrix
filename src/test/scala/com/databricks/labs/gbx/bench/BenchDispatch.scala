@@ -21,9 +21,7 @@ import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
-import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToSize
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
-import com.databricks.labs.gbx.rasterx.expressions.web.RST_ToWebMercator
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
@@ -51,9 +49,8 @@ object BenchDispatch {
     a.get(k).map(_.split("[,\\s]+").filter(_.nonEmpty).map(_.trim.toDouble)).getOrElse(d)
 
   private val ACC = "accessor"; private val TER = "terrain"
-  private val WARP = "warp"
   private val EDIT = "edit"
-  private val FOCAL = "focal"; private val FMT = "format"; private val RES = "resample"
+  private val FOCAL = "focal"; private val FMT = "format"
   private val DGGS = "dggs"
   private val VECTOR = "vector"
 
@@ -74,7 +71,6 @@ object BenchDispatch {
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
     "rst_tri" -> TER,
-    "rst_to_webmercator" -> WARP,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
@@ -94,7 +90,6 @@ object BenchDispatch {
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT,
     "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT,
-    "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_derivedband" -> FMT,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
@@ -362,7 +357,6 @@ object BenchDispatch {
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
-    case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
     // rst_crs: canonical CRS STRING (authority else WKT). ofScalar coerces the
@@ -418,9 +412,6 @@ object BenchDispatch {
     // dataset (identity != input ds). The GTiff round-trip still times correctly
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
-    case "rst_resample_to_size" =>
-      fpDerived(RST_ResampleToSize.execute(ds, Map.empty, argI(a, "width_px", 128),
-        argI(a, "height_px", 128), argS(a, "algorithm", "bilinear")))
     // tile-out transforms with geometry / expression / band-map / function args
     // SIX are full raster comparisons (same algorithm + CRS-independent
     // args); FOUR are timing-only (no in-extent geometry across the multi-CRS
@@ -691,7 +682,6 @@ object BenchDispatch {
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
       case "rst_tri"        => rst_tri(tile)
-      case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors
       case "rst_srid"        => rst_srid(tile)
       case "rst_crs"         => rst_crs(tile)
@@ -727,9 +717,6 @@ object BenchDispatch {
         val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
-      case "rst_resample_to_size" =>
-        rst_resample_to_size(tile, argI(a, "width_px", 128),
-          argI(a, "height_px", 128), argS(a, "algorithm", "bilinear"))
       // tile-out transforms with geometry / function args
       case "rst_derivedband" =>
         rst_derivedband(tile, derivedBandPyFunc, derivedBandFuncName)

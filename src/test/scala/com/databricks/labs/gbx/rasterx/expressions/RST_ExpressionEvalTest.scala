@@ -24,8 +24,9 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
         def runQuery(df: DataFrame): Unit = {
             val base = df
-                // Resample down to reduce data size for faster, more stable testing
-                .withColumn("clipped", rst_resample_to_size(col("raster"), 256, 256))
+                // Cut to a 256 x 256 window to reduce data size for faster, more stable testing
+                .select(rst_tooverlappingtiles(col("raster"), 256, 256, 0).as("clipped"))
+                .limit(1)
                 .cache()
             base.collect()
             Seq(
@@ -39,7 +40,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),
               rst_worldtorastercoordx(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0)),
-              rst_to_webmercator(col("clipped")),
               rst_tryopen(col("clipped")),
               rst_updatetype(col("clipped"), lit("Float32"))
             ).foreach(f => base.select(f).collect())
@@ -67,8 +67,9 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
 
         def convolveQuery(df: DataFrame): Unit = {
             val base = df
-                // Resample down further for convolve operations (which are compute-intensive)
-                .withColumn("raster", rst_resample_to_size(col("raster"), 128, 128))
+                // Cut to a smaller window for convolve operations (which are compute-intensive)
+                .select(rst_tooverlappingtiles(col("raster"), 128, 128, 0).as("raster"))
+                .limit(1)
                 .cache()
             base.collect()
             // Test one representative convolve operation for stability

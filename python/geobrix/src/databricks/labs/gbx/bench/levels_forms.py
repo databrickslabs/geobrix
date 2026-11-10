@@ -2739,6 +2739,13 @@ def _hv_nulls(call: str, *, text_output: bool = False, paths: bool = False) -> s
     )
 
 
+# the tile length with a NULL tile as 0, so a form whose every output is an error tile still ends with its row (and the NULL report)
+_HV_FP = (
+    "SELECT count(*) AS n, sum(coalesce(length(t.raster), 0)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM {{src}})"
+)
+
+
 def _hv(fn, level, variant, sql, **kw):
     return Form("DEM", fn, level, variant, _HV_INPUT[fn], sql, **kw)
 
@@ -2752,7 +2759,7 @@ for _fn in HV_FUNCTIONS:
     _fp = (
         "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM {{src}})"
         if _text
-        else _SE_FP
+        else _HV_FP
     )
 
     def _v(call, _text=_text, _corpus=_corpus):

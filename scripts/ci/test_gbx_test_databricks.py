@@ -535,6 +535,7 @@ def test_one_file_longer_than_the_target_gets_a_chunk_of_its_own():
     got = ts.pack({"a": 30.0, "b": 2.0, "c": 2.0, "d": 1.0, "e": 1.0}, 4.0)
     assert got[0] == ["a"] and sorted(x for g in got for x in g) == ["a", "b", "c", "d", "e"]
     assert ts.pack({"a": 1.0}, 4.0) == [["a"]]
+    assert len(ts.pack({f"f{i}": 1.0 for i in range(10)}, 7.0)) == 2, "10 min of small files over a 6.3 min budget: two chunks, not one"
 
 
 def test_history_wins_over_the_ci_minutes_from_its_first_sample(shards):

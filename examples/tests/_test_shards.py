@@ -12,6 +12,7 @@ Pure Python (PyYAML and git only): the tests of this module need no workspace.
 from __future__ import annotations
 
 import ast
+import math
 import re
 import subprocess
 import zlib
@@ -404,14 +405,14 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
 
 def pack(mins: Dict[str, float], target: float) -> List[List[str]]:
     """Cut units (minutes each) into chunks of about ``target`` minutes: a unit longer than the target is a chunk of its own,
-    the rest go longest first onto the lightest of about ``sum / target`` chunks. So one long file or table never makes a
+    the rest go longest first onto the lightest of ``ceil(sum / target)`` chunks. So one long file or table never makes a
     lopsided chunk with others."""
     work = max(0.1, target - FIXED_MIN)
     big = [k for k in sorted(mins, key=lambda k: (-mins[k], k)) if mins[k] >= work]
     small = [k for k in sorted(mins, key=lambda k: (-mins[k], k)) if mins[k] < work]
     out = [[k] for k in big]
     if small:
-        n = max(1, round(sum(mins[k] for k in small) / work))
+        n = max(1, math.ceil(sum(mins[k] for k in small) / work - 1e-9))  # no chunk of them over the target
         parts: List[List[str]] = [[] for _ in range(min(n, len(small)))]
         load = [0.0] * len(parts)
         for k in small:

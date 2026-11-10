@@ -581,8 +581,7 @@
       "description": "Apply a Python pixel function to the bands of the raster.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1844,8 +1843,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },

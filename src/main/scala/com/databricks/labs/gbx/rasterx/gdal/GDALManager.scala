@@ -94,9 +94,6 @@ object GDALManager extends Logging {
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
     @volatile private var ogrEnabled = false
 
-    private val pythonLock = new Object
-    @volatile private var pythonDepth = 0
-
     /** The one switch of the process-level driver policy: `GBX_GDAL_DRIVER_POLICY=off` in the environment, or
       * `spark.databricks.labs.gbx.gdal.driver_policy=off` in the conf (the same name the light tier reads). Off: no
       * refused driver is skipped and the raw-band setting is left as GDAL has it. Read once, at the JVM's first GDAL use
@@ -146,8 +143,7 @@ object GDALManager extends Logging {
             gdal.SetConfigOption("GDAL_SKIP", skipList(Option(gdal.GetConfigOption("GDAL_SKIP"))))
             gdal.SetConfigOption("GDAL_VRT_ENABLE_RAWRASTERBAND", "NO")
         }
-        // Off by default; flipped on only around PixelCombineRasters.combine() via withVrtPython. A VRT's Python pixel
-        // function runs code from the file, so it is off for the process whatever the switch.
+        // A VRT's Python pixel function runs code from the file, so it is off for the process whatever the switch.
         gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
     }
 
@@ -156,23 +152,6 @@ object GDALManager extends Logging {
         val refused = DefaultSkippedDrivers.split(" ").toSeq
         val extra = current.toSeq.flatMap(_.split("[ ,]+")).map(_.trim).filter(_.nonEmpty).filterNot(refused.contains)
         (refused ++ extra.distinct).mkString(" ")
-    }
-
-    /**
-      * Bracket `block` with `GDAL_VRT_ENABLE_PYTHON=YES` so a VRT with a `<PixelFunctionLanguage>Python</...>`
-      * band can evaluate, then reset to `NO`. Safe for concurrent Spark tasks in the same JVM via a
-      * reference count (GDAL Java bindings expose only process-global `SetConfigOption`).
-      */
-    def withVrtPython[T](block: => T): T = {
-        pythonLock.synchronized {
-            if (pythonDepth == 0) gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "YES")
-            pythonDepth += 1
-        }
-        try block
-        finally pythonLock.synchronized {
-            pythonDepth -= 1
-            if (pythonDepth == 0) gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
-        }
     }
 
     private val hdfLock = new Object

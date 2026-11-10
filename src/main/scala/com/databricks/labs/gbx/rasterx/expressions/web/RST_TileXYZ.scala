@@ -82,8 +82,8 @@ object RST_TileXYZ extends WithExpressionInfo {
     /** Largest tile side, in pixels. */
     val MaxTileSize: Int = 4096
 
-    /** Validates the render arguments shared by `rst_tilexyz` and `rst_xyzpyramid`. They are parameters,
-      * not data, so they need no dataset and a bad one raises.
+    /** Validates the render arguments of `rst_tilexyz`. They are parameters, not data, so they need no
+      * dataset and a bad one raises.
       *
       * @param fn
       *   function name used as the message prefix
@@ -234,8 +234,9 @@ object RST_TileXYZ extends WithExpressionInfo {
         executeWithScale(ds, options, z, x, y, format, size, resampling, scaleFlags)
     }
 
-    /** Render with a PRE-RESOLVED scale string (RST_XYZPyramid resolves once and passes it
-     *  here for every tile so all tiles share one mapping -- no seams, stats read once).
+    /** Render with a PRE-RESOLVED scale string: a caller that renders many tiles of one source
+     *  resolves it once and passes it here for every tile, so all tiles share one mapping
+     *  (no seams, stats read once).
      */
     private[web] def executeWithScale(
         ds: Dataset,

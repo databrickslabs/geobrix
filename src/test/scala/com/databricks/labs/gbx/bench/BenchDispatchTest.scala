@@ -73,7 +73,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // The JVM forms the level order never picks left: the tile and geometry aggregates (combineavg, frombands,
     // derivedband, rasterize, binpoints), the tiling and tessellate generators (maketiles, tooverlappingtiles,
     // separatebands, h3 and quadbin tessellate, and the h3 centroid case), isempty, tryopen, isoband and merge: 55 - 15 = 40.
-    assert(BenchDispatch.all.size == 40)
+    // derivedband and xyzpyramid left too (the level order never picks them): 40 - 2 = 38.
+    assert(BenchDispatch.all.size == 38)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -95,7 +96,6 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.category("rst_xyzpyramid") == "format")
     assert(BenchDispatch.minBands("rst_band") == 2)
     assert(BenchDispatch.minBands("rst_width") == 1)
     assert(BenchDispatch.category("rst_tri") == "terrain")

@@ -20,7 +20,6 @@ object GeneratorContract {
 
     val GridSuite = "GridGeneratorContractTest"
     val VectorSuite = "VectorGeneratorContractTest"
-    val RasterSuite = "RST_GeneratorRowShapeTest"
 
     /** SQL function name of every heavyweight generator -> the suite whose tests evaluate it. */
     val coverage: Map[String, String] = Map(
@@ -32,8 +31,7 @@ object GeneratorContract {
       "gbx_custom_geomkringexplode"     -> GridSuite,
       "gbx_custom_geomkloopexplode"     -> GridSuite,
       "gbx_st_triangulate"              -> VectorSuite,
-      "gbx_st_interpolateelevationbbox" -> VectorSuite,
-      "gbx_rst_xyzpyramid"              -> RasterSuite
+      "gbx_st_interpolateelevationbbox" -> VectorSuite
     )
 
     /** SQL names the given suite is responsible for. */

@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -136,37 +135,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         val e = intercept[IllegalStateException](GDAL.requireOk(CE_Failure, "writing the validity"))
         assert(e.getMessage.startsWith("writing the validity failed"), e.getMessage)
     }
-
-    // ------------------------------------------------------------------------------------------------
-    // derivedband: invalid where the input is
-    // ------------------------------------------------------------------------------------------------
-
-    private val SumFunc =
-        "def total(in_ar, out_ar, xoff, yoff, xsize, ysize, rxsize, rysize, radius, gt, **kw):\n" +
-            "    out_ar[:] = sum(a.astype('float64') for a in in_ar)\n"
-
-    for ((what, build) <- Seq[(String, () => Dataset)](
-      ("gray_x_alpha", () => fixture(GrayXA)),
-      ("rgba", () => fixture(Rgba)),
-      ("rgb_nir with its own mask", () => fixture(RgbNir, maskedColumn0 = true))
-    )) {
-        test(s"the band derived from $what is invalid where its input is") {
-            val ds = build()
-            try {
-                val (out, _) = RST_DerivedBand.execute(Seq(ds), Map.empty[String, String], SumFunc, "total")
-                try {
-                    assert(out.GetRasterCount == 1)
-                    val valid = new Array[Byte](16)
-                    new ValidMask(out).read(0, 0, 4, 4, valid)
-                    val want = new Array[Byte](16)
-                    new ValidMask(ds).read(0, 0, 4, 4, want)
-                    assert(valid.map(_ != 0).toSeq == want.map(_ != 0).toSeq)
-                    assert(valid.exists(_ == 0) && valid.exists(_ != 0))
-                } finally RasterDriver.releaseDataset(out)
-            } finally RasterDriver.releaseDataset(ds)
-        }
-    }
-
 
     test("Convolve writes every pixel of its output where the pixel is: corners 20, edges 30, interior 45 for a 3x3 sum of 5s") {
         // it used to write each block's interior at the block's origin, shifted, and leave the rest as the input

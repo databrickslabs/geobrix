@@ -7,7 +7,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
 import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
-import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
@@ -20,9 +19,7 @@ import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.BoundingBox
-import com.databricks.labs.gbx.rasterx.tile.TileMath
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.Column
 import org.apache.spark.unsafe.types.UTF8String
@@ -46,17 +43,6 @@ object BenchDispatch {
   // Functions that need a >=2-band source (rst_band selects band 2 on the 2-band corpus).
   private val multiBand: Set[String] = Set("rst_band")
 
-  // --- complex-arg constants, hardcoded identically to the pyrx side ---
-  // The derived-band pixel function cannot ride the stringly-typed bench args map,
-  // so it is fixed here exactly as in spec.py (same policy as the convolve kernel).
-  private val derivedBandFuncName = "mean_bands"
-  private val derivedBandPyFunc =
-    "import numpy as np\n" +
-      "def mean_bands(in_ar, out_ar, xoff, yoff, xsize, ysize,\n" +
-      "               raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n" +
-      "    stack = np.array(in_ar, dtype='float64')\n" +
-      "    out_ar[:] = stack.mean(axis=0)\n"
-
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
     "rst_tri" -> TER,
@@ -79,8 +65,7 @@ object BenchDispatch {
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT,
     "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT,
-    // tile-out transforms with geometry / expression / band-map / function args
-    "rst_derivedband" -> FMT,
+    // (derivedband has no heavyweight level: its output kept the source data type, not Float64.)
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // getsubdataset is accessor-flavored; the readers emit a tile -> format.
     // (buildoverviews has no heavyweight level: it measured slower than light.)
@@ -89,9 +74,7 @@ object BenchDispatch {
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
     // (The combine family and merge have no heavyweight level: they measured slower than light.)
     "rst_frombands" -> FMT,
-    // bucket C, group C4: the tiling fn with a heavyweight level -> a COLLECTION of tiles -> format.
-    // (The other tiling, tessellate and isoband functions have no heavyweight level.)
-    "rst_xyzpyramid" -> FMT,
+    // (The tiling, tessellate, xyzpyramid and isoband functions have no heavyweight level.)
     // grid rasterize aggregators (DGGS; routed through the grid-aggregate branch
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
     // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
@@ -362,12 +345,6 @@ object BenchDispatch {
     // dataset (identity != input ds). The GTiff round-trip still times correctly
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
-    // tile-out transforms with geometry / expression / band-map / function args
-    // SIX are full raster comparisons (same algorithm + CRS-independent
-    // args); FOUR are timing-only (no in-extent geometry across the multi-CRS
-    // corpus, and/or divergent interpolation/scan engines).
-    case "rst_derivedband" =>
-      fpDerived(RST_DerivedBand.execute(Seq(ds), Map.empty, derivedBandPyFunc, derivedBandFuncName))
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -377,41 +354,8 @@ object BenchDispatch {
       val sub = RST_GetSubdataset.execute(ds, argS(a, "name", "0"))
       if (sub != null) RasterDriver.releaseDataset(sub)
       BenchFingerprint.empty
-    // bucket C, group C4: the tiling fn -> a COLLECTION of tiles. It reduces ONE
-    // input tile to MANY output tiles; the output is fingerprinted as a
-    // raster_collection (tile count + pooled, order-independent agg). xyzpyramid uses
-    // RST_TileXYZ.execute, which does NOT close the source, so it runs directly on
-    // the shared ds.
-    case "rst_xyzpyramid" =>
-      fpXyzPyramid(ds, argI(a, "min_z", 10), argI(a, "max_z", 11),
-        argS(a, "format", "PNG"), argI(a, "size", 256), argS(a, "resampling", "bilinear"))
     case other            => throw new IllegalArgumentException(s"unknown bench fn: $other")
     }
-  }
-
-  /** Heavy xyzpyramid pure-core: enumerate intersecting (z, x, y) tiles across the
-    * zoom range (WGS84 extent -> TileMath), render each via RST_TileXYZ.execute
-    * (PNG/JPEG/WEBP bytes), open each render into a dataset, and fingerprint the
-    * collection. RST_TileXYZ does not close the source, so `ds` stays valid. */
-  private def fpXyzPyramid(ds: Dataset, minZ: Int, maxZ: Int,
-      format: String, size: Int, resampling: String): String = {
-    val env = BoundingBox.bbox(ds, GDAL.WSG84).getEnvelopeInternal
-    val (lonMin, lonMax, latMin, latMax) = (env.getMinX, env.getMaxX, env.getMinY, env.getMaxY)
-    val rendered = scala.collection.mutable.ArrayBuffer.empty[Array[Byte]]
-    var z = minZ
-    while (z <= maxZ) {
-      val tiles = TileMath.intersectingTiles(lonMin, latMin, lonMax, latMax, z)
-      var i = 0
-      while (i < tiles.length) {
-        val (zz, xx, yy) = tiles(i)
-        rendered += RST_TileXYZ.execute(ds, Map.empty, zz, xx, yy, format, size, resampling)
-        i += 1
-      }
-      z += 1
-    }
-    val opened = rendered.map(b => RasterDriver.readFromBytes(b, Map.empty)).filter(_ != null).toSeq
-    try BenchFingerprint.ofCollection(opened)
-    finally opened.foreach(RasterDriver.releaseDataset)
   }
 
   /** Pure-core dispatch for `input_kind == "bytes"` reader/constructor fns: the
@@ -559,9 +503,6 @@ object BenchDispatch {
         val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
-      // tile-out transforms with geometry / function args
-      case "rst_derivedband" =>
-        rst_derivedband(tile, derivedBandPyFunc, derivedBandFuncName)
       // bucket C, group C1/C2. fromcontent reads the tile's raster (binary
       // content) column. getsubdataset is pure-core-only here; its column form
       // exists only to keep the match exhaustive (the spark-path runner filters
@@ -574,9 +515,6 @@ object BenchDispatch {
       // ARRAY<tile> column the runner built from the synthesized tiles (the same
       // files the pure-core path reads). The binding takes a single array column.
       case "rst_frombands"     => rst_frombands(tile)
-      // bucket C, group C4: the tiling fn -> ARRAY column (spark-path is timing-only,
-      // not fingerprint-compared, so the args only need to be valid).
-      case "rst_xyzpyramid"  => rst_xyzpyramid(tile, argI(a, "min_z", 10), argI(a, "max_z", 11))
       // bucket A aggregators have no scalar column form; they are aggregate
       // expressions handled by aggregateColumn (the spark-path runner routes them
       // through the aggregate branch, not column()).

@@ -887,28 +887,6 @@ result.show()
 (one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
-  val rst_derivedband_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Apply a GDAL VRT Python pixel-function that doubles band 1
-val rasters = spark.table("multiband_rasters")
-val pythonFunc = "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n    out_ar[:] = in_ar[0] * 2\n"
-val result = rasters.select(rx.rst_derivedband(col("tile"), lit(pythonFunc), lit("double")).alias("derived"))
-result.show(truncate = false)
-""".trim
-
-  val rst_derivedband_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|derived                                                    |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(derived band raster from Python UDF)
-""".trim
-
   // ============================================================================
   // Terrain Analysis Functions
   // ============================================================================
@@ -1031,26 +1009,6 @@ result.show(truncate = false)
 |[BINARY]  |
 +----------+
 (PNG image bytes, 256×256 pixels)
-"""
-
-  val rst_xyzpyramid_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_xyzpyramid(col("tile"), lit(10), lit(12)).alias("tile_array"))
-result.show(truncate = false)
-""".trim
-
-  val rst_xyzpyramid_scala_example_output: String =
-    """
-+----------+
-|tile_array|
-+----------+
-|[tile, ...|
-+----------+
-(array of tile structs: [{z, x, y, bytes}, ...])
 """
 
   val h3_cell_bbox_scala_example: String =

@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.web
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
-/** The render-argument validators shared by `rst_tilexyz` and `rst_xyzpyramid` (no dataset needed). */
+/** The render-argument validators of `rst_tilexyz` (no dataset needed). */
 class RST_TileXYZValidationTest extends AnyFunSuite {
 
     test("validateRender normalizes format to upper case and resampling to lower case") {
@@ -18,8 +18,8 @@ class RST_TileXYZValidationTest extends AnyFunSuite {
     }
 
     test("validateRender rejects an unknown format, an unknown resampling and a size outside (0, 4096], naming the function") {
-        val format = intercept[IllegalArgumentException](RST_TileXYZ.validateRender("rst_xyzpyramid", "GIF", 256, "bilinear"))
-        format.getMessage should (include("rst_xyzpyramid: format must be one of") and include("got 'GIF'"))
+        val format = intercept[IllegalArgumentException](RST_TileXYZ.validateRender("rst_tilexyz", "GIF", 256, "bilinear"))
+        format.getMessage should (include("rst_tilexyz: format must be one of") and include("got 'GIF'"))
 
         val resampling = intercept[IllegalArgumentException](RST_TileXYZ.validateRender("rst_x", "PNG", 256, "sharpest"))
         resampling.getMessage should include("unsupported resampling 'sharpest'")
@@ -40,8 +40,8 @@ class RST_TileXYZValidationTest extends AnyFunSuite {
 
     test("parseRescale rejects anything else") {
         for (bad <- Seq("bogus", "", "1", "1,2,3", "a,b", "5,1", "3,3")) {
-            val ex = intercept[IllegalArgumentException](RST_TileXYZ.parseRescale("rst_xyzpyramid", bad))
-            withClue(s"'$bad': ") { ex.getMessage should (include("rst_xyzpyramid: rescale") and include("min")) }
+            val ex = intercept[IllegalArgumentException](RST_TileXYZ.parseRescale("rst_tilexyz", bad))
+            withClue(s"'$bad': ") { ex.getMessage should (include("rst_tilexyz: rescale") and include("min")) }
         }
     }
 

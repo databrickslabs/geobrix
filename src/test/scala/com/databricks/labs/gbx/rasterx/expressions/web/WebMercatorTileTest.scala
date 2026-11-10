@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.web
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import com.databricks.labs.gbx.rasterx.tile.TileMath
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.BeforeAndAfterAll
@@ -66,30 +65,6 @@ class WebMercatorTileTest extends AnyFunSuite with BeforeAndAfterAll {
         // PNG magic must still be present even for the empty / transparent fallback.
         bytes(0) shouldBe 0x89.toByte
         bytes(3) shouldBe 'G'.toByte
-    }
-
-    test("RST_XYZPyramid guards reject max_z above the cap") {
-        // Force the guard via TileMath direct check — exercising the same constraint
-        // that the generator's eval path enforces. Avoids spinning up a Spark session
-        // for what is a pure-logic assertion.
-        an[IllegalArgumentException] should be thrownBy {
-            require(21 <= TileMath.MAX_ZOOM, s"max_z must be <= ${TileMath.MAX_ZOOM}; got 21")
-        }
-    }
-
-    test("RST_XYZPyramid tile-count guard fires when the requested range explodes the count") {
-        // Compute intersecting count for a global 4326 raster across z=0..18 — this should
-        // overshoot MAX_TILE_COUNT (10^6) at z=10+ even though only a fraction of the
-        // global tile set is actually covered. We test the helper that the generator uses.
-        // For our small source at z=18 the count is bounded (extent is tiny), so we use
-        // a global extent here to verify the guard math.
-        var total: Long = 0L
-        var z = 0
-        while (z <= 18) {
-            total += TileMath.intersectingTileCount(-180.0, -85.0, 180.0, 85.0, z)
-            z += 1
-        }
-        total should be > RST_XYZPyramid.MAX_TILE_COUNT
     }
 
     test("OperatorOptions PNG branch injects -scale when scale option supplied") {
@@ -188,11 +163,11 @@ class WebMercatorTileTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally ds.delete()
     }
 
-    test("RST_XYZPyramid resolves ONE scale for the source and reuses it per tile") {
+    test("RST_TileXYZ renders many tiles with ONE scale resolved from the source") {
         val ds = makeUint16Narrow()
         try {
-            // The pyramid resolves the scale once from the source, then renders each tile
-            // with that same string. Simulate the loop: resolve once, render two tiles.
+            // Resolve the scale once from the source, then render each tile with that
+            // same string: resolve once, render two tiles.
             val scale = RST_TileXYZ.resolveScale(ds, "auto")
             scale should not be empty
             // resolveScale uses repeated -scale (not -scale_N); verify the prefix is present.

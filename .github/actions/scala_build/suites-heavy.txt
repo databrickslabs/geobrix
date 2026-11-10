@@ -30,9 +30,7 @@ com.databricks.labs.gbx.rasterx.RegisteredProjGridSpec
 com.databricks.labs.gbx.rasterx.RasterXFunctionsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AccessorsEvalTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AccessorsExecuteTest
-com.databricks.labs.gbx.rasterx.expressions.RST_AdvancedOperationsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AggEvalTest
-com.databricks.labs.gbx.rasterx.expressions.RST_AggregationsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AsFormatArgumentsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ConstructorsEvalTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ConstructorsExecuteTest
@@ -41,7 +39,6 @@ com.databricks.labs.gbx.rasterx.expressions.RST_CrsOpsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ErrorHandlingParityTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ExpressionEvalTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ExpressionExecuteTest
-com.databricks.labs.gbx.rasterx.expressions.RST_GeneratorRowShapeTest
 com.databricks.labs.gbx.rasterx.expressions.RST_GridIntegrationTest
 com.databricks.labs.gbx.rasterx.expressions.RST_InitNoDataTest
 com.databricks.labs.gbx.rasterx.expressions.RST_NoVrtPayloadTest
@@ -68,7 +65,6 @@ com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest
 com.databricks.labs.gbx.rasterx.operations.BandSubsetAlphaTest
 com.databricks.labs.gbx.rasterx.operations.ClipToGeomTest
 com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometryTest
-com.databricks.labs.gbx.rasterx.operations.PixelCombineRastersTest
 com.databricks.labs.gbx.rasterx.operations.RasterAccessorsTest
 com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest
 com.databricks.labs.gbx.rasterx.operator.DerivedTileCompressionTest

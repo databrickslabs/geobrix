@@ -199,8 +199,6 @@ object functions extends Serializable {
     // Operations
     def rst_asformat(tile: Column, newFormat: Column): Column = ColumnAdapter(RST_AsFormat.name, Seq(tile, newFormat))
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
-    def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
-        ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
     def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
@@ -244,21 +242,6 @@ object functions extends Serializable {
         format: String, size: Int, resampling: String
     ): Column =
         rst_tilexyz(tile, lit(z), lit(x), lit(y), lit(format), lit(size), lit(resampling))
-
-    def rst_xyzpyramid(tile: Column, minZ: Column, maxZ: Column): Column =
-        ColumnAdapter(RST_XYZPyramid.name, Seq(tile, minZ, maxZ, lit("PNG"), lit(256), lit("bilinear")))
-    def rst_xyzpyramid(
-        tile: Column, minZ: Column, maxZ: Column,
-        format: Column, size: Column, resampling: Column
-    ): Column =
-        ColumnAdapter(RST_XYZPyramid.name, Seq(tile, minZ, maxZ, format, size, resampling))
-    def rst_xyzpyramid(tile: Column, minZ: Int, maxZ: Int): Column =
-        rst_xyzpyramid(tile, lit(minZ), lit(maxZ))
-    def rst_xyzpyramid(
-        tile: Column, minZ: Int, maxZ: Int,
-        format: String, size: Int, resampling: String
-    ): Column =
-        rst_xyzpyramid(tile, lit(minZ), lit(maxZ), lit(format), lit(size), lit(resampling))
 
     // Terrain analysis (DEM processing) - Column form
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))

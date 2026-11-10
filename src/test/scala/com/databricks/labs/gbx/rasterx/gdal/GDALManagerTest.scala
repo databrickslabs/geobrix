@@ -20,33 +20,6 @@ class GDALManagerTest extends AnyFunSuite with BeforeAndAfterAll {
         gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
     }
 
-    test("withVrtPython flips GDAL_VRT_ENABLE_PYTHON YES inside the block and resets NO after") {
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-        val inside = GDALManager.withVrtPython {
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON")
-        }
-        inside shouldBe "YES"
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
-    test("withVrtPython resets to NO when the block throws") {
-        an[RuntimeException] should be thrownBy GDALManager.withVrtPython[Unit] {
-            throw new RuntimeException("boom")
-        }
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
-    test("withVrtPython refcounts so nested calls keep YES until the outer exits") {
-        GDALManager.withVrtPython {
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-            GDALManager.withVrtPython {
-                gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-            }
-            gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "YES"
-        }
-        gdal.GetConfigOption("GDAL_VRT_ENABLE_PYTHON") shouldBe "NO"
-    }
-
     test("network-capable drivers are not registered by default") {
         for (name <- Seq("WMS", "WMTS", "WCS", "WFS", "HTTP", "CSW", "OGCAPI")) {
             withClue(s"expected $name to be skipped: ") {

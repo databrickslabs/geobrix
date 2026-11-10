@@ -125,11 +125,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_derivedband should accept tile, pyfunc, and funcName") {
-        val result = functions.rst_derivedband(col("tile"), "def f(x): return x", "f")
-        result should not be null
-    }
-
     test("rst_initnodata should create Column") {
         val result = functions.rst_initnodata(col("tile"))
         result should not be null

@@ -16,8 +16,8 @@ import org.scalatest.matchers.should.Matchers._
 
 /**
   * The scalar `gbx_rst_tilexyz` splits a bad parameter from bad data: a parameter that is wrong (an unknown
-  * `format`, `resampling` or `rescale`, a `size` outside (0, 4096]) raises, as `rst_xyzpyramid` does, while a tile
-  * that cannot be read or rendered still yields a transparent PNG, never NULL and never a failed query.
+  * `format`, `resampling` or `rescale`, a `size` outside (0, 4096]) raises, while a tile that cannot be read or
+  * rendered still yields a transparent PNG, never NULL and never a failed query.
   */
 class RST_TileXYZScalarTest extends PlanTest with SilentSparkSession {
 

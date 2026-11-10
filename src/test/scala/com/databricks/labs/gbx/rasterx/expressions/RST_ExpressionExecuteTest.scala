@@ -50,27 +50,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         Files.deleteIfExists(Paths.get(miniDsPath))
     }
 
-    test("RST_DerivedBand should compute derived band from raster") {
-        // Valid GDAL VRT Python pixel-function signature. The earlier
-        // `def compute(pixel): return pixel[0]*2` shape silently never
-        // executed (PixelCombineRasters opened the VRT before injecting
-        // the pixel function), so the malformed signature went unnoticed.
-        // After the ordering fix the pixel function actually fires, so
-        // the signature has to be correct.
-        val pyfunc =
-            """
-              |import numpy as np
-              |def compute(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):
-              |    out_ar[:] = np.array(in_ar[0]) * 2
-              |""".stripMargin
-        val (derivedDs, _) = RST_DerivedBand.execute(Seq(ds, ds), Map.empty, pyfunc, "compute")
-        derivedDs != null shouldBe true
-        derivedDs.getRasterCount == ds.getRasterCount shouldBe true
-        derivedDs.getRasterXSize == ds.getRasterXSize shouldBe true
-        derivedDs.getRasterYSize == ds.getRasterYSize shouldBe true
-        RasterDriver.releaseDataset(derivedDs)
-    }
-
     test("RST_InitNoData should initialize NoData values in raster") {
         val (noDataDs, _) = RST_InitNoData.execute(ds, Map.empty)
         noDataDs should not be null

@@ -260,7 +260,6 @@ def _classify_tile_returning_functions() -> set[str]:
           ``StructField("raster", BinaryType`` field.
 
     Explicitly NOT tile-returning (excluded by name even if source matches):
-      - gbx_rst_xyzpyramid  (uses RST_XYZPyramid.tileStruct -- no inline raster field)
       - gbx_rst_tilexyz     (BinaryType scalar)
       - gbx_rst_boundingbox (BinaryType scalar)
     """
@@ -345,10 +344,8 @@ def _classify_tile_returning_functions() -> set[str]:
                 tile_functions.add(best_name)
 
     # Explicit exclusions per spec:
-    # - gbx_rst_xyzpyramid uses RST_XYZPyramid.tileStruct (no inline raster field)
     # - gbx_rst_tilexyz returns BinaryType (PNG bytes)
     # - gbx_rst_boundingbox returns BinaryType (WKB)
-    tile_functions.discard("gbx_rst_xyzpyramid")
     tile_functions.discard("gbx_rst_tilexyz")
     tile_functions.discard("gbx_rst_boundingbox")
 

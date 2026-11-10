@@ -50,44 +50,6 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Fingerprint a COLLECTION of output tiles (bucket C, group C4 tiling fns).
-    *
-    * Mirrors python bench/fingerprint.py `fingerprint_collection`: records the tile
-    * COUNT plus the agg stats POOLED over every tile's valid (non-nodata) pixels
-    * across all bands. Pooling is ORDER-INDEPENDENT, so heavy and light may emit
-    * tiles in any order and still agree; the comparator compares `count` exactly. */
-  def ofCollection(tiles: Seq[Dataset]): String = {
-    val pooled = scala.collection.mutable.ArrayBuffer.empty[Double]
-    tiles.foreach { ds =>
-      val w = ds.GetRasterXSize()
-      val h = ds.GetRasterYSize()
-      for (bi <- 1 to ds.GetRasterCount()) {
-        val band = ds.GetRasterBand(bi)
-        val buf = Array.ofDim[Double](w * h)
-        band.ReadRaster(0, 0, w, h, buf)
-        val nod = BandAccessors.getNoDataValue(band)
-        val valid = if (nod.isNaN) buf else buf.filterNot(_ == nod)
-        pooled ++= valid
-        band.delete()
-      }
-    }
-    val n = mapper.createObjectNode()
-    n.put("kind", "raster_collection")
-    n.put("count", tiles.length)
-    val agg: ObjectNode = n.putObject("agg")
-    if (pooled.isEmpty) {
-      agg.putNull("min"); agg.putNull("max"); agg.putNull("mean"); agg.putNull("std")
-    } else {
-      val mean = pooled.sum / pooled.length
-      val variance = pooled.map(x => (x - mean) * (x - mean)).sum / pooled.length
-      agg.put("min", pooled.min)
-      agg.put("max", pooled.max)
-      agg.put("mean", mean)
-      agg.put("std", math.sqrt(variance))
-    }
-    mapper.writeValueAsString(n)
-  }
-
   /** Write min/max/mean/std (population) of `vals` into `node`; nulls when empty.
     * Shared by every stats-bearing kind so the JSON shape matches python `_stat`. */
   private def putStats(node: ObjectNode, vals: Seq[Double]): Unit = {

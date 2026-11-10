@@ -1,6 +1,6 @@
 """Spark-free web-mercator XYZ slippy-map tiling (rio-tiler + morecantile).
 
-Mirrors the heavyweight rasterx ``RST_TileXYZ`` / ``RST_XYZPyramid`` semantics:
+Mirrors the heavyweight rasterx ``RST_TileXYZ`` semantics:
 
   * ``render_tile`` renders a single (z, x, y) web-mercator tile to PNG / JPEG /
     WEBP bytes. Out-of-extent or empty tiles return a transparent PNG (RGBA,

@@ -18,12 +18,6 @@ import scala.util.control.NonFatal
   */
 final class RasterArgumentException(msg: String) extends IllegalArgumentException(msg)
 
-/** Raised by a generator's own argument guard (for example the `gbx_rst_xyzpyramid` tile-count cap) so the
-  * message reaches the caller. Extends IllegalArgumentException, but unlike an ordinary per-row IAE it is
-  * re-thrown by [[RST_ErrorHandler.safeEvalNullElement]] rather than degraded to a NULL row.
-  */
-final class GeneratorGuardException(msg: String) extends IllegalArgumentException(msg)
-
 /**
   * Wraps raster expression eval so failures produce an error row (with error_message and last_error in metadata)
   * instead of failing the task, unless ExpressionConfig.crashExpressions is true.
@@ -194,30 +188,6 @@ object RST_ErrorHandler extends Logging {
         else rows.minBy { r =>
             val md = RasterSerializationUtil.metadataOf(r).toSeq.sorted.map { case (k, v) => s"$k=$v" }
             (RasterSerializationUtil.cellIdOf(r), md.mkString("\u0000"))
-        }
-    }
-
-    /** Generator variant for generators whose single output column cannot carry an error tile
-      * (the `(z, x, y, bytes)` struct of `gbx_rst_xyzpyramid` has no metadata map).
-      *
-      * A failure while reading or rendering the raster is a per-row data error: it emits ONE row whose
-      * column is NULL, so the failure stays visible and auditable (`WHERE tile IS NULL`), and is logged.
-      * Only two things are re-thrown: [[VirtualTileException]] (a virtual tile reached a heavyweight
-      * function) and [[GeneratorGuardException]] (the generator's own argument guard, whose message must
-      * reach the caller). Any other `IllegalArgumentException`, such as one raised while reading the tile,
-      * is data-origin and degrades like every other failure here, as in the scalar overload
-      * (see [[safeEval]] with a conf). Fatal errors (out of memory, ...) are never swallowed.
-      */
-    def safeEvalNullElement(eval: () => IterableOnce[InternalRow]): IterableOnce[InternalRow] = {
-        try {
-            eval()
-        } catch {
-            case e: VirtualTileException    => throw e
-            case e: GeneratorGuardException => throw e
-            case e: ProjDatabaseException   => throw e
-            case NonFatal(e) =>
-                logWarning(s"RasterX generator evaluation failed; emitting one NULL row: ${e.getMessage}", e)
-                Seq(InternalRow.fromSeq(Seq(null)))
         }
     }
 

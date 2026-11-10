@@ -42,8 +42,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
         val window256 = modisWindow(256)
         val window128 = modisWindow(128)
 
-        val pyfunc = "def myfunc(x):\n  return x * 2"
-
         def runQuery(df: DataFrame): Unit = {
             val base = df
                 .select(col("raster").as("clipped"))
@@ -53,7 +51,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
             Seq(
               rst_boundingbox(col("clipped")),
               rst_asformat(col("clipped"), lit("GTiff")),
-              rst_derivedband(col("clipped"), pyfunc, "myfunc"),
               rst_initnodata(col("clipped")), //lit(-28672.0)),
               rst_rastertoworldcoordx(col("clipped"), lit(10), lit(10)),
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),

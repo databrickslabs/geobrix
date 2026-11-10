@@ -115,47 +115,6 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         errorTile.getLong(0) shouldBe -1L
     }
 
-    test("safeEvalNullElement degrades a data-origin IllegalArgumentException to one NULL row") {
-        // A plain IAE raised while reading the tile is a per-row data error, not an argument guard.
-        val dataError: () => IterableOnce[InternalRow] = () => throw new IllegalArgumentException("Unrecognized raster tile struct")
-        val seq = RST_ErrorHandler.safeEvalNullElement(dataError).toSeq
-        seq should have size 1
-        seq.head.numFields shouldBe 1
-        seq.head.isNullAt(0) shouldBe true
-    }
-
-    test("safeEvalNullElement does not swallow fatal errors") {
-        intercept[OutOfMemoryError] {
-            RST_ErrorHandler.safeEvalNullElement(() => throw new OutOfMemoryError("fatal"))
-        }
-    }
-
-    test("safeEvalNullElement when eval throws should return one row with a NULL element") {
-        val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
-        val seq = RST_ErrorHandler.safeEvalNullElement(throwingEval).toSeq
-        seq should have size 1
-        seq.head.numFields shouldBe 1
-        seq.head.isNullAt(0) shouldBe true
-    }
-
-    test("safeEvalNullElement when eval succeeds should return eval result") {
-        val oneRow = Seq(minimalRow())
-        RST_ErrorHandler.safeEvalNullElement(() => oneRow).toSeq shouldBe oneRow
-    }
-
-    test("safeEvalNullElement re-throws a generator guard so its message reaches the caller") {
-        val ex = intercept[GeneratorGuardException] {
-            RST_ErrorHandler.safeEvalNullElement(() => throw new GeneratorGuardException("rst_xyzpyramid: tile-count exceeds the cap"))
-        }
-        ex.getMessage should include("tile-count")
-    }
-
-    test("safeEvalNullElement VirtualTileException is re-thrown not swallowed as a NULL row") {
-        intercept[VirtualTileException] {
-            RST_ErrorHandler.safeEvalNullElement(() => throw new VirtualTileException("generator virtual guard"))
-        }
-    }
-
     test("safeEval (generator) when eval succeeds should return eval result") {
         val row = minimalRow()
         val oneRow = Seq(row)

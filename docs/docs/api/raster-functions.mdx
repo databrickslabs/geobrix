@@ -4457,7 +4457,7 @@ _Example kernel: 3×3 identity (`[[0,0,0],[0,1,0],[0,0,0]]`), which passes pixel
 ### rst_derivedband
 
 {/* BEGIN GENERATED gbx_rst_derivedband: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4485,7 +4485,6 @@ Apply a Python pixel function to derive a band. The function runs in the session
   name="rst_derivedband"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxBandmathLightCode} pythonSource="docs/tests/python/api/rasterx_bandmath_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_bandmath_python_light.py"
 />
 
@@ -5259,7 +5258,7 @@ Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by defa
 ### rst_xyzpyramid
 
 {/* BEGIN GENERATED gbx_rst_xyzpyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5292,7 +5291,6 @@ Generator: explode a raster into one row per intersecting `(z, x, y)` tile acros
   name="rst_xyzpyramid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 

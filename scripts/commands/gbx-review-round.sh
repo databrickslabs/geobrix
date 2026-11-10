@@ -199,17 +199,18 @@ if [[ "$HAS_OWN_CONFIG" -ne 1 ]]; then
 fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")
-# isaac resolves a relative -o/--output against its own working directory, which is the scratch
-# worktree (deleted on exit) when notebook outputs are stripped: anchor it to the caller's directory.
+# isaac resolves a relative -o/--output or -c/--config against its own working directory, which is a
+# scratch worktree (deleted on exit, and without the checkout's own edits) when notebook outputs are
+# stripped or the checkout is dirty: anchor them to the caller's directory.
 if [[ ${#PASSTHRU[@]} -gt 0 ]]; then
     for i in "${!PASSTHRU[@]}"; do
         case "${PASSTHRU[$i]}" in
-            -o|--output)
+            -o|--output|-c|--config)
                 j=$((i + 1))
                 if [[ -n "${PASSTHRU[$j]:-}" && "${PASSTHRU[$j]}" != /* ]]; then
                     PASSTHRU[$j]="$CALLER_DIR/${PASSTHRU[$j]}"
                 fi ;;
-            -o=*|--output=*)
+            -o=*|--output=*|-c=*|--config=*)
                 if [[ "${PASSTHRU[$i]#*=}" != /* ]]; then
                     PASSTHRU[$i]="${PASSTHRU[$i]%%=*}=$CALLER_DIR/${PASSTHRU[$i]#*=}"
                 fi ;;

@@ -1676,6 +1676,44 @@ def test_review_round_keeps_a_relative_report_when_notebooks_are_stripped(
     assert (sandbox.root / "test-logs" / "r.md").read_text() == "report\n"
 
 
+
+def test_review_round_reviews_head_in_a_clean_worktree_when_the_checkout_is_dirty(
+    sandbox, tmp_path
+):
+    # isaac's local mode reviews uncommitted and untracked files too: a dirty checkout (another agent's work in
+    # progress) is reviewed from a clean worktree at HEAD, removed after; a clean one in place
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    (sandbox.root / "change.txt").write_text("x\n")
+    subprocess.run([*git, "add", "change.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "change"], check=True)
+    seen = tmp_path / "seen"
+    dbexec = sandbox.bin / "dbexec"
+    dbexec.write_text(
+        f'#!/bin/sh\n{{ pwd -P; ls; printf "%s\\n" "$@"; }} > "{seen}"\necho reviewed\n'
+    )
+    dbexec.chmod(0o755)
+
+    def review(*args):
+        res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", *args)
+        assert res.returncode == 0, res.output
+        return seen.read_text().splitlines()
+
+    lines = review()
+    assert lines[0] == str(sandbox.root.resolve())  # clean: in place
+    (sandbox.root / "wip.txt").write_text("not mine\n")
+    lines = review("--", "-c", "mine.yaml")
+    assert lines[0] != str(sandbox.root.resolve())
+    assert "change.txt" in lines and "wip.txt" not in lines
+    assert str(sandbox.root / "mine.yaml") in lines  # a relative config still names the caller's file
+    worktrees = subprocess.run(
+        [*git, "worktree", "list"], capture_output=True, text=True, check=True
+    ).stdout.splitlines()
+    assert len(worktrees) == 1  # the scratch worktree is gone
+
+
 # ----------------------------------------- host venv curated to match the container (venv check)
 
 

@@ -657,10 +657,11 @@ def stage_jar(path: Path, root: Path, copy: bool = True) -> dict:
 
 def jar_source(jar_path: str) -> Optional[Path]:
     """The JAR ``--jar-path`` names: the file itself, or in a folder (``python/geobrix/lib/`` when unset) its
-    ``geobrix-*-jar-with-dependencies.jar`` (the last by name). None when there is none."""
+    ``geobrix-*-jar-with-dependencies.jar`` (the newest, should it hold several). None when there is none."""
     p = Path(jar_path) if jar_path else REPO_ROOT / "python/geobrix/lib"
     if p.is_dir():
-        return next(iter(sorted(p.glob("geobrix-*-jar-with-dependencies.jar"), reverse=True)), None)
+        jars = sorted(p.glob("geobrix-*-jar-with-dependencies.jar"), key=lambda j: (j.stat().st_mtime, j.name))
+        return jars[-1] if jars else None
     return p
 
 
@@ -726,9 +727,9 @@ def main(argv=None) -> int:
         jar_src = jar_source(a.jar_path)
         if not jar_src or not jar_src.is_file():
             if a.explain_only:
-                notes.append("no JAR found in python/geobrix/lib/ (the heavy shards need one: gbx:build:jar, or --jar-path)")
+                notes.append(f"no JAR found in {a.jar_path or 'python/geobrix/lib/'} (the heavy shards need one: gbx:build:jar, or --jar-path)")
             else:
-                print("PRECONDITION MISSING: no JAR for the heavy shards (python/geobrix/lib/ or --jar-path); heavy shards not run.", file=sys.stderr)
+                print(f"PRECONDITION MISSING: no JAR for the heavy shards in {a.jar_path or 'python/geobrix/lib/'}; heavy shards not run.", file=sys.stderr)
                 return EXIT_USAGE
         else:
             jar = stage_jar(jar_src, REPO_ROOT, copy=not a.explain_only)

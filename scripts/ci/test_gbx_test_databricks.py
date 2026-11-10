@@ -687,3 +687,9 @@ def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):
     assert launcher.jar_source(str(tmp_path / "empty")) == tmp_path / "empty"  # no such file: refused by the caller
     (tmp_path / "none").mkdir()
     assert launcher.jar_source(str(tmp_path / "none")) is None
+    import os
+
+    newer = tmp_path / "geobrix-0.10.0-jar-with-dependencies.jar"
+    newer.write_bytes(b"PK")
+    os.utime(jar, (1, 1))  # an older build, though its name sorts after the newer one
+    assert launcher.jar_source(str(tmp_path)) == newer

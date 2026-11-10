@@ -146,7 +146,7 @@ Any other form is refused with a `Fix:` that names the session function. That co
 
 <CodeFromTest code={ucExamples} language="python" functionName="crs_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-`gbx_rst_transformcrs` takes a tile that carries its pixels. A virtual tile is refused, and so is a tile whose CRS has no authority code.
+`gbx_rst_transformcrs` takes a tile that carries its pixels. A virtual tile is refused.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_TRANSFORMCRS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
@@ -166,11 +166,12 @@ The raster functions take the arguments of their session functions and give the 
 
 <CodeFromTest code={ucExamples} language="python" functionName="tile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-**Three functions answer differently from their session functions.** Their UC forms keep the earlier Python code.
+**The GDAL functions run the session's GDAL call.** These are the terrain functions, the spectral indices, `gbx_rst_index`, `gbx_rst_threshold`, `gbx_rst_mapalgebra`, the warp and resample functions, `gbx_rst_fillnodata`, `gbx_rst_viewshed`, `gbx_rst_color_relief`, `gbx_rst_summary`, `gbx_rst_contour` and `gbx_rst_polygonize`. Each gives the tile, lines or JSON its session function gives. These rules apply on top:
 
-- `gbx_rst_summary` returns the earlier JSON, with `bands[].min` and `bands[].max`.
-- `gbx_rst_mapalgebra` evaluates the expression with NumExpr, which has no `?:`. Write `where(A > 0, A, 0)`.
-- `gbx_rst_contour` lines stop at the outermost pixel centres. The session lines run half a pixel further, to the tile's edge.
+- The input and the result of one call together must fit 64 MiB decoded. Over that, the call is refused with the session's `Fix:`, before GDAL runs.
+- A tile with no CRS, given to a function that reprojects, gives `NULL`, as a corrupt tile does. A session gives an error tile for both.
+- The `gbx_rst_viewshed` observer is a `GEOMETRY`. Its SRID wins over `crs`.
+- `gbx_rst_polygonize` is a table function. A result over 64 MiB is refused with a `Fix:`.
 
 **A merge or a combine checks its size before it reads a pixel.** It adds up the tiles in the array and the result. Over the limit, the `Fix:` names a session route:
 
@@ -199,7 +200,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Header accessors: pixel and world coordinates | `gbx_rst_rastertoworldcoord`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoord`, `gbx_rst_worldtorastercoordx`, `gbx_rst_worldtorastercoordy` |
 | Pixel statistics | `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max`, `gbx_rst_median`, `gbx_rst_pixelcount`, `gbx_rst_summary`, `gbx_rst_histogram`, `gbx_rst_isempty`, `gbx_rst_sample`, `gbx_rst_tryopen` |
 | Tile operations: warp and edit | `gbx_rst_transform`, `gbx_rst_transformcrs`, `gbx_rst_to_webmercator`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_resample`, `gbx_rst_resample_to_size`, `gbx_rst_resample_to_res`, `gbx_rst_clip`, `gbx_rst_align_to`, `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_band`, `gbx_rst_asformat`, `gbx_rst_getsubdataset`, `gbx_rst_filter`, `gbx_rst_convolve`, `gbx_rst_fillnodata` |
-| Tile operations: terrain | `gbx_rst_slope`, `gbx_rst_aspect`, `gbx_rst_hillshade`, `gbx_rst_tpi`, `gbx_rst_tri`, `gbx_rst_roughness` |
+| Tile operations: terrain | `gbx_rst_slope`, `gbx_rst_aspect`, `gbx_rst_hillshade`, `gbx_rst_tpi`, `gbx_rst_tri`, `gbx_rst_roughness`, `gbx_rst_color_relief`, `gbx_rst_viewshed` |
 | Tile operations: indices | `gbx_rst_ndvi`, `gbx_rst_ndwi`, `gbx_rst_nbr`, `gbx_rst_savi`, `gbx_rst_evi`, `gbx_rst_index` |
 | Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
 | Tile operations: files | `gbx_rst_buildoverviews`, `gbx_rst_cog_convert` |
@@ -208,7 +209,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize`, `gbx_rst_custom_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
 | Tile splitting (table functions) | `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles`, `gbx_rst_separatebands` |
 | Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmedian`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_quadbin_rastertogridavg`, `gbx_rst_quadbin_rastertogridcount`, `gbx_rst_quadbin_rastertogridmax`, `gbx_rst_quadbin_rastertogridmedian`, `gbx_rst_quadbin_rastertogridmin`, `gbx_rst_quadbin_rastertogridstddev`, `gbx_rst_quadbin_rastertogridsum`, `gbx_rst_quadbin_rastertogridvariance`, `gbx_rst_bng_rastertogrid_partial`, `gbx_rst_bng_rastertogridavg`, `gbx_rst_bng_rastertogridcount`, `gbx_rst_bng_rastertogridmax`, `gbx_rst_bng_rastertogridmedian`, `gbx_rst_bng_rastertogridmin`, `gbx_rst_bng_rastertogridstddev`, `gbx_rst_bng_rastertogridsum`, `gbx_rst_bng_rastertogridvariance`, `gbx_rst_custom_rastertogrid_partial`, `gbx_rst_custom_rastertogridavg`, `gbx_rst_custom_rastertogridcount`, `gbx_rst_custom_rastertogridmax`, `gbx_rst_custom_rastertogridmedian`, `gbx_rst_custom_rastertogridmin`, `gbx_rst_custom_rastertogridstddev`, `gbx_rst_custom_rastertogridsum`, `gbx_rst_custom_rastertogridvariance` |
-| Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
+| Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband`, `gbx_rst_polygonize` (table function) |
 | From file bytes | `gbx_rst_fromcontent` |
 | Tessellation (table functions) | `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate`, `gbx_rst_custom_tessellate` |
 | Web tiles | `gbx_rst_tilexyz`, `gbx_rst_xyzpyramid` (table function) |

@@ -62,10 +62,16 @@ FROM ex_rasters
 WHERE name = 'scene';
 
 -- cid: raster_summary_and_histogram
--- A text summary of every band, and a 5-bucket histogram of the DEM.
-SELECT gbx_rst_summary(tile) AS summary, gbx_rst_histogram(tile, 5) AS histogram
-FROM ex_rasters
-WHERE name = 'dem';
+-- GDAL's raster info of the DEM as JSON, with band statistics: read its keys with get_json_object.
+-- And a 5-bucket histogram of the DEM.
+SELECT get_json_object(summary, '$.bands[0].minimum') AS band1_minimum,
+       get_json_object(summary, '$.bands[0].maximum') AS band1_maximum,
+       get_json_object(summary, '$.bands[0].mean') AS band1_mean,
+       get_json_object(summary, '$.size') AS size,
+       histogram
+FROM (SELECT gbx_rst_summary(tile) AS summary, gbx_rst_histogram(tile, 5) AS histogram
+      FROM ex_rasters
+      WHERE name = 'dem');
 
 -- cid: raster_health_checks
 -- Is the tile empty, and does GDAL open it? A tile that cannot be read gives false.

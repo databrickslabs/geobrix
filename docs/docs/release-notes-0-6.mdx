@@ -163,7 +163,6 @@ These changes affect callers that pass keywords or named arguments.
   - It replaces NumExpr. NumPy spellings such as `numpy.where` raise. Write a condition as `A > 0 ? A : 0`.
   - The envelope takes `calc` and the `A_index` and `A_band` style keys only.
   - A `dialect` or `extra_options` key raises and names itself.
-  - On Unity Catalog the function still uses NumExpr.
 - **`rst_transformcrs`: `crs` is now `target_crs`.**
 - **`rst_align_to(tile, reference_tile)`** replaces `(tile, reference)`.
 - **`rst_color_relief(tile, color_table)`** replaces `(tile, color_table_path)`. Pass the color table's text, not a file path. A path now raises, and so does any text that is not a color table. The error names the first bad line and carries a `Fix:`. To use a table file, read its text first and pass that.
@@ -203,7 +202,6 @@ These changes affect callers that pass keywords or named arguments.
   - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` strings with more digits.
   - The JSON adds `description`, `files`, `cornerCoordinates`, `wgs84Extent`, `stac` and, for each band, `block`, `colorInterpretation` and `metadata`. The input is shown as `<input>`.
   - A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`. A virtual tile of a container with no band gives NULL.
-  - On Unity Catalog the function still returns the earlier shape.
 - **The four cell-fill aggregates return the `BINARY` payload,** not `ARRAY<STRUCT<cellid, value>>`.
 - **`gbx_rst_merge_agg` has no JVM level.** It runs in Python on every compute.
 - **`gbx_st_asmvt_pyramid` takes `layer_name` and `extent` as optional arguments.**
@@ -353,6 +351,10 @@ See [Unity Catalog functions](./api/uc-functions) and [Installation](./installat
 - **On Unity Catalog, `gbx_rst_dtmfromgeoms` and `gbx_rst_gridfrompoints` take `ARRAY<GEOMETRY(ANY)>` points.** The Z of each point is kept, and so are the break lines of the terrain function. The session functions still take WKB or WKT arrays. Collect `GEOMETRY` values, not `BINARY`, in a UC statement.
 - **`gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array` and `gbx_st_coverageinvalidedges_array` take a collected array.** Call each with `GROUP BY` and `collect_list`. They answer as the aggregates `gbx_st_asmvt`, `gbx_st_coverageisvalid` and `gbx_st_coverageinvalidedges` do. The attributes of a feature are JSON text.
 - **Seven vector functions and two raster file functions run on Unity Catalog.** They are `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints`, `gbx_st_shiftlongitude`, `gbx_rst_buildoverviews` and `gbx_rst_cog_convert`. A geometry result keeps the SRID of the first argument. Two geometries in different SRIDs are refused with a `Fix:`.
+- **The GDAL raster functions give on Unity Catalog the answer they give in a session.** These are the terrain functions, the spectral indices, `gbx_rst_index`, `gbx_rst_threshold`, `gbx_rst_mapalgebra`, the warp and resample functions, `gbx_rst_fillnodata`, `gbx_rst_summary` and `gbx_rst_contour`. Each UC function runs the same GDAL call as its session function, so it gives the same tile, lines or JSON.
+  - The input and the result of one call together must fit 64 MiB decoded. Over that, the call is refused with a `Fix:`.
+  - A tile with no CRS, given to a function that reprojects, gives NULL, as a corrupt tile does. A session gives an error tile for both.
+- **`gbx_rst_viewshed`, `gbx_rst_color_relief` and `gbx_rst_polygonize` run on Unity Catalog.** The viewshed observer is a `GEOMETRY`. `gbx_rst_polygonize` is a table function, called with `LATERAL`, and refuses a result over 64 MiB with a `Fix:`.
 - **`gbx.uc.install(..., stubs=True)` creates a raising function for each session-only scalar.** The scalars are `gbx_st_crs`, `gbx_st_setcrs`, `gbx_st_transformcrs`, `gbx_rst_fromfile` and `gbx_rst_derivedband`. The error names the route on Unity Catalog. Stubs are off by default. The [Unity Catalog page](./api/uc-functions#session-functions-on-uc) lists the route for every session function without a Unity Catalog twin. It also gives recipes, measured costs and size limits.
 
 ## Ingestion {#ingestion}
@@ -1181,6 +1183,7 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
   - GeoBrix reads cloud storage with `obstore` and adds no `fsspec`, `s3fs` or `gcsfs`.
   - See [Zarr Stores](./api/zarr-stores#what-you-need).
 - **LiDAR stack.** The lightweight tier takes `laspy` 2.7 with `lazrs` 0.8 (bumped together).
+- **Fewer dependencies.** GeoBrix no longer installs `scikit-image` or `lazy_loader`. The functions that used `scikit-image` run GDAL now, and `rst_land_cover` builds its footprint with NumPy. On DBR 19 ML and Serverless environment 6 ML the install no longer upgrades `lazy_loader`.
 - **Newer minimums.** `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and and `overturemaps` 1.0.2 or later (a separate install). None is preinstalled on a supported runtime. `overturemaps` still raises `click` and `tqdm` on install.
 - **`rio-tiler` imports on Serverless environment 5 and DBR 17.3 / 18 (fix).** `rio-tiler` 9.x needs `typing_extensions` 4.13 or later. Those runtimes ship 4.12.2, so `import rio_tiler` failed with a `TypeError`.
   - The lightweight `rst_tilexyz` and `rst_xyzpyramid` fell back to the rasterio renderer.

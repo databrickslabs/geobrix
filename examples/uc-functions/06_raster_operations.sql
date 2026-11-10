@@ -115,6 +115,12 @@ SELECT size(gbx_rst_contour(tile, array(70.0, 80.0, 90.0))) AS contour_lines,
 FROM ex_rasters
 WHERE name = 'dem';
 
+-- cid: raster_polygonize
+-- One polygon for each region of equal pixel values, as rows: gbx_rst_polygonize is a table function.
+SELECT count(*) AS regions, min(p.value) AS lowest, max(p.value) AS highest
+FROM ex_rasters AS r, LATERAL gbx_rst_polygonize(r.tile) AS p
+WHERE r.name = 'dem';
+
 -- cid: raster_web_map_tile
 -- Render the scene as a 256 pixel PNG web tile (zoom 18, a tile that covers it).
 SELECT length(gbx_rst_tilexyz(tile, 18, 130988, 87118, 'PNG', 256, 'bilinear', 'auto')) AS png_bytes

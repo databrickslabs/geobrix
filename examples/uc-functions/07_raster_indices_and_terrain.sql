@@ -36,6 +36,14 @@ SELECT gbx_rst_avg(gbx_rst_slope(tile, 'percent')) AS slope_percent,
 FROM ex_rasters
 WHERE name = 'dem';
 
+-- cid: raster_color_relief_and_viewshed
+-- Colour the DEM from a color table's text (blue at 60 m, red at 120 m), and the share of the DEM a 2 m tall
+-- observer in its middle sees (a visible cell is 255). The observer is a GEOMETRY in the DEM's SRID.
+SELECT gbx_rst_numbands(gbx_rst_color_relief(tile, '60 0 0 255\n120 255 0 0')) AS relief_bands,
+       gbx_rst_avg(gbx_rst_viewshed(tile, CAST(st_point(530120, 180360, 27700) AS GEOMETRY(ANY)), 2.0))[0] / 255 AS visible_share
+FROM ex_rasters
+WHERE name = 'dem';
+
 -- cid: raster_canopy_height
 -- A canopy height model is the surface model minus the terrain model. Here the surface is the DEM plus 8 m.
 SELECT gbx_rst_avg(gbx_rst_chm(gbx_rst_mapalgebra(array(tile), 'A + 8'), tile)) AS mean_height_m

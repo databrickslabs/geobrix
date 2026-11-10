@@ -83,10 +83,11 @@ DEFAULT_NODE = "m5d.8xlarge"
 SPARK_VERSION = mut.SPARK_VERSION
 PYTEST_PIN = mut.PYTEST_PIN
 EXTRAS = "stac,vizx,zarr,databricks"  # the env wheel's feature extras the suites import
-# What the tests read besides python/geobrix: docs, examples, scripts and the Scala test resources the checks point at.
-# What the tests read besides python/geobrix: the CI workflow and actions (the scripts/ci shard and its guards parse them), scripts,
-# docs, examples, sample data and the Scala sources (main, and the test sources the heavy tests read: TestL1.scala).
-SUBSET = (".github", "python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main", "src/test/scala", "README.md")
+# The tarball is every file committed at --sha but two folders: the tests read files anywhere in the checkout (.mvn, pom.xml,
+# rust-toolchain.toml, the CI workflow, the Scala sources), and a list of what to take missed some. Left out: the test resources
+# (staged once per content, below) and the doc images under resources/, which no shard reads.
+EXCLUDED = ("src/test/resources", "resources")
+SUBSET = (".", *(f":(exclude){d}" for d in EXCLUDED))  # a git pathspec
 RESOURCES = "src/test/resources"  # the test rasters, NetCDF and MODIS scenes the tests open: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3
@@ -309,8 +310,9 @@ if PLAN.get("resources"):  # the test resources, shared by every run of the same
     with tarfile.open(root + "/res.tar.gz") as tf:
         tf.extractall(repo, filter="data")
 pkg = repo + "/python/geobrix"
-# some tests ask git for the checkout's root or HEAD: the tarball has no history, so give it a one-commit repository
-os.system("cd %%s && git init -q && git -c user.name=gbx -c user.email=gbx@example.com commit -q --allow-empty -m run >/dev/null 2>&1" %% repo)
+# some tests ask git for the checkout's root, HEAD or its files (git ls-files, ls-tree): the tarball has no history, so make it
+# a one-commit repository that holds every file, as the commit under test does
+os.system("cd %%s && git init -q && git add -A -f && git -c user.name=gbx -c user.email=gbx@example.com commit -q -m run >/dev/null 2>&1" %% repo)
 if PLAN.get("jar"):  # the heavy tests look for the JAR in the checkout's lib/ (the cluster has it installed as a library as well)
     os.makedirs(pkg + "/lib", exist_ok=True)
     shutil.copy(PLAN["jar"]["volume"], pkg + "/lib/" + PLAN["jar"]["name"])

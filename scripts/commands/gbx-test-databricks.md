@@ -48,7 +48,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 ## What it does
 
 - Reads the shards from `.github/workflows/build_main.yml` (the `light` matrix and `light-scripts`) and from `LIGHT_IGNORES` in `.github/actions/python_build/action.yml` (one heavy shard per remaining dir). A shard added to CI is a shard here.
-- Stages a tarball of the committed repo files at `--sha`, the env6 wheel and `plan.json` to `<volume>/test-runs/<run id>/`. It downloads the wheel and tarball back and compares sha256. The JAR goes to `<volume>/test-pool-jars/<sha256 prefix>/`, so the pool reinstalls it only when it differs.
+- Stages a tarball of the committed repo files at `--sha`, the env6 wheel and `plan.json` to `<volume>/test-runs/<run id>/`. The tarball holds every committed file except `src/test/resources` (staged once per content) and the doc images in `resources/`. On the node it becomes a one-commit repository, so `git ls-files` sees every file. It downloads the wheel and tarball back and compares sha256. The JAR goes to `<volume>/test-pool-jars/<sha256 prefix>/`, so the pool reinstalls it only when it differs.
 - Leases the pool's single-node cluster (DBR 19, dedicated). It makes one when the pool has none. It never ends a pool cluster; the pool ends itself after 60 idle minutes (`gbx:bench:pool down` is the owner's call).
 - Cuts long shards by file, so no part is much longer than the rest. The cut balances the recorded timings, or CI's minutes without timings.
 - Leases the free clusters of the pool, up to `--clusters` (default: the pool's cap). It starts stopped clusters, and makes new ones while under the cap. It prints the plan: the queue, the clusters, the runners, the expected wall.
@@ -75,12 +75,13 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - The wait should be a few seconds per shard (the claim). A large wait means a slot idled while work was queued.
   - The idle time at the end is the tail: the last shards end at different times.
 - The summary also checks isolation: one Python process per shard, and no temp view or conf left by an earlier shard.
-- Each runner adds about 10 s per shard: the claim and the start of the shard's notebook run.
+- Each runner adds about 6 s per shard: the claim and the start of the shard's notebook run (2026-11-10: 107 s over 18 shards on 4 slots).
+- The order of the queue follows the estimates. A long shard estimated short starts last and makes the tail; the next run's timings correct it.
 - `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
 
 ## Known failures on a node
 
-- Tests that hand a bare local path to Spark fail with `PATH_NOT_FOUND`, for example the array-agg legs of `test/bench`. Spark reads a bare path from DBFS on Databricks. They need `file:` URIs.
+- Spark reads a bare path from DBFS on Databricks. The provided session therefore reads a bare local path (a test's `tmp_path`) as a `file:` URI in `DataFrameReader.load` and `DataStreamReader.load`. A test that writes through Spark to a bare local path still writes to DBFS.
 - The overture tests that mix Spark and file I/O on a bare path skip under the provided session, with the reason.
 - `test/bench/test_levels.py`'s worker-peak tests inspect Spark's local-mode Python workers and cannot pass against the cluster's session.
 - The family oracle chunks need several minutes each; the Scala suites never run here.

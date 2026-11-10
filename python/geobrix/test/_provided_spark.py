@@ -6,11 +6,16 @@ stop it at the end. On a cluster that is wrong twice: a local master and local-o
 log store, the warehouse dir) do not belong on the provided session, and ``stop()`` would end the session every other
 shard of the node shares.
 
-``install()`` changes the four calls that do it, for the process, and nothing else:
+``install()`` changes these calls, for the process, and nothing else:
 
 * ``Builder.master``, ``Builder.appName``, ``Builder.config`` and ``Builder.enableHiveSupport`` return the builder
   unchanged (the settings are recorded in ``IGNORED``), so ``getOrCreate()`` returns the provided session as it is;
-* ``SparkSession.stop`` does nothing.
+* ``SparkSession.stop`` does nothing;
+* ``DataFrameReader.load`` and ``DataStreamReader.load`` read a bare local path (a test's ``tmp_path``) as a ``file:`` URI. On Databricks Spark
+  resolves a bare path on DBFS (``dbfs:/local_disk0/...``: PATH_NOT_FOUND); a local session resolves it on the local
+  disk. A path that exists on the local disk and is not ``/Volumes``, ``/dbfs`` or ``/Workspace`` is qualified, so the
+  read finds what the test wrote, as it does on a local session. The test clusters are single node: the driver's disk
+  is the executor's.
 
 It applies when ``DATABRICKS_RUNTIME_VERSION`` is set, or when ``GBX_TEST_PROVIDED_SPARK`` is a true value (a way to
 try it off Databricks); ``GBX_TEST_PROVIDED_SPARK=0`` turns it off on Databricks. Without either, a run is exactly
@@ -68,6 +73,41 @@ def _patch_stop(session_cls) -> None:
         session_cls.stop = stop
 
 
+_PLATFORM_ROOTS = ("/Volumes/", "/dbfs/", "/Workspace/")
+
+
+def local_uri(path):
+    """``file:<path>`` for a bare absolute path on the local disk; any other path (a URI, a platform path, a path that
+    does not exist here) as it is."""
+    if isinstance(path, os.PathLike):
+        path = os.fspath(path)
+    if (
+        isinstance(path, str)
+        and path.startswith("/")
+        and not path.startswith(_PLATFORM_ROOTS)
+        and os.path.exists(path)
+    ):
+        return "file:" + path
+    return path
+
+
+def _patch_load(reader_cls) -> None:
+    load = getattr(reader_cls, "load", None)
+    if load is None or getattr(load, "_gbx_provided", False):
+        return
+
+    def call(self, path=None, *args, **kwargs):
+        if isinstance(path, (list, tuple)):
+            path = [local_uri(p) for p in path]
+        elif path is not None:
+            path = local_uri(path)
+        return load(self, path, *args, **kwargs)
+
+    call.__name__ = "load"
+    call._gbx_provided = True  # type: ignore[attr-defined]
+    reader_cls.load = call
+
+
 def install(env=None) -> bool:
     """Apply the change when it is wanted; True when it is in effect. Safe to call twice."""
     global _installed
@@ -81,11 +121,23 @@ def install(env=None) -> bool:
         return False
     _patch_builder(classic.SparkSession.Builder)
     _patch_stop(classic.SparkSession)
-    try:  # Spark Connect (a Serverless or shared cluster): the same two changes on the client classes
+    try:
+        from pyspark.sql import readwriter
+        from pyspark.sql.streaming import readwriter as streaming
+
+        _patch_load(readwriter.DataFrameReader)
+        _patch_load(streaming.DataStreamReader)
+    except ImportError:
+        pass
+    try:  # Spark Connect (a Serverless or shared cluster): the same changes on the client classes
+        from pyspark.sql.connect import readwriter as connect_rw
         from pyspark.sql.connect import session as connect
+        from pyspark.sql.connect.streaming import readwriter as connect_stream
 
         _patch_builder(connect.SparkSession.Builder)
         _patch_stop(connect.SparkSession)
+        _patch_load(connect_rw.DataFrameReader)
+        _patch_load(connect_stream.DataStreamReader)
     except Exception:  # noqa: BLE001 - the client deps are optional
         pass
     _installed = True

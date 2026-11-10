@@ -106,3 +106,45 @@ def test_installing_twice_does_not_wrap_twice(monkeypatch):
     monkeypatch.setattr(ps, "_installed", False)
     ps.install({"GBX_TEST_PROVIDED_SPARK": "1"})
     assert spark_cls.Builder.master is first
+
+
+def test_a_bare_local_path_is_read_as_a_file_uri_and_other_paths_are_left_alone(
+    tmp_path,
+):
+    f = tmp_path / "r0.tif"
+    f.write_bytes(b"x")
+    assert ps.local_uri(str(f)) == "file:" + str(f)
+    assert ps.local_uri(f) == "file:" + str(f)  # a Path too
+    for kept in (
+        "/Volumes/c/s/v/r0.tif",
+        "/dbfs/x",
+        "/Workspace/x",
+        "dbfs:/x",
+        "file:/x",
+        "s3://b/k",
+        "rel/x",
+        str(tmp_path / "absent.tif"),
+    ):
+        assert ps.local_uri(kept) == kept
+
+
+def test_the_reader_qualifies_one_path_or_a_list(monkeypatch, tmp_path):
+    seen = []
+
+    class Reader:
+        def load(self, path=None, format=None, **options):
+            seen.append(path)
+            return "df"
+
+    f = tmp_path / "a.tif"
+    f.write_bytes(b"x")
+    ps._patch_load(Reader)
+    ps._patch_load(Reader)  # twice: still one wrapper
+    assert Reader().load(str(f)) == "df"
+    Reader().load([str(f), "/Volumes/c/s/v/b.tif"])
+    Reader().load()  # a reader with the path in its options
+    assert seen == [
+        "file:" + str(f),
+        ["file:" + str(f), "/Volumes/c/s/v/b.tif"],
+        None,
+    ]

@@ -504,10 +504,22 @@ def test_seconds_measured_at_eight_slots_are_brought_to_the_slots_of_the_plan():
     assert ts.rescale_seconds({"a": 100.0}, 4, 4) == {"a": 100.0}
 
 
-def test_the_tarball_carries_the_ci_workflow_the_scripts_shard_parses():
-    assert ".github" in launcher.SUBSET and "src/test/scala" in launcher.SUBSET, "the heavy tests read TestL1.scala"
-    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows/build_main.yml"], cwd=REPO_ROOT, capture_output=True, text=True).stdout
-    assert ".github/workflows/build_main.yml" in listed, "the file the guards read is in the tree the subset archives"
+def test_the_tarball_carries_every_committed_file_the_tests_read():
+    # a node once lacked .mvn (test_maven_wrapper, the container guards) and pom.xml (test/bench/test_spec.py finds the root by it)
+    listed = subprocess.run(["git", "archive", "--format=tar", "HEAD", *launcher.SUBSET], cwd=REPO_ROOT, capture_output=True, check=True).stdout
+    import io
+    import tarfile
+
+    names = set(tarfile.open(fileobj=io.BytesIO(listed)).getnames())
+    for f in (".mvn/wrapper/maven-wrapper.properties", "pom.xml", "rust-toolchain.toml", ".github/workflows/build_main.yml"):
+        assert f in names, f
+    assert any(n.startswith("src/test/scala/") for n in names), "the heavy tests read the Scala test sources (TestL1.scala)"
+    assert not any(n.startswith(("src/test/resources/", "resources/")) for n in names), "staged once per content, or read by no shard"
+
+
+def test_the_node_checkout_is_a_repository_that_holds_every_file(shards):
+    src = _cell_source(shards)
+    assert "git add -A -f" in src and "--allow-empty" not in src, "git ls-files / ls-tree HEAD see the files, as in the commit under test"
 
 
 def test_a_fresh_cluster_run_makes_one_pool_per_kind_so_light_and_jar_do_not_share_a_cluster():

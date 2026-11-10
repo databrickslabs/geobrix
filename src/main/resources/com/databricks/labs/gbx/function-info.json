@@ -711,6 +711,16 @@
       ],
       "since": "0.2.0"
     },
+    "gbx_rst_gdal": {
+      "examples": "Examples:\n      > SELECT gbx_rst_gdal(tile, 'slope --unit=percent') AS slope_pct, gbx_rst_gdal(tile, 'reproject --output-crs=EPSG:3857 ! slope ! hillshade --zfactor=2') AS shade FROM dem_rasters;",
+      "usage_args": "tile, command",
+      "description": "Run an allowlisted GDAL raster step or pipeline on a tile.",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_georeference": {
       "examples": "Examples:\n      > SELECT gbx_rst_georeference(tile) AS georeference FROM rasters;",
       "usage_args": "tile",

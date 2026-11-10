@@ -112,6 +112,18 @@ def test_rst_viewshed_python_light_example(spark):
     _assert_materialized_tile(result, "rst_viewshed")
 
 
+def test_rst_gdal_python_light_example(spark):
+    """rst_gdal returns a materialized tile in the pipeline's CRS."""
+    assert terrain_examples is not None
+    result = terrain_examples.rst_gdal_python_example(spark)
+    _assert_materialized_tile(result, "rst_gdal")
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(result["raster"])) as mf, mf.open() as src:
+        assert src.crs.to_epsg() == 3857
+        assert src.dtypes[0] == "float32"
+
+
 def test_rst_sample_python_example(spark):
     """rst_sample returns an array of sampled pixel values."""
     assert terrain_examples is not None

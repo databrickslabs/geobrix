@@ -292,6 +292,9 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   `gbx_rst_transformcrs`, `gbx_rst_slope` and `gbx_rst_mapalgebra` open a tile's non-TIFF bytes only
   with a short list of single-file drivers. They therefore refuse the same formats and more.
 
+**`gbx_rst_gdal` runs only listed GDAL steps.** The command takes no file, format, option or `/vsi` name. GeoBrix writes the read and write steps itself. The input is the tile and the output is a tile.
+Each step and argument must be on the allowlist. Each value must have the grammar of its argument. Each CRS goes through the CRS resolver.
+
 **Remote paths that come from data.** On the lightweight tier, a path from data is
 opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
 store, or `/vsimem/`. The cloud object store forms are

@@ -41,6 +41,7 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import argv as argv_mod
+from databricks.labs.gbx.engine import command as command_mod
 from databricks.labs.gbx.engine.spec import DataError, ParamError, output_format
 
 PREFIX = "/vsimem/gbx-spec"
@@ -1212,11 +1213,24 @@ def _judge_budget(
     4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header.
     """
     grid = None
-    if fn.gdal.alg == "raster reproject":
+    warp = tokens
+    if fn.gdal.alg == "raster pipeline":
+        # a command's first reprojection: its grid is taken from the input's header (a bound for later steps)
+        warp = next(
+            (s for s in command_mod.steps_of(tokens) if s and s[0] == "reproject"),
+            None,
+        )
+    if warp is not None and fn.gdal.alg in ("raster reproject", "raster pipeline"):
         grid = (
-            _warp_grid(gdal, fn.sql_name, sources[0], tokens, drivers)
+            _warp_grid(gdal, fn.sql_name, sources[0], warp, drivers)
             if 0 in sources
-            else _warp_grid(gdal, fn.sql_name, names[0], tokens)
+            else _warp_grid(
+                gdal,
+                fn.sql_name,
+                names[0],
+                warp,
+                ("GTiff",) if names[0].startswith(PREFIX) else virtual_drivers(),
+            )
         )
     need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
     if budget and need > budget:

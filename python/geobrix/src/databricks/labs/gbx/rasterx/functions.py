@@ -2750,6 +2750,49 @@ def rst_fromfile(
     )
 
 
+def rst_gdal(
+    tile: ColLike,
+    command: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Run an allowlisted GDAL raster step or pipeline on a tile.
+
+    Args:
+        tile: The tile to process.
+        command: What follows `gdal raster` on the command line: one step or steps
+            joined by `!`, such as `'slope --unit=percent'` or `'reproject
+            --output-crs=EPSG:3857 ! slope'`. Every step and argument must be on the
+            allowlist; a file, URL or option outside it raises.
+        virtualize_dir: Python only: write the result under this directory and return a virtual tile.
+        virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
+        materialize: Python only: ``True`` returns the raster bytes in the tile.
+
+    Returns:
+        A GeoTIFF tile with what GDAL writes: its size, bands, type and NoData come from
+        the last step. A NULL tile or command gives NULL; an error tile comes out as
+        itself; a tile that cannot be read, or a step GDAL fails on, gives an error
+        tile. A step, argument or value outside the allowlist raises.
+
+    SQL: ``gbx_rst_gdal(tile, command)``
+    """
+    if _api.forced(virtualize_dir, virtualize_prefix, materialize):
+        return _api.force_output(
+            "gbx_rst_gdal",
+            virtualize_dir,
+            virtualize_prefix,
+            materialize,
+            tile,
+            command,
+        )
+    return _api.call(
+        "gbx_rst_gdal",
+        tile,
+        command,
+    )
+
+
 def rst_georeference(
     tile: ColLike,
 ) -> Column:

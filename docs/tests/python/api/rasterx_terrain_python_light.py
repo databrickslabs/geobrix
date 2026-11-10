@@ -244,6 +244,32 @@ rst_viewshed_python_example_output = """
 """
 
 
+def rst_gdal_python_example(spark):
+    """Run a GDAL raster pipeline on a DEM tile: reproject, then slope in percent."""
+    from databricks.labs import gbx
+    from databricks.labs.gbx.rasterx import functions as rx_api
+    from pyspark.sql import functions as f
+
+    gbx.register(spark)
+    df = dem_tile_df(spark)
+    result = df.select(
+        rx_api.rst_gdal(
+            "tile", f.lit("reproject --output-crs=EPSG:3857 ! slope --unit=percent")
+        ).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_gdal_python_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(a GeoTIFF tile in EPSG:3857 holding the slope in percent)
+"""
+
+
 def rst_sample_python_example(spark):
     """Sample raster pixel values at a POINT geometry."""
     from databricks.labs.gbx.rasterx import functions as rx

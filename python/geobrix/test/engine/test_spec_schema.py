@@ -510,7 +510,7 @@ def test_the_read_and_crs_rules_are_the_vocabulary_and_the_warp_rows_use_them():
     assert MAN.functions["gbx_rst_resample"].gdal.in_read == "factor"
     assert {
         n for n, f in MAN.functions.items() if f.gdal and f.gdal.in_read == "path"
-    } == {"gbx_rst_viewshed"}
+    } == {"gbx_rst_viewshed", "gbx_rst_gdal"}
     assert {
         n for n, f in MAN.functions.items() if f.gdal and f.gdal.same_crs == "keep"
     } == {"gbx_rst_transform", "gbx_rst_to_webmercator"}
@@ -559,3 +559,60 @@ def test_the_analysis_rows_use_the_json_output_the_whole_number_binder_and_the_b
     }
     assert {f.sql_name for f in ENGINE_FNS if f.gdal.per_band} == {"gbx_rst_fillnodata"}
     assert spec.OUTPUT_FORMAT_OF["json"] == "json"
+
+
+# --- the command allowlist (gbx_rst_gdal) -----------------------------------------------------------------------------
+
+
+def test_the_command_row_is_the_pipeline_and_its_allowlist_is_the_pipeline_argument_alone():
+    fn = MAN.functions["gbx_rst_gdal"]
+    assert fn.gdal.alg == "raster pipeline"
+    assert MAN.gdal.allow["raster pipeline"] == ("pipeline",)
+    assert [(a.arg, a.type) for a in fn.gdal.args] == [("pipeline", "command")]
+    assert fn.gdal.write == "command"
+    assert (
+        fn.levels["L3"]["engine"] == "gdal"
+        and "L1" not in fn.levels
+        and "L4" not in fn.levels
+    )
+
+
+def test_the_command_allowlist_names_no_calc_dialect_and_no_deny_listed_argument_but_geometry():
+    allow = MAN.gdal.command_allow
+    assert "dialect" not in {a for kinds in allow.values() for a in kinds}
+    assert "calc" not in allow
+    held = {
+        (step, arg)
+        for step, kinds in allow.items()
+        for arg in kinds
+        if arg in MAN.gdal.deny or arg in spec.ENGINE_ARGS
+    }
+    assert held == {("clip", "geometry")}
+    assert allow["clip"]["geometry"] == "wkt"
+    # no argument of a dataset or a file: the kinds are values, never a name GDAL opens
+    assert not {
+        (s, a)
+        for s, k in allow.items()
+        for a in k
+        if a.startswith("like") or a in ("mask", "sd-filename")
+    }
+
+
+def test_every_command_kind_is_one_the_grammar_knows():
+    from databricks.labs.gbx.engine import command
+
+    known = set(command._KIND) | {"flag", "crs", "wkt"}
+    assert {
+        k for kinds in MAN.gdal.command_allow.values() for k in kinds.values()
+    } <= known
+    assert manifest.GDAL_COMMAND_KINDS == known
+
+
+def test_a_command_kind_outside_the_vocabulary_is_refused_at_load():
+    raw = {
+        "pin": "3.13.3",
+        "command_allow": {"slope": {"unit": "path"}},
+        "raster_drivers": {"allowed": ["GTiff"], "refused": []},
+    }
+    with pytest.raises(ValueError, match="path"):
+        manifest._parse_gdal_section(raw)

@@ -314,8 +314,14 @@ def engine_creation_options(
     width: int,
     height: int,
     alg: Optional[str] = None,
+    predictor: bool = True,
+    striped: bool = False,
 ) -> list:
     """The `--creation-option` values of a GDAL spec engine output (the `tile` write profile), in order.
+
+    ``predictor=False`` (the `command` write profile) writes ``PREDICTOR=1``: a pipeline's output type is known only after
+    it runs, and a predictor for the input's type could be invalid for it. ``striped=True`` leaves the tiling options out,
+    as for the regular hillshade below (a pipeline with a hillshade step).
 
     The codec, level and predictor are ``creation_opts(dtype, decoded_bytes, "auto")`` (ZSTD on the size ladder,
     the dtype's predictor); the tiling is 512-pixel blocks capped to the raster, at least 64, floored to a multiple
@@ -332,10 +338,12 @@ def engine_creation_options(
     )
     out = [
         f"COMPRESS={opts['compress'].upper()}",
-        f"PREDICTOR={opts['predictor']}",
+        f"PREDICTOR={opts['predictor'] if predictor else 1}",
         f"ZSTD_LEVEL={opts['zstd_level']}",
     ]
-    if alg != HILLSHADE_ALG or gdal_dtype.lower() not in ("byte", "uint8"):
+    if not striped and (
+        alg != HILLSHADE_ALG or gdal_dtype.lower() not in ("byte", "uint8")
+    ):
         blk = max(64, min(512, int(width), int(height))) // 16 * 16
         out += ["TILED=YES", f"BLOCKXSIZE={blk}", f"BLOCKYSIZE={blk}"]
     return out + ["BIGTIFF=IF_SAFER"]

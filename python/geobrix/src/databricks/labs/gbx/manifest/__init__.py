@@ -148,12 +148,31 @@ GDAL_BINDERS = frozenset(
         "size_from_factor",
         "int_pair",
         "double_pair",
+        "command",
     }
 )
 GDAL_NULL = frozenset({"omit", "null_result", "raise"})
 GDAL_BAD = frozenset({"raise", "data"})
-# Write profiles: `tile` is a GTiff with the engine's creation options. No profile writes VRT or GDALG.
-GDAL_WRITE = frozenset({"tile"})
+# Write profiles: `tile` is a GTiff with the engine's creation options; `command` is the same with no predictor (a
+# pipeline's output type is known only after it runs, and a type-specific predictor could be invalid for it). No profile
+# writes VRT or GDALG.
+GDAL_WRITE = frozenset({"tile", "command"})
+# The kinds of value a `gdal.command_allow` argument takes (`engine/command.py` holds the grammar of each).
+GDAL_COMMAND_KINDS = frozenset(
+    {
+        "flag",
+        "integer",
+        "number",
+        "integers",
+        "numbers",
+        "word",
+        "words",
+        "sizes",
+        "expr",
+        "crs",
+        "wkt",
+    }
+)
 
 # The v2 tile struct as a SQL type (== V2_TILE_SCHEMA.simpleString(); a contract test pins it).
 TILE_SQL = (
@@ -539,6 +558,22 @@ class GdalSection:
     #     AIG, DOQ1, DOQ2, FAST, ESAT.
     # Not in the class, by the same ruling: netCDF, HDF5, HFA, JP2OpenJPEG and GPKG.
     bytes_refused_light_drivers: Tuple[str, ...] = ()
+    # `gbx_rst_gdal`'s allowlist: each `gdal raster` step a caller may name (its words, not GDAL's whole list), with the
+    # arguments it takes and the kind of value each takes (``GDAL_COMMAND_KINDS``). A step or an argument not here is
+    # refused. No argument here is on the deny list except `geometry`, which only takes a WKT polygon the engine writes
+    # again itself.
+    command_allow: Mapping[str, Mapping[str, str]] = MappingProxyType({})
+
+    @property
+    def command_crs_args(self) -> frozenset:
+        """The arguments of the allowed steps whose value is a CRS: each is rewritten through the canonical CRS
+        resolver, so a CRS value never names a file or a URL."""
+        return frozenset(
+            arg
+            for args in self.command_allow.values()
+            for arg, kind in args.items()
+            if kind == "crs"
+        )
 
 
 def _closed(raw: Mapping, keys: frozenset, what: str) -> None:
@@ -656,7 +691,11 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
 def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
     if raw is None:
         return None
-    _closed(raw, frozenset({"pin", "deny", "allow", "raster_drivers"}), "section")
+    _closed(
+        raw,
+        frozenset({"pin", "deny", "allow", "raster_drivers", "command_allow"}),
+        "section",
+    )
     drivers = raw.get("raster_drivers", {})
     _closed(
         drivers,
@@ -696,6 +735,17 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
         refused_drivers=refused,
         bytes_drivers=in_bytes,
         bytes_refused_light_drivers=light_refused,
+        command_allow=MappingProxyType(
+            {
+                step: MappingProxyType(
+                    {
+                        arg: _one_of(kind, GDAL_COMMAND_KINDS, f"kind of {step}/{arg}")
+                        for arg, kind in args.items()
+                    }
+                )
+                for step, args in raw.get("command_allow", {}).items()
+            }
+        ),
     )
 
 

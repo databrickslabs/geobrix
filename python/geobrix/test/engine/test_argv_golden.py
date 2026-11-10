@@ -38,7 +38,11 @@ def test_the_argv_is_the_golden_one(case):
 @pytest.mark.parametrize("case", GOLDEN["creation_options"], ids=lambda c: c["id"])
 def test_the_write_profile_is_the_golden_one(case):
     got = engine_creation_options(
-        case["dtype"], case["decoded_bytes"], case["width"], case["height"]
+        case["dtype"],
+        case["decoded_bytes"],
+        case["width"],
+        case["height"],
+        predictor=case.get("predictor", True),
     )
     assert got == case["options"]
 

@@ -55,6 +55,7 @@ New:
 - [Unity Catalog functions](#unity-catalog-functions)
 - [`netcdf_gbx` reads CF discrete sampling geometries](#readers-retired)
 - [Table functions for grouped merge and BNG rasterize](#read-caps)
+- [`rst_gdal` runs an allowlisted GDAL `raster` command](#rst-gdal)
 
 ## Python API and registration {#python-api}
 
@@ -668,6 +669,18 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - Heavyweight `rst_tilexyz` now raises for them too, as `rst_xyzpyramid` and the lightweight tier do. It returned a transparent PNG.
   - A tile that cannot be read or rendered still returns a transparent PNG, never NULL.
 - **Corrupt tiles yield an error row again (fix).** The lightweight `rst_separatebands`, `rst_retile` and `rst_tooverlappingtiles` failed with `UDTF_RETURN_SCHEMA_MISMATCH` on an unreadable input. They emit one error tile (NULL raster, error in `metadata.last_error`).
+
+### `rst_gdal` runs an allowlisted GDAL `raster` command (new) {#rst-gdal}
+
+- **`gbx_rst_gdal(tile, command)` runs one GDAL `raster` step or a pipeline on a tile.** `command` is what follows `gdal raster`, such as `'slope --unit=percent'` or `'reproject --output-crs=EPSG:3857 ! slope ! hillshade --zfactor=2'`.
+  - It is available in session SQL and Python on every compute. It has no Unity Catalog form and no JVM form.
+  - GeoBrix adds the read and write steps. The result is a GeoTIFF tile.
+- **Only listed steps and arguments run.** The steps are `aspect`, `clip`, `fill-nodata`, `hillshade`, `neighbors`, `nodata-to-alpha`, `proximity`, `reclassify`, `reproject`, `resize`, `roughness`, `scale`, `select`, `set-type`, `sieve`, `slope`, `tpi`, `tri`, `unscale` and `viewshed`.
+  - Any other step, a short flag, an unlisted argument or a `--config` option raises. So does an input or output override.
+  - A value is never a file, a URL, an `@file` or a `/vsi` name. A CRS value goes through the CRS resolver, and `clip --geometry` takes a WKT polygon.
+  - GDAL's `calc` step does not run inside a pipeline. Use `gbx_rst_mapalgebra`.
+- **The tile in a file is read by its path.** A virtual tile that is a whole file is read block by block.
+  - A pipeline that GDAL cannot run on a tile gives an error tile with GDAL's reason.
 
 ### Raster viewshed: GDAL's `raster viewshed` (behavior change) {#viewshed}
 

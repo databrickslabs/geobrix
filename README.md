@@ -15,8 +15,8 @@
   python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
 -->
 <!-- BEGIN GENERATED counts -->
-![Functions](https://img.shields.io/badge/functions-257-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-165-1565c0)
+![Functions](https://img.shields.io/badge/functions-258-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-166-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-66-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-24-1565c0)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)

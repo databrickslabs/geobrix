@@ -2895,7 +2895,7 @@ def _ref_polygons(args):
         gdal.Unlink(name)
 
 
-def _ref_gdaldem_slope(args):
+def _ref_gdaldem_slope(args, slope_format="degree", compute_edges=False):
     """GDAL's own `gdal.DEMProcessing` slope (Horn, no edges), the `gdaldem` command line's scale handling, through
     `osgeo`: independent of the engine's `raster slope` and of the numpy kernel. The source is the tile written under
     a `/vsimem` name; the scale is GDAL's own (for a geographic CRS, its metres per degree).
@@ -2910,7 +2910,12 @@ def _ref_gdaldem_slope(args):
     gdal.FileFromMemBuffer(src, _raster_of(args[0]))
     try:
         gdal.DEMProcessing(
-            dst, src, "slope", alg="Horn", computeEdges=False, slopeFormat="degree"
+            dst,
+            src,
+            "slope",
+            alg="Horn",
+            computeEdges=compute_edges,
+            slopeFormat=slope_format,
         )
         f = gdal.VSIFOpenL(dst, "rb")
         gdal.VSIFSeekL(f, 0, 2)
@@ -3783,6 +3788,9 @@ _REFS = {
     "clip_triangle": _ref_clip_triangle,
     "slope": _ref_slope,
     "gdaldem_slope": _ref_gdaldem_slope,
+    # gbx_rst_gdal: the command's `slope --unit=percent` against GDAL's own DEMProcessing; the step computes the edges
+    # unless the command says --no-edges, which the engine's own slope row always does
+    "gdaldem_slope_percent": lambda args: _ref_gdaldem_slope(args, "percent", True),
     "chm": _ref_chm,
     "norm_diff": _ref_norm_diff,
     "times2": _ref_times2,

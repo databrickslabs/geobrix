@@ -6223,6 +6223,55 @@ Keep the pixels for which `pixel op value` holds, with their original values, an
 
 Higher-level analytical transforms wrapping single GDAL primitives — COG layout publishing, proximity surfaces, contour extraction, and viewshed analysis. See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst_cog_convert` converting 3DEP DEMs to COGs and cataloging them in a STAC Delta table (NB03).
 
+### rst_gdal
+
+{/* BEGIN GENERATED gbx_rst_gdal: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_gdal(tile, command)` | `TILE` |
+| Python | `rasterx.functions.rst_gdal(tile, command, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to process. |
+| `command` | `STRING` |  | What follows `gdal raster` on the command line: one step or steps joined by `!`, such as `'slope --unit=percent'` or `'reproject --output-crs=EPSG:3857 ! slope'`. Every step and argument must be on the allowlist; a file, URL or option outside it raises. |
+{/* END GENERATED gbx_rst_gdal */}
+
+{/* BEGIN GENERATED gbx_rst_gdal: placeholder, run gbx:manifest:gen */}
+{/* END GENERATED gbx_rst_gdal */}
+
+:::note Implementation
+Runs GDAL's `raster pipeline` in the worker on every compute. GeoBrix adds the read and write steps itself.
+:::
+
+:::note Python-only keywords
+The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
+:::
+
+Run a GDAL `raster` command on a tile. `command` is what follows `gdal raster` on the command line. It is one step or several steps joined by `!`. The result is a GeoTIFF tile with what the last step writes.
+
+```sql
+SELECT gbx_rst_gdal(tile, 'slope --unit=percent') FROM dem_rasters;
+SELECT gbx_rst_gdal(tile, 'reproject --output-crs=EPSG:3857 ! slope ! hillshade --zfactor=2') FROM dem_rasters;
+```
+
+**Steps.** These steps run: `aspect`, `clip`, `fill-nodata`, `hillshade`, `neighbors`, `nodata-to-alpha`, `proximity`, `reclassify`, `reproject`, `resize`, `roughness`, `scale`, `select`, `set-type`, `sieve`, `slope`, `tpi`, `tri`, `unscale` and `viewshed`. Any other step raises. This includes `read`, `write`, `calc` and every `vector` step.
+
+**Arguments.** Write each argument as `--name=value`, with `=` and no space. Short flags and unlisted arguments raise. A value is a number, a word, a list of numbers, a mapping or a polygon. It is never a file, a URL, an `@file` or a `/vsi` name. A CRS value such as `--output-crs=3857` goes through the same CRS resolver as `gbx_rst_transformcrs`. `clip --geometry` takes a WKT polygon.
+
+**What the command cannot do.** You cannot name an input or an output. The input is the tile you pass, and the output is the tile you get. You cannot set a file format, a creation option or a `--config` option. For map algebra, use `gbx_rst_mapalgebra`: GDAL's `calc` step does not run inside a pipeline.
+
+**Results.** The function returns what GDAL writes. `reproject` here does not mask the area outside the source, as `gbx_rst_transformcrs` does. A step that GDAL cannot run on the tile gives an error tile with GDAL's reason. A command GDAL does not accept raises. A virtual tile that is a whole file is read by its path, block by block.
+
+<FunctionExamples
+  name="rst_gdal"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
 ### rst_cog_convert
 
 {/* BEGIN GENERATED gbx_rst_cog_convert: edit manifest/functions.json, then run gbx:manifest:gen */}

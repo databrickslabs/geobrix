@@ -3070,6 +3070,26 @@ rst_viewshed_sql_example_output = """
 """
 
 
+def rst_gdal_sql_example():
+    """Run a GDAL raster step, or steps joined by !, on a tile."""
+    return """
+-- One step: slope in percent. Then a pipeline: reproject, slope, hillshade.
+SELECT gbx_rst_gdal(tile, 'slope --unit=percent') AS slope_pct,
+       gbx_rst_gdal(tile, 'reproject --output-crs=EPSG:3857 ! slope ! hillshade --zfactor=2') AS shade
+FROM dem_rasters;
+"""
+
+
+rst_gdal_sql_example_output = """
++-----------------------------------------------------------+-----------------------------------------------------------+
+|slope_pct                                                  |shade                                                      |
++-----------------------------------------------------------+-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+-----------------------------------------------------------+
+(the result is a GeoTIFF tile; a step or argument outside the allowlist raises)
+"""
+
+
 def rst_dtmfromgeoms_sql_example():
     """DTM via Delaunay-TIN interpolation from Z-valued points (+ optional breaklines)."""
     return """

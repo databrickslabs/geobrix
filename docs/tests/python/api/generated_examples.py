@@ -664,6 +664,11 @@ EXAMPLES = {
         "fromfile_gtiff",
         "SELECT gbx_rst_fromfile(c0, 'GTiff') AS out FROM gbx_example",
     ),
+    "gbx_rst_gdal": (
+        "SPEC_GDAL",
+        "gdal_slope_percent",
+        "SELECT gbx_rst_gdal(c0, 'slope --unit=percent') AS out FROM gbx_example",
+    ),
     "gbx_rst_georeference": (
         "RASTER_ACCESSOR",
         "georeference",

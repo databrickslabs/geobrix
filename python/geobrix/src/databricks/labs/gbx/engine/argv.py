@@ -20,6 +20,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from databricks.labs.gbx import manifest
+from databricks.labs.gbx.engine import command as command_mod
 from databricks.labs.gbx.engine.spec import (
     ENGINE_FILE_BINDERS,
     PLACEHOLDER,
@@ -859,6 +860,78 @@ def _output_pixels(tokens: Sequence[str], first: "RasterProps", grid) -> int:
     return grid.width * grid.height if grid is not None else first.width * first.height
 
 
+# The steps whose result is a float (or wider than a Byte input) unless the step names the type.
+_FLOAT_STEPS = frozenset(
+    {
+        "slope",
+        "aspect",
+        "tri",
+        "tpi",
+        "roughness",
+        "proximity",
+        "neighbors",
+        "unscale",
+        "scale",
+    }
+)
+
+
+def _step_pixels(step: Sequence[str], first: "RasterProps", grid) -> int:
+    """The pixels one step of a command writes at most, for the estimate: a ``--size`` (whole numbers or percentages of the
+    input's size), else a ``--resolution`` over the extent (``_output_pixels``), else the grid GDAL picks for a reprojection,
+    else the input's size."""
+    base = first.width * first.height
+    size = _token_value(step, "size")
+    if size is not None:
+        dims = (first.width, first.height)
+        try:
+            vals = [
+                (
+                    max(1, round(dims[i] * float(v[:-1]) / 100.0))
+                    if v.endswith("%")
+                    else int(v)
+                )
+                for i, v in enumerate(size.split(","))
+            ]
+        except ValueError:
+            return base
+        if (
+            len(vals) == 1
+        ):  # `--size=N` keeps the aspect ratio (GDAL's resize) or is a square: count the larger
+            vals = [vals[0], max(vals[0], round(vals[0] * dims[1] / max(dims[0], 1)))]
+        return vals[0] * vals[1]
+    if step[0] in ("reproject", "resize"):
+        return _output_pixels(
+            list(step), first, grid if step[0] == "reproject" else None
+        )
+    return base
+
+
+def _pipeline_estimate(tokens: Sequence[str], first: "RasterProps", grid) -> int:
+    """The decoded bytes a ``command`` row's output will hold, for the per-call budget. Steps are lazy or stream in GDAL,
+    so this is a bound, not a measurement: the largest pixel count any step writes (a reprojection's from the grid GDAL
+    picks for the input), the input's bands (plus one for an alpha band), the widest type the input or a step names
+    (Float32 after a terrain, scale or neighbors step), and one more copy for each step that holds its result in memory
+    while it runs (``command.MATERIALIZING``).
+    """
+    steps = command_mod.steps_of(tokens)[1:-1]  # without the read and write steps
+    pixels = first.width * first.height
+    item = _ITEMSIZE.get(first.dtype, 8)
+    bands = first.bands
+    held = 0
+    for step in steps:
+        pixels = max(pixels, _step_pixels(step, first, grid))
+        named = _token_value(step, "output-data-type")
+        if named is not None:
+            item = max(item, _ITEMSIZE.get(named, 8))
+        elif step[0] in _FLOAT_STEPS:
+            item = max(item, 4)
+        if step[0] == "nodata-to-alpha" or "--add-alpha" in step:
+            bands = first.bands + 1
+        held += step[0] in command_mod.MATERIALIZING
+    return pixels * bands * item * (1 + held)
+
+
 def estimate_output(
     fn,
     tokens: Sequence[str],
@@ -877,6 +950,8 @@ def estimate_output(
     first = props[0]
     if fn.gdal.out_kind == "json":
         return 0  # the text is small; the statistics read the pixels block by block
+    if fn.gdal.alg == command_mod.PIPELINE_ALG:
+        return _pipeline_estimate(tokens, first, grid)
     dtype = _token_value(tokens, "output-data-type") or (
         first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
     )
@@ -957,7 +1032,9 @@ def _check_together(fn, a, v, by_arg, values) -> None:
         )
 
 
-def _output_tokens(fn, inputs: Sequence[RasterProps]) -> List[str]:
+def _output_tokens(
+    fn, inputs: Sequence[RasterProps], striped: bool = False
+) -> List[str]:
     """The output tokens of a spec's output kind: a GeoTIFF with the write profile's creation options, or for features
     GDAL's in-memory layer (it writes no file, and the output name is a label)."""
     block = fn.gdal
@@ -970,7 +1047,13 @@ def _output_tokens(fn, inputs: Sequence[RasterProps]) -> List[str]:
             r.width * r.height * r.bands * _ITEMSIZE.get(r.dtype, 8) for r in inputs
         )
         creation = engine_creation_options(
-            dtype, decoded, first.width, first.height, block.alg
+            dtype,
+            decoded,
+            first.width,
+            first.height,
+            block.alg,
+            predictor=block.write != "command",
+            striped=striped,
         )
         return ["--output=<output>", "--output-format=GTiff"] + [
             f"--creation-option={o}" for o in creation
@@ -1052,10 +1135,28 @@ def _bound_tokens(fn, a, v, values, inputs, n_texts: int):
     return ([tok] if tok else []), None
 
 
+def _pipeline_template(fn, values, inputs, section) -> Optional[List[str]]:
+    """The argv of a ``command`` row (``gbx_rst_gdal``): the whole ``raster pipeline`` token list, which the
+    caller's command fills between the engine's ``read`` and ``write`` steps. A NULL command makes the result NULL.
+    A pipeline with a hillshade step is written striped (``engine_creation_options``).
+    """
+    a = next(x for x in fn.gdal.args if x.type == "command")
+    v = values.get(a.source)
+    if _is_null(v):
+        if a.null == "raise":
+            raise ParamError(f"{fn.sql_name}: {a.source} must not be NULL")
+        return None
+    steps = command_mod.tokenize(str(v))
+    out = _output_tokens(fn, inputs, striped=any(s[0] == "hillshade" for s in steps))
+    return command_mod.pipeline_tokens(str(v), section, canonical_crs, out)
+
+
 def _template(fn, values, inputs, section) -> Optional[List[str]]:
     """The argv with the placeholder input and output names: bound once per distinct (spec, values, input props),
     so a literal argument is resolved once, not per row."""
     block = fn.gdal
+    if block.alg == command_mod.PIPELINE_ALG:
+        return _pipeline_template(fn, values, inputs, section)
     in_kind = block.inputs[0][1]
     names = (
         ["<input>"]

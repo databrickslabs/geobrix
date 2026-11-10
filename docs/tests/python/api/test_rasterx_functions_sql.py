@@ -640,6 +640,7 @@ def test_rst_polygonize_sql_example(spark):
         "rst_color_relief_sql_example",
         "rst_contour_sql_example",
         "rst_viewshed_sql_example",
+        "rst_gdal_sql_example",
     ],
 )
 def test_dem_processing_sql_example(spark, dem_rasters_view, example_attr):

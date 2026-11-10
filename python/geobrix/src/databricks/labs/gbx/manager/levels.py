@@ -227,6 +227,7 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # two passes, c0 against c1 against a floor): 0.5 / 1.5 to 2.0 / 5.9 to 6.1 s against 0.6 to 1.3 / 2.0 to 2.3 / 6.0 to 6.1 s at 24 /
 # 96 / 384 tiles. The two meet the floor at 384 (the call itself costs about as much as reading the tile); c0 is faster at the
 # smaller rungs and needs no wrapper. The batch wrapper also types the geometry by its first session type (BINARY).
+# The generic GDAL command (`gbx_rst_gdal`) is unmeasured: it takes the row-wise form, which needs no wrapper and no Arrow capability.
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -253,6 +254,7 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "summary",
             "polygonize",
             "viewshed",
+            "gdal",
         )
     },
 }

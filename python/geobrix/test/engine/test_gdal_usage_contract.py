@@ -91,6 +91,74 @@ def test_every_spec_argument_is_canonical_and_its_choices_exist(usage, fn):
             assert set(words) <= set(choices), (a.arg, words, choices)
 
 
+# The kind of value each GDAL usage type takes in a `gbx_rst_gdal` command (`gdal.command_allow`). A string argument has
+# no type of its own in the usage: it is a word, a list of words, a size, an expression, a CRS or a polygon.
+_USAGE_KINDS = {
+    "boolean": {"flag"},
+    "integer": {"integer"},
+    "real": {"number"},
+    "integer_list": {"integers"},
+    "real_list": {"numbers"},
+    "string": {"word", "number", "expr", "crs", "wkt"},
+    "string_list": {"words", "sizes", "expr"},
+}
+_COMMAND_STEPS = sorted(MAN.gdal.command_allow)
+
+
+@pytest.fixture(scope="module")
+def step_usage():
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    return {
+        step: json.loads(run.usage_json(f"raster {step}")) for step in _COMMAND_STEPS
+    }
+
+
+@pytest.mark.parametrize("step", _COMMAND_STEPS)
+def test_every_command_step_and_argument_exists_and_is_canonical(step_usage, step):
+    """Each `gbx_rst_gdal` step is `raster <step>` in the pinned GDAL, each argument is its canonical name (never an
+    alias), and its kind of value is one the argument's usage type takes. A dataset argument is never allowed (it would
+    name a file); no argument is one the engine writes."""
+    args = _args(step_usage[step])
+    aliases = {al for a in args.values() for al in a.get("aliases", ())}
+    for name, kind in MAN.gdal.command_allow[step].items():
+        assert (
+            name in args and name not in aliases
+        ), f"{step}: '{name}' is not a canonical argument of 'raster {step}'"
+        gtype = args[name]["type"]
+        assert (
+            gtype in _USAGE_KINDS and kind in _USAGE_KINDS[gtype]
+        ), f"{step}: '{name}' is {gtype} in GDAL; kind '{kind}' does not take it"
+        assert name not in spec.ENGINE_ARGS, (step, name)
+        choices = args[name].get("choices")
+        if choices and kind == "word":
+            assert all(
+                c.replace("-", "").replace("_", "").replace(".", "").isalnum()
+                for c in choices
+            ), (step, name, choices)
+
+
+def test_the_crs_arguments_are_the_ones_whose_name_says_so():
+    """`command_crs_args` is every CRS-kind argument of the allowed steps, and GDAL's CRS arguments are the `*-crs` ones."""
+    named = {
+        name
+        for kinds in MAN.gdal.command_allow.values()
+        for name in kinds
+        if name.endswith("-crs")
+    }
+    assert (
+        MAN.gdal.command_crs_args
+        == named
+        == {
+            "input-crs",
+            "output-crs",
+            "bbox-crs",
+            "geometry-crs",
+        }
+    )
+
+
 def test_the_engines_exception_mode_is_its_own_threads(usage):
     """The engine turns osgeo's exceptions off for its own calls (``run._gdal_status``); in the pinned GDAL that mode
     is the calling thread's alone, so another thread using osgeo meanwhile keeps the process's mode.

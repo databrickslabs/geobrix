@@ -423,6 +423,36 @@ def test_a_window_wider_than_a_strip_is_scanned_block_by_block(monkeypatch):
     assert edit.holds_no_pixel_centre(leg.union(bar), t, N, N)
 
 
+def test_a_bound_on_a_pixel_edge_is_snapped_and_the_cap_is_exact(monkeypatch):
+    """A bound on a pixel edge that float noise puts a hair past it (14.000000000000004 for 0.1 pixels) does not widen
+    the window by a column; a block that would pass the scan's cap is not rasterized; and a cutline on a pixel edge,
+    thinner than the snap, still turns to the pixels it touches."""
+    import rasterio.features
+
+    shapes, mask = [], rasterio.features.geometry_mask
+
+    def recorded(geoms, out_shape, *a, **k):
+        shapes.append(tuple(out_shape))
+        return mask(geoms, out_shape, *a, **k)
+
+    monkeypatch.setattr(rasterio.features, "geometry_mask", recorded)
+    fine = from_origin(1.0, 52.6, 0.1, 0.1)
+    edge = box(1.0 + 13.6 * 0.1, 52.6 - 0.25, 1.0 + 14 * 0.1, 52.6 - 0.1)
+    assert (~fine * (1.0 + 14 * 0.1, 52.6))[0] != 14  # the noise this guards against
+    assert edit.holds_no_pixel_centre(edge, fine, N, N)
+    assert shapes == [(2, 1)]  # rows 1-2 of column 13, not columns 13-14
+    t = from_origin(0, N, 1, 1)
+    short = box(3.6, N - 10, 3.7, N - 2)  # rows 2 to 9: two blocks of four
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    for cap, held, calls in ((8, True, 2), (6, False, 1)):
+        monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", cap)
+        shapes.clear()
+        assert edit.holds_no_pixel_centre(short, t, N, N) is held
+        assert len(shapes) == calls
+    monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", 1 << 24)
+    assert edit.holds_no_pixel_centre(box(4 - 1e-8, N - 10, 4 + 1e-8, N - 2), t, N, N)
+
+
 # ---------------------------------------------------------------------------
 # the materializers
 # ---------------------------------------------------------------------------

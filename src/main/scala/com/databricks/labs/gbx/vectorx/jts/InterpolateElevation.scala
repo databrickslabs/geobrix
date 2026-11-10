@@ -13,10 +13,11 @@ import scala.jdk.CollectionConverters._
 /** Delaunay triangulation from points and breaklines; interpolates Z at grid points and builds point grids. */
 object InterpolateElevation {
 
-    /** Builds triangulation from multipoint and breaklines, then interpolates Z for each grid point. */
+    /** Builds triangulation from multipoint and breaklines, then interpolates Z for each grid point. Each break
+     *  line geometry is split into parts as [[triangulate]] splits it (see [[prepareSites]]). */
     def interpolate(
         multipoint: MultiPoint,
-        breaklines: Seq[LineString],
+        breaklines: Seq[Geometry],
         gridPoints: MultiPoint,
         mergeTolerance: Double,
         snapTolerance: Double,

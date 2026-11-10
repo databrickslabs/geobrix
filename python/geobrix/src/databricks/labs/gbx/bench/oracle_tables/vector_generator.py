@@ -51,6 +51,12 @@ CENTRES = [(x, y, _z(x, y)) for x in (2.5, 7.5) for y in (2.5, 7.5)]
 CENTRES_4 = [
     (x, y, _z(x, y)) for x in (1.25, 3.75, 6.25, 8.75) for y in (1.25, 3.75, 6.25, 8.75)
 ]
+# Two break lines, as one multi-line, from the square's east corners to x = 20, on the plane.
+MULTILINE_EAST = (
+    f"MULTILINESTRING Z ((10 0 {_z(10, 0)}, 20 0 {_z(20, 0)}), (10 10 {_z(10, 10)}, 20 10 {_z(20, 10)}))"
+)
+# Cell centres of a 4 x 2 grid over (0, 0)-(20, 10).
+CENTRES_EAST = [(x, y, _z(x, y)) for x in (2.5, 7.5, 12.5, 17.5) for y in (2.5, 7.5)]
 M = "MIDPOINT"
 SQUARE_BL = ([R.line(R.SQUARE_LINE)], R.points(R.SQUARE))
 
@@ -309,6 +315,32 @@ VECTOR_GENERATOR = (
         (SQUARE_WKB, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 27700),
         "elev_points",
         CENTRES,
+    ),
+    # A multi-line break line adds each of its lines. Its two lines carry the hull from the square out to x = 20, so
+    # every cell of the 4 x 2 grid has a row (without them half of it is outside, as in the row below).
+    *(
+        Case(
+            f"elevbbox_multiline_breakline_{mode}",
+            EBB,
+            (
+                SQUARE_WKT,
+                [MULTILINE_EAST],
+                0.0,
+                0.0,
+                F,
+                0.0,
+                0.0,
+                20.0,
+                10.0,
+                4,
+                2,
+                0,
+                mode,
+            ),
+            "elev_points",
+            CENTRES_EAST,
+        )
+        for mode in ("constrained", "conforming")
     ),
     # Half of the grid is outside the hull of the points: those cells give no row.
     Case(

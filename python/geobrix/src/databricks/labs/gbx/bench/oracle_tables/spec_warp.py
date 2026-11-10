@@ -12,7 +12,7 @@ import math
 import os
 
 from databricks.labs.gbx._gdal_policy import open_bytes
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, mirror, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -469,29 +469,23 @@ def _uc_clip_row(cid, session_cid, **changes):
     return replace(row, cid=cid, surfaces=("uc",), **changes)
 
 
-# Unity Catalog: a materialized tile gives the session's tile (a reprojection, a resample, a clip); a virtual tile is
-# refused with a Fix, a corrupt one is NULL, a tile with no CRS cannot be reprojected (refused with a Fix), and a result
-# decoded over the cap is refused before it is made.
-SPEC_WARP = share(
-    _session_warp_rows,
-    "transform_3857", "transform_4326", "transform_identity", "transform_gcp", "transform_null_tile",
-    "transform_null_srid", "transform_error_in",
-    "webmercator_nearest", "webmercator_default", "webmercator_bad_word", "webmercator_bad_word_identity",
-    "webmercator_null_tile", "webmercator_null_tile_bad_word", "webmercator_error_in",
-    "resample_half", "resample_double", "resample_average_half", "resample_word_case", "resample_zero",
-    "resample_negative", "resample_bad_algorithm", "resample_cubicspline", "resample_gauss", "resample_null_tile",
-    "resample_null_factor", "resample_error_in", "resample_error_tile_passes_bad_word",
-    "resample_to_size", "resample_to_size_zero", "resample_to_size_null",
-    "resample_to_res", "resample_to_res_zero", "resample_to_res_null",
-    "clip_half", "clip_half_pixels", "clip_all_touched", "clip_tiny_keeps_a_pixel", "clip_outside_is_the_fallback_nodata",
-    "clip_outside_is_the_source_nodata", "clip_no_overlap", "clip_null_tile", "clip_null_geom",
-    "clip_null_flag", "clip_error_in",
+# Unity Catalog: the reprojections and resamples run the session's engine call on UC too (engine.uc), so each session
+# row runs there with the session's value; clip (no engine row) shares its rows by name. A virtual tile is refused with a
+# Fix, a corrupt one or one with no CRS to reproject from is NULL (an error tile in the session), a CRS form UC does not
+# take is refused, and so is a result decoded over the UC cap, before it is made.
+SPEC_WARP = mirror(
+    share(
+        _session_warp_rows,
+        "clip_half", "clip_half_pixels", "clip_all_touched", "clip_tiny_keeps_a_pixel",
+        "clip_outside_is_the_fallback_nodata", "clip_outside_is_the_source_nodata", "clip_no_overlap", "clip_null_tile",
+        "clip_null_geom", "clip_null_flag", "clip_error_in",
+    ),
+    null=("transform_no_crs", "transform_corrupt", "webmercator_no_crs", "resample_corrupt"),
+    refused=("transform_bad_srid", "resample_upsample_over_budget"),
 ) + edges(
     transform=(3857,), to_webmercator=(), resample=(0.5,), resample_to_size=(10, 20), resample_to_res=(0.02, 0.02),
     clip=(LEFT_HALF, False),
 ) + (
-    Case("uc_transform_no_crs_refused", TR, (Build("tile_nocrs"), 3857), "uc_refused", None, ("uc",)),
-    Case("uc_webmercator_no_crs_refused", WM, (Build("tile_nocrs"),), "uc_refused", None, ("uc",)),
     # a result decoded over the cap is refused before its pixels are made: 20000 x 20000 float32 is 1.5 GiB
     Case("uc_resample_to_size_result_over_cap", RSZ, (T4326, 20000, 20000), "uc_refused", None, ("uc",)),
     Case("uc_resample_result_over_cap", RS, (T4326, 1000.0), "uc_refused", None, ("uc",)),

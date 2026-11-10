@@ -9,9 +9,8 @@ pixel is NoData when its 3 x 3 window holds NoData or crosses the border. The fi
 """
 
 import os
-from dataclasses import replace
 
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, mirror
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -478,8 +477,7 @@ _session_dem_rows += (
     # `contour_dem_hole` holds the levels against the reference (which would agree with a leak that is in both).
     Case("contour_dem_hole_no_line", CT, (DEM, [90.0]), "contours", {}, ONLY),
     # The lines against GDAL's older `gdal.ContourGenerateEx` (an entry point apart from `raster contour`), which draws
-    # the same lines: exact. The earlier scikit-image lines, still the Unity Catalog kernel's, are equivalent to them:
-    # the same levels and line counts, within half a pixel, each up to a pixel shorter (see check_features_ref).
+    # the same lines: exact.
     *(
         Case(cid, CT, args, "features_ref", "exact", ONLY)
         for cid, args in _REF_ARGS.items()
@@ -487,34 +485,11 @@ _session_dem_rows += (
 )
 
 
-# Unity Catalog: the surface of a materialized DEM tile is the session's; a virtual tile is refused with a Fix, a
-# corrupt one is NULL, and a unit that is not degrees or percent is a wrong argument (the session raises too).
-SPEC_DEM = share(
-    _session_dem_rows,
-    "slope_example", "aspect_compass", "aspect_trig", "aspect_plane_east", "aspect_flat_nodata", "aspect_flat_zero",
-    "aspect_null_param", "aspect_null_tile", "aspect_error_tile",
-    "hillshade_default", "hillshade_params", "hillshade_scales", "hillshade_sql_defaults", "hillshade_half_scale",
-    "hillshade_null_param", "tri", "tri_null_tile", "tri_error_tile", "tpi", "roughness",
-    "contour_levels", "contour_interval", "contour_null_tile", "contour_error_tile", "contour_corrupt",
-    "contour_levels_win", "contour_levels_unsorted", "contour_levels_duplicate", "contour_levels_null_element",
-    "contour_level_exact", "contour_interval_exact",
-    "contour_levels_none_cross", "contour_nodata_sentinel", "contour_nodata_declared", "contour_all_nodata",
-    "contour_no_interval", "contour_null_interval", "contour_nonfinite_interval", "contour_nonfinite_level",
-    "contour_blank_attr",
-) + tuple(
-    replace(c, cid=f"uc_{c.cid}", expect="equivalent", surfaces=("uc",))
-    for c in _session_dem_rows
-    if c.kind == "features_ref" and c.args[0] is not VIRT
+# Unity Catalog: every function here runs the session's engine call on UC too (engine.uc), so each session row runs there
+# with the session's value. A virtual tile is refused with a Fix and a corrupt one is NULL (the edges rows).
+SPEC_DEM = mirror(
+    _session_dem_rows, null=("aspect_corrupt", "color_relief_corrupt")
 ) + edges(
     slope=("degrees",), aspect=(False, False), hillshade=(315.0, 45.0, 1.0), tpi=(), tri=(), roughness=(),
-    contour=([1.5],),
-) + (
-    Case("uc_slope_percent", SL, (DEM, "percent"), "ref", "slope", ("uc",)),
-    Case("uc_slope_percent_cased", SL, (DEM, "Percent"), "ref", "slope", ("uc",)),
-    Case("uc_slope_scales", SL, (DEM, "degrees", 2.0, 0.5), "ref", "slope", ("uc",)),
-    Case("uc_slope_half_scale", SL, (DEM, "degrees", 2.0, None), "raises", "xscale and yscale must be supplied together", ("uc",)),
-    Case("uc_slope_bad_unit", SL, (DEM, "radians"), "uc_refused", None, ("uc",)),
-    Case("uc_slope_null_unit", SL, (DEM, None), "null", None, ("uc",)),
-    Case("uc_slope_null_tile", SL, (None, "degrees"), "null", None, ("uc",)),
-    Case("uc_slope_error_tile", SL, (ERR, "radians"), "error_tile", UPSTREAM_ERROR, ("uc",)),
+    contour=([1.5],), color_relief=(_RGB,),
 )  # fmt: skip

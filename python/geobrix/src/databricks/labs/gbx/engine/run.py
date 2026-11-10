@@ -43,7 +43,12 @@ from typing import Iterable, Mapping, Optional, Sequence
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import argv as argv_mod
 from databricks.labs.gbx.engine import command as command_mod
-from databricks.labs.gbx.engine.spec import DataError, ParamError, output_format
+from databricks.labs.gbx.engine.spec import (
+    DataError,
+    OverCap,
+    ParamError,
+    output_format,
+)
 
 PREFIX = "/vsimem/gbx-spec"
 _TIFF_MAGIC = (
@@ -97,6 +102,8 @@ class Result:
     features: Optional[Iterable] = None
     # a JSON output: GDAL's text, with the engine's /vsimem names shown as <input>
     text: Optional[str] = None
+    # the failure is the call over the decoded size this compute holds (``spec.OverCap``), not the data
+    over_cap: bool = False
 
 
 @functools.lru_cache(maxsize=1)
@@ -1666,23 +1673,23 @@ def _pipe_start(gdal, sql_name: str, name: str, props, drivers):
         ds = None
 
 
-def _judge_read_cap(fn, sizes) -> None:
-    """DataError (with a Fix) when an input the engine holds is decoded over the read cap: the cap of every tile read from
-    bytes (light's ``_serde.open_tile``), judged from its header. A ``PathSource`` holds nothing (size 0): GDAL reads it
-    block by block, so only the decoded budget (``_judge_budget``) judges it, by its output.
+def _judge_read_cap(fn, sizes, cap: Optional[int] = None) -> None:
+    """OverCap (with a Fix) when an input the engine holds is decoded over the read cap: the cap of every tile read from
+    bytes (light's ``_serde.open_tile``), judged from its header; ``cap`` replaces this compute's. A ``PathSource`` holds
+    nothing (size 0): GDAL reads it block by block, so only the decoded budget (``_judge_budget``) judges it, by its output.
     """
     from databricks.labs.gbx.pyrx.core.budget import read_cap_refusal, tile_read_cap
 
-    cap = tile_read_cap()
+    cap = tile_read_cap() if cap is None else cap
     for size in sizes:
         if size > cap:
-            raise DataError(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
+            raise OverCap(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
 
 
 def _judge_budget(
     gdal, fn, tokens, props, names, sources, drivers, decoded, budget
 ) -> None:
-    """DataError (with a Fix) unless the call's inputs and its estimated output fit the decoded budget at once (spec
+    """OverCap (with a Fix) unless the call's inputs and its estimated output fit the decoded budget at once (spec
     4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header. A command is judged
     by the largest state any of its steps leaves (``argv.pipeline_peak``): each step is sized from the one before it.
     """
@@ -1717,7 +1724,7 @@ def _judge_budget(
             )
         need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
     if budget and need > budget:
-        raise DataError(
+        raise OverCap(
             f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
             f"compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile), or ask for a "
             "smaller output"
@@ -1725,13 +1732,20 @@ def _judge_budget(
 
 
 def run(
-    fn, rasters: Sequence[bytes], values: Mapping, section=None, src_sizes=None
+    fn,
+    rasters: Sequence[bytes],
+    values: Mapping,
+    section=None,
+    src_sizes=None,
+    cap: Optional[int] = None,
 ) -> Optional[Result]:
     """One call of `fn`'s spec over `rasters` (raster bytes: GeoTIFF, or another driver GeoBrix reads, translated
     first) with `values` (param -> value): its Result, or
     None for a NULL result. Raises ParamError for a value the function refuses. `section` is the allowlist
     (default the manifest's `gdal` section). `src_sizes` is one ``(width, height)`` or None per raster: the
     window's own size where the raster is a decimated read of it, which a size taken from a factor is a share of.
+    `cap` is the decoded size each input and the whole call (inputs and estimated output) may hold, in place of this
+    compute's read cap and budget (a Unity Catalog function's, ``engine.uc``); over it the Result has ``over_cap``.
     """
     apply_driver_policy()
     block = fn.gdal
@@ -1752,9 +1766,9 @@ def run(
                 gdal, fn, rasters, names, prefix, shown, section, src_sizes
             )
             sizes = _held_sizes(rasters, props)
-            _judge_read_cap(fn, sizes)
+            _judge_read_cap(fn, sizes, cap)
             decoded = sum(sizes)
-            budget = decoded_budget()
+            budget = decoded_budget() if cap is None else cap
             # the texts of the call's text arguments (a color table) are files of their own under the prefix
             texts = argv_mod.text_values(fn, values)
             text_names = [f"{prefix}/arg_{k}.txt" for k in range(len(texts))]
@@ -1904,6 +1918,11 @@ def run(
                 )
             return Result(_read(gdal, out), None, command)
         except DataError as exc:
-            return Result(None, _shown(str(exc), shown), command)
+            return Result(
+                None,
+                _shown(str(exc), shown),
+                command,
+                over_cap=isinstance(exc, OverCap),
+            )
         finally:
             _cleanup(gdal, prefix, scratch)

@@ -520,6 +520,9 @@ UC_ROWS = [
 
 @pytest.mark.parametrize("table,sql_name", UC_ROWS)
 def test_family_oracle_uc_handlers(tmp_path, table, sql_name):
+    why = oracles.engine_missing(sql_name)
+    if why:
+        pytest.skip(f"{sql_name} runs the GDAL spec engine on UC: {why}")
     cases = [c for c in oracles.TABLES[table] if c.fn == sql_name]
     fn = manifest.load().functions[sql_name]
     run = (

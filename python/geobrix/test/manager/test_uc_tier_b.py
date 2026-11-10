@@ -69,7 +69,7 @@ def test_a_header_function_answers_a_tile_over_the_cap_and_a_pixel_function_refu
     assert tier_b.HANDLERS["gbx_rst_metadata"](tile)["width"] == "64"
     assert tier_b.HANDLERS["gbx_rst_bandmetadata"](tile, 1) is not None
     assert tier_b.HANDLERS["gbx_rst_boundingbox"](tile)
-    for name in ("gbx_rst_avg", "gbx_rst_summary", "gbx_rst_isempty"):
+    for name in ("gbx_rst_avg", "gbx_rst_median", "gbx_rst_isempty"):
         with pytest.raises(ValueError, match=r"the tile is 12 KiB decoded, over the"):
             tier_b.HANDLERS[name](tile)
     assert tier_b.HANDLERS["gbx_rst_tryopen"](_built("tile_corrupt", tmp_path)) is False
@@ -155,22 +155,6 @@ def test_a_tile_function_returns_the_dict_tile_with_the_srid_and_the_header_meta
     }
 
 
-def test_transformcrs_builds_its_tile_like_the_other_tile_functions(tmp_path):
-    from rasterio.io import MemoryFile
-
-    from databricks.labs.gbx.uc import handlers
-
-    out = handlers.rst_transformcrs(_tile(tmp_path), "EPSG:3857")
-    assert set(out) == TILE_KEYS and out["crs"] == "3857"
-    with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
-        assert out["metadata"] == {
-            "driver": "GTiff",
-            "width": str(ds.width),
-            "height": str(ds.height),
-            "count": str(ds.count),
-        }
-
-
 def test_an_error_tile_goes_through_a_tile_function_unchanged_whatever_the_arguments_are():
     err = {
         "cellid": 7,
@@ -178,7 +162,10 @@ def test_an_error_tile_goes_through_a_tile_function_unchanged_whatever_the_argum
         "path": None,
         "metadata": {"last_error": "upstream"},
     }
-    for name, args in (("gbx_rst_setsrid", (-1,)), ("gbx_rst_resample", (0.0, "sinc"))):
+    for name, args in (
+        ("gbx_rst_setsrid", (-1,)),
+        ("gbx_rst_updatetype", ("NoSuchType",)),
+    ):
         out = tier_b.HANDLERS[name](err, *args)
         assert set(out) == TILE_KEYS and out["raster"] is None and out["cellid"] == 7
         assert out["metadata"] == {"last_error": "upstream"}
@@ -247,7 +234,6 @@ def test_the_cell_id_of_an_array_result_is_the_sessions_rule_for_each_function(
     assert tier_b.HANDLERS["gbx_rst_combinesum"](differ)["cellid"] == -1
     assert tier_b.HANDLERS["gbx_rst_frombands"](differ)["cellid"] == 7
     assert tier_b.HANDLERS["gbx_rst_merge"](same)["cellid"] == 0
-    assert tier_b.HANDLERS["gbx_rst_mapalgebra"](differ, "A + B")["cellid"] == 7
 
 
 def test_a_null_array_or_expression_is_null_and_an_array_of_error_tiles_answers_the_first(
@@ -258,10 +244,6 @@ def test_a_null_array_or_expression_is_null_and_an_array_of_error_tiles_answers_
         assert tier_b.HANDLERS[name](None) is None and tier_b.HANDLERS[name]([]) is None
         assert tier_b.HANDLERS[name]([None, None]) is None
         assert tier_b.HANDLERS[name]([None, err])["metadata"] == {"last_error": "x"}
-    assert (
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](_built("aa_stack", tmp_path), None)
-        is None
-    )
 
 
 @pytest.mark.parametrize(
@@ -296,8 +278,6 @@ def test_members_and_result_together_over_the_cap_are_refused_before_a_pixel_is_
     with pytest.raises(ValueError, match=r"together over the 0 KiB.*Fix: ") as err:
         tier_b.HANDLERS["gbx_rst_combineavg"](stack)
     assert "combine_by_key(" in str(err.value)
-    with pytest.raises(ValueError, match=r"together over the 0 KiB.*Fix: "):
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](stack, "A + B")
 
 
 def test_a_mosaic_of_tiles_in_two_crs_over_the_cap_names_the_grid_steps_before_the_vrt(
@@ -322,39 +302,6 @@ def test_a_mosaic_the_sandbox_would_have_to_stream_is_refused_with_the_vrt_route
     ) as err:
         tier_b.HANDLERS["gbx_rst_merge"](_built("quad_tiles", tmp_path))
     assert "Fix: " in str(err.value)
-
-
-def test_a_bad_map_algebra_expression_raises_and_a_virtual_member_refuses_the_array(
-    tmp_path,
-):
-    stack = _built("aa_stack", tmp_path)
-    with pytest.raises(
-        ValueError, match=r"gbx_rst_mapalgebra: .*cannot be evaluated.*Fix: "
-    ):
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](stack, "A + Z")
-    with pytest.raises(
-        ValueError, match=r"gbx_rst_mapalgebra: .*A_index=9 is out of range"
-    ):
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](stack, '{"calc": "A", "A_index": 9}')
-
-
-def test_map_algebra_computes_over_a_good_tile_that_carries_a_skipped_member_note(
-    tmp_path,
-):
-    a, b, _ = _built("aa_stack", tmp_path)
-    noted = {
-        **a,
-        "metadata": {
-            "last_error": "gbx_rst_combineavg: skipped 1 corrupt input tile(s)"
-        },
-    }
-    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([noted, b], "A + B")
-    assert out["raster"] is not None and out["metadata"]["driver"] == "GTiff"
-    err = {"cellid": 0, "raster": None, "path": None, "metadata": {"last_error": "up"}}
-    assert (
-        tier_b.HANDLERS["gbx_rst_mapalgebra"]([noted, err, b], "A + B")["raster"]
-        is None
-    )
 
 
 def test_a_mosaic_whose_size_cannot_be_worked_out_is_refused_not_assumed_to_be_its_largest_member(
@@ -541,14 +488,8 @@ def test_a_constructor_tile_is_built_like_every_other_uc_tile():
 
 
 # --- raster to vector --------------------------------------------------------------------------------------------------
-def test_contour_and_isoband_return_dict_rows_of_little_endian_wkb(tmp_path):
+def test_isoband_returns_dict_rows_of_little_endian_wkb(tmp_path):
     tile = _built("vz_columns", tmp_path)
-    lines = tier_b.HANDLERS["gbx_rst_contour"](tile, [1.5], 0.0, 0.0, "elev")
-    assert (
-        lines
-        and set(lines[0]) == {"geom_wkb", "value"}
-        and lines[0]["geom_wkb"][0] == 1
-    )
     patches = tier_b.HANDLERS["gbx_rst_isoband"](tile, [0.0, 2.0])
     assert patches and set(patches[0]) == {"geom_wkb", "band", "lower", "upper"}
     assert patches[0]["geom_wkb"][0] == 1 and patches[0]["band"] == 0
@@ -575,9 +516,7 @@ def test_a_vector_result_over_the_cap_is_refused_not_truncated(tmp_path, monkeyp
         ValueError,
         match=r"the result is 0 KiB of geometry, over the 0 KiB.*Fix: trace fewer levels",
     ):
-        tier_b.HANDLERS["gbx_rst_contour"](
-            tile, [0.5, 1.5, 2.5, 3.5, 4.5], 0.0, 0.0, "elev"
-        )
+        tier_b.HANDLERS["gbx_rst_isoband"](tile, [0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
 
 
 # --- from bytes, and to an image ---------------------------------------------------------------------------------------
@@ -681,18 +620,6 @@ def test_a_percentile_statistic_that_is_not_a_number_from_0_to_100_raises_with_a
     assert out["raster"] is not None
 
 
-def test_the_grid_checked_for_a_resample_to_res_is_the_grid_the_kernel_makes(tmp_path):
-    from rasterio.io import MemoryFile
-
-    tile = _tile(tmp_path)
-    with MemoryFile(tile["raster"]) as mf, mf.open() as ds:
-        left, bottom, right, top = ds.bounds
-        x_res, y_res = (right - left) / 2.6, (top - bottom) / 3.7  # 2.6 -> 3, 3.7 -> 4
-        assert tier_b._res_size(ds, x_res, y_res, "bilinear") == (3, 4)
-    out = tier_b.HANDLERS["gbx_rst_resample_to_res"](tile, x_res, y_res, "bilinear")
-    assert (out["metadata"]["width"], out["metadata"]["height"]) == ("3", "4")
-
-
 def test_tilexyz_lets_a_failure_of_the_render_raise_and_answers_an_image_only_for_a_tile_that_does_not_open(
     tmp_path, monkeypatch
 ):
@@ -728,10 +655,6 @@ WAREHOUSE_EMPTY_TILE = {
 ERROR_CALLS = (
     ("gbx_rst_setsrid", (3857,)),
     ("gbx_rst_updatetype", ("Int32",)),
-    ("gbx_rst_resample", (0.5, "bilinear")),
-    ("gbx_rst_transform", (3857,)),
-    ("gbx_rst_ndvi", (1, 2)),
-    ("gbx_rst_slope", ("degrees",)),
     ("gbx_rst_proximity", ([1.0], "PIXEL")),
 )
 
@@ -768,22 +691,3 @@ def test_an_error_tile_is_known_by_its_reason_in_every_form_a_map_arrives_in(md)
     assert tier_b.HANDLERS["gbx_rst_merge"]([err])["metadata"] == {
         "last_error": "upstream"
     }
-
-
-def test_an_error_tile_passes_through_map_algebra_before_its_expression_is_read(
-    tmp_path,
-):
-    """An expression numexpr cannot evaluate is a wrong argument over real tiles; over an error tile the error
-    goes through first, as it does in a session.
-    """
-    expression = "A +* 2"
-    err = {**WAREHOUSE_EMPTY_TILE, "metadata": {"last_error": "upstream"}}
-    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([err, err], expression)
-    assert out["raster"] is None and out["metadata"] == {"last_error": "upstream"}
-    assert (
-        tier_b.HANDLERS["gbx_rst_mapalgebra"]([WAREHOUSE_EMPTY_TILE] * 2, expression)
-        is None
-    )
-    pair = _built("se_pair", tmp_path)
-    with pytest.raises(ValueError, match="cannot be evaluated"):
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](pair, expression)

@@ -5,7 +5,7 @@ The expected values come from the fixtures' definitions (see raster_accessor.py)
 first pixel NoData has the valid values 2..12, so its minimum is 2, its maximum 12 and its mean 7.
 """
 
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, mirror, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -786,17 +786,23 @@ SPEC_ANALYSIS += (
     ),
 )
 
-# Unity Catalog: the fill and the proximity of a materialized tile are the session's; the summary's NULL rows are too. The
-# summary's JSON stays the earlier numpy shape on Unity Catalog until its handler runs the engine, so its JSON rows are the
-# session's alone
-SPEC_ANALYSIS = (
+# Unity Catalog: the summary, the fill, the viewshed and polygonize run the session's engine call on UC too (engine.uc),
+# so each of their session rows runs there with the session's value; proximity (no engine row) shares its rows by name. A
+# virtual tile is refused with a Fix and a corrupt one is NULL (an error tile in the session, no rows for polygonize).
+# The viewshed's observer is a GEOMETRY on UC (WKB bytes are no GEOMETRY there), and its `crs` takes an SRID, EPSG:<n>
+# or ESRI:<n>: another form is refused with a Fix.
+SPEC_ANALYSIS = mirror(
     share(
-        SPEC_ANALYSIS, "summary_null_tile", "summary_error_tile",
-        "fillnodata_default", "fillnodata_short_search", "fillnodata_smoothed", "fillnodata_null_tile",
-        "fillnodata_null_distance", "fillnodata_error_in",
+        SPEC_ANALYSIS,
         "proximity_targets", "proximity_default_sources", "proximity_pixel_capped", "proximity_bad_units",
         "proximity_bad_cap", "proximity_null_tile", "proximity_null_units", "proximity_null_cap", "proximity_nan_cap",
         "proximity_error_in",
-    )
-    + edges(summary=(), fillnodata=(), proximity=("1",))
+    ),
+    null=("fillnodata_corrupt", "viewshed_outside_dem_out_of_reach", "viewshed_corrupt"),
+    refused=("viewshed_bad_crs",),
+) + edges(
+    summary=(), fillnodata=(), proximity=("1",), viewshed=(OBSERVER, 2.0),
+) + (
+    Case("uc_polygonize_virtual_refused", PG, (VIRT,), "uc_refused", None, ("uc",)),
+    Case("uc_polygonize_corrupt_no_rows", PG, (CORRUPT,), "no_rows", None, ("uc",)),
 )  # fmt: skip

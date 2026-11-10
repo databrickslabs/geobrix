@@ -244,7 +244,6 @@ rst_max = _scalar("gbx_rst_max", "accessors", "maximum")
 rst_median = _scalar("gbx_rst_median", "accessors", "median")
 rst_pixelcount = _scalar("gbx_rst_pixelcount", "accessors", "pixelcount")
 rst_stats_partial = _scalar("gbx_rst_stats_partial", "accessors", "stats_partial")
-rst_summary = _scalar("gbx_rst_summary", "accessors", "summary")
 # an error tile has no valid pixel: it is empty
 rst_isempty = _scalar("gbx_rst_isempty", "accessors", "isempty", on_empty=True)
 
@@ -491,64 +490,7 @@ def _check(module: str, attr: str, *names: str) -> Callable:
     return run
 
 
-# --- warp and edit: tile to tile ------------------------------------------------------------------------------------
-def _no_crs_refusal(fn: str) -> _Refusal:
-    return _Refusal(
-        f"{fn}: the tile has no CRS, so it cannot be reprojected. Fix: set its CRS first with gbx_rst_setcrs"
-    )
-
-
-def _reproject(fn: str, ds, crs: str, resampling: str = "nearest"):
-    """The tile reprojected to the CRS ``crs`` (an authority code). A tile with no CRS is refused (nothing to
-    reproject from); a result grid over the cap is refused before the pixels are made.
-    """
-    from databricks.labs.gbx.pyrx.core import warp
-
-    if warp.source_crs(ds) is None:
-        raise _no_crs_refusal(fn)
-    width, height = warp.target_grid(ds, crs)
-    check_grows(fn, width, height, ds.dtypes[:1] * ds.count)
-    return warp.reproject_to_crs(ds, crs, resampling=resampling)
-
-
-def rst_transform(tile, srid):
-    """gbx_rst_transform: the tile reprojected to a CRS given as an SRID integer (an EPSG or ESRI code)."""
-    from databricks.labs.gbx.core.crs import parse_uc_crs
-
-    fn = "gbx_rst_transform"
-    if tile is None or srid is None:
-        return None
-    done, early = gate(fn, tile)
-    if done:
-        return early
-    crs = parse_uc_crs(srid, fn=fn)
-    return with_tile(fn, tile, lambda ds: _reproject(fn, ds, crs.code))
-
-
-HANDLERS["gbx_rst_transform"] = rst_transform
-
-
-def rst_to_webmercator(tile, resampling):
-    """gbx_rst_to_webmercator: the tile reprojected to EPSG:3857, with the resampling word given."""
-    from databricks.labs.gbx.pyrx.core._util import resampling_enum
-
-    fn = "gbx_rst_to_webmercator"
-    if tile is None or resampling is None:
-        return None
-    done, early = gate(fn, tile)
-    if done:
-        return early
-    resampling_enum(
-        str(resampling)
-    )  # a word that names no resampling raises, also for a tile already in 3857
-    return with_tile(
-        fn, tile, lambda ds: _reproject(fn, ds, "EPSG:3857", str(resampling))
-    )
-
-
-HANDLERS["gbx_rst_to_webmercator"] = rst_to_webmercator
-
-
+# --- edit: tile to tile ---------------------------------------------------------------------------------------------
 def rst_setsrid(tile, srid):
     """gbx_rst_setsrid: stamp the CRS from an SRID integer without reprojecting; 0 clears it."""
     from databricks.labs.gbx.core.crs import parse_uc_crs
@@ -585,49 +527,6 @@ def rst_setcrs(tile, crs):
 
 
 HANDLERS["gbx_rst_setcrs"] = rst_setcrs
-
-
-def _grid_of(size: Callable) -> Callable:
-    """A ``grows`` hint from ``size(ds, *args) -> (width, height)``: the grid has the tile's bands and types."""
-
-    def grows(ds, *args):
-        width, height = size(ds, *args)
-        return max(1, int(width)), max(1, int(height)), ds.dtypes
-
-    return grows
-
-
-rst_resample = _tile_fn(
-    "gbx_rst_resample",
-    "resample",
-    "resample_by_factor",
-    check=_check("resample", "check_by_factor", "factor", "algorithm"),
-    grows=_grid_of(
-        lambda ds, f, a: (round(ds.width * float(f)), round(ds.height * float(f)))
-    ),
-)
-rst_resample_to_size = _tile_fn(
-    "gbx_rst_resample_to_size",
-    "resample",
-    "resample_to_size",
-    check=_check("resample", "check_to_size", "width_px", "height_px", "algorithm"),
-    grows=_grid_of(lambda ds, w, h, a: (w, h)),
-)
-
-
-def _res_size(ds, x_res, y_res, algorithm):
-    left, bottom, right, top = ds.bounds
-    # rounded as resample.resample_to_res rounds, so the grid checked is the grid made
-    return round((right - left) / float(x_res)), round((top - bottom) / float(y_res))
-
-
-rst_resample_to_res = _tile_fn(
-    "gbx_rst_resample_to_res",
-    "resample",
-    "resample_to_res",
-    check=_check("resample", "check_to_res", "x_res", "y_res", "algorithm"),
-    grows=_grid_of(_res_size),
-)
 
 
 def rst_clip(tile, geom, cutline_all_touched, clip_crs):
@@ -672,12 +571,6 @@ rst_updatetype = _tile_fn(
     grows=_type_grid,
 )
 rst_initnodata = _tile_fn("gbx_rst_initnodata", "edit", "init_nodata")
-rst_threshold = _tile_fn(
-    "gbx_rst_threshold",
-    "edit",
-    "threshold",
-    check=lambda op, value: _kernel("edit", "check_threshold_op")(op),
-)
 
 
 def rst_band(tile, band_index):
@@ -872,147 +765,15 @@ rst_filter = _tile_fn(
 rst_convolve = _tile_fn(
     "gbx_rst_convolve", "focal", "convolve", check=_check("focal", "check_kernel")
 )
-rst_fillnodata = _tile_fn("gbx_rst_fillnodata", "features", "fill_nodata")
-
-
-# --- terrain: a DEM tile to a surface tile -------------------------------------------------------------------------
-def _slope_args(unit, xscale, yscale):
-    """The wrong arguments of gbx_rst_slope: a unit that is not degrees or percent, one scale without the other."""
-    try:
-        _kernel("terrain", "normalize_slope_unit")(unit)
-    except ValueError as exc:
-        raise _Parameter(str(exc)) from exc
-    if (xscale is None) != (yscale is None):
-        raise _Parameter(_kernel("terrain", "SLOPE_HALF_SCALE_REFUSAL"))
-
-
-def _hillshade_args(azimuth, altitude, z_factor, xscale, yscale):
-    if (xscale is None) != (yscale is None):
-        raise _Parameter(_kernel("terrain", "HILLSHADE_HALF_SCALE_REFUSAL"))
 
 
 def _surface(dtype: str) -> Callable:
-    """A ``grows`` hint: a terrain result is one band of ``dtype`` on the tile's grid."""
+    """A ``grows`` hint: a result of one band of ``dtype`` on the tile's grid."""
     return lambda ds, *args: (ds.width, ds.height, [dtype])
 
 
 def _optional_float(*values):
     return tuple(None if v is None else float(v) for v in values)
-
-
-rst_slope = _tile_fn(
-    "gbx_rst_slope",
-    "terrain",
-    "slope",
-    optional=(1, 2),
-    check=_slope_args,
-    cast=lambda unit, xscale, yscale: (str(unit), *_optional_float(xscale, yscale)),
-    grows=_surface("float32"),
-)
-rst_aspect = _tile_fn(
-    "gbx_rst_aspect",
-    "terrain",
-    "aspect",
-    cast=lambda trigonometric, zero_for_flat: (
-        bool(trigonometric),
-        bool(zero_for_flat),
-    ),
-    grows=_surface("float32"),
-)
-rst_hillshade = _tile_fn(
-    "gbx_rst_hillshade",
-    "terrain",
-    "hillshade",
-    optional=(3, 4),
-    check=_hillshade_args,
-    cast=lambda azimuth, altitude, z_factor, xscale, yscale: (
-        float(azimuth),
-        float(altitude),
-        float(z_factor),
-        *_optional_float(xscale, yscale),
-    ),
-    grows=_surface("uint8"),
-)
-rst_tpi = _tile_fn("gbx_rst_tpi", "terrain", "tpi", grows=_surface("float32"))
-rst_tri = _tile_fn("gbx_rst_tri", "terrain", "tri", grows=_surface("float32"))
-rst_roughness = _tile_fn(
-    "gbx_rst_roughness", "terrain", "roughness", grows=_surface("float32")
-)
-
-
-# --- spectral indices: bands to one index band -----------------------------------------------------------------------
-rst_ndvi = _tile_fn(
-    "gbx_rst_ndvi",
-    "indices",
-    "ndvi",
-    cast=lambda red, nir: (int(red), int(nir)),
-    bands={"red_idx": 0, "nir_idx": 1},
-    grows=_surface("float32"),
-)
-rst_ndwi = _tile_fn(
-    "gbx_rst_ndwi",
-    "indices",
-    "ndwi",
-    cast=lambda green, nir: (int(green), int(nir)),
-    bands={"green_idx": 0, "nir_idx": 1},
-    grows=_surface("float32"),
-)
-rst_nbr = _tile_fn(
-    "gbx_rst_nbr",
-    "indices",
-    "nbr",
-    cast=lambda nir, swir: (int(nir), int(swir)),
-    bands={"nir_idx": 0, "swir_idx": 1},
-    grows=_surface("float32"),
-)
-rst_savi = _tile_fn(
-    "gbx_rst_savi",
-    "indices",
-    "savi",
-    cast=lambda red, nir, l_val: (int(red), int(nir), float(l_val)),
-    bands={"red_idx": 0, "nir_idx": 1},
-    grows=_surface("float32"),
-)
-rst_evi = _tile_fn(
-    "gbx_rst_evi",
-    "indices",
-    "evi",
-    cast=lambda red, nir, blue, l_val, c1, c2, g: (
-        int(red),
-        int(nir),
-        int(blue),
-        float(l_val),
-        float(c1),
-        float(c2),
-        float(g),
-    ),
-    bands={"red_idx": 0, "nir_idx": 1, "blue_idx": 2},
-    grows=_surface("float32"),
-)
-
-
-def rst_index(tile, formula_name, band_map):
-    """gbx_rst_index: a built-in index (ndvi, msavi, ...) from the bands named in `band_map`, one Float32 band."""
-    fn = "gbx_rst_index"
-    if tile is None or formula_name is None or band_map is None:
-        return None
-    done, early = gate(fn, tile)
-    if done:
-        return early
-    key, mapped = _kernel("indices", "check_index")(formula_name, band_map)
-    needed = {
-        f"band_map['{b}']": mapped[b] for b in _kernel("indices", "formula_bands")(key)
-    }
-
-    def kernel(ds):
-        check_bands(fn, ds, needed)
-        check_grows(fn, *_surface("float32")(ds))
-        return _kernel("indices", "index")(ds, str(formula_name), dict(band_map))
-
-    return with_tile(fn, tile, kernel)
-
-
-HANDLERS["gbx_rst_index"] = rst_index
 
 
 # --- other tile to tile ------------------------------------------------------------------------------------------
@@ -1111,7 +872,7 @@ rst_proximity = _tile_fn(
 )
 
 
-# --- an ARRAY of tiles: combine, merge, frombands, mapalgebra -------------------------------------------------------
+# --- an ARRAY of tiles: combine, merge, frombands -----------------------------------------------------------------
 # The session rules for the members of an array (pyrx.core.arrays): a NULL element is skipped, an error tile or a tile
 # that cannot be read is skipped and counted in the result's `last_error`, an array of nothing but error tiles answers
 # the first of them, and an array with no usable member is NULL. UC adds what a sandbox needs: a virtual member refuses
@@ -1329,45 +1090,6 @@ def rst_merge(tiles):
 
 
 HANDLERS["gbx_rst_merge"] = rst_merge
-
-
-def rst_mapalgebra(tiles, expression):
-    """gbx_rst_mapalgebra: an expression over band 1 of each tile (A, B, C, ... in array order), or the bands a JSON spec
-    names, as a Float32 tile on the first tile's grid. The expression is evaluated by numexpr (math only). An error
-    member goes through; a member that cannot be read is NULL (every member is needed).
-    """
-    fn = "gbx_rst_mapalgebra"
-    if tiles is None or expression is None:
-        return None
-    members, done, value = array_members(fn, tiles)
-    if done:
-        return value
-    errors = [error_row(t) for t in tiles if t is not None and _is_error_tile(t)]
-    if errors:
-        return _kernel("arrays", "first_error")(errors)
-    try:
-        _kernel("mapalgebra", "check_expression")(expression, len(members))
-    except ValueError as exc:
-        raise _Parameter(f"{fn}: {exc}") from exc
-    rasters = [r for _, r in members]
-    agg = _agg()
-    try:
-        hdrs = agg._scan_headers(rasters)
-    except Exception:  # noqa: BLE001 - a member that cannot be read: the call is NULL
-        return None
-    check_array_cap(
-        fn,
-        hdrs,
-        grid_bytes(hdrs[0].width, hdrs[0].height, ["float32"]),
-        *_session_fix(fn)(hdrs),
-    )
-    made = run_array_kernel(
-        fn, lambda: _kernel("mapalgebra", "mapalgebra")(rasters, str(expression))
-    )
-    return array_row(fn, made, _cellid(tiles[0]))
-
-
-HANDLERS["gbx_rst_mapalgebra"] = rst_mapalgebra
 
 
 # --- constructors: geometries or points to a tile (no input tile) ------------------------------------------------------
@@ -1752,33 +1474,6 @@ def check_rows(fn: str, rows) -> None:
             f"function returns. Fix: trace fewer levels or bands, clip the tile first (gbx_rst_clip), or run {fn} in "
             "a notebook or job session"
         )
-
-
-def rst_contour(tile, levels, interval, base, attr_field):
-    """gbx_rst_contour: the contour lines of band 1 as `{geom_wkb, value}` (a WKB line in the tile's CRS) at the given
-    levels, or every `interval` from `base` when there are none."""
-    fn = "gbx_rst_contour"
-    if tile is None:
-        return None
-    lvls = [] if levels is None else [float(v) for v in levels if v is not None]
-    iv = 0.0 if interval is None else float(interval)
-    bs = 0.0 if base is None else float(base)
-    attr = "elev" if attr_field is None else str(attr_field)
-    try:
-        _kernel("analysis", "check_contour")(lvls, iv, attr)
-    except ValueError as exc:
-        raise _Parameter(
-            f"{exc}. Fix: pass levels, or an interval above 0 and a non-empty attr_field"
-        ) from exc
-    rows = with_dataset(
-        fn, tile, lambda ds: _kernel("analysis", "contour")(ds, lvls, iv, bs, attr)
-    )
-    if rows is not None:
-        check_rows(fn, rows)
-    return rows
-
-
-HANDLERS["gbx_rst_contour"] = rst_contour
 
 
 def rst_isoband(tile, breaks):

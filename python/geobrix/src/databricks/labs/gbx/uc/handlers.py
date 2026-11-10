@@ -13,8 +13,6 @@ import math
 import re
 from typing import Optional
 
-from databricks.labs.gbx._gdal_policy import open_bytes
-
 
 class _Refusal(ValueError):
     """Input the UC surface does not serve; the message ends with a Fix: line."""
@@ -94,43 +92,6 @@ def bng_eastnorthasbng_batch(batches):
                 zero_copy_only=False
             )
         yield pd.Series(out)
-
-
-def _warp(raster: bytes, crs, fn: str) -> bytes:
-    from rasterio.io import MemoryFile
-
-    from databricks.labs.gbx.core.crs import authority_srid_of
-    from databricks.labs.gbx.pyrx.core import warp
-
-    with MemoryFile(raster) as mf, open_bytes(mf) as ds:
-        if authority_srid_of(ds.crs) is None:
-            raise _refuse(fn, "the raster's CRS is missing or has no authority code")
-        return warp.reproject_to_crs(ds, crs.code)
-
-
-def rst_transformcrs(tile, target_crs):
-    from databricks.labs.gbx.core.crs import parse_uc_crs
-    from databricks.labs.gbx.uc.tier_b import tile_row  # tier_b imports this module
-
-    fn = "gbx_rst_transformcrs"
-    if tile is None or target_crs is None:
-        return None
-    crs = parse_uc_crs(target_crs, fn=fn)  # .srid (int) for outputs, .code for rasterio
-    raster = _field(tile, "raster")
-    if raster is None:
-        if _field(tile, "path") is not None:
-            raise _refuse(
-                fn, "virtual tiles (a path, no raster bytes) are session-only"
-            )
-        return None  # nothing to transform
-    try:
-        out = _warp(bytes(raster), crs, fn)
-    except (MemoryError, RecursionError, ImportError, _Refusal):
-        raise  # resource exhaustion, a missing dependency and a refusal are never "bad data"
-    except Exception:  # noqa: BLE001 - unreadable data is NULL on UC (no error tile)
-        return None
-    # tile_row is the canonical UC tile builder: driver, size and band count in the metadata, the integer SRID in crs.
-    return tile_row(fn, tile, out)
 
 
 def _geom_bytes(geom):

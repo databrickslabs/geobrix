@@ -6,7 +6,13 @@ import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
 
-from databricks.labs.gbx.bench.oracles import Build, Case
+from databricks.labs.gbx.bench.oracles import (  # noqa: F401 - the engine rows' UC helpers live beside Case
+    VIRTUAL_BUILDS,
+    Build,
+    Case,
+    engine_uc,
+    mirror,
+)
 
 BOTH = ("session", "uc")
 

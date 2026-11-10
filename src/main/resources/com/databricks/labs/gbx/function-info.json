@@ -316,6 +316,7 @@
       "description": "Colour a DEM through a `gdaldem` colour table.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1198,6 +1199,7 @@
       "description": "Extract a polygon for each connected region of equal pixel values.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1783,6 +1785,7 @@
       "description": "Compute a binary viewshed from a DEM tile and an observer point.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

@@ -7,7 +7,7 @@ float32 bands (1 red, 2 near-infrared, 3 blue) on a 10 m grid, with one NoData p
 bands 1 and 2 are both 0 (a division by zero).
 """
 
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, mirror, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -253,13 +253,10 @@ _engine_rows = (
 )  # fmt: skip
 
 
-# Unity Catalog: the band math of a materialized tile is the session's; a band the tile does not have is a wrong argument
-SPEC_CALC = _engine_rows + share(
-    _session_calc_rows,
-    "threshold", "threshold_le", "threshold_bad_operator",
-    "ndvi", "ndvi_null_band", "ndvi_null_tile", "ndvi_error_tile", "ndvi_band_out_of_range", "ndwi", "nbr", "savi",
-    "savi_sql_default", "evi", "evi_sql_defaults", "index_ndvi", "index_msavi", "index_unknown_formula",
-    "chm", "chm_null_dsm", "chm_error_tile",
+# Unity Catalog: the band math runs the session's engine call on UC too (engine.uc), so each session row runs there with
+# the session's value; chm (no engine row) shares its rows by name. A virtual tile is refused, a corrupt one is NULL.
+SPEC_CALC = mirror(
+    _engine_rows + share(_session_calc_rows, "chm", "chm_null_dsm", "chm_error_tile"), null=("ndvi_corrupt",)
 ) + edges(
     threshold=(">", 12.0), ndvi=(1, 2), ndwi=(3, 2), nbr=(2, 3), savi=(1, 2, 0.25), evi=(1, 2, 3, 2.0, 6.0, 7.5, 2.5),
     index=("ndvi", {"red": 1, "nir": 2}), chm=(Build("calc_dem"),),

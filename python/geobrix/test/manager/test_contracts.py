@@ -1082,7 +1082,7 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
     assert int(
         out.stdout
     ) == sum(  # every UC row ran: the scalars, and the table function's handler
-        "uc" in c.surfaces for c in oracles.MVP_S
+        "uc" in c.surfaces and not oracles.engine_missing(c.fn) for c in oracles.MVP_S
     ) + sum(
         "uc" in c.surfaces and c.fn in (oracles.TE, oracles.RT) for c in oracles.MVP_G
     )

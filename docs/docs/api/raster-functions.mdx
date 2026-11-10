@@ -1040,7 +1040,6 @@ The JSON is GDAL's, not the earlier GeoBrix shape. A query that reads its keys m
 - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
 - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` values with more digits.
 - A band with no valid pixel has no statistics. A tile held as bytes in another driver, such as PNG or netCDF, reports its own driver. A tile with no band held that way, such as a netCDF container, has an empty `bands` list. A virtual tile is read into a GeoTIFF of its window first, so it reports `GTiff`. A virtual tile of a container with no band gives NULL.
-- On Unity Catalog the function still returns the earlier shape.
 :::
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has real pixel data._
@@ -4640,9 +4639,7 @@ Both `A` and `B` read raster `0` (the one tile in the array), with `A` = band 4 
 The envelope does not take `extra_options` (raw `gdal_calc` flags) or `dialect`. Either key raises an error that names it. A key other than `calc` and the `*_index` and `*_band` keys raises too.
 
 :::note Expression grammar
-In a session, every expression uses GDAL's muparser grammar, for example `(A - B) / (A + B)`, `A > 0 ? A : 0` and `max(A, B)`. NumPy spellings such as `numpy.where` are not accepted. An expression GDAL cannot evaluate raises. See the GDAL [raster calculator reference](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
-
-On Unity Catalog the function evaluates the expression with NumExpr instead, which does math only. It has no `?:`: write a condition as `where(A > 0, A, 0)`.
+Every expression uses GDAL's muparser grammar, in a session and on Unity Catalog, for example `(A - B) / (A + B)`, `A > 0 ? A : 0` and `max(A, B)`. NumPy spellings such as `numpy.where` are not accepted. An expression GDAL cannot evaluate raises. See the GDAL [raster calculator reference](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
 :::
 
 <FunctionExamples
@@ -5308,20 +5305,21 @@ Move data between the raster (`tile`) and vector (`geom`) worlds.
 ### rst_polygonize
 
 {/* BEGIN GENERATED gbx_rst_polygonize: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_polygonize(tile, [band], [connectedness])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_polygonize(tile, [band], [connectedness])` | rows |
 | Python | `rasterx.functions.rst_polygonize(df, tile, band=None, connectedness=None)` | DataFrame |
 
 Rows: `geom_wkb` `BINARY`, `value` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to polygonize. |
-| `band` | `INT` | `1` | The band to read, from 1. |
-| `connectedness` | `INT` | `4` | `4` joins pixels that share an edge; `8` also joins pixels that touch at a corner. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to polygonize. |
+| `band` | `INT` | `INT` | `1` | The band to read, from 1. |
+| `connectedness` | `INT` | `INT` | `4` | `4` joins pixels that share an edge; `8` also joins pixels that touch at a corner. |
 {/* END GENERATED gbx_rst_polygonize */}
 
 <Impl udtf/>
@@ -5445,17 +5443,18 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 ### rst_color_relief
 
 {/* BEGIN GENERATED gbx_rst_color_relief: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_color_relief(tile, color_table)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_color_relief(tile, color_table)` | `TILE` |
 | Python | `rasterx.functions.rst_color_relief(tile, color_table, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
-| `color_table` | `STRING` |  | The color table as text, in the `gdaldem` color-file format: one `value R G B [A]` line per entry, a color name such as `red` in place of `R G B`, `nv` for NoData, and `N%` for a share of the value range. Pass the text, not a file path. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
+| `color_table` | `STRING` | `STRING` |  | The color table as text, in the `gdaldem` color-file format: one `value R G B [A]` line per entry, a color name such as `red` in place of `R G B`, `nv` for NoData, and `N%` for a share of the value range. Pass the text, not a file path. |
 {/* END GENERATED gbx_rst_color_relief */}
 
 :::note Color table and NoData
@@ -6363,21 +6362,22 @@ Compute a Float32 raster where each pixel holds the exact Euclidean distance to 
 ### rst_viewshed
 
 {/* BEGIN GENERATED gbx_rst_viewshed: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_viewshed(tile, observer_geom, [observer_height], [target_height], [max_distance], [crs])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_viewshed(tile, observer_geom, [observer_height], [target_height], [max_distance], [crs])` | `TILE` |
 | Python | `rasterx.functions.rst_viewshed(tile, observer_geom, observer_height=None, target_height=None, max_distance=None, crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The DEM tile. |
-| `observer_geom` | `BINARY` or `STRING` |  | The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises. |
-| `observer_height` | `DOUBLE` | `0.0` | The observer's height above the DEM, 0 or more. NULL is 0. |
-| `target_height` | `DOUBLE` | `1.6` | The height of the target above the DEM at each cell, 0 or more. |
-| `max_distance` | `DOUBLE` | `NULL` | The largest distance to analyse in the DEM's CRS units, above 0. NULL for no limit: the whole DEM. A limit gives the window around the observer. |
-| `crs` | `STRING` | `NULL` | The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT). NULL means the DEM's CRS. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The DEM tile. |
+| `observer_geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises. |
+| `observer_height` | `DOUBLE` | `DOUBLE` | `0.0` | The observer's height above the DEM, 0 or more. NULL is 0. |
+| `target_height` | `DOUBLE` | `DOUBLE` | `1.6` | The height of the target above the DEM at each cell, 0 or more. |
+| `max_distance` | `DOUBLE` | `DOUBLE` | `NULL` | The largest distance to analyse in the DEM's CRS units, above 0. NULL for no limit: the whole DEM. A limit gives the window around the observer. |
+| `crs` | `STRING` | `STRING` | `NULL` | The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT). NULL means the DEM's CRS. |
 {/* END GENERATED gbx_rst_viewshed */}
 
 :::note Implementation

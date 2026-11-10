@@ -61,6 +61,17 @@ def horn(z, nodata, xres, yres, xscale=1.0, yscale=1.0):
     return _place(dzdx, mask), _place(dzdy, mask), mask
 
 
+def slope(z, nodata, xres, yres, unit="degrees", xscale=1.0, yscale=1.0):
+    """The slope of Horn's gradients: degrees from the horizontal, or ``percent`` (100 x rise over run), the unit in any
+    case. ``xscale`` and ``yscale`` are the vertical units in one horizontal unit, as GDAL's options.
+    """
+    dzdx, dzdy, mask = horn(z, nodata, xres, yres, xscale, yscale)
+    rise = np.hypot(dzdx, dzdy)
+    if str(unit).strip().lower() == "percent":
+        return rise * 100.0, mask
+    return np.degrees(np.arctan(rise)), mask
+
+
 def aspect(z, nodata, xres, yres, trigonometric=False, zero_for_flat=False):
     """The direction of steepest descent, in degrees: clockwise from north, or counter-clockwise from east
     (both in [0, 360)). A flat cell is NoData, or 0 with ``zero_for_flat``."""

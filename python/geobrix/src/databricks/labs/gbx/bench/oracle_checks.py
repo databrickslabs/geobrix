@@ -177,16 +177,9 @@ def check_contours(case, out, args) -> Optional[str]:
 
 def check_features_ref(case, out, args) -> Optional[str]:
     """`features_ref`: the lines of the array `out`, by level, against GDAL's older `ContourGenerateEx` on the same tile
-    (`oracles._ref_contours`). `expect` names the rule:
-
-    - ``exact``: the GDAL spec engine runs the algorithm the reference runs. The same levels, the same number of lines
-      per level, and every level's lines within a millionth of a pixel of the reference (Hausdorff distance), with the
-      same total length.
-    - ``equivalent``: the earlier scikit-image lines, which are still the Unity Catalog kernel's. They trace the same
-      crossings, but stop at the outermost pixel centres where GDAL's run to the tile's edge (half a pixel farther
-      along each axis), and the two split a line at a NoData cell differently. The same levels, and each level's
-      lines within one pixel of the reference (Hausdorff distance): measured at 0.5 to 0.86 pixel on a smooth surface
-      and on noise with NoData holes. The line count and length may differ.
+    (`oracles._ref_contours`). `expect` is ``exact``: the GDAL spec engine runs the algorithm the reference runs. The same
+    levels, the same number of lines per level, and every level's lines within a millionth of a pixel of the reference
+    (Hausdorff distance), with the same total length.
     """
     import shapely
     from shapely.ops import unary_union
@@ -204,14 +197,13 @@ def check_features_ref(case, out, args) -> Optional[str]:
     want, px = _ref_contours(args)
     if sorted(got) != sorted(want):
         return f"{case.cid}: levels {sorted(got)}, reference {sorted(want)}"
-    exact = case.expect == "exact"
+    if case.expect != "exact":
+        raise ValueError(
+            f"{case.cid}: features_ref takes the rule 'exact', not {case.expect!r}"
+        )
     for lv in sorted(want):
         g, w = got[lv], want[lv]
         away = shapely.hausdorff_distance(unary_union(g), unary_union(w)) / px
-        if not exact:
-            if away > 1.0:
-                return f"{case.cid}: level {lv} lies {away:.3g} px from the reference"
-            continue
         lg, lw = sum(x.length for x in g), sum(x.length for x in w)
         if len(g) != len(w):
             return f"{case.cid}: level {lv} has {len(g)} lines, reference {len(w)}"

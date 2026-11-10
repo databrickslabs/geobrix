@@ -12,7 +12,9 @@ def test_scalar_uc_handlers_answer_the_rows_without_spark(tmp_path):
     receives)."""
     ran = oracles.run_handlers(oracles.MVP_S, tmpdir=str(tmp_path))
     assert [m for _, m in ran if m] == []
-    assert len(ran) == sum("uc" in c.surfaces for c in oracles.MVP_S)
+    assert len(ran) == sum(
+        "uc" in c.surfaces and not oracles.engine_missing(c.fn) for c in oracles.MVP_S
+    )
 
 
 def test_the_uc_table_functions_answer_the_rows_without_spark(tmp_path):
@@ -59,7 +61,7 @@ def test_uc_statement_file_and_result_file_round_trip(tmp_path):
         "bng_bad_res": {
             "error": "[UDF_ERROR] BNG resolution not supported; found '3km'"
         },
-        "tcrs_wkt_uc": {"error": "Fix: use the session function gbx_rst_transformcrs"},
+        "uc_tcrs_wkt": {"error": "Fix: use the session function gbx_rst_transformcrs"},
         "mv_square_ogc": {
             "value": to_wkb(set_srid(box(0, 0, 1, 1), 4326), include_srid=True)
         },

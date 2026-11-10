@@ -58,6 +58,23 @@ class DataError(Exception):
     """A value or a tile the function cannot process: the result is an error tile, carrying this reason."""
 
 
+class OverCap(DataError):
+    """A call over the decoded size this compute holds: an input over the read cap, or its inputs and its estimated output
+    over the call's budget. A data error in the session (an error tile with a Fix); a Unity Catalog function refuses it
+    with the same Fix, as it has no error tile (``engine.uc``)."""
+
+
+def sql_default(text: Optional[str]):
+    """A manifest param's SQL DEFAULT text as the Python value SQL would pass."""
+    if text is None or text.upper() == "NULL":
+        return None
+    if text.startswith("'") and text.endswith("'"):
+        return text[1:-1]
+    if text.lower() in ("true", "false"):
+        return text.lower() == "true"
+    return float(text) if any(c in text for c in ".eE") else int(text)
+
+
 def check_value(sql_name: str, param: str, value) -> None:
     """Refuse a string value that could name a file or a URL (GDAL reads files and URLs through some
     arguments: a dataset, an @file). Binder output is not checked: the engine writes it. A `crs` value is judged by

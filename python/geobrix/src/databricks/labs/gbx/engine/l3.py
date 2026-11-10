@@ -44,6 +44,7 @@ from pyspark.sql.types import (
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import _tile as tile_checks
 from databricks.labs.gbx.engine import run
+from databricks.labs.gbx.engine.spec import sql_default
 from databricks.labs.gbx.pyrx._serde import V2_TILE_SCHEMA
 
 RESULT = StructType(
@@ -120,19 +121,12 @@ def _value(fn, res: Optional[run.Result]):
 
 
 def metadata(res: run.Result) -> dict:
-    """The metadata of an engine tile, the same on every level: the output's format and the command for a
-    success; GDAL's reason under `last_error` and `error_message` for a failure."""
-    if res.error is not None:
-        return {"last_error": res.error, "error_message": res.error}
-    return {"driver": "GTiff", "compression": "ZSTD", "last_command": res.command}
+    """The metadata of an engine tile (``_tile.engine_metadata``), the same on every level."""
+    return tile_checks.engine_metadata(res)
 
 
 def _tile(res: Optional[run.Result], cellid) -> Optional[dict]:
-    if res is None:
-        return None
-    row = {f.name: None for f in V2_TILE_SCHEMA.fields}
-    row.update(cellid=cellid, raster=res.raster, metadata=metadata(res))
-    return row
+    return tile_checks.engine_tile(res, cellid)
 
 
 def _setup(grid_dirs: Tuple[str, ...]) -> None:
@@ -482,17 +476,6 @@ def _inputs(
     return rasters, None, tile_checks.cellid(tiles[0])
 
 
-def _sql_default(text: Optional[str]):
-    """A manifest param's SQL DEFAULT text as the Python value SQL would pass."""
-    if text is None or text.upper() == "NULL":
-        return None
-    if text.startswith("'") and text.endswith("'"):
-        return text[1:-1]
-    if text.lower() in ("true", "false"):
-        return text.lower() == "true"
-    return float(text) if any(c in text for c in ".eE") else int(text)
-
-
 def _function(sql_name: str, fn_ref: Optional[str]):
     """The manifest row `sql_name`, or the Function object `fn_ref` ('module:attr') names (a spec that is not a
     SQL function, such as the bench's floor). A UDF captures only these names: a worker looks the row up itself.
@@ -524,7 +507,7 @@ def c0(
     for a `rasters` input), so a FILE-backed virtual tile is read through it."""
     fn = _function(sql_name, fn_ref)
     names = [p.name for p in fn.params[1:]]
-    defaults = [_sql_default(p.default) for p in fn.params[1:]]
+    defaults = [sql_default(p.default) for p in fn.params[1:]]
     raster_out = fn.gdal.out_kind == "raster"
 
     @F.udf(return_type(fn), useArrow=True)
@@ -583,7 +566,7 @@ def udtf(
             f"{sql_name}: a table function runs a generator row with a features output"
         )
     names = [p.name for p in fn.params[1:]]
-    defaults = [_sql_default(p.default) for p in fn.params[1:]]
+    defaults = [sql_default(p.default) for p in fn.params[1:]]
     row_type = return_type(fn).elementType
     tile_name = fn.params[0].name
 
@@ -655,7 +638,7 @@ def forced_c0(
     virtualize_dir, virtualize_prefix, materialize)`` and returns a tile."""
     fn = _function(sql_name, None)
     names = [p.name for p in fn.params[1:]]
-    defaults = [_sql_default(p.default) for p in fn.params[1:]]
+    defaults = [sql_default(p.default) for p in fn.params[1:]]
 
     @F.udf(V2_TILE_SCHEMA, useArrow=True)
     def _forced(first, *rest):

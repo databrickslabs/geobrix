@@ -220,6 +220,155 @@ READ_CAP_ROWS: Dict[str, int] = {
     "db_agg_member_over_cap_refused": 20,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
+# The fixtures that build a virtual tile (a path, no raster bytes) or an array with one. A UC function refuses each with a
+# Fix (the `edges` and `array_edges` rows), so `mirror` does not run their session rows on UC. A container test holds
+# the set to what the fixtures build (test_engine_uc.py).
+VIRTUAL_BUILDS = frozenset(
+    {
+        "aa_stack_virtual_member",
+        "aa_virtual_only",
+        "calc_bands_file",
+        "calc_bands_vrt",
+        "dem_cog_overviews",
+        "dem_eedai",
+        "dem_file",
+        "dem_gdalg",
+        "dem_gti",
+        "dem_inline_gdalg",
+        "dem_inline_raw",
+        "dem_missing",
+        "dem_stacta",
+        "dem_vrt",
+        "dem_vrt_gdalg",
+        "dem_vrt_gti_gdalg",
+        "dem_vrt_python",
+        "dem_vrt_raw",
+        "se_pair_paths",
+        "tile_virtual",
+        "vs_wall_file",
+        "vz_columns_virtual",
+        "vz_missing",
+    }
+)
+
+
+def _virtual_input(case) -> bool:
+    first = case.args[0] if case.args else None
+    items = first if isinstance(first, (list, tuple)) else [first]
+    return any(isinstance(a, Build) and a.name in VIRTUAL_BUILDS for a in items)
+
+
+def _geometry_args(case) -> list:
+    """The arguments of ``case`` that a UC function takes as a GEOMETRY."""
+    from databricks.labs.gbx import manifest
+
+    params = manifest.load().functions[case.fn].params
+    return [
+        a
+        for a, p in zip(case.args, params)
+        if (p.uc or "").upper() == "GEOMETRY" and a is not None
+    ]
+
+
+def _uc_geometry_text(arg) -> bool:
+    """Whether a GEOMETRY argument of a session row is one a UC function can be handed: a WKT or EWKT text that is a
+    geometry. WKB bytes are a BINARY, which is no GEOMETRY on UC, and a text that is no geometry never becomes one.
+    """
+    if not isinstance(arg, str):
+        return False
+    from databricks.labs.gbx._geom import parse_geom
+
+    try:
+        parse_geom(arg)
+    except Exception:  # noqa: BLE001 - any text the parser refuses is no geometry
+        return False
+    return True
+
+
+def _ewkt_srid(text: str) -> int:
+    """The SRID of an EWKT (``SRID=<n>;...``), 0 for a plain WKT."""
+    m = re.match(r"\s*SRID=(\d+);", text, re.IGNORECASE)
+    return int(m.group(1)) if m else 0
+
+
+def engine_uc(fn: str) -> bool:
+    """Whether ``fn``'s UC form runs the GDAL spec engine (``engine.uc``): its answer is the session's by construction."""
+    from databricks.labs.gbx import manifest
+
+    f = manifest.load().functions[fn]
+    l4 = f.levels.get("L4", {})
+    ref = l4.get("handler") or ""
+    if "tvf_over" in l4:
+        ref = getattr(manifest.load().private.get(l4["tvf_over"]), "handler", "") or ""
+    return f.gdal is not None and ref.startswith("databricks.labs.gbx.engine.uc:")
+
+
+def engine_missing(fn: str) -> Optional[str]:
+    """Why the UC handler of ``fn`` cannot run in this process: it runs the GDAL spec engine (``engine_uc``) and this
+    process has no engine ``osgeo`` (the host's dev venv). None otherwise. The handler legs skip such a row; the dev
+    container and CI, which carry the engine, run it."""
+    if not engine_uc(fn):
+        return None
+    from databricks.labs.gbx.engine import run
+
+    return run.unavailable_reason()
+
+
+def mirror(rows, null=(), refused=()):
+    """``rows`` with the session rows of every GDAL spec engine function that has a UC form (``engine_uc``) also run on
+    UC, against the session's value: the UC handler runs the session's engine call, so its answer is the session's.
+    The rules a UC function adds decide the rest:
+
+    - a row whose tile is virtual (``VIRTUAL_BUILDS``) stays session-only: UC refuses it (the ``edges`` rows), and so
+      does a batch row (``per_row``, ``exact_rows``), a row judged under a lowered session read cap (``READ_CAP_ROWS``),
+      and a row that gives a GEOMETRY parameter WKB bytes or a text that is no geometry (neither is a GEOMETRY on UC:
+      ``uc_clip_wkb_into_geometry_refused`` holds the refusal);
+    - a GEOMETRY argument carries the SRID of its EWKT on UC, else none (0), as the session reads a plain WKT;
+    - a row named in ``null`` is a data error, an error tile in the session: on UC it is NULL (row ``uc_<cid>``);
+    - a row named in ``refused`` is refused on UC with a Fix (row ``uc_<cid>``): a CRS form UC does not take, or a call
+      over the decoded size a UC function holds.
+
+    A named row that is no such session row raises, so the lists cannot go stale."""
+    named = {**{c: "null" for c in null}, **{c: "uc_refused" for c in refused}}
+    seen, out = set(), []
+    for c in rows:
+        if "session" not in c.surfaces or c.sql is not None or not engine_uc(c.fn):
+            out.append(c)
+            continue
+        if c.cid in named:
+            seen.add(c.cid)
+            out.append(c)
+            out.append(
+                replace(
+                    c,
+                    cid=f"uc_{c.cid}",
+                    kind=named[c.cid],
+                    expect=None,
+                    surfaces=("uc",),
+                    variants=(),
+                )
+            )
+            continue
+        # a batch row (one call over several argument rows) is a session UDF's form; a UC function takes one row
+        batch = c.kind in ("per_row", "exact_rows")
+        geoms = _geometry_args(c)
+        if (
+            _virtual_input(c)
+            or batch
+            or c.cid
+            in READ_CAP_ROWS  # judged under a session read cap the harness lowers; UC's cap is its own
+            or not all(_uc_geometry_text(g) for g in geoms)
+        ):
+            out.append(c)
+            continue
+        # a GEOMETRY carries its SRID on UC: an EWKT's own, else none (0), as the session reads a plain WKT
+        srid = next((_ewkt_srid(g) for g in geoms if isinstance(g, str)), 0)
+        out.append(replace(c, surfaces=("session", "uc"), geom_srid=srid))
+    missing = set(named) - seen
+    assert not missing, f"no such engine session rows for UC: {sorted(missing)}"
+    return tuple(out)
+
+
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
@@ -331,8 +480,8 @@ MVP_S: Tuple[Case, ...] = (
         None,
         ("uc",),
     ),
-    # The target CRS forms UC accepts: an int SRID, EPSG:<n> or ESRI:<n> (converted to the int).
-    # Anything else is refused on UC with a Fix: line; the session accepts every CRS spelling.
+    # The target CRS forms UC accepts: an int SRID, EPSG:<n> or ESRI:<n>. Anything else is refused on UC with a Fix:
+    # line (the `refused` rows of the mirror below); the session accepts every CRS spelling.
     Case(
         "tcrs_int_srid",
         T,
@@ -363,14 +512,6 @@ MVP_S: Tuple[Case, ...] = (
         ("session",),
     ),
     Case(
-        "tcrs_wkt_uc",
-        T,
-        (Build("tile_4326"), Build("wkt_3857")),
-        "uc_refused",
-        None,
-        ("uc",),
-    ),
-    Case(
         "tcrs_proj4",
         T,
         (Build("tile_4326"), MERC_PROJ),
@@ -379,23 +520,12 @@ MVP_S: Tuple[Case, ...] = (
         ("session",),
     ),
     Case(
-        "tcrs_proj4_uc", T, (Build("tile_4326"), MERC_PROJ), "uc_refused", None, ("uc",)
-    ),
-    Case(
         "tcrs_custom_src",
         T,
         (Build("tile_custom"), "EPSG:4326"),
         "tile_props",
         "EPSG:4326",
         ("session",),
-    ),
-    Case(
-        "tcrs_custom_src_uc",
-        T,
-        (Build("tile_custom"), "EPSG:4326"),
-        "uc_refused",
-        None,
-        ("uc",),
     ),
     Case("tcrs_null_tile", T, (None, "EPSG:3857"), "null"),
     # A tile with neither raster nor path and no diagnostic has nothing to transform: NULL.
@@ -434,24 +564,6 @@ MVP_S: Tuple[Case, ...] = (
         "error_tile",
         None,
         ("session",),
-    ),
-    # A malformed string is refused too, never a NULL: with ANSI off (the warehouse Statement API) the
-    # product casts a bad CRS string to a silent NULL, so UC checks the form before any CRS use.
-    Case(
-        "tcrs_bad_crs_uc",
-        T,
-        (Build("tile_4326"), "EPSG:not-a-crs"),
-        "uc_refused",
-        None,
-        ("uc",),
-    ),
-    Case(
-        "tcrs_corrupt_uc",
-        T,
-        (Build("tile_corrupt"), "EPSG:3857"),
-        "null",
-        None,
-        ("uc",),
     ),
     # A materialized tile's driver decides how every level reads its bytes (the manifest's driver classes). One
     # that is neither self-contained nor refused (netCDF here) is read as GeoTIFF bytes: the same result on every
@@ -565,6 +677,13 @@ MVP_S: Tuple[Case, ...] = (
         (OPPOSITE, 4326),
         ("session",),
     ),
+)
+# Unity Catalog: gbx_rst_transformcrs runs the session's engine call (engine.uc), so its rows run there too. A corrupt or
+# refused tile is NULL there; a CRS form other than an SRID, EPSG:<n> or ESRI:<n> is refused with a Fix.
+MVP_S = mirror(
+    MVP_S,
+    null=("tcrs_corrupt", "bytes_class_refused_driver", "bytes_class_vrt_refused"),
+    refused=("tcrs_wkt", "tcrs_proj4", "tcrs_bad_crs"),
 )
 
 
@@ -1496,16 +1615,8 @@ SPEC_SE: Tuple[Case, ...] = (
     Case(
         "se_ma_null", MALG, (None, "(A - B) / (A + B)"), "null", None, ("session", "uc")
     ),
-    # Unity Catalog evaluates with numexpr: an expression it cannot evaluate is a wrong argument, found before any
-    # raster is read; an array of members over the cap, or with a virtual member, is refused with a Fix
-    Case(
-        "uc_ma_bad_syntax",
-        MALG,
-        (Build("se_one"), "A +* 2"),
-        "raises",
-        "cannot be evaluated",
-        ("uc",),
-    ),
+    # Unity Catalog runs the session's engine call: an array of members over the UC cap, or with a virtual member, is
+    # refused with a Fix
     Case("uc_ma_null_expression", MALG, (Build("se_one"), None), "null", None, ("uc",)),
     Case(
         "uc_ma_virtual_refused",
@@ -1556,6 +1667,16 @@ SPEC_SE += (
         ("session",),
     ),
 )
+# Unity Catalog: slope, transformcrs and map algebra run the session's engine call (engine.uc), so their rows run there
+# too. A data error is NULL there (no error tile), and a CRS form UC does not take is refused with a Fix.
+SPEC_SE = mirror(
+    SPEC_SE,
+    null=(
+        "se_slope_corrupt", "se_bytes_refused_light", "se_tcrs_no_crs", "se_tcrs_png", "se_tcrs_vrt_bytes",
+        "se_tcrs_vrt_bytes_vsicurl", "se_ma_crs_mismatch",
+    ),
+    refused=("se_tcrs_grid_path", "se_tcrs_missing_grid", "se_tcrs_projjson", "se_tcrs_url"),
+)  # fmt: skip
 
 
 # The read-path table: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to
@@ -2712,15 +2833,39 @@ def _ref_dataset(args):
 
 
 def _ref_slope(args):
-    """The light tier's numpy Horn (pyrx.core.terrain), independent of GDAL: (values, NoData mask)."""
-    from databricks.labs.gbx.pyrx.core import terrain
+    """Horn's slope (oracle_refs.slope), independent of GDAL: (values, NoData mask). A NULL xscale and yscale take GDAL's
+    default scale for the DEM's CRS (``_gdaldem_scale``)."""
+    from databricks.labs.gbx.bench import oracle_refs
 
     unit = args[1] if len(args) > 1 else "degrees"
     xs, ys = (args[2], args[3]) if len(args) > 3 else (None, None)
-    with _ref_dataset(args) as ds:
-        ref = terrain.slope(ds, unit=unit, xscale=xs, yscale=ys)
-    g = _masked_band(ref)
-    return g.data.astype("float64"), g.mask
+    z, nodata, xres, yres = _dem_band(args)
+    if xs is None or ys is None:
+        with _ref_dataset(args) as ds:
+            xs, ys = _gdaldem_scale(ds)
+    return oracle_refs.slope(z, nodata, xres, yres, unit, xs, ys)
+
+
+def _gdaldem_scale(ds) -> tuple:
+    """GDAL's default (xscale, yscale) of a DEM with none given, as ``gdaldem`` derives it from the CRS: about 111 km a
+    degree for a geographic CRS (the x scale shrunk by the cosine of the mean latitude), the metres in a linear unit for a
+    projected one, and 1 for none. The heights are taken to be metres."""
+    import math
+
+    from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+    if ds.crs is None:
+        return 1.0, 1.0
+    pcrs = to_pyproj_crs(ds.crs)
+    if pcrs.is_geographic:
+        ang = math.pi / 180.0
+        yscale = ang * pcrs.ellipsoid.semi_major_metre
+        mean_lat = (ds.transform.f + ds.height * ds.transform.e / 2.0) * ang
+        return yscale * math.cos(mean_lat), yscale
+    if pcrs.is_projected:
+        lin = pcrs.axis_info[0].unit_conversion_factor
+        return lin, lin
+    return 1.0, 1.0
 
 
 def _ref_contours(args):
@@ -5962,8 +6107,11 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
             "uc" not in case.surfaces
             or case.sql is not None
             or "handler" not in fn.levels.get("L4", {})
+            or engine_missing(case.fn)
         ):
-            continue  # not on UC, a recipe, or a table function (run_handlers_rows runs the function behind it)
+            # not on UC, a recipe, a table function (run_handlers_rows runs the function behind it), or an engine
+            # function where this process has no engine
+            continue
         handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
         try:
             msgs = []
@@ -6056,7 +6204,11 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
     out = []
     for case in cases:
         fn = man.functions[case.fn]
-        if "uc" not in case.surfaces or "tvf_over" not in fn.levels.get("L4", {}):
+        if (
+            "uc" not in case.surfaces
+            or "tvf_over" not in fn.levels.get("L4", {})
+            or engine_missing(case.fn)
+        ):
             continue
         over = fn.levels["L4"]["tvf_over"]
         if (

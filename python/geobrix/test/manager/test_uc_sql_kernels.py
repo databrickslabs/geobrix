@@ -8,6 +8,7 @@ local engine has none); the workspace pass judges those.
 
 import copy
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from databricks.labs.gbx import manifest
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import recipe
 from databricks.labs.gbx.manager import levels, sqlwrap
+from databricks.labs.gbx.manifest import sql_type
 from databricks.labs.gbx.uc import ddl, sqlbody
 
 RAW = json.loads((Path(manifest.__file__).with_name("functions.json")).read_text())
@@ -265,3 +267,58 @@ def test_the_dependency_order_keeps_the_declared_order_otherwise():
         "gbx__a",
         "gbx__b",
     ]
+
+
+# ---- mechanism: Unity Catalog binds a helper's arguments first ---------------------------------------------------
+
+_PRODUCT_CALL = re.compile(r"(?<![\w.])(?:h3|st)_\w+\(", re.IGNORECASE)
+
+
+def _host_kernels():
+    for fn in sorted(manifest.load().functions.values(), key=lambda f: f.sql_name):
+        src = sqlbody.l4_source(fn)
+        if (
+            src
+            and src[1]
+            and not any(
+                _PRODUCT_CALL.search(t) for t in [src[0]] + [h["sql"] for h in src[1]]
+            )
+        ):
+            yield fn.sql_name
+
+
+@pytest.mark.parametrize("name", list(_host_kernels()))
+def test_the_uc_rows_hold_with_each_helper_a_function_of_its_own(spark, name):
+    """On Unity Catalog a helper is a function, and the engine computes its arguments before the body that calls it
+    (DBSQL raised for `gbx_bng_eastnorthasbng(e, n, NULL)`: the NULL resolution went into gbx__bng_resindex, ahead of
+    the body's own NULL test). The host's inlined form evaluates them where the call is, so it cannot see that; this
+    installs the helpers as temporary functions of their own and runs the UC rows the same way.
+    """
+    fn = manifest.load().functions[name]
+    body, helpers = sqlbody.l4_source(fn)
+    made = []
+    try:
+        for h in helpers:
+            sig = ", ".join(f"{n} {sql_type(t)}" for n, t in h["params"])
+            spark.sql(
+                f"CREATE OR REPLACE TEMPORARY FUNCTION {h['name']}({sig}) RETURNS {sql_type(h['returns'])} "
+                f"RETURN {sqlbody.render(h['sql'], '')}"
+            )
+            made.append(h["name"])
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+        spark.sql(
+            f"CREATE OR REPLACE TEMPORARY FUNCTION {name}({ddl._params_sig(fn)}) "
+            f"RETURNS {sql_type(fn.returns_uc)} RETURN {sqlbody.render(body, '')}"
+        )
+        made.append(name)
+        cases = [
+            c
+            for t in oracles.TABLES.values()
+            for c in t
+            if c.fn == name and "uc" in c.surfaces
+        ]
+        assert cases, name
+        assert _fail(oracles.run_session(spark, cases, surface="uc")) == []
+    finally:
+        for n in made:
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {n}")

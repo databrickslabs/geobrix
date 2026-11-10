@@ -576,3 +576,51 @@ def test_source_binds_its_values_on_spark_connect(spark_connect_local, monkeypat
     _echo_function(monkeypatch, spark_connect_local)
     rows = _api.source("gbx_echo_test", INJECTION[0]).collect()
     assert [r["out"] for r in rows] == [INJECTION[0]]
+
+
+_PIXEL_SOURCE = (
+    "def double(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, "
+    "buf_radius, gt, **kwargs):\n    out_ar[:] = in_ar[0] * 2\n"
+)
+
+
+@pytest.mark.parametrize("name", ["rst_derivedband", "rst_derivedband_agg"])
+@pytest.mark.parametrize("as_lit", [False, True], ids=["column", "lit"])
+def test_derivedband_refuses_its_source_as_a_column_before_any_sql_runs(
+    spark, monkeypatch, name, as_lit
+):
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    monkeypatch.setattr(
+        _api, "ensure", lambda *a: pytest.fail("the call went past the check")
+    )
+    source = F.lit(_PIXEL_SOURCE) if as_lit else F.col("source")
+    with pytest.raises(TypeError, match="must be a Python str, not a Column") as err:
+        getattr(rx, name)("tile", source, "double")
+    assert "pass the function's source as a Python string, not a column" in str(
+        err.value
+    )
+
+
+@pytest.mark.parametrize("name", ["rst_derivedband", "rst_derivedband_agg"])
+def test_derivedband_still_takes_its_source_as_a_str(spark, monkeypatch, name):
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    monkeypatch.setattr(_api, "ensure", lambda *a: None)
+    monkeypatch.setattr(_api, "_active", lambda: spark)
+    assert rx.__dict__[name]("tile", _PIXEL_SOURCE, "double") is not None
+
+
+def test_only_the_derivedband_sources_are_str_only():
+    flagged = {
+        (n, p.name)
+        for n, f in manifest.load().functions.items()
+        for p in f.params
+        if p.str_only
+    }
+    assert flagged == {
+        ("gbx_rst_derivedband", "python_func"),
+        ("gbx_rst_derivedband_agg", "python_func"),
+    }

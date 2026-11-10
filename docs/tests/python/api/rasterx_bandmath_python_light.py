@@ -388,7 +388,6 @@ def rst_derivedband_python_example(spark):
     Float64 tile. Uses the multiband fixture (non-default; 3 bands).
     """
     from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
 
     df = spark.table("multiband_rasters")
 
@@ -399,7 +398,7 @@ def rst_derivedband_python_example(spark):
         "    out_ar[:] = in_ar[0] * 2\n"
     )
     result = df.select(
-        rx.rst_derivedband("tile", f.lit(python_func), f.lit("double")).alias("tile")
+        rx.rst_derivedband("tile", python_func, "double").alias("tile")
     ).first()
     return result["tile"]
 

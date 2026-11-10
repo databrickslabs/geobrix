@@ -178,6 +178,7 @@ These changes affect callers that pass keywords or named arguments.
 - **`rst_hillshade` takes optional `xscale` and `yscale` in SQL.** `rst_slope` and `rst_hillshade` refuse one without the other, with a `Fix:`.
 - **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `out_crs`, `attr_field`, `statistic`, `mode`, and the BNG `resolution` and the TIN `split_point_finder` and `grid_origin`.
   - A column can no longer supply those arguments row by row.
+- **`rst_derivedband` and `rst_derivedband_agg` take the pixel function as a Python string only.** A `Column`, including `F.lit(...)`, raises a `TypeError` with a `Fix:`. SQL is unchanged.
 - **The `rst_fromfile` Python default is a virtual tile.** Pass `materialize=True` for a materialized tile. The SQL function `gbx_rst_fromfile` materializes.
 - **`rst_merge_agg(tile, materialize=False)` returns the unforced BINARY form.** Only `materialize=True` or a directory and prefix force a tile.
 - **`rst_rasterize`, `rst_gridfrompoints` and `rst_dtmfromgeoms` take an optional `out_srid` and a trailing `out_crs`.** `out_crs` is `EPSG:n`, `ESRI:n` or WKT. Setting both raises. A NULL `out_srid` with no `out_crs` leaves the output without a CRS.

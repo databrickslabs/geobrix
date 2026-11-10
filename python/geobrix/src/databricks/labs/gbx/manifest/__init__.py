@@ -225,6 +225,9 @@ class Param:
     py: str = "col"  # a key of PY_MODES
     # The values a text parameter takes (compared without case): the Python API refuses any other before it calls SQL.
     choices: Tuple[str, ...] = ()
+    # The Python API takes this parameter as a Python str only and refuses a Column (SQL is unchanged): the source of
+    # code that runs in the session, which a caller writes as a literal rather than reads from a column.
+    str_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -983,6 +986,7 @@ def parse(raw: Mapping) -> Manifest:
                 p.get("doc", ""),
                 p.get("py", "col"),
                 tuple(p.get("choices", ())),
+                bool(p.get("str_only")),
             )
             for p in r["params"]
         )

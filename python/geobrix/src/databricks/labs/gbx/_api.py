@@ -86,6 +86,18 @@ def _arg(value: Any, param):
     return F.lit(value)
 
 
+def _check_str_only(sql_name: str, param, value: Any) -> None:
+    """A parameter that declares ``str_only`` takes a Python str (or None); a Column is refused here, before any SQL
+    runs."""
+    from pyspark.sql import Column
+
+    if param.str_only and isinstance(value, Column):
+        raise TypeError(
+            f"{sql_name}: {param.name} must be a Python str, not a Column. "
+            f"Fix: pass the function's source as a Python string, not a column."
+        )
+
+
 def _columns(fn, values, fill_all: bool):
     """Columns for ``values``. A trailing optional left as None is not sent (the SQL default applies); an
     optional left as None before one that is set gets the manifest's SQL default, never a shifted value.
@@ -107,6 +119,7 @@ def _columns(fn, values, fill_all: bool):
         if v is None and i >= fn.min_args:
             cols.append(F.expr(f"CAST({p.default} AS {sql_type(p.session[0])})"))
         else:
+            _check_str_only(fn.sql_name, p, v)
             cols.append(_arg(v, p))
     return cols
 

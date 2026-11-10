@@ -1325,17 +1325,28 @@ class _PipeGeo:
                 ds = None
         if st.crs is None or st.px_x <= 0:
             return None
+        try:
+            sr = argv_mod._osr_reference(st.crs)
+        except (
+            ValueError
+        ):  # GDAL cannot build the state's CRS: no grid it can suggest, the step is unbounded
+            return None
         vrt = gdal.GetDriverByName("VRT").Create("", st.width, st.height, 0)
         try:
             vrt.SetGeoTransform((st.ox, st.px_x, 0.0, st.oy, 0.0, -st.px_y))
-            vrt.SetSpatialRef(argv_mod._osr_reference(st.crs))
+            vrt.SetSpatialRef(sr)
             return _suggest(gdal, vrt, target)
         finally:
             vrt = None
 
     def envelope(self, bbox, from_crs, to_crs):
         osr = argv_mod._osgeo().osr
-        src, dst = argv_mod._osr_reference(from_crs), argv_mod._osr_reference(to_crs)
+        try:
+            src, dst = argv_mod._osr_reference(from_crs), argv_mod._osr_reference(
+                to_crs
+            )
+        except ValueError:  # GDAL cannot build one of the CRSs: the box cannot be moved
+            return None
         for sr in (src, dst):
             sr.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         if src.IsSame(dst):

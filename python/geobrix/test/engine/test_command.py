@@ -639,3 +639,15 @@ def test_a_tile_in_a_file_is_read_by_its_path_with_the_virtual_tile_drivers(tmp_
     res = run.run(FN, [run.PathSource(str(path))], {"command": "slope --unit=percent"})
     assert res.error is None, res.error
     assert str(path) not in res.command
+@needs_engine
+def test_a_crs_gdal_cannot_rebuild_while_sizing_is_unbounded_not_a_crash(monkeypatch):
+    def refuse(text):
+        raise ValueError("GDAL cannot build the CRS")
+
+    monkeypatch.setattr(argv, "_osr_reference", refuse)
+    geo = run._PipeGeo(run._gdal(), "gbx_rst_gdal", "x", ("GTiff",))
+    state = argv.PipeState(8, 8, 1.0, 1.0, 0.0, 0.0, "EPSG:32633", 1, 4, False)
+    assert geo.warp(state, "EPSG:3857") is None
+    assert geo.envelope((0.0, 0.0, 1.0, 1.0), "EPSG:4326", "EPSG:3857") is None
+
+

@@ -81,7 +81,7 @@ object InterpolateElevation {
         mode: String = "constrained"
     ): Seq[Geometry] = {
         // the word in any case, as the Python and UC levels take it (`pyvx/_tin.py` `validate_mode`)
-        val m = mode.toLowerCase(java.util.Locale.ROOT)
+        val m = Option(mode).map(_.toLowerCase(java.util.Locale.ROOT)).orNull // a null mode raises below
         if (m != "conforming" && m != "constrained") {
             throw new IllegalArgumentException(s"mode must be 'constrained' or 'conforming'; got '$mode'")
         }

@@ -239,5 +239,8 @@ class InterpolateElevationTest extends AnyFunSuite {
         tris("CONFORMING") should not be tris("constrained")
         val e = intercept[IllegalArgumentException](tris("Sideways"))
         e.getMessage shouldBe "mode must be 'constrained' or 'conforming'; got 'Sideways'"
+        // a null mode is the same argument error, not a NullPointerException
+        intercept[IllegalArgumentException](tris(null)).getMessage shouldBe
+            "mode must be 'constrained' or 'conforming'; got 'null'"
     }
 }

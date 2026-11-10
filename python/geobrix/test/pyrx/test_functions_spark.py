@@ -1,5 +1,7 @@
+import pytest
 from pyspark.sql import functions as f
 
+from databricks.labs.gbx.engine import run as _engine_run
 from databricks.labs.gbx.pyrx import functions as prx
 from databricks.labs.gbx.rasterx import functions as rx
 
@@ -655,6 +657,9 @@ def test_rst_rasterize_geom_encodings(spark):
     assert len(set(results.values())) == 1, "rst_rasterize encodings diverged"
 
 
+@pytest.mark.skipif(
+    bool(_engine_run.unavailable_reason()), reason=str(_engine_run.unavailable_reason())
+)  # gbx_rst_viewshed runs only on the GDAL spec engine (rasterio's osgeo); a host venv without it skips
 def test_rst_viewshed_geom_encodings(spark):
     import numpy as np
     from rasterio.io import MemoryFile

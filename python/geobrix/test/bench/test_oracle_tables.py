@@ -439,6 +439,12 @@ def test_the_grid_and_vector_generator_kinds_can_fail():
         judge("triangles", [t], [tri((0.0, 0.0), (2.0, 0.0), (0.0, 1.0))]) is not None
     )
     assert judge("triangles", [t], []) is not None
+    # triangles_exact takes each X and Y as it is: an error of 1e-12, within the 1e-9 of "triangles", fails
+    near = tri((0.0, 0.0), (1.0 + 1e-12, 0.0), (0.0, 1.0))
+    assert judge("triangles", [t], [near]) is None
+    assert judge("triangles_exact", [t], [tri(*t[::-1])]) is None
+    assert judge("triangles_exact", [t], [near]) is not None
+    assert judge("triangles_exact", [t], [tri(*t), tri(*t)]) is not None  # twice
 
     pt = lambda x, y, z: {"elevation_point": wkb.dumps(Point(x, y, z))}  # noqa: E731
     assert judge("elev_points", [(1.0, 2.0, 3.0)], [pt(1.0, 2.0, 3.0)]) is None
@@ -739,3 +745,29 @@ def test_a_table_function_shape_may_name_the_function_and_a_fixture_constant_is_
         oracles.run_groups(
             spark, [fixture], tmpdir=str(tmp_path), column_of=lambda name: None
         )
+
+
+def test_a_str_only_argument_that_differs_between_the_rows_fails_the_python_leg(
+    spark, tmp_path
+):
+    """The Python API takes a str_only argument as one Python str, so a case whose variant rows give it two values
+    cannot run through it: the leg reports the row, it does not call the function."""
+    from databricks.labs.gbx.bench import oracles
+
+    src = "def f(in_ar, out_ar, *a):\n    out_ar[:] = in_ar[0]\n"
+    case = oracles.Case(
+        "probe_str_only",
+        "gbx_rst_derivedband",
+        (None, src, "f"),
+        "null",
+        variants=((None, src.replace("in_ar[0]", "in_ar[0] + 1"), "f"),),
+    )
+
+    def column_of(name):
+        raise AssertionError("the Python API must not be called")
+
+    ((_, msg),) = oracles.run_session(
+        spark, [case], tmpdir=str(tmp_path), column_of=column_of
+    )
+    assert "python_func of gbx_rst_derivedband differs between the rows" in msg
+    assert "Fix: give the variant rows one value for it" in msg

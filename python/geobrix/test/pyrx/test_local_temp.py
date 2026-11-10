@@ -717,3 +717,31 @@ def test_the_listed_signature_counts_only_the_names_gdal_looks_up(
     assert {os.path.basename(p) for p in _env.sidecar_files(a, listed=True)} == {
         "a.tif.aux.xml"
     }
+
+
+def test_a_long_name_without_an_extension_is_shortened_with_its_digest_alone():
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    for long in (
+        "s" * 300,
+        "s" * 200 + "." + "e" * 40,
+    ):  # no dot; an "extension" too long to be one
+        short = lt.staged_name(long)
+        assert short == lt.staged_name(long) and "." not in short.rpartition("~")[2]
+        assert len(short.encode()) <= lt._STAGED_NAME_MAX and short.startswith("s" * 16)
+    assert lt.staged_name("s" * 300) != lt.staged_name("s" * 299 + "t")
+
+
+def test_a_listed_lookup_falls_back_to_by_name_checks(monkeypatch, tmp_path):
+    """A folder held as too large, one that cannot be listed, and a listing that lacks the file (written since) are each
+    checked name by name, so their sidecars are still found."""
+    from databricks.labs.gbx.pyrx import _env
+
+    a = _src(tmp_path, "a.tif", 10)
+    Path(a + ".aux.xml").write_bytes(b"<PAMDataset/>")
+    stale = _env._IndexedNames(["b.tif"])
+    for held in (_env._TOO_LARGE, None, stale):
+        monkeypatch.setattr(_env, "_LISTINGS", _env._FolderListings())
+        monkeypatch.setattr(_env._LISTINGS, "names", lambda *a, _h=held, **k: _h)
+        got = {os.path.basename(p) for p in _env.sidecar_files(a, listed=True)}
+        assert got == {"a.tif.aux.xml"}, held

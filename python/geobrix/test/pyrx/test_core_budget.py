@@ -231,3 +231,27 @@ def test_the_refusal_names_the_decoded_size_and_the_cap_in_whole_units():
     assert "5 MiB decoded" in text and "(2 MiB)" in text and "Fix: retile" in text
     assert budget.size_text(3 * 1024) == "3 KiB"
     assert budget.size_text(_MIB) == "1 MiB"
+
+
+def test_a_serverless_or_cgroup_worker_keeps_its_own_call_budget(monkeypatch):
+    """The Serverless flag and a task cgroup limit are memory signals of the worker's own: a carried cap holds only up
+    to its own budget. With neither, the carried cap is the budget (standard access mode).
+    """
+    from databricks.labs.gbx import _gdal_policy
+
+    for k in (*budget.CLASSIC_MEMORY_ENV, "IS_SERVERLESS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: None)
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 4096 * _MIB)
+    assert budget.call_decoded_budget() == 4096 * _MIB
+    monkeypatch.setenv("IS_SERVERLESS", "true")
+    assert budget.call_decoded_budget() == 64 * _MIB
+    monkeypatch.delenv("IS_SERVERLESS")
+    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: _1_GIB)
+    assert budget.call_decoded_budget() == int(_1_GIB * 0.15)
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 32 * _MIB)
+    assert (
+        budget.call_decoded_budget() == 32 * _MIB
+    )  # a cap lowered on the driver still holds
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: None)
+    assert budget.call_decoded_budget() == int(_1_GIB * 0.15)

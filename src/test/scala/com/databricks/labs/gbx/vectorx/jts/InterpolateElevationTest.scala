@@ -356,4 +356,20 @@ class InterpolateElevationTest extends AnyFunSuite {
                 Set(0.0)
         }
     }
+
+    test("the merge joins the nearest kept point, and the lesser (x, y) on an exact tie") {
+        val bl = Seq(line((0.0, 0.0, 1.0), (0.0, 10.0, 1.0)), line((2.0, 0.0, 2.0), (2.0, 10.0, 2.0)))
+        val near = InterpolateElevation.prepareSites(pts(), bl :+ line((1.2, 0.0, 9.0), (1.2, 5.0, 9.0)), 1.5, 0.0)._2
+        near(2)(0).getZ shouldBe 2.0 // (1.2, 0) joins (2, 0), the nearer
+        val tie = InterpolateElevation.prepareSites(pts(), bl :+ line((1.0, 0.0, 9.0), (1.0, 5.0, 9.0)), 1.5, 0.0)._2
+        tie(2)(0).getZ shouldBe 1.0 // (1, 0) is 1 from both and joins (0, 0), the lesser X
+    }
+
+    test("a mass point near a snapped vertex merges into it, the line's coordinate winning") {
+        val bl = Seq(line((0.0, 0.0, 0.0), (10.0, 0.0, 10.0)))
+        val (kept, lines) =
+            InterpolateElevation.prepareSites(pts((5.0, 0.05, 0.0), (5.5, 0.3, 0.0), (5.0, 8.0, 0.0)), bl, 1.0, 0.1)
+        kept.map(c => (c.x, c.y)).toSeq shouldBe Seq((5.0, 8.0))
+        lines(0).map(c => (c.x, c.y)).toSeq shouldBe Seq((0.0, 0.0), (5.0, 0.0), (10.0, 0.0))
+    }
 }

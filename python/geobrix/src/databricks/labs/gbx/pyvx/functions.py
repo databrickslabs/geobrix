@@ -175,20 +175,19 @@ _all_xyz = _tin.all_xyz
 _validate_mode = _tin.validate_mode
 
 
-def _mode_arg(rest):
-    """The ``mode`` of a TIN table function from its trailing arguments: ``'constrained'`` when left out, None for a
-    NULL (no rows, as for any NULL argument), else the word checked. A default in the signature could not tell the two
-    apart."""
-    if len(rest) > 1:
-        raise TypeError(
-            f"a TIN function takes one mode argument at the end; got {len(rest)}"
-        )
-    if not rest:
+# The default of a TIN table function's ``mode``: Spark passes an argument left out as nothing and a NULL as None, so
+# this tells the two apart (a NULL gives no rows, as for any NULL argument; left out is 'constrained'). A str, compared
+# by value, so a copy made by pickling the class still matches.
+_MODE_LEFT_OUT = "\x00gbx:mode-left-out"
+
+
+def _mode_arg(mode):
+    """The ``mode`` of a TIN table function: ``'constrained'`` when left out, None for a NULL, else the word checked."""
+    if mode == _MODE_LEFT_OUT:
         return "constrained"
-    if rest[0] is None:
-        return None
-    _validate_mode(rest[0])
-    return rest[0]
+    if mode is not None:
+        _validate_mode(mode)
+    return mode
 
 
 def _triangulate_schema():
@@ -206,7 +205,7 @@ class _TriangulateUDTF:
         merge_tolerance,
         snap_tolerance,
         split_point_finder,
-        *mode,
+        mode=_MODE_LEFT_OUT,
     ):
         mode = _mode_arg(mode)
         if (
@@ -262,7 +261,7 @@ class _InterpElevBBoxUDTF:
         width_px,
         height_px,
         srid,
-        *mode,
+        mode=_MODE_LEFT_OUT,
     ):
         mode = _mode_arg(mode)
         if None in (xmin, ymin, xmax, ymax, width_px, height_px, srid):
@@ -300,7 +299,7 @@ class _InterpElevGeomUDTF:
         grid_rows,
         cell_size_x,
         cell_size_y,
-        *mode,
+        mode=_MODE_LEFT_OUT,
     ):
         mode = _mode_arg(mode)
         from shapely import get_srid

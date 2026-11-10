@@ -301,7 +301,8 @@ object InterpolateElevation {
     }
 
     /** Moves each mass point within `snapTol` of a break line onto the nearest one (see `prepare_sites`): returns the
-     *  mass points left and the break lines with the snapped points inserted as vertices. */
+     *  mass points left (less those within `mergeTol` of an inserted vertex) and the break lines with the snapped
+     *  points inserted as vertices. */
     private def snapToBreaklines(
         points: Array[Coordinate],
         lines: Seq[Array[Coordinate]],
@@ -364,7 +365,10 @@ object InterpolateElevation {
             }
             buf.toArray
         }
-        (kept.toArray, out)
+        // a mass point left within mergeTol of a vertex the snap inserted merges into it (light step 3e)
+        val added = new SiteIndex(mergeTol)
+        inserted.foreach(_.foreach { case (_, q) => added.add(q) })
+        (if (inserted.exists(_.nonEmpty)) kept.filter(c => added.matchOf(c) == null).toArray else kept.toArray, out)
     }
 
     /** `coords` less each one whose X and Y an earlier one has (-0.0 is 0.0): the site list of the constrained mode,

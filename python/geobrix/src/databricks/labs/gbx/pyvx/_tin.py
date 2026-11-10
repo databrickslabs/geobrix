@@ -193,7 +193,9 @@ def prepare_sites(points, breaklines, merge_tolerance, snap_tolerance):
           segment, so it becomes a constraint vertex and an edge end: no zero-area triangle. A projection within
           ``merge_tolerance`` of a break line vertex already there (an end, an interior vertex or a point snapped
           before it) merges into that vertex instead, by the rule of step 2;
-       d. a snapped point leaves the mass points.
+       d. a snapped point leaves the mass points;
+       e. a mass point left within ``merge_tolerance`` of a vertex inserted by the snap merges into it, the line's
+          coordinate winning, as in step 2 (only possible where ``merge_tolerance`` is above ``snap_tolerance``).
     4. Then the mode triangulates the mass points left and the break lines.
     """
     tol = float(merge_tolerance)
@@ -266,7 +268,13 @@ def prepare_sites(points, breaklines, merge_tolerance, snap_tolerance):
                 row.extend(q for _, q in sorted(inserted[s], key=lambda t: t[0]))
                 s += 1
         out.append(np.array(row, dtype=float).reshape(-1, 3))
-    return pts[~snapped], out
+    added = _SiteIndex(tol)
+    for q in (q for ins in inserted for _, q in ins):
+        added.add(q)
+    keep = ~snapped
+    if any(inserted):
+        keep &= np.array([added.match(c) is None for c in rows], dtype=bool)
+    return pts[keep], out
 
 
 def validate_finder(split_point_finder) -> str:
@@ -310,16 +318,19 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
         pts = _unique_xy(np.vstack(lines + [pts]))
     if len(pts) < 3:
         return []
+    xy = pts[:, :2]
     try:
-        xy = pts[:, :2]
-        tri = Delaunay(
-            xy - xy.min(axis=0)
-        )  # from its corner: Qhull loses close points far from 0
+        # from its corner: Qhull loses close points far from 0
+        tri = Delaunay(xy - xy.min(axis=0))
     except QhullError:
         # Collinear/degenerate input ("Initial simplex is flat"): no 2D simplex
         # exists. Heavy returns gracefully (no triangles); match it.
         return []
     simplices = tri.simplices.copy()
+    if len(tri.coplanar):
+        simplices = _jts_delaunay(
+            xy
+        )  # Qhull left out a site: JTS's own triangles of every site
     if lines:
         where = {(x + 0.0, y + 0.0): i for i, (x, y) in enumerate(pts[:, :2].tolist())}
         segments = [
@@ -330,6 +341,18 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
         simplices = _recover_constraints(pts[:, :2], simplices, segments)
     z = pts[:, 2]
     return [np.column_stack([pts[s, 0], pts[s, 1], z[s]]) for s in simplices]
+
+
+def _jts_delaunay(xy: np.ndarray) -> np.ndarray:
+    """The triangles (site index triples) the JVM level's ``DelaunayTriangulationBuilder`` makes of ``xy``: the sites
+    sorted by (x, y), inserted into JTS's incremental triangulation framed on their envelope, tolerance 0 (the
+    ``_quadedge`` port). For the rare input whose close sites Qhull leaves out."""
+    from ._conforming import jts_delaunay
+
+    order = np.lexsort((xy[:, 1], xy[:, 0]))
+    env = tuple(float(v) for v in (*xy.min(axis=0), *xy.max(axis=0)))
+    tris = jts_delaunay([(x, y, 0.0) for x, y in xy[order].tolist()], env, 0.0)
+    return order[tris]
 
 
 def _orient2d(a, b, c) -> float:

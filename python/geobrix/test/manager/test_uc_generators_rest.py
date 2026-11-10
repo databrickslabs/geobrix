@@ -437,3 +437,23 @@ def test_the_conforming_mode_runs_here():
         _geoms(SQUARE), None, 0.0, 0.0, "MIDPOINT", "conforming"
     )
     assert len(rows) == 4
+
+
+def test_constrained_crossing_break_lines_raise_with_the_function_name_and_fix():
+    lines = _geoms(["LINESTRING (1 3, 9 6)", "LINESTRING (1 6, 9 3)"])
+    with pytest.raises(
+        ValueError,
+        match=r"^gbx_st_triangulate: mode 'constrained'.*Fix: split the break lines",
+    ):
+        forms.st_triangulate_rows(
+            _geoms(SQUARE), lines, 0.0, 0.0, "NONENCROACHING", "constrained"
+        )
+
+
+def test_a_null_mode_gives_no_rows():
+    assert (
+        forms.st_triangulate_rows(
+            _geoms(SQUARE), None, 0.0, 0.0, "NONENCROACHING", None
+        )
+        is None
+    )

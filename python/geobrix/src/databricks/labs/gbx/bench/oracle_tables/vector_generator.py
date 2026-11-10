@@ -94,6 +94,21 @@ VECTOR_GENERATOR = (
     Case("tri_null_points", TRI, (None, [], 0.0, 0.0, F), "no_rows"),
     Case("tri_empty_points", TRI, ([], [], 0.0, 0.0, F), "no_rows"),
     Case("tri_null_tolerance", TRI, (SQUARE_WKT, [], None, 0.0, F), "no_rows"),
+    # The constrained mode cannot make two crossing break lines both edges: it raises with a Fix on every level.
+    Case(
+        "tri_constrained_crossing_lines",
+        TRI,
+        (
+            SQUARE_WKT,
+            ["LINESTRING (1 3, 9 6)", "LINESTRING (1 6, 9 3)"],
+            0.0,
+            0.0,
+            F,
+            "constrained",
+        ),
+        "raises",
+        "Fix: split the break lines where they cross",
+    ),
     # A NULL mode gives no rows, as any NULL argument does; a mode left out is 'constrained'.
     Case("tri_null_mode", TRI, (KITE, [], 0.0, 0.0, F, None), "no_rows"),
     Case(

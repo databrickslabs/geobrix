@@ -392,6 +392,7 @@ A `snap_tolerance` above 0 moves points onto break lines before either mode tria
 2. The point takes the line's Z there, interpolated along the segment. A 2D break line has Z 0.
 3. The point becomes a new vertex of the line, so no triangle has zero area.
 4. A point that lands within `merge_tolerance` of a line vertex merges into it. With `merge_tolerance` 0, only the same X and Y merges.
+5. A point that does not snap but lies within `merge_tolerance` of a new vertex merges into that vertex.
 
 :::note Invocation surface
 Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t`), or through the Python entry, which takes the DataFrame first.

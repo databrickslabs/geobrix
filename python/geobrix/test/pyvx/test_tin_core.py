@@ -404,3 +404,61 @@ def test_snap_inserts_on_a_later_segment_of_a_polyline():
         [10.0, 4.0, 14.0],
         [10.0, 10.0, 20.0],
     ]
+
+
+def test_the_merge_joins_the_nearest_kept_point_and_the_lesser_on_a_tie():
+    # as JTS's KdTree: (1.2, 0) joins (2, 0), the nearer; (1, 0) is 1 from both and joins (0, 0), the lesser X
+    bl = [
+        np.array([[0.0, 0.0, 1.0], [0.0, 10.0, 1.0]]),
+        np.array([[2.0, 0.0, 2.0], [2.0, 10.0, 2.0]]),
+    ]
+    near = [np.array([[1.2, 0.0, 9.0], [1.2, 5.0, 9.0]])]
+    _, lines = _tin.prepare_sites(np.zeros((0, 3)), bl + near, 1.5, 0.0)
+    assert lines[2][0].tolist() == [2.0, 0.0, 2.0]
+    tie = [np.array([[1.0, 0.0, 9.0], [1.0, 5.0, 9.0]])]
+    _, lines = _tin.prepare_sites(np.zeros((0, 3)), bl + tie, 1.5, 0.0)
+    assert lines[2][0].tolist() == [0.0, 0.0, 1.0]
+
+
+def test_a_mass_point_near_a_snapped_vertex_merges_into_it():
+    # merge_tolerance 1 is above snap_tolerance 0.1: (5, 0.05) snaps to (5, 0); (5.5, 0.3) is out of snap reach but
+    # within 1 of the new vertex, so it merges into it, the line's coordinate winning
+    bl = [np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 10.0]])]
+    pts = _sites([(5.0, 0.05), (5.5, 0.3), (5.0, 8.0)])
+    kept, lines = _tin.prepare_sites(pts, bl, 1.0, 0.1)
+    assert kept[:, :2].tolist() == [[5.0, 8.0]]
+    assert lines[0][:, :2].tolist() == [[0.0, 0.0], [5.0, 0.0], [10.0, 0.0]]
+
+
+def test_constrained_keeps_close_points_far_from_0(monkeypatch):
+    # points under 1 cm apart at BNG magnitudes: Qhull on the raw coordinates leaves one out of every triangle; from
+    # the corner it keeps them all (the JTS port, the fallback, is ruled out here)
+    monkeypatch.setattr(
+        _tin, "_jts_delaunay", lambda xy: pytest.fail("Qhull left out a site")
+    )
+    rng = np.random.default_rng(0)
+    base = np.column_stack(
+        [530000 + rng.random(400) * 100, 180000 + rng.random(400) * 100]
+    )
+    pts = np.vstack([base, base[:40] + rng.random((40, 2)) * 0.01])
+    pts = np.column_stack([pts, np.zeros(len(pts))])
+    bl = [np.array([[530001.0, 180050.0, 0.0], [530099.0, 180050.0, 0.0]])]
+    tris = _tin.triangulate(pts, bl, 0.0, 0.0)
+    vs = {(v[0], v[1]) for t in tris for v in t.tolist()}
+    assert {(x, y) for x, y, _ in pts.tolist()} <= vs
+
+
+def test_the_jts_port_stands_in_where_qhull_leaves_out_a_site(monkeypatch):
+    # forced: the same sites through the JTS port give every site and a valid constrained triangulation
+    real = _tin.Delaunay
+
+    class LeftOut:
+        def __init__(self, xy):
+            self.simplices, self.coplanar = real(xy).simplices, [0]
+
+    monkeypatch.setattr(_tin, "Delaunay", LeftOut)
+    grid = _sites([(x, y) for x in range(0, 11, 2) for y in range(0, 11, 2)])
+    bl = [np.array([[1.0, 1.0, 1.0], [9.0, 8.0, 1.0]])]
+    tris = _tin.triangulate(grid, bl, 0.0, 0.0)
+    assert frozenset(((1.0, 1.0), (9.0, 8.0))) in _edges(tris)
+    assert sum(abs(_tin._orient2d(*t)) / 2 for t in tris) == pytest.approx(100.0)

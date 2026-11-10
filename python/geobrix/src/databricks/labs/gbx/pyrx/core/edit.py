@@ -28,8 +28,8 @@ def clip_shape(ds_crs, geom, geom_crs=None):
     """The cutline of *geom* in the CRS *ds_crs* of the raster it clips (a shapely geometry, or the GeoJSON-like dict of
     its reprojection).
 
-    Mirrors heavyweight ``RST_Clip``: if the cutline carries a positive SRID and the raster has a CRS, reproject the
-    cutline from EPSG:srid to the raster CRS before masking. Otherwise (srid 0/unknown, or no raster CRS) the cutline is
+    If the cutline carries a positive SRID and the raster has a CRS, the cutline is reprojected from EPSG:srid to the
+    raster CRS before masking. Otherwise (srid 0/unknown, or no raster CRS) the cutline is
     assumed to already be in the raster CRS and used as-is. Any failure to build the source CRS or transform falls back
     to using the cutline as-is.
     """
@@ -50,8 +50,8 @@ def clip_shape(ds_crs, geom, geom_crs=None):
                 # accepts GeoJSON geometries directly.
                 mask_shape = transform_geom(src_crs, ds_crs, mapping(geom))
         except Exception:
-            # Unknown EPSG / transform failure -> fall back to as-is (heavy's
-            # "fall back to the raster's CRS" intent: assume already aligned).
+            # Unknown EPSG / transform failure -> fall back to as-is: the cutline
+            # is taken to be in the raster's CRS already.
             mask_shape = geom
     return mask_shape
 
@@ -172,8 +172,8 @@ def clip_masked(
         )
     except ValueError as exc:
         # rasterio.mask raises ValueError("Input shapes do not overlap raster.")
-        # when the cutline misses the raster entirely. Match heavy's empty-result
-        # behavior with a null tile; re-raise anything else.
+        # when the cutline misses the raster entirely: that is an empty result,
+        # a null tile; re-raise anything else.
         if "do not overlap" in str(exc).lower():
             return None
         raise

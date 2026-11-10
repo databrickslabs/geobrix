@@ -1839,7 +1839,7 @@ def _read_cutline(geom_wkb, clip_crs):
     """The cutline geometry of a clip (``None`` for an empty one), with its CRS checked.
 
     A cutline that cannot be read, or a ``clip_crs`` that names no CRS, is data the tile cannot be clipped by:
-    the tile's error tile with the reason, as heavy ``RST_Clip`` gives it, not a failed task.
+    the tile's error tile with the reason, not a failed task.
     """
     import shapely
 
@@ -1865,7 +1865,7 @@ def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
 
     _env.configure_gdal_env()
     # The parsed cutline keeps the SRID (EWKT/EWKB carry it) so clip_to_geom can
-    # reproject it to the raster CRS, mirroring heavy RST_Clip.
+    # reproject it to the raster CRS.
     geom = _read_cutline(geom_wkb, clip_crs)
     if geom is None:
         return None

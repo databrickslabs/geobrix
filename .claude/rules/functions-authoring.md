@@ -45,6 +45,10 @@ Python-only keywords (the force-output trio) are declared in the row's `python` 
   L4 `sql` to `"L0"`. L0 is never a default: add the name to `manager/levels.py` `PREFERENCE` only after a measurement.
 - A table function over a SQL kernel inlines the body (UC refuses a SQL function inside a generator). A body must not
   use a parameter name as a lambda variable or alias: inlining renames identifiers outside quotes.
+- Inlining puts an argument a helper reads twice or more in once (`transform(array(arg), __gbx<n>_<p> -> body)[0]`),
+  unless it is a column, a literal or a CAST of one. Copying it multiplied down helper chains (eastnorthasbng was 28x,
+  80 KB, uncompilable, ~2 s a query on DBR 19); `test_no_sql_kernel_grows_by_copying_an_argument_when_inlined` holds
+  every kernel to 4x its text. Such a helper body runs in a lambda: no Python UDF (a host stand-in) inside it.
 - A session-only scalar gets a stub with an L4 spec holding only `stub` (the Fix sentence, without a `Fix:` prefix).
   The row has no UC level; `gbx.uc.install(..., stubs=True)` creates the raising function. Aggregates and generators get none.
 - `_array`, `_partial` and `_finalize` names are scalars; a `_finalize` needs its `_partial`. The collision gate

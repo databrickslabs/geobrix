@@ -238,6 +238,47 @@ def test_helper_calls_nested_in_an_argument_inline_like_they_render():
     )  # the UC call keeps the nesting
 
 
+def test_an_argument_a_helper_reads_twice_is_inlined_once():
+    h = [{"name": "gbx__h", "params": [["k", "INT"]], "returns": "INT", "sql": "k * k"}]
+    # an expression goes in once, bound to a lambda variable; a column or a literal is copied as before
+    assert (
+        sqlbody.inlined("{q}gbx__h(x + 1)", h)
+        == "(transform(array(x + 1), __gbx0_k -> __gbx0_k * __gbx0_k)[0])"
+    )
+    assert sqlbody.inlined("{q}gbx__h(x)", h) == "((x) * (x))"
+    assert sqlbody.inlined("{q}gbx__h(-2)", h) == "((-2) * (-2))"
+    assert sqlbody.inlined("{q}gbx__h(CAST(x AS BIGINT))", h) == (
+        "((CAST(x AS BIGINT)) * (CAST(x AS BIGINT)))"
+    )
+    # a helper called in an argument of a helper that reads it twice: the inner body is inlined once
+    g = h + [
+        {
+            "name": "gbx__g",
+            "params": [["a", "STRING"]],
+            "returns": "INT",
+            "sql": "length(a) + 1",
+        }
+    ]
+    text = sqlbody.inlined("{q}gbx__h({q}gbx__g(s))", g)
+    assert text.count("length(") == 1, text
+
+
+def test_no_sql_kernel_grows_by_copying_an_argument_when_inlined():
+    # The session's L0 function and a table function carry the body inlined. A helper argument copied into each place
+    # the helper reads it multiplies down a chain of helpers: gbx_bng_eastnorthasbng once grew 28 times (80 KB), a plan
+    # Spark could not compile, ~2 s per query on DBR 19.
+    man = manifest.load()
+    for fn in man.functions.values():
+        for src in (sqlbody.l0_source(fn), sqlbody.l4_source(fn)):
+            if src is None:
+                continue
+            body, helpers = src
+            source = len(body) + sum(len(h["sql"]) for h in helpers)
+            grown = len(sqlbody.inlined(body, helpers))
+            # a body may call one helper several times (each call is a copy); 4x leaves room for that and no more
+            assert grown <= 4 * source, (fn.sql_name, source, grown)
+
+
 def test_the_inlining_guards_name_a_cycle_an_unbalanced_call_and_a_leftover_qualifier():
     loop = [
         {

@@ -5,6 +5,12 @@ Catalog, nothing in the session. A table function cannot call a SQL function (UC
 table function over a SQL kernel, and the session's temporary function, carry the body with its helpers INLINED: each
 ``{q}gbx__x(args)`` is replaced by the helper's body with its parameters bound to the (parenthesised) arguments.
 
+An argument the helper reads more than once goes in once, unless it is a column, a literal or a CAST of one: the
+helper's body becomes ``transform(array(arg), v -> body)[0]``, evaluated where the call is. Copying the argument into
+each read multiplies down a chain of helpers: ``gbx_bng_eastnorthasbng`` once inlined to 28 times its text (80 KB),
+which Spark could not compile, at about 2 s a query on DBR 19. Such a body runs in a lambda, so it cannot call a Python
+UDF (a host stand-in for a product function is one).
+
 Pure Python, no pyspark: it runs where the DDL is built.
 
 A body must not use a parameter name as a lambda variable or an alias: inlining renames identifiers outside quotes
@@ -220,10 +226,37 @@ def inline_helpers(body: str, helpers: Sequence[Mapping], _depth: int = 0) -> st
                 f"{m.group(1)} takes {len(params)} argument(s), the body passes {len(args)}"
             )
         inner = inline_helpers(h["sql"], helpers, _depth + 1)
-        bound = rename(inner, {p: f"({a})" for p, a in zip(params, args)})
+        mapping, once = {}, []
+        for p, a in zip(params, args):
+            if _TRIVIAL.match(a) or _reads(inner, p) < 2:
+                mapping[p] = f"({a})"
+            else:  # an expression the helper reads more than once: computed once, read through a lambda variable
+                mapping[p] = f"__gbx{_depth}_{p}"
+                once.append((mapping[p], a))
+        bound = rename(inner, mapping)
+        for var, a in reversed(once):
+            bound = f"transform(array({a}), {var} -> {bound})[0]"
         out.append(body[pos : m.start()])
         out.append(f"({bound})")
         pos = end
+
+
+# A column, a parameter, a lambda variable or a literal, or a CAST of one: copying it costs nothing, so it is never
+# bound (a lambda is evaluated without code generation).
+_ATOM = r"\(*\s*(?:[A-Za-z_]\w*|`[^`]*`|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?[A-Za-z]?|'(?:[^'\\]|\\.|'')*')\s*\)*"
+_TRIVIAL = re.compile(
+    r"^(?:"
+    + _ATOM
+    + r"|\(*\s*CAST\("
+    + _ATOM
+    + r"\s+AS\s+[A-Za-z_]\w*(?:\(\d+(?:,\s*\d+)?\))?\)\s*\)*)$",
+    re.IGNORECASE,
+)
+
+
+def _reads(body: str, name: str) -> int:
+    """How many places of ``body`` read the parameter ``name`` (the places :func:`rename` rewrites)."""
+    return rename(body, {name: "\x00"}).count("\x00")
 
 
 def _in_code(text: str, idx: int) -> bool:

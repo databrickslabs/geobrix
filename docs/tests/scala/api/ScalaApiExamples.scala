@@ -595,47 +595,6 @@ result.show()
 +---------------+
 """.trim
 
-  val rst_isempty_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif) which carries real pixel data.
-// The single-band sentinel2 tile has NoData=0 with all pixels equal zero (isempty=true).
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_isempty(col("tile")).alias("is_empty"))
-result.show()
-""".trim
-
-  val rst_isempty_scala_example_output: String =
-    """
-+--------+
-|is_empty|
-+--------+
-|false   |
-+--------+
-""".trim
-
-  val rst_tryopen_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif — committed, always openable).
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_tryopen(col("tile")).alias("try_open"))
-result.show()
-""".trim
-
-  val rst_tryopen_scala_example_output: String =
-    """
-+--------+
-|try_open|
-+--------+
-|true    |
-+--------+
-""".trim
-
   // ===========================================================================
   // Tile ops & constructors family (Scala)
   // ===========================================================================
@@ -843,141 +802,6 @@ result.show()
   // Aggregators family (Scala)
   // ===========================================================================
 
-  val rst_binpoints_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Multi-row fixture: 3 BNG (EPSG:27700) scalar x/y/z rows over a 1 km extent at 10×10 pixels.
-val schema = StructType(Seq(
-  StructField("region", StringType()), StructField("x", DoubleType()),
-  StructField("y", DoubleType()), StructField("z", DoubleType())))
-val rows = Seq(("R1",550100.0,180100.0,42.5),("R1",550200.0,180200.0,45.1),("R1",550300.0,180500.0,38.7))
-val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map(r => org.apache.spark.sql.Row(r._1,r._2,r._3,r._4))), schema)
-val result = df.groupBy("region").agg(
-  rx.rst_binpoints_agg(col("x"), col("y"), col("z"),
-    lit(550000.0), lit(180000.0), lit(551000.0), lit(181000.0),
-    lit(10), lit(10), lit(27700)).alias("tile")
-)
-result.show()
-""".trim
-
-  val rst_binpoints_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
-""".trim
-
-  val rst_combineavg_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Multi-tile fixture: load multiband tif and split to 3 per-band rows (same grid).
-val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
-val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
-val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("region", lit("R1"))
-val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("region", lit("R1"))
-val df = b1.union(b2).union(b3)
-val result = df.groupBy("region").agg(rx.rst_combineavg_agg(col("tile")).alias("avg"))
-result.show()
-""".trim
-
-  val rst_combineavg_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|avg                                                        |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
-  val rst_derivedband_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Multi-tile fixture: load multiband tif and split to 3 per-band rows.
-val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
-val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
-val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("region", lit("R1"))
-val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("region", lit("R1"))
-val df = b1.union(b2).union(b3)
-val fn = "def fn(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n    out_ar[:] = in_ar[0]\n"
-val result = df.groupBy("region").agg(rx.rst_derivedband_agg(col("tile"), fn, "fn").alias("derived"))
-result.show()
-""".trim
-
-  val rst_derivedband_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|derived                                                    |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
-  val rst_frombands_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Multi-tile fixture: load multiband tif and split to 3 per-band rows with band_index.
-val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
-val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1)).withColumn("region", lit("R1"))
-val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2)).withColumn("region", lit("R1"))
-val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3)).withColumn("region", lit("R1"))
-val df = b1.union(b2).union(b3)
-val result = df.groupBy("region").agg(rx.rst_frombands_agg(col("tile"), col("band_index")).alias("stacked"))
-result.show()
-""".trim
-
-  val rst_frombands_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|stacked                                                    |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
-  val rst_rasterize_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Multi-row fixture: 3 rows with WKB polygons + burn values over a 4x4 EPSG:4326 canvas.
-spark.sql("CREATE OR REPLACE TEMP VIEW _rst_agg_src AS SELECT 'R1' AS region, unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000') AS geom, 1.0 AS value UNION ALL SELECT 'R1', unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000'), 2.0 UNION ALL SELECT 'R1', unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000'), 3.0")
-val df = spark.table("_rst_agg_src")
-val result = df.groupBy("region").agg(
-  rx.rst_rasterize_agg(col("geom"), col("value"), lit(0.0), lit(0.0), lit(4.0), lit(4.0), lit(8), lit(8), lit(4326)).alias("burned")
-)
-result.show()
-""".trim
-
-  val rst_rasterize_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|burned                                                     |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
   val rst_h3_rasterize_agg_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1063,33 +887,6 @@ result.show()
 (one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
-  // =========================================================================
-  // Isoband example (tabbed docs)
-  // =========================================================================
-
-  val rst_isoband_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Reclassify DEM elevation into five 50-metre bands [0,50),[50,100),...,[200,311).
-// Returns ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>.
-val dem = spark.table("dem_rasters")
-val breaks = array(lit(0.0), lit(50.0), lit(100.0), lit(150.0), lit(200.0), lit(311.0))
-val result = dem.select(rx.rst_isoband(col("tile"), breaks).alias("patches"))
-result.show(truncate = false)
-""".trim
-
-  val rst_isoband_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|patches                                                    |
-+-----------------------------------------------------------+
-|[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
-+-----------------------------------------------------------+
-(ARRAY of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
-""".trim
-
   val rst_derivedband_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1110,32 +907,6 @@ result.show(truncate = false)
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (derived band raster from Python UDF)
-""".trim
-
-  val rst_merge_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-
-// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
-val multiband = spark.table("multiband_rasters")
-val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
-val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
-val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
-val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
-val result = bands.groupBy("region").agg(rx.rst_merge(collect_list("tile")).alias("merged"))
-result.show(truncate = false)
-""".trim
-
-  val rst_merge_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|merged                                                     |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(merged raster from aligned tiles)
 """.trim
 
   // ============================================================================
@@ -1282,26 +1053,6 @@ result.show(truncate = false)
 (array of tile structs: [{z, x, y, bytes}, ...])
 """
 
-  val rst_h3_tessellate_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_h3_tessellate(col("tile"), lit(7)).alias("h3_cells"))
-result.show(truncate = false)
-""".trim
-
-  val rst_h3_tessellate_scala_example_output: String =
-    """
-+---+
-|h3_|
-+---+
-|[{ |
-+---+
-(array of structs: [{cellid: LONG, raster: BINARY}, ...])
-"""
-
   val h3_cell_bbox_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1326,98 +1077,6 @@ result.show(truncate = false)
 +------------------+------------------------------+
 (STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
 """
-
-  val rst_quadbin_tessellate_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_quadbin_tessellate(col("tile"), lit(12)).alias("qb_cells"))
-result.show(truncate = false)
-""".trim
-
-  val rst_quadbin_tessellate_scala_example_output: String =
-    """
-+---+
-|qb_|
-+---+
-|[{ |
-+---+
-(array of tile structs per quadbin cell, zoom 12)
-"""
-
-  // =========================================================================
-  // Generator Functions (Scala)
-  // =========================================================================
-
-  val rst_tooverlappingtiles_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_tooverlappingtiles(col("tile"), lit(64), lit(64), lit(8)).alias("tiles"))
-result.show(truncate = false)
-""".trim
-
-  val rst_tooverlappingtiles_scala_example_output: String =
-    """
-+-----+
-|tiles|
-+-----+
-|[{0, |
-+-----+
-(array of overlapping tile structs with 8% overlap)
-"""
-
-  val rst_separatebands_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("multiband_rasters")
-val result = raster.select(rx.rst_separatebands(col("tile")).alias("bands"))
-result.show(truncate = false)
-""".trim
-
-  val rst_separatebands_scala_example_output: String =
-    """
-+-----+
-|bands|
-+-----+
-|[{0, |
-+-----+
-(array of tile structs: one per band from the multiband raster)
-"""
-
-  val rst_maketiles_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_maketiles(col("tile"), lit(1.0)).alias("tiles"))
-result.show(truncate = false)
-""".trim
-
-  val rst_maketiles_scala_example_output: String =
-    """
-+-----+
-|tiles|
-+-----+
-|[{0, |
-+-----+
-(array of tile structs per MB subdivision)
-"""
-
-  // =========================================================================
-  // rst_custom_tessellate
-  //
-  // Fixture: synthesize a 2km × 2km raster in EPSG:27700 (BNG) over central
-  // London, then tessellate with a matching custom grid (same CRS and extent).
-  // Resolution 1 = four 1km cells subdividing the 2km root cell.
-  // =========================================================================
 
   // =========================================================================
   // rst_custom_rasterize_agg
@@ -1464,29 +1123,6 @@ result.show()
 +------+-----------------------------------------------------------+
 (one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
 """.trim
-
-  val rst_custom_tessellate_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Synthetic 2km London raster (EPSG:27700); custom grid with the same CRS and extent.
-val londonWkt = "POLYGON((529000 179000, 531000 179000, 531000 181000, 529000 181000, 529000 179000))"
-val raster = spark.range(1).select(
-  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
-    lit(529000.0), lit(179000.0), lit(531000.0), lit(181000.0),
-    lit(200), lit(200), lit(27700)).alias("tile"))
-// Custom grid covering the same EPSG:27700 extent as the raster.
-val customGrid = call_function("gbx_custom_grid",
-  lit(529000), lit(531000), lit(179000), lit(181000), lit(2), lit(2000), lit(2000), lit(27700))
-val result = raster.select(rx.rst_custom_tessellate(col("tile"), customGrid, lit(1)).alias("chips"))
-result.show(truncate = false)
-""".trim
-
-  val rst_custom_tessellate_scala_example_output: String =
-    """[Row(cellid=<bigint>, raster=Row(...)), ...]
-(one v2-Tile Row per custom-grid cell; cellid is BIGINT encoding the custom cell)"""
 
   // =========================================================================
   // VectorX TIN family — st_triangulate, st_interpolateelevationbbox,

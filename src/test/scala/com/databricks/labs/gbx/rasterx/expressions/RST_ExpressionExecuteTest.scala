@@ -80,20 +80,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         noDataDs.delete()
     }
 
-    test("RST_IsEmpty should check if raster is empty") {
-        val isEmpty = RST_IsEmpty.execute(ds)
-        isEmpty shouldBe false
-    }
-
-    test("RST_Merge should merge multiple rasters") {
-        val (mergedDs, _) = RST_Merge.execute(Array(ds, ds, ds), Map.empty)
-        mergedDs should not be null
-        mergedDs.getRasterCount shouldBe ds.getRasterCount
-        mergedDs.getRasterXSize should be >= ds.getRasterXSize
-        mergedDs.getRasterYSize should be >= ds.getRasterYSize
-        RasterDriver.releaseDataset(mergedDs)
-    }
-
     test("RST_RasterToWorldCoordX should convert raster to world X coordinate") {
         val x = RST_RasterToWorldCoordX.execute(ds, 10000, 10000)
         x should not be 0.0

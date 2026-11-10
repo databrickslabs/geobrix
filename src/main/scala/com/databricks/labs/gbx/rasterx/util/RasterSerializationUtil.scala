@@ -188,40 +188,6 @@ object RasterSerializationUtil {
         )
     }
 
-    /** Reshape a v1 (3-field) or v2 (9-field) tile InternalRow to the canonical v2 9-field
-      * layout WITHOUT opening / re-encoding the raster. v2 (9-field) rows pass through unchanged;
-      * v1 rows are widened: (cellid, raster, metadata) → (cellid, raster, null×6, metadata).
-      *
-      * Use this at aggregator update() time so every buffered row is 9-field, making the
-      * size==1 fast-path passthrough and the serialize UnsafeProjection (which is created
-      * over the 9-field dataType) both safe on v1 input.
-      */
-    def normalizeToV2Row(row: InternalRow): InternalRow = {
-        val lyt = tileLayout(row)
-        if (lyt.isV2) row
-        else {
-            // v1: cellid@0, raster@1, metadata@2 → v2 9-field row; read v1 by its own positional layout
-            val cellid   = row.getLong(lyt.cellid)
-            val raster   = if (row.isNullAt(lyt.raster))   null else row.getBinary(lyt.raster)
-            val metadata = if (row.isNullAt(lyt.metadata)) null else row.getMap(lyt.metadata)
-            V2Tile.row(cellid = cellid, raster = raster, metadata = metadata)
-        }
-    }
-
-    /** Deserialize an array of tile structs to (cellId, Dataset, metadata); caller must release each Dataset.
-      *
-      * @param elementFieldCount the declared field count of the element StructType (3 for v1, 9 for v2).
-      *                          Must come from the expression's declared input schema — never hardcoded.
-      */
-    def arrayToTiles(array: ArrayData, dataType: DataType, elementFieldCount: Int = 3): Seq[(Long, Dataset, Map[String, String])] = {
-        val n = array.numElements()
-        (0 until n).map { i =>
-            val row = array.getStruct(i, elementFieldCount)
-            rowToTile(row, dataType)
-        }
-    }
-
-
     /** Runs an array function over the usable members of an array of tile structs, and answers as the light tier does:
       *
       *   - a NULL element, an error tile, a tile with no raster and a tile whose bytes cannot be opened are skipped

@@ -11,20 +11,20 @@ import org.scalatest.matchers.should.Matchers._
 /**
   * Self-contained-payload regression: tile.raster bytes must be reachable from any
   * executor — VRT XML referencing a /vsimem/ tempfile on the producing executor is
-  * not. Three RasterX operations (MergeRasters, MergeBands, PixelCombineRasters)
+  * not. RasterX operations (MergeBands, PixelCombineRasters)
   * historically left their result metadata claiming driver=VRT (the input dataset's
   * driver) even though their on-disk output was GTiff; that mis-tagging propagated
   * through RasterDriver.writeToBytes and caused the on-wire payload to be VRT XML.
   *
   * This test asserts the post-fix invariant: for every function that flows through
-  * those three operations, the serialized tile.raster bytes start with the GTiff
+  * those operations, the serialized tile.raster bytes start with the GTiff
   * magic and never with `<VRTDataset`, and tile.metadata("driver") reports "GTiff".
   *
   * Functions exercised (one per VRT-using internal operation):
   *   - rst_frombands  → MergeBands
-  *   - rst_combineavg → PixelCombineRasters (CombineAVG → PixelCombineRasters)
+  *   - rst_derivedband → PixelCombineRasters
   *
-  * Adding a new function that touches any of those three operations? Add it here.
+  * Adding a new function that touches any of those operations? Add it here.
   */
 class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
 
@@ -74,33 +74,34 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         assertSelfContained(bytes, driver, "rst_frombands")
     }
 
-    test("rst_combineavg_agg returns self-contained GTiff bytes (no VRT payload)") {
+    test("rst_derivedband returns self-contained GTiff bytes (no VRT payload)") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
         TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
-        // No rst_clip warmup needed: PixelCombineRasters.combine now
-        // pre-creates NodeFilePathUtil.rootPath itself, so combineavg_agg
-        // is safe as the first op in a fresh JVM.
+        // No rst_clip warmup needed: PixelCombineRasters.combine pre-creates
+        // NodeFilePathUtil.rootPath itself, so derivedband is safe as the first
+        // op in a fresh JVM.
+        val pyfunc =
+            "import numpy as np\n" +
+            "def identity(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n" +
+            "    out_ar[:] = in_ar[0]\n"
         val df = Seq(
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF",
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B02.TIF",
-          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B03.TIF"
+          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
         ).toDF("path")
             .withColumn("tile", udfs.rasterFromPath(col("path")))
-            .groupBy(lit(1).alias("g"))
-            .agg(rst_combineavg_agg(col("tile")).alias("avg"))
+            .select(rst_derivedband(col("tile"), pyfunc, "identity").alias("derived"))
             .select(
-              col("avg.raster").alias("raster"),
-              col("avg.metadata").alias("metadata")
+              col("derived.raster").alias("raster"),
+              col("derived.metadata").alias("metadata")
             )
 
         val row = df.collect().head
         val bytes = row.getAs[Array[Byte]]("raster")
         val driver = row.getAs[Map[String, String]]("metadata").getOrElse("driver", "")
-        assertSelfContained(bytes, driver, "rst_combineavg_agg")
+        assertSelfContained(bytes, driver, "rst_derivedband")
     }
 
 }

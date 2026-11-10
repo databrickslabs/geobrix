@@ -64,7 +64,7 @@ class GdalParallelSafetyTest extends AnyFunSuite {
 
   test("parallel scaled groupBy().agg() (hash keys + broadcast group, no coalesce) is safe + correct") {
     // Mirrors the runAggregate fan-out fix: hash-partition keys into a bounded fan-out,
-    // broadcast the small group, run a real groupBy(key).agg(combineavg) across concurrent
+    // broadcast the small group, run a real groupBy(key).agg(h3 rasterize) across concurrent
     // GDAL tasks in local[4]. Confirms the aggregate path is parallel-safe + produces a tile
     // per key (no SIGSEGV, no coalesce(1)).
     val spark = SparkSession.builder()
@@ -79,15 +79,9 @@ class GdalParallelSafetyTest extends AnyFunSuite {
       gdal.AllRegister()
       TestL1.installAll(spark)
 
-      val tif = this.getClass
-        .getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-        .toString.replace("file:/", "/")
-      val bytes = Files.readAllBytes(Paths.get(tif))
       import spark.implicits._
-      // 2 aligned copies = the combineavg group.
-      val groupDf = spark.createDataFrame(Seq((0L, bytes), (1L, bytes))).toDF("cellid", "rb")
-        .withColumn("tile", functions.rst_fromcontent(col("rb"), lit("GTiff")))
-        .select(col("tile"))
+      // The bench's fixed H3 cell set = the rasterize group (value NULL: presence-mask burn).
+      val groupDf = BenchDispatch.h3RasterizeCells().map(c => (c, Option.empty[Double])).toDF("cellid", "value")
         .cache()
       groupDf.count()
 
@@ -97,8 +91,8 @@ class GdalParallelSafetyTest extends AnyFunSuite {
       val keys = spark.range(n).select(col("id").alias("key")).repartition(parts, col("key"))
       val scaled = keys.crossJoin(broadcast(groupDf)) // no coalesce(1)
       val ext = (0.0, 0.0, 0.0, 0.0, 0, 0, 0)
-      val aggCol = BenchDispatch.aggregateColumn("rst_combineavg_agg", scaled, ext, Map.empty)
-      val outRows = scaled.groupBy("key").agg(aggCol.alias("out")).count()
+      val aggCol = BenchDispatch.aggregateColumn("rst_h3_rasterize_agg", scaled, ext, Map.empty)
+      val outRows = scaled.groupBy("key").agg(aggCol.alias("out")).filter(col("out").isNotNull).count()
       assert(outRows == n.toLong, s"expected one aggregated tile per key: $outRows vs $n")
     } finally spark.stop()
   }

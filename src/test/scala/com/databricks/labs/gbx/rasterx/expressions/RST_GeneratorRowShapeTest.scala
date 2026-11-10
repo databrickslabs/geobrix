@@ -12,12 +12,11 @@ import org.scalatest.matchers.should.Matchers._
 
 
 /**
-  * Row-shape contract for the RasterX generators: every row a generator emits, on every path
-  * (normal, error, passthrough), has to fit the single `tile` column its `elementSchema` declares.
+  * Row-shape contract for the RasterX generator (`gbx_rst_xyzpyramid`, the one with a JVM form): every row it
+  * emits, on every path (normal, error), has to fit the `elementSchema` it declares.
   *
-  * Spark projects generator rows through `elementSchema`. A generator that emits the tile row
-  * itself (9 fields) instead of a one-field row wrapping it hands Spark a Long where it expects
-  * a struct, which surfaces as an opaque ClassCastException instead of the documented error row.
+  * Spark projects generator rows through `elementSchema`. A generator that emits a row of another shape
+  * surfaces as an opaque ClassCastException instead of the documented row.
   */
 class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
 
@@ -41,132 +40,6 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
         TestL1.installAll(spark)
         Seq((1, s"$modisPath/$b01")).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
-    }
-
-    private val customGrid: Column =
-        struct(lit(0L), lit(100L), lit(0L), lit(100L), lit(2), lit(10), lit(10), lit(32633))
-
-    /** Every tile-emitting generator (SQL name, applied to the `raster` column). */
-    private def tileGenerators(): Seq[(String, Column => Column)] = {
-        import com.databricks.labs.gbx.rasterx.functions._
-        Seq(
-          "gbx_rst_separatebands"      -> ((r: Column) => rst_separatebands(r)),
-          "gbx_rst_tooverlappingtiles" -> ((r: Column) => rst_tooverlappingtiles(r, lit(256), lit(256), lit(10))),
-          "gbx_rst_maketiles"          -> ((r: Column) => rst_maketiles(r, lit(4))),
-          "gbx_rst_h3_tessellate"      -> ((r: Column) => rst_h3_tessellate(r, lit(3))),
-          "gbx_rst_quadbin_tessellate" -> ((r: Column) => rst_quadbin_tessellate(r, lit(5))),
-          "gbx_rst_custom_tessellate"  -> ((r: Column) => rst_custom_tessellate(r, customGrid, lit(2)))
-        )
-    }
-
-    test("a failing tile yields one error row in the tile column for every tile generator") {
-        val df = corruptTile()
-        tileGenerators().foreach { case (name, gen) =>
-            val rows = df.select(gen(col("raster")).as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
-            withClue(s"$name: ") {
-                rows.length shouldBe 1
-                rows.head.isNullAt(0) shouldBe false
-            }
-        }
-    }
-
-    test("rst_maketiles with a non-positive size passes the tile through as one row in the tile column") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        val df = validTile()
-        val widths = df
-            .select(rst_width(col("raster")).as("w"), rst_maketiles(col("raster"), lit(0)).as("t"))
-            .select(col("w"), rst_width(col("t")).as("tw"))
-            .collect()
-        widths.length shouldBe 1
-        widths.head.isNullAt(1) shouldBe false
-        widths.head.getInt(1) shouldBe widths.head.getInt(0)
-    }
-
-    test("a generator error tile carries the cellid of the tile it failed on") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        // Tessellate a real raster into tiles that have a cell id, then fail the next generator on them with
-        // a NULL resolution (a bad row of data, answered inside the generator's guarded body).
-        val tiles = validTile().select(rst_h3_tessellate(col("raster"), lit(1)).as("t")).limit(2)
-        val rows = tiles
-            .select(col("t.cellid").as("in_cell"), rst_h3_tessellate(col("t"), lit(null).cast("int")).as("e"))
-            .select(
-              col("in_cell"),
-              col("e.cellid").as("out_cell"),
-              col("e.metadata").getItem("error_message").as("err")
-            )
-            .collect()
-        rows.length should be > 0
-        rows.foreach { r =>
-            r.isNullAt(2) shouldBe false // the error row, not a tessellated tile
-            r.getLong(1) shouldBe r.getLong(0)
-        }
-    }
-
-    /** The message chain of whatever `df.collect()` throws. */
-    private def raised(df: DataFrame): String = {
-        val ex = intercept[Throwable](df.collect())
-        LazyList.iterate(Option(ex))(_.flatMap(t => Option(t.getCause))).takeWhile(_.isDefined).flatMap(_.toSeq)
-            .map(t => String.valueOf(t.getMessage)).mkString(" | ")
-    }
-
-    test("a tessellate with an unknown assignment or coverage raises, naming the value, on every grid") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        val df = validTile()
-        val calls: Seq[(String, String, Column)] = Seq(
-          ("h3", "assignment", rst_h3_tessellate(col("raster"), 3, "sideways")),
-          ("h3", "coverage", rst_h3_tessellate(col("raster"), 3, "centroid", "sideways")),
-          ("quadbin", "assignment", rst_quadbin_tessellate(col("raster"), 5, "sideways")),
-          ("quadbin", "coverage", rst_quadbin_tessellate(col("raster"), 5, "centroid", "sideways")),
-          ("custom", "assignment", rst_custom_tessellate(col("raster"), customGrid, 2, "sideways")),
-          ("custom", "coverage", rst_custom_tessellate(col("raster"), customGrid, 2, "centroid", "sideways"))
-        )
-        calls.foreach { case (grid, arg, c) =>
-            withClue(s"$grid $arg: ") {
-                val msg = raised(df.select(c.as("t")))
-                msg should include(s"$arg must be one of")
-                msg should include("'sideways'")
-            }
-        }
-    }
-
-    test("a tessellate with a NULL resolution is the row's error tile, not resolution 0") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        val nullRes = lit(null).cast("int")
-        val gens: Seq[(String, Column)] = Seq(
-          "h3" -> rst_h3_tessellate(col("raster"), nullRes),
-          "quadbin" -> rst_quadbin_tessellate(col("raster"), nullRes),
-          "custom" -> rst_custom_tessellate(col("raster"), customGrid, nullRes)
-        )
-        gens.foreach { case (grid, c) =>
-            val rows = validTile().select(c.as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
-            withClue(s"$grid: ") {
-                rows.length shouldBe 1
-                rows.head.isNullAt(0) shouldBe false
-            }
-        }
-    }
-
-    test("rst_tooverlappingtiles raises for a window below 1 pixel or an overlap outside 0 to below 100") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        val df = validTile()
-        raised(df.select(rst_tooverlappingtiles(col("raster"), 0, 32, 10).as("t"))) should include("tile_width must be 1 or more")
-        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 0, 10).as("t"))) should include("tile_height must be 1 or more")
-        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 32, 100).as("t"))) should include("overlap must be from 0 to below 100")
-        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 32, -1).as("t"))) should include("overlap must be from 0 to below 100")
-    }
-
-    test("rst_tooverlappingtiles and rst_maketiles with a NULL size are the row's error tile") {
-        import com.databricks.labs.gbx.rasterx.functions._
-        val nullInt = lit(null).cast("int")
-        val calls = Seq(
-          rst_tooverlappingtiles(col("raster"), nullInt, lit(32), lit(10)),
-          rst_maketiles(col("raster"), nullInt)
-        )
-        calls.foreach { c =>
-            val rows = validTile().select(c.as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
-            rows.length shouldBe 1
-            rows.head.isNullAt(0) shouldBe false
-        }
     }
 
     test("rst_xyzpyramid: a corrupt tile yields one row with a NULL tile (the pyramid struct cannot carry an error tile)") {
@@ -243,7 +116,7 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     // Declarative on purpose: the generators this suite covers are the ones its tests iterate over, so the
     // check does not depend on test order or on a `-z` filter.
     test("this suite covers every generator the contract assigns to it") {
-        (tileGenerators().map(_._1) :+ xyzPyramid).toSet shouldBe GeneratorContract.coveredBy(GeneratorContract.RasterSuite)
+        Set(xyzPyramid) shouldBe GeneratorContract.coveredBy(GeneratorContract.RasterSuite)
     }
 
 }

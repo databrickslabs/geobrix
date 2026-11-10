@@ -36,7 +36,7 @@ class GeneratorCoverageGuardTest extends PlanTest with SilentSparkSession {
 
     test("every registered gbx function names an expression class that loads") {
         val registered = registeredGbx()
-        assert(registered.size > 100, s"only ${registered.size} gbx_* functions registered: the guard would be vacuous")
+        assert(registered.size > 50, s"only ${registered.size} gbx_* functions registered: the guard would be vacuous")
         // A function whose class does not resolve cannot be classified, so it must not be dropped silently.
         val unloadable = registered.filter { case (_, className) => Try(Class.forName(className)).isFailure }
         assert(unloadable.isEmpty, s"registered functions whose ExpressionInfo class does not load: ${unloadable.mkString(", ")}")

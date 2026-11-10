@@ -15,7 +15,6 @@ Tests that directly test operation classes and utilities **without Spark**. Thes
 - `RST_AccessorsExecuteTest` - Tests accessor operations directly on GDAL datasets
 - `ClipToGeomTest` - Tests ClipToGeom operation logic
 - `KernelFilterTest` - Tests KernelFilter operation logic
-- `RasterProjectTest` - Tests RasterProject operation logic
 
 ### 2. Eval Tests (Spark Execution)
 Tests that test expressions **through Spark execution**. These test the end-to-end Spark SQL integration.
@@ -53,9 +52,7 @@ src/test/scala/
 │   │   │   └── RST_TransformationsEvalTest.scala    # ✨ NEW: Transformations (clip, filter, transform)
 │   │   ├── operations/
 │   │   │   ├── ClipToGeomTest.scala         # ✨ NEW: Clip operation tests
-│   │   │   ├── KernelFilterTest.scala       # ✨ NEW: Filter operation tests
-│   │   │   └── RasterProjectTest.scala      # ✨ NEW: Projection operation tests
-│   │   ├── GDALOperationsTest.scala         # GDAL operations tests
+│   │   │   └── KernelFilterTest.scala       # ✨ NEW: Filter operation tests
 │   │   └── RasterDebugger.scala             # Debugging utilities
 │   ├── vectorx/
 │   │   └── jts/
@@ -80,7 +77,6 @@ mvn test
 # Operation tests (Execute)
 mvn test -Dtest=ClipToGeomTest
 mvn test -Dtest=KernelFilterTest
-mvn test -Dtest=RasterProjectTest
 
 # Expression tests (Eval)
 mvn test -Dtest=RST_TransformationsEvalTest
@@ -176,12 +172,6 @@ Test data is located in `src/test/resources/`:
 - Multiple kernel sizes
 - Property preservation
 - Error handling
-
-**RasterProjectTest** (10 tests):
-- Multiple CRS transformations
-- Property preservation
-- Dimension validation
-- Options handling
 
 ### Expression Tests (Spark Level)
 

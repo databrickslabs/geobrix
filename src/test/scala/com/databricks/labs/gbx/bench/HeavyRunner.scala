@@ -65,8 +65,6 @@ object HeavyRunner {
         val src = resolve(corpusRoot, tileRelPath)
         val n = withVolumeDataset(src)(ds => if (ds != null) ds.GetRasterCount() else 0)
         (1 to n).map(b => f"band_$b%02d.tif")
-      case "combineavg" => Seq("copy_0.tif", "copy_1.tif")
-      case "merge"      => Seq("part_0.tif", "part_1.tif")
       case other        => throw new IllegalArgumentException(s"no synth recipe: $other")
     }
     names.map(nm => dir.resolve(nm).toString)
@@ -349,29 +347,12 @@ object HeavyRunner {
     out.toSeq
   }
 
-  // (xmin, ymin, xmax, ymax, widthPx, heightPx, srid) from an open Dataset -- the
-  // per-group extent constants a geometry aggregator burns/interpolates into. Mirrors
-  // the pyrx _tile_extent_size_srid: dataset bounds + size + EPSG.
-  private def extentOf(ds: Dataset): (Double, Double, Double, Double, Int, Int, Int) = {
-    val gt = ds.GetGeoTransform()
-    val w = ds.GetRasterXSize(); val h = ds.GetRasterYSize()
-    val x0 = gt(0); val y0 = gt(3)
-    val x1 = gt(0) + w * gt(1); val y1 = gt(3) + h * gt(5)
-    val (xmin, xmax) = (math.min(x0, x1), math.max(x0, x1))
-    val (ymin, ymax) = (math.min(y0, y1), math.max(y0, y1))
-    val srid = try {
-      val sr = ds.GetSpatialRef()
-      if (sr != null && sr.GetAuthorityCode(null) != null) sr.GetAuthorityCode(null).toInt else 0
-    } catch { case _: Throwable => 0 }
-    (xmin, ymin, xmax, ymax, w, h, srid)
-  }
-
   /** bucket A: run a *_agg aggregator as a real df.groupBy(key).agg(...). Emits a
     * CONSISTENCY row (a fixed deterministic single group -> ONE out tile ->
     * BenchFingerprint.ofDataset, on the smallest-N row) and the PERF timing (the
     * scaled groupBy, one fixed group replicated per key). The fixed group is
-    * byte-identical to the pyrx tier (the tile aggregators read the SAME synthesized
-    * tiles; the geometry aggregators read the SAME geometry.json WKB). */
+    * byte-identical to the pyrx tier (the grid aggregators stream the SAME fixed
+    * cell set). */
   private def runAggregate(spark: SparkSession, corpusRoot: String, corpus: Corpus,
                            fn: String, runId: String, rowCounts: Seq[Int],
                            warmup: Int, measured: Int, a: Map[String, String],
@@ -401,28 +382,9 @@ object HeavyRunner {
       // (NULL-containing corpus) and the fingerprint (dggs cell-set, not raster)
       // branch on this. Hoisted here so it is visible to both.
       val isCellFill = BenchDispatch.cellFill.contains(fn)
-      // Build the fixed group DataFrame + (for geometry aggregators) extent.
-      var ext: (Double, Double, Double, Double, Int, Int, Int) = (0, 0, 0, 0, 0, 0, 0)
-      val groupDf: org.apache.spark.sql.DataFrame = if (kind == "tile_aggregate") {
-        val recipe = BenchDispatch.aggSynthRecipe(fn)
-        val dir = synthDir(corpusRoot, arrayRoot, recipe)
-        val src = resolve(corpusRoot, arrayRoot)
-        val names = recipe match {
-          case "frombands" =>
-            val n = withVolumeDataset(src)(ds => if (ds != null) ds.GetRasterCount() else 0)
-            (1 to n).map(b => f"band_$b%02d.tif")
-          case "combineavg" => Seq("copy_0.tif", "copy_1.tif")
-          case "merge"      => Seq("part_0.tif", "part_1.tif")
-        }
-        val rows = names.zipWithIndex.map { case (nm, i) =>
-          val bytes = BenchIO.readBytes(dir.resolve(nm).toString)  // FUSE-safe
-          (0L, bytes, i)
-        }
-        import spark.implicits._
-        spark.createDataFrame(rows).toDF("cellid", "rasterBytes", "band_index")
-          .withColumn("tile", functions.rst_fromcontent(col("rasterBytes"), lit("GTiff")))
-          .select(col("tile"), col("band_index"))
-      } else if (kind == "grid_aggregate") {
+      // Build the fixed group DataFrame. The grid aggregates take no extent (aggregateColumn's `ext`).
+      val ext: (Double, Double, Double, Double, Int, Int, Int) = (0, 0, 0, 0, 0, 0, 0)
+      val groupDf: org.apache.spark.sql.DataFrame = if (kind == "grid_aggregate") {
         // The grid rasterize aggregators stream (cellid, value) rows from a fixed
         // deterministic cell set (the SAME recipe the pyrx tier mirrors). value is
         // NULL on every row -> presence-mask burn (1.0). The grid rides as SQL
@@ -460,41 +422,9 @@ object HeavyRunner {
             val rows = cells.zip(vals).map { case (c, v) => Row(c, v) }
             spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
         }
-      } else if (fn == "rst_binpoints_agg") {
-        // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
-        // aggregators below). Decode the fixed zpoint set to (x, y, z) DOUBLE columns in
-        // the driver (once) via JTS so the timed groupBy times ONLY the binning --
-        // matching the light tier, which decodes the SAME zpoints to x/y/z. WKBReader
-        // reads the 3D coordinate; getZ yields the z of each POINT Z.
-        import org.apache.spark.sql.Row
-        import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
-        val gset = geomCorpus.flatMap(_.setFor(arrayRoot, pool.tiles.headOption.map(_.srid).getOrElse(0)))
-          .getOrElse(throw new IllegalStateException(
-            s"no geometry set for $arrayRoot; geometry.json missing or stale"))
-        ext = withVolumeDataset(resolve(corpusRoot, arrayRoot))(extentOf)
-        val reader = new org.locationtech.jts.io.WKBReader()
-        val rows = gset.zpointWkbs.map { b =>
-          val c = reader.read(b).getCoordinate
-          Row(c.x, c.y, c.getZ)
-        }
-        val schema = StructType(Seq(
-          StructField("x", DoubleType, nullable = false),
-          StructField("y", DoubleType, nullable = false),
-          StructField("z", DoubleType, nullable = false)))
-        spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
       } else {
-        // geometry aggregate: rows of (geom_wkb, value) from the per-tile GeometrySet.
-        val gset = geomCorpus.flatMap(_.setFor(arrayRoot, pool.tiles.headOption.map(_.srid).getOrElse(0)))
-          .getOrElse(throw new IllegalStateException(
-            s"no geometry set for $arrayRoot; geometry.json missing or stale"))
-        ext = withVolumeDataset(resolve(corpusRoot, arrayRoot))(extentOf)
-        val pairs: Seq[(Array[Byte], Double)] = fn match {
-          case "rst_dtmfromgeoms_agg"   => gset.zpointWkbs.map(b => (b, 0.0))
-          case "rst_gridfrompoints_agg" => gset.pointPairs
-          case _                        => gset.boxPairs  // rst_rasterize_agg
-        }
-        import spark.implicits._
-        spark.createDataFrame(pairs).toDF("geom_wkb", "value")
+        // The tile and geometry aggregates have no heavyweight level: the grid aggregates are the only kind left.
+        throw new IllegalArgumentException(s"no heavyweight aggregate of input kind $kind: $fn")
       }
       // The fixed group is a handful of tiles; cache it once (it's broadcast per key in the
       // perf loop, so its partitioning is irrelevant). coalesce(1) keeps the tiny build on

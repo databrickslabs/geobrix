@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.bench
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.RasterTessellate
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.funsuite.AnyFunSuite
@@ -71,11 +70,10 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_clip left with its expression (it was never registered; its light level is lightweight only): 64 - 1 = 63.
     // rst_transform, resample, resample_to_res, fillnodata, proximity and summary left with their companions (measured under
     // 1.2x of light, or a different output): 63 - 6 = 57. rst_to_webmercator and rst_resample_to_size left too (0.98x): 57 - 2 = 55.
-    assert(BenchDispatch.all.size == 55)
-    // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
-    assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
-    assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
-    assert(BenchDispatch.inputKind("rst_rasterize_agg") == "geometry_aggregate")
+    // The JVM forms the level order never picks left: the tile and geometry aggregates (combineavg, frombands,
+    // derivedband, rasterize, binpoints), the tiling and tessellate generators (maketiles, tooverlappingtiles,
+    // separatebands, h3 and quadbin tessellate, and the h3 centroid case), isempty, tryopen, isoband and merge: 55 - 15 = 40.
+    assert(BenchDispatch.all.size == 40)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -97,14 +95,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.aggSynthRecipe("rst_combineavg_agg") == "combineavg")
-    assert(BenchDispatch.aggSynthRecipe("rst_frombands_agg") == "frombands")
-    assert(BenchDispatch.aggSynthRecipe("rst_derivedband_agg") == "frombands")
-    assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
-    assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
-    assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
     assert(BenchDispatch.category("rst_xyzpyramid") == "format")
-    assert(BenchDispatch.category("rst_separatebands") == "format")
     assert(BenchDispatch.minBands("rst_band") == 2)
     assert(BenchDispatch.minBands("rst_width") == 1)
     assert(BenchDispatch.category("rst_tri") == "terrain")
@@ -117,22 +108,16 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
-    val tessellates = Seq("rst_quadbin_tessellate")
     val aggs = Seq("rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
-    (tessellates ++ aggs).foreach { fn =>
+    aggs.foreach { fn =>
       assert(BenchDispatch.all.contains(fn), s"$fn not in BenchDispatch.all")
-      // tessellate + rasterize_agg are all DGGS shape (like H3/quadbin).
+      // the rasterize_aggs are DGGS shape (like H3).
       assert(BenchDispatch.category(fn) == "dggs", s"$fn should be dggs")
     }
     // The 2 rasterize_aggs route to the grid-aggregate branch (the same branch that
     // holds rst_h3_rasterize_agg), NOT the tile/geometry aggregate branches.
     Seq("rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg").foreach { fn =>
       assert(BenchDispatch.inputKind(fn) == "grid_aggregate", s"$fn should be grid_aggregate")
-    }
-    // The tessellates take tile+resolution, so they must NOT be caught by
-    // the byte / tile-array / geometry / aggregate input-classification sets: plain "tile".
-    tessellates.foreach { fn =>
-      assert(BenchDispatch.inputKind(fn) == "tile", s"$fn should be plain tile input")
     }
     // Fixed-cell-set parity contracts (deterministic input for the light-vs-heavy check).
     assert(BenchDispatch.quadbinRasterizeCells().size == BenchDispatch.quadbinRaggNCells)
@@ -148,48 +133,4 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(sfp.get("kind").asText() == "raster")
   }
 
-  test("rst_h3_tessellate_centroid times the default centroid + complete assignment") {
-    // A 64x64 window of the MODIS tile keeps the H3 res-7 run short.
-    val small = gdal.GetDriverByName("MEM").Create("", 64, 64, 1, ds.GetRasterBand(1).getDataType)
-    try {
-      small.SetGeoTransform(ds.GetGeoTransform)
-      small.SetProjection(ds.GetProjection)
-      val buf = new Array[Short](64 * 64)
-      ds.GetRasterBand(1).ReadRaster(0, 0, 64, 64, buf)
-      small.GetRasterBand(1).WriteRaster(0, 0, 64, 64, buf)
-      // cell -> (chip width, height, geotransform) of a drained tessellation; releases every chip.
-      def shapes(it: Iterator[(Long, Dataset, Map[String, String])]): Map[Long, (Int, Int, Seq[Double])] =
-        it.map { case (cell, chip, _) =>
-          try cell -> (chip.getRasterXSize, chip.getRasterYSize, chip.GetGeoTransform.toSeq)
-          finally RasterDriver.releaseDataset(chip)
-        }.toMap
-      // The tessellate iterator owns its input, so the direct calls get copies of `small`.
-      def direct(assignment: String) = shapes(RasterTessellate.tessellateH3Iter(
-        gdal.GetDriverByName("MEM").CreateCopy("", small), Map.empty, 7, assignment, "complete"))
-      val benched = shapes(BenchDispatch.h3TessellateCentroidChips(small, Map.empty))
-      val centroid = direct("centroid")
-      assert(centroid.nonEmpty)
-      assert(benched == centroid, "the case does not drain the centroid + complete chips")
-      assert(direct("covering") != centroid, "fixture must tell covering chips from centroid chips")
-      val fp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_h3_tessellate_centroid", small, Map.empty))
-      assert(fp.get("kind").asText() == "dggs_grid")
-    } finally small.delete()
-  }
-
-  // The heavy runner passes an empty args map, so the default in BenchDispatch IS the
-  // value compared cross-engine. It must equal the authoritative pyrx FnSpec default
-  // (bench/spec.py rst_tooverlappingtiles overlap=25). A mismatched default (was 32)
-  // produced different overlapping-window positions and a ~3% pooled-pixel divergence.
-  test("tooverlappingtiles default overlap matches the pyrx spec (25, not 32)") {
-    val mapper = new ObjectMapper()
-    val deflt = mapper.readTree(BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map.empty))
-    val ov25 = mapper.readTree(
-      BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map("overlap" -> "25")))
-    val ov32 = mapper.readTree(
-      BenchDispatch.pureCore("rst_tooverlappingtiles", ds, Map("overlap" -> "32")))
-    // Default must agree with the spec value (25) and differ from the old default (32).
-    assert(deflt.get("agg").get("mean").asDouble() == ov25.get("agg").get("mean").asDouble())
-    assert(deflt.get("agg").get("std").asDouble() == ov25.get("agg").get("std").asDouble())
-    assert(deflt.get("agg").get("mean").asDouble() != ov32.get("agg").get("mean").asDouble())
-  }
 }

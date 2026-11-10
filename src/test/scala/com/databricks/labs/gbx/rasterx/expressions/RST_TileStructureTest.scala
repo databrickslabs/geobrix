@@ -143,30 +143,6 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         extension should (be(".tif") or be(".TIF") or include("tif") or include("TIF"))
     }
 
-    test("Tessellated tiles should have non-null cellid") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF").toString
-
-        // rst_h3_tessellate is a generator that produces multiple rows directly (no explode needed)
-        // Use resolution 1 (coarse) to avoid generating too many cells
-        val df = spark.range(1)
-          .withColumn("tile", udfs.rasterFromPath(lit(tifPath)))
-          .withColumn("tessellated", rst_h3_tessellate(col("tile"), lit(1)))
-          .select(col("tessellated.cellid").alias("cellid"))
-          .limit(10) // Limit results for test efficiency
-
-        val result = df.collect()
-
-        result should not be empty
-        // Tessellated tiles should have non-null cellid
-        result.forall(row => row.getAs[Long]("cellid") != 0) should be(true)
-        result.forall(row => row.getAs[Long]("cellid") > 0) should be(true)
-    }
-
     test("Tile structure should be compatible with accessor functions") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._

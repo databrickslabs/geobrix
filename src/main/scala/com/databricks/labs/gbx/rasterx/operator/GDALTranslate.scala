@@ -26,7 +26,7 @@ object GDALTranslate {
         val size = Try(Files.size(Paths.get(outputPath))).getOrElse(-1L)
         // TODO: build a JNA bridge for VSI mem estimate
         // Record the OUTPUT driver here, not the input's. Operations like
-        // MergeRasters / MergeBands / PixelCombineRasters pass a VRT-driver
+        // MergeBands / PixelCombineRasters pass a VRT-driver
         // Dataset as input to executeTranslate; if we stamped the input's
         // driver (VRT) into the returned metadata, downstream code paths
         // (notably RasterDriver.writeToBytes via the extension calc and the

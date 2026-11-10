@@ -26,8 +26,6 @@ import org.gdal.gdalconst.gdalconstConstants.CE_None
   */
 final class ValidMask(ds: Dataset) {
 
-    private val xSize = ds.getRasterXSize
-    private val ySize = ds.getRasterYSize
     private val alphaIndex: Option[Int] = GDAL.alphaBandIndex(ds)
     private val dataBands: Array[Int] = (1 to ds.getRasterCount).filterNot(alphaIndex.contains).toArray
     private val dataMasks: Array[Band] = dataBands.map(b => ds.GetRasterBand(b).GetMaskBand())
@@ -85,22 +83,6 @@ final class ValidMask(ds: Dataset) {
         check(ds.GetRasterBand(band).GetMaskBand().ReadRaster(xOff, yOff, w, h, out), s"the band $band mask", yOff, h)
         if (!alphaIndex.contains(band)) gateByAlpha(xOff, yOff, w, h, out)
     }
-
-    /** True when some pixel of the dataset is valid, read in row strips of at most [[ValidMask.StripPixels]]
-      * pixels and stopping at the first valid one. */
-    def anyValid(): Boolean = {
-        val rows = math.max(1, math.min(ySize, ValidMask.StripPixels / math.max(1, xSize)))
-        val strip = new Array[Byte](xSize * rows)
-        var y0 = 0
-        while (y0 < ySize) {
-            val h = math.min(rows, ySize - y0)
-            read(0, y0, xSize, h, strip)
-            var p = 0
-            while (p < xSize * h) { if (strip(p) != 0) return true; p += 1 }
-            y0 += h
-        }
-        false
-    }
 }
 
 object ValidMask {
@@ -108,7 +90,4 @@ object ValidMask {
     /** Pixels per validity strip (1 M): each buffer of a strip stays about 1 MB whatever the raster size. The
       * lightweight tier's `_STRIP_PIXELS` is the same cap. */
     val StripPixels: Int = 1048576
-
-    /** True when some pixel of `ds` is valid ([[ValidMask]]). */
-    def anyValid(ds: Dataset): Boolean = new ValidMask(ds).anyValid()
 }

@@ -3,12 +3,9 @@ package com.databricks.labs.gbx.rasterx.util
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, TileBytes}
 import com.databricks.labs.gbx.util.NodeFileManager
-import org.apache.spark.TaskContext
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
-import org.apache.spark.util.TaskFailureListener
 
-import scala.util.Try
 
 /**
   * Helpers for RasterX expressions: tile struct type, GDAL init, and iterator cleanup.
@@ -36,18 +33,14 @@ object RST_ExpressionUtil {
       * Raster DataType inside an `ARRAY<tile>` expression, with a friendly
       * IllegalArgumentException when the caller actually passed a single tile.
       *
-      * Used by the non-aggregating array-of-tiles functions
-      * (`gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra`). Without this guard, callers who write
-      * `gbx_rst_merge(tile)` instead of `gbx_rst_merge(collect_list(tile))`
-      * or the aggregator variant get a raw `ClassCastException: StructType
+      * Used by the non-aggregating array-of-tiles function with a JVM form
+      * (`gbx_rst_frombands`). Without this guard, callers who write
+      * `gbx_rst_frombands(tile)` instead of `gbx_rst_frombands(collect_list(tile))`
+      * get a raw `ClassCastException: StructType
       * cannot be cast to ArrayType` from inside Spark's CheckAnalysis,
       * which is hostile and untraceable from a notebook.
       *
       * `funcName` is the SQL-facing name surfaced in the error.
-      * `aggHint` is an optional pointer to the aggregator companion
-      * (e.g. "gbx_rst_merge_agg") for functions where the typical
-      * mistake is reaching for the non-agg form when an aggregate across
-      * rows was wanted.
       *
       * Note: Spark 4.0's `AnalysisException` no longer exposes a
       * `(String)` constructor (only the error-class form), so the error
@@ -57,8 +50,7 @@ object RST_ExpressionUtil {
       */
     def arrayOfTileRasterType(
         funcName: String,
-        tile: Expression,
-        aggHint: Option[String] = None
+        tile: Expression
     ): DataType = tile.dataType match {
         case ArrayType(StructType(fields), _) if fields.length >= 2 =>
             fields(1).dataType match {
@@ -69,13 +61,9 @@ object RST_ExpressionUtil {
                 case other => other
             }
         case other =>
-            val aggSuggestion = aggHint
-                .map(name => s" To aggregate the column across rows, use $name(tile).")
-                .getOrElse("")
             throw new IllegalArgumentException(
                 s"$funcName expects ARRAY<tile> (e.g. collect_list(tile) " +
-                s"or array(t1, t2, ...)), but received ${other.simpleString}." +
-                aggSuggestion
+                s"or array(t1, t2, ...)), but received ${other.simpleString}."
             )
     }
 
@@ -124,18 +112,6 @@ object RST_ExpressionUtil {
         GDALManager.init(expressionConfig)
         // the read cap of this task's tile reads (TileBytes, at RasterDriver.readFromBytes)
         TileBytes.useReadCap(expressionConfig.readCap)
-    }
-
-    /** Register task completion/failure listeners to close the given iterator (e.g. release resources). */
-    def addCleanupListener(it: Iterator[_]): Unit = {
-        val iter = it.asInstanceOf[AutoCloseable]
-        Try {
-            val tc = org.apache.spark.TaskContext.get()
-            tc.addTaskCompletionListener[Unit](_ => iter.close())
-            tc.addTaskFailureListener(new TaskFailureListener() {
-                override def onTaskFailure(context: TaskContext, error: Throwable): Unit = iter.close()
-            })
-        }
     }
 
 }

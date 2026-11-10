@@ -72,20 +72,11 @@ class ValidMaskTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     for (l <- Layouts) {
-        test(s"the alpha band of ${l.name} is its last band, when that is labelled alpha, and a copy is labelled to match") {
+        test(s"the alpha band of ${l.name} is its last band, when that is labelled alpha") {
             val ds = fixture(l, None)
             try {
                 assert(GDAL.alphaBandIndex(ds) == (if (l.alphaLast) Some(l.interps.size) else None))
                 assert(GDAL.hasAlpha(ds) == l.alphaLast)
-                // a copy is labelled alpha where the source's alpha band is, whatever GDAL labelled it by default
-                val copy = ds.GetDriver().Create(
-                  s"/vsimem/validmask_copy_${UUID.randomUUID().toString.replace("-", "")}.tif", 4, 4, l.interps.size, GDT_Byte
-                )
-                try {
-                    GDAL.matchAlpha(copy, GDAL.alphaBandIndex(ds))
-                    val labelled = (1 to copy.GetRasterCount()).filter(copy.GetRasterBand(_).GetColorInterpretation == GCI_AlphaBand)
-                    assert(labelled == GDAL.alphaBandIndex(ds).toSeq)
-                } finally RasterDriver.releaseDataset(copy)
             } finally RasterDriver.releaseDataset(ds)
         }
 
@@ -100,20 +91,9 @@ class ValidMaskTest extends AnyFunSuite with BeforeAndAfterAll {
                 val ds = fixture(l, nodata)
                 try {
                     assert(validRows(ds) == expected)
-                    assert(ValidMask.anyValid(ds) == expected.nonEmpty)
                 } finally RasterDriver.releaseDataset(ds)
             }
         }
-    }
-
-    test("anyValid is false for a raster that is entirely transparent, and reads in strips") {
-        val l = Layouts.head
-        val ds = fixture(l, None)
-        try {
-            ds.GetRasterBand(4).WriteRaster(0, 0, 4, 4, Array.fill(16)(0.0))
-            ds.FlushCache()
-            assert(!ValidMask.anyValid(ds))
-        } finally RasterDriver.releaseDataset(ds)
     }
 
     // The band-subset rule, the same cases as the lightweight tier's `subset_colorinterp`.

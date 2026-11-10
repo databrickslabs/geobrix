@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.RST_TryOpen
 import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
@@ -244,8 +243,6 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
             RST_ErrorHandler.safeEval(() => throw new RuntimeException("fail"), upstream, BinaryType, UTF8String.fromString(crash.toB64))
         }
         wrapped.getMessage should (include("Cell ID: 9") and include("upstream boom"))
-        // an error tile is not openable
-        RST_TryOpen.eval(upstream, UTF8String.fromString(crash.toB64), BinaryType) shouldBe false
         // last_error alone on a tile that still has pixels is a warning (the merge aggregates stamp it), not an error tile
         val warned = V2Tile.row(
           cellid = 1L,

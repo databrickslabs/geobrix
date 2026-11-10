@@ -18,7 +18,7 @@ import java.util.UUID
   * ([[GDAL.alphaBandIndex]]). `gdal_translate -b` copies the label, so a lone alpha band comes out labelled
   * alpha and is then judged by its values ([[ValidMask]]): `gbx_rst_band` of an RGBA raster's band 4 would have
   * its zero pixels read as NoData, where the lightweight tier writes the band as data. Heavyweight band
-  * extraction (`gbx_rst_band`, `gbx_rst_separatebands`) writes the band as data too.
+  * extraction (`gbx_rst_band`) writes the band as data too.
   */
 class BandSubsetAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -86,19 +86,6 @@ class BandSubsetAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
                     res.GetRasterBand(1).ReadRaster(0, 0, 4, 4, vals)
                     assert(vals.count(_ == 0.0) == 8, "the band's values are not the source's")
                 } finally RasterDriver.releaseDataset(res)
-            } finally RasterDriver.releaseDataset(src)
-        }
-
-        test(s"gbx_rst_separatebands of ${l.name} writes no band as alpha") {
-            val src = source(l)
-            try {
-                (0 until l.interps.size).foreach { b =>
-                    val (res, _) = SeparateBands.getTile(src, Map.empty[String, String], b)
-                    try {
-                        assert(!GDAL.hasAlpha(res), s"band ${b + 1} of ${l.name} is labelled alpha: ${labels(res)}")
-                        assert(allValid(res), s"band ${b + 1} reads partly as NoData")
-                    } finally RasterDriver.releaseDataset(res)
-                }
             } finally RasterDriver.releaseDataset(src)
         }
     }

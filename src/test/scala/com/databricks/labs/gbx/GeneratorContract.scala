@@ -34,12 +34,6 @@ object GeneratorContract {
       "gbx_st_triangulate"              -> VectorSuite,
       "gbx_st_interpolateelevationbbox" -> VectorSuite,
       "gbx_st_interpolateelevationgeom" -> VectorSuite,
-      "gbx_rst_separatebands"           -> RasterSuite,
-      "gbx_rst_tooverlappingtiles"      -> RasterSuite,
-      "gbx_rst_maketiles"               -> RasterSuite,
-      "gbx_rst_h3_tessellate"           -> RasterSuite,
-      "gbx_rst_quadbin_tessellate"      -> RasterSuite,
-      "gbx_rst_custom_tessellate"       -> RasterSuite,
       "gbx_rst_xyzpyramid"              -> RasterSuite
     )
 

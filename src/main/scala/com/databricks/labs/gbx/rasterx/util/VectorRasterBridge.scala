@@ -1,64 +1,23 @@
 package com.databricks.labs.gbx.rasterx.util
 
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.operator.{GDALTranslate, OperatorOptions}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GDT_Float64
-import org.gdal.ogr.{DataSource, Feature, FeatureDefn, FieldDefn, Geometry, Layer, ogr}
-import org.gdal.ogr.ogrConstants.{OFTReal, wkbUnknown}
 
 import java.util.UUID
 
-/** Shared helpers for the vector↔raster bridge expressions
- *  (`RST_RasterizeAgg`).
+/** Shared helpers for the grid rasterize aggregates (`RST_*_RasterizeAgg`).
  *
- *  These wrap GDAL's `Memory` OGR driver, `MEM` raster driver, and GTiff
- *  serialization in three single-purpose methods so the two expressions can
- *  stay focused on their orchestration logic.
+ *  These wrap GDAL's `MEM` raster driver and GTiff serialization in
+ *  single-purpose methods so the aggregates can stay focused on their
+ *  orchestration logic.
  *
  *  Resource ownership convention: every method that returns a native GDAL
  *  object documents what the caller is responsible for releasing. Forgetting
  *  to `.delete()` a Dataset or DataSource leaks native memory.
  */
 object VectorRasterBridge {
-
-    /** Field name used for the burn value attribute on the in-memory OGR layer. */
-    val ValueFieldName: String = "value"
-
-    /** Build an in-memory OGR Layer from `(geom_wkb, value)` tuples.
-     *
-     *  Returns the (DataSource, Layer) pair; caller must call `.delete()` on
-     *  the DataSource when done — that releases the layer too.
-     */
-    def buildOgrLayer(
-        features: Seq[(Array[Byte], Double)],
-        srid: Int
-    ): (DataSource, Layer) = {
-        GDALManager.initOgr()
-        val driver = ogr.GetDriverByName("Memory")
-        val ds = driver.CreateDataSource(s"mem_${UUID.randomUUID().toString.replace("-", "")}")
-        // Resolve via the shared rule so an ESRI code (e.g. 54008) classifies
-        // correctly, not only EPSG — matches the light tier's out_srid handling.
-        val sr = SpatialRefOps.resolveCrs(srid.toString)
-        val layer = ds.CreateLayer("features", sr, wkbUnknown)
-        val fd = new FieldDefn(ValueFieldName, OFTReal)
-        layer.CreateField(fd); fd.delete()
-        val defn: FeatureDefn = layer.GetLayerDefn()
-        features.foreach { case (wkb, v) =>
-            val feat = new Feature(defn)
-            val geom = Geometry.CreateFromWkb(wkb)
-            if (geom != null) {
-                feat.SetGeometry(geom)
-                feat.SetField(ValueFieldName, v)
-                layer.CreateFeature(feat)
-                geom.delete()
-            }
-            feat.delete()
-        }
-        sr.delete()
-        (ds, layer)
-    }
 
     /** Create an empty in-memory raster `Dataset` of the requested extent, size, and SRID.
      *
@@ -107,7 +66,7 @@ object VectorRasterBridge {
      *  The copy goes through [[GDALTranslate.executeTranslate]], so the bytes are encoded with the same codec,
      *  predictor and tiling as every other derived heavyweight tile ([[OperatorOptions.appendOptions]]):
      *  `compression` (default [[OperatorOptions.DefaultCompression]]) with the dtype-matched predictor. This is
-     *  the one encoder of the rasterize / binpoints / grid-from-points tile writers; a plain `CreateCopy`
+     *  the one encoder of the grid rasterize tile writers; a plain `CreateCopy`
      *  wrote them uncompressed. Pixels are unchanged.
      */
     def toGTiffBytes(ds: Dataset, compression: String = OperatorOptions.DefaultCompression): Array[Byte] = {

@@ -18,9 +18,7 @@ case class RST_FromBands(
 ) extends InvokedExpression {
 
     /** Raster DataType from the bands array element struct. */
-    private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_FromBands.name, bandsExpr, aggHint = None
-    )
+    private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(RST_FromBands.name, bandsExpr)
     /** Element field count from the declared input array element struct (3 for v1, 9 for v2). */
     private lazy val elementFieldCountLit: Expression =
         Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(bandsExpr), IntegerType)

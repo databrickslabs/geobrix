@@ -10,8 +10,7 @@ import org.scalatest.matchers.should.Matchers._
 /** Covers RasterAccessors.memSize, with emphasis on the in-memory (MEM-driver)
   * dataset case whose GetDescription() is empty -- the form produced by
   * gdal.GetDriverByName("MEM").CreateCopy("", ds). Before the robustness fix this
-  * returned -1, which made BalancedSubdivision.getTileSize collapse to a single
-  * tile (the heavy-vs-light maketiles benchmark divergence: heavy=1, light=4). */
+  * returned -1 instead of the encoded size both tiers report. */
 class RasterAccessorsTest extends AnyFunSuite with BeforeAndAfterAll {
 
     override def beforeAll(): Unit = {
@@ -20,11 +19,9 @@ class RasterAccessorsTest extends AnyFunSuite with BeforeAndAfterAll {
         gdal.AllRegister()
     }
 
-    /** A real-pixel MEM dataset whose ENCODED (DEFLATE GTiff) size comfortably exceeds
-      * 1 MiB, forcing a power-of-4 split at a 1 MiB budget. memSize keys on the encoded
-      * byte length, so the pixels must be incompressible: a 1024x1024 Float64 band of
-      * uniform random doubles encodes to ~8 MiB (a compressible ramp would shrink to
-      * <1 MiB and never split — that is what the assertion guards against). */
+    /** A real-pixel MEM dataset whose ENCODED (DEFLATE GTiff) size is large: memSize keys on
+      * the encoded byte length, so the pixels are incompressible (a 1024x1024 Float64 band of
+      * uniform random doubles encodes to ~8 MiB). */
     private def bigMemDataset(): Dataset = {
         val drv = gdal.GetDriverByName("MEM")
         val ds = drv.Create("", 1024, 1024, 1, gdalconstConstants.GDT_Float64)
@@ -45,31 +42,6 @@ class RasterAccessorsTest extends AnyFunSuite with BeforeAndAfterAll {
             sz should be > 0L // NOT the -1 failure sentinel
             // The encoded GTiff buffer is the authoritative size; memSize must equal it.
             sz shouldBe RasterDriver.writeToBytes(ds, Map.empty).length.toLong
-        } finally ds.delete()
-    }
-
-    test("getTileSize splits a >budget MEM dataset into a power-of-4 grid (not a single tile)") {
-        val ds = bigMemDataset()
-        try {
-            // Encoded size of the 1024x1024 Float64 tile is comfortably > 1 MiB, so a
-            // 1 MiB budget must yield at least one quad-split round (tileX/Y < full size).
-            val (tileX, tileY) = BalancedSubdivision.getTileSize(ds, 1)
-            tileX should be < 1024
-            tileY should be < 1024
-        } finally ds.delete()
-    }
-
-    test("getTileSize returns whole-image dims when destMiB <= 0 (no split)") {
-        val ds = bigMemDataset()
-        try {
-            // destMiB <= 0 = no split: the whole-image dimensions are returned
-            // regardless of the (large) encoded byte size. This is the reader
-            // default (sizeInMB = -1) -> one tile per file.
-            for (destMiB <- Seq(-1, 0)) {
-                val (tileX, tileY) = BalancedSubdivision.getTileSize(ds, destMiB)
-                tileX shouldBe ds.getRasterXSize
-                tileY shouldBe ds.getRasterYSize
-            }
         } finally ds.delete()
     }
 

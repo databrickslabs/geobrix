@@ -130,7 +130,7 @@ object BenchFingerprint {
   }
 
   /** Count-only string-cell-id dggs_grid fingerprint for BNG tessellation (no
-    * per-cell measure); the string analogue of [[ofDggsGridIds]]. */
+    * per-cell measure): an EMPTY `agg`, matching the python tessellate path's `agg == {}`. */
   def ofDggsGridStrIds(ids: Seq[String]): String = dggsGridStrJson(ids, None)
 
   /** Fingerprint a `gbx_<grid>_cellfill` output (H3/quadbin/custom: LONG cell ids).
@@ -167,18 +167,8 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Count-only dggs_grid fingerprint for tessellation (no per-cell measure).
-    *
-    * `RST_H3_Tessellate` yields one Dataset per cell with NO scalar measure, so
-    * the fingerprint records only the cell COUNT + sorted-id hash and emits an
-    * EMPTY `agg` object -- matching the python tessellate path, which fingerprints
-    * `[(cellid, bytes)]` and produces `agg == {}` (no measures). Passing 0.0
-    * measures instead would yield a non-empty heavy agg ({min:0,...}) that
-    * disagrees with the light `{}`, so tessellation must use this id-only form. */
-  def ofDggsGridIds(ids: Seq[Long]): String = dggsGridJson(ids, None)
-
   /** Shared dggs_grid JSON builder: cell COUNT, sha256 over SORTED signed-int64
-    * cell ids, the sorted ids, and the agg. `vals == None` (tessellation) emits an
+    * cell ids, the sorted ids, and the agg. `vals == None` emits an
     * EMPTY agg object to mirror python's `agg == {}` when there are no measures;
     * `Some(vals)` runs `putStats` (which itself emits nulls only when vals empty). */
   private def dggsGridJson(ids: Seq[Long], vals: Option[Seq[Double]]): String = {

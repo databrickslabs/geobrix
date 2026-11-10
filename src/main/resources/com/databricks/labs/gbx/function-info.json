@@ -86,8 +86,7 @@
       "description": "Bin a group's points into one single-band tile.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.2"
     },
@@ -338,8 +337,7 @@
       "description": "Per-pixel mean across a group's aligned tiles, ignoring NoData.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -572,8 +570,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -594,8 +591,7 @@
       "description": "Apply a GDAL VRT pixel function across a group's tiles.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -683,8 +679,7 @@
       "description": "Stack a group's single-band tiles into one multi-band tile.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -903,8 +898,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -972,8 +966,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -984,8 +977,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.2"
     },
@@ -1007,8 +999,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1064,8 +1055,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1351,8 +1341,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.3"
     },
@@ -1373,8 +1362,7 @@
       "description": "Burn a group's `(geom, value)` features into one tile.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1533,8 +1521,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1683,8 +1670,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1740,8 +1726,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },

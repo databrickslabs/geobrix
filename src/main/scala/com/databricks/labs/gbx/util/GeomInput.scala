@@ -25,17 +25,6 @@ object GeomInput {
         case _              => null
     }
 
-    /** Normalise an evaluated geometry value to WKB bytes. BINARY passes through untouched (WKB and EWKB
-      * stay byte-identical); STRING is parsed and re-encoded as WKB (Z only when the geometry has one).
-      * Null on null, on unparseable text, or on any other type. */
-    def toWkb(v: Any): Array[Byte] = v match {
-        case b: Array[Byte] => b
-        case u: UTF8String =>
-            val g = parse(u)
-            if (g == null) null else JTS.toWKBAdaptive(g)
-        case _ => null
-    }
-
     /** Analysis-time check for a geometry argument: BINARY, STRING or a NULL literal; anything else is
       * refused. `paramIndex` is the Spark ordinal word ("first", "second", ...). */
     def checkType(geom: Expression, paramIndex: String): TypeCheckResult = geom.dataType match {

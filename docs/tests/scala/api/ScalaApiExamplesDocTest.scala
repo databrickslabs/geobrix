@@ -81,14 +81,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_width_scala_example_output.nonEmpty)
   }
 
-  test("ScalaApiExamples rst_isoband snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_isoband_scala_example.nonEmpty)
-  }
-
-  test("ScalaApiExamples rst_isoband output vals are non-empty") {
-    assert(ScalaApiExamples.rst_isoband_scala_example_output.nonEmpty)
-  }
-
   test("ScalaApiExamples Batch F pmtiles_agg snippet vals are non-empty") {
     assert(ScalaApiExamples.pmtiles_agg_scala_example.nonEmpty)
   }
@@ -147,12 +139,10 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
   }
 
   test("ScalaApiExamples custom-grid snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_custom_tessellate_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples custom-grid output vals are non-empty") {
-    assert(ScalaApiExamples.rst_custom_tessellate_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example_output.nonEmpty)
   }
 
@@ -168,19 +158,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
       lit(null).cast("double"), lit(null).cast("double"),
       lit(null).cast("int"), lit(null).cast("int"),
       lit("centroids"), lit(1))
-    succeed
-  }
-
-  test("RasterX rst_custom_tessellate Scala signature compiles") {
-    val grid = call_function("gbx_custom_grid",
-      lit(2.0), lit(2.01), lit(55.0), lit(55.01),
-      lit(2), lit(0.01), lit(0.01), lit(4326))
-    val _: Column = rx.rst_custom_tessellate(col("tile"), grid, lit(0))
-    succeed
-  }
-
-  test("RasterX rst_isoband signatures compile") {
-    val _: Column = rx.rst_isoband(col("tile"), col("breaks"))
     succeed
   }
 
@@ -207,8 +184,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = rx.rst_crs(col("tile"))
     val _: Column = rx.rst_upperleftx(col("tile"))
     val _: Column = rx.rst_upperlefty(col("tile"))
-    val _: Column = rx.rst_isempty(col("tile"))
-    val _: Column = rx.rst_tryopen(col("tile"))
     succeed
   }
 
@@ -228,8 +203,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_crs_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_upperleftx_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_upperlefty_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_isempty_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_tryopen_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples accessor output vals are non-empty") {
@@ -248,8 +221,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_crs_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_upperleftx_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_upperlefty_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_isempty_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_tryopen_scala_example_output.nonEmpty)
   }
 
   test("JVM job examples compile and are non-empty") {

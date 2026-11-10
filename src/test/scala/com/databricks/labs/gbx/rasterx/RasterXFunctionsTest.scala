@@ -101,18 +101,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    // ====== Aggregator Functions ======
-
-    test("rst_combineavg_agg should create Column") {
-        val result = functions.rst_combineavg_agg(col("tile"))
-        result should not be null
-    }
-
-    test("rst_derivedband_agg should accept pyfunc and funcName") {
-        val result = functions.rst_derivedband_agg(col("tile"), "def f(x): return x", "f")
-        result should not be null
-    }
-
     // ====== Constructor Functions ======
 
     test("rst_fromcontent should accept content and driver") {
@@ -122,28 +110,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("rst_frombands should accept bands") {
         val result = functions.rst_frombands(col("bands"))
-        result should not be null
-    }
-
-    // ====== Generator Functions ======
-
-    test("rst_h3_tessellate should accept tile and resolution") {
-        val result = functions.rst_h3_tessellate(col("tile"), col("res"))
-        result should not be null
-    }
-
-    test("rst_maketiles should accept tile and size in MB") {
-        val result = functions.rst_maketiles(col("tile"), col("size_in_mb"))
-        result should not be null
-    }
-
-    test("rst_separatebands should create Column") {
-        val result = functions.rst_separatebands(col("tile"))
-        result should not be null
-    }
-
-    test("rst_tooverlappingtiles should accept tile, width, height, and overlap") {
-        val result = functions.rst_tooverlappingtiles(col("tile"), col("w"), col("h"), col("o"))
         result should not be null
     }
 
@@ -169,16 +135,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_isempty should create Column") {
-        val result = functions.rst_isempty(col("tile"))
-        result should not be null
-    }
-
-    test("rst_merge should accept tiles") {
-        val result = functions.rst_merge(col("tiles"))
-        result should not be null
-    }
-
     test("rst_rastertoworldcoordx should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoordx(col("tile"), col("x"), col("y"))
         result should not be null
@@ -186,11 +142,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("rst_rastertoworldcoordy should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoordy(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
-    test("rst_tryopen should create Column") {
-        val result = functions.rst_tryopen(col("tile"))
         result should not be null
     }
 

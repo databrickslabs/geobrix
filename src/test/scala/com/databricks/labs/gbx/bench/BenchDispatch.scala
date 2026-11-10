@@ -1,6 +1,5 @@
 package com.databricks.labs.gbx.bench
 
-import com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
@@ -10,12 +9,9 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
 import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
-import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
-import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
@@ -25,15 +21,12 @@ import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.{BalancedSubdivision, BoundingBox, OverlappingTiles, RasterTessellate, SeparateBands}
+import com.databricks.labs.gbx.rasterx.operations.BoundingBox
 import com.databricks.labs.gbx.rasterx.tile.TileMath
 import com.databricks.labs.gbx.util.NodeFilePathUtil
-import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.Column
-import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
-import org.locationtech.jts.geom.{Geometry, LineString}
 
 import java.nio.file.Files
 
@@ -43,10 +36,6 @@ object BenchDispatch {
   private def argD(a: Map[String, String], k: String, d: Double) = a.get(k).map(_.toDouble).getOrElse(d)
   private def argI(a: Map[String, String], k: String, d: Int) = a.get(k).map(_.toInt).getOrElse(d)
   private def argB(a: Map[String, String], k: String, d: Boolean) = a.get(k).map(_.toBoolean).getOrElse(d)
-  // ARRAY<DOUBLE> arg (e.g. isoband breaks) ridden as a comma/space-separated
-  // string in the stringly-typed bench args map; falls back to `d` when absent.
-  private def argDoubleArray(a: Map[String, String], k: String, d: Array[Double]): Array[Double] =
-    a.get(k).map(_.split("[,\\s]+").filter(_.nonEmpty).map(_.trim.toDouble)).getOrElse(d)
 
   private val ACC = "accessor"; private val TER = "terrain"
   private val EDIT = "edit"
@@ -75,7 +64,7 @@ object BenchDispatch {
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
     "rst_scaley" -> ACC, "rst_skewx" -> ACC, "rst_skewy" -> ACC,
-    "rst_rotation" -> ACC, "rst_isempty" -> ACC,
+    "rst_rotation" -> ACC,
     "rst_format" -> ACC, "rst_memsize" -> ACC,
     // coordinate / index accessors
     "rst_rastertoworldcoordx" -> ACC,
@@ -93,40 +82,22 @@ object BenchDispatch {
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_derivedband" -> FMT,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
-    // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
-    // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
-    "rst_tryopen" -> ACC, "rst_fromcontent" -> FMT,
+    // getsubdataset is accessor-flavored; the readers emit a tile -> format.
+    // (buildoverviews has no heavyweight level: it measured slower than light.)
+    "rst_fromcontent" -> FMT,
     "rst_getsubdataset" -> ACC,
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
-    // (The combine family has no heavyweight level: it measured slower than light.)
-    "rst_frombands" -> FMT, "rst_merge" -> FMT,
-    // bucket C, group C4: tiling fns -> a COLLECTION of tiles -> format.
-    "rst_maketiles" -> FMT, "rst_tooverlappingtiles" -> FMT,
-    "rst_separatebands" -> FMT, "rst_xyzpyramid" -> FMT,
-    // bucket B, group B-grid: DGGS fns -> a set of grid cells (dggs_grid fp).
-    "rst_h3_tessellate" -> DGGS,
-    // a second rst_h3_tessellate case: the default centroid + complete assignment
-    // (bench/spec.py FnSpec variant_of="rst_h3_tessellate").
-    "rst_h3_tessellate_centroid" -> DGGS,
-    // BNG raster->grid reducers (DGGS, same shape as H3/quadbin reducers). Their
-    // cell ids are OS grid STRINGS (e.g. "TQ3080"), not Longs, so the pure-core
-    // path fingerprints them via ofDggsGridStr; the timing is otherwise identical.
-    // BNG reducers/tessellate reproject the tile to EPSG:27700 internally (unlike
-    // the 4326-native H3/quadbin), so their timing includes that warp.
-    // tessellate generators (DGGS, same as rst_h3_tessellate). quadbin is
-    // 4326-native; BNG reprojects to 27700 and emits STRING cell ids.
-    "rst_quadbin_tessellate" -> DGGS,
+    // (The combine family and merge have no heavyweight level: they measured slower than light.)
+    "rst_frombands" -> FMT,
+    // bucket C, group C4: the tiling fn with a heavyweight level -> a COLLECTION of tiles -> format.
+    // (The other tiling, tessellate and isoband functions have no heavyweight level.)
+    "rst_xyzpyramid" -> FMT,
     // grid rasterize aggregators (DGGS; routed through the grid-aggregate branch
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
     // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
     "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
-    // LiDAR function: isoband is geometry/vector.
-    "rst_isoband" -> VECTOR,
-    // bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness). The 4
-    // tile aggregators reduce a group of tiles -> one tile (format); the 3 geometry
-    // aggregators reduce a group of (geom, value) rows -> one tile (vector bridge).
-    "rst_combineavg_agg" -> FMT, "rst_frombands_agg" -> FMT, "rst_derivedband_agg" -> FMT,
-    "rst_rasterize_agg" -> VECTOR, "rst_binpoints_agg" -> VECTOR,
+    // bucket A: the grid *_agg aggregators (Spark groupBy aggregate harness). (The tile
+    // and geometry aggregators have no heavyweight level.)
     // rst_h3_rasterize_agg: a GRID aggregator (cellid,value rows -> one tile,
     // pixel-centroid burn). dggs, like the other H3 fns.
     "rst_h3_rasterize_agg" -> DGGS,
@@ -146,30 +117,24 @@ object BenchDispatch {
   // raster bytes (the dispatch opens them via vsimem); "path" is the corpus file
   // path (the dispatch opens it). Reader/constructor fns take content/path, not
   // an open ds, so they cannot use the shared ds-in pureCore path.
-  private val byteInput: Set[String] = Set("rst_tryopen", "rst_fromcontent")
+  private val byteInput: Set[String] = Set("rst_fromcontent")
   // rst_fromfile is lightweight-only now (the JVM cannot read UC Volumes, issue #34),
   // so there is no heavy-tier dispatch for it -- the "path" input_kind is unused.
   private val pathInput: Set[String] = Set.empty
   // bucket C, group C3: multi-tile fns consume an ARRAY of tiles. The bench
   // synthesizes the multi-tile input from the corpus tile and writes it ONCE
   // (write-once-read-both); the heavy runner reads the SAME synthesized files.
-  private val tileArrayInput: Set[String] = Set(
-    "rst_frombands", "rst_merge")
+  private val tileArrayInput: Set[String] = Set("rst_frombands")
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
   // (No function takes this kind now: rst_gridfrompoints was the last, and it has no heavyweight level.)
   private val geometryInput: Set[String] = Set.empty
-  // bucket A: the 7 *_agg aggregators reduce a GROUP of rows to ONE tile via a real
-  // df.groupBy(key).agg(...). The 4 tile aggregators build their fixed consistency
-  // group from synthesized tiles (write-once-read-both); the 3 geometry aggregators
-  // build it from the per-tile GeometrySet (geometry.json). Both are spark-path-only
-  // (no single-row pure-core analogue of a UDAF) -- the heavy runner handles them in
-  // a dedicated aggregate branch, not the column/pure-core paths.
-  private val tileAggregate: Set[String] =
-    Set("rst_combineavg_agg", "rst_frombands_agg", "rst_derivedband_agg")
-  private val geometryAggregate: Set[String] =
-    Set("rst_rasterize_agg", "rst_binpoints_agg")
+  // bucket A: the *_agg aggregators reduce a GROUP of rows to ONE result via a real
+  // df.groupBy(key).agg(...). They are spark-path-only (no single-row pure-core
+  // analogue of a UDAF) -- the heavy runner handles them in a dedicated aggregate
+  // branch, not the column/pure-core paths. The tile and geometry aggregators have
+  // no heavyweight level, so the grid aggregators below are the only kind.
   // The grid rasterize aggregators reduce a GROUP of (cellid, value) rows to ONE
   // tile, burning each grid cell's centroid pixel onto an EXPLICIT, hardcoded
   // grid. Their fixed consistency group is a deterministic cell set generated
@@ -195,8 +160,6 @@ object BenchDispatch {
     else if (pathInput.contains(fn)) "path"
     else if (tileArrayInput.contains(fn)) "tile_array"
     else if (geometryInput.contains(fn)) "geometry"
-    else if (tileAggregate.contains(fn)) "tile_aggregate"
-    else if (geometryAggregate.contains(fn)) "geometry_aggregate"
     else if (gridAggregate.contains(fn)) "grid_aggregate"
     else "tile"
 
@@ -322,18 +285,7 @@ object BenchDispatch {
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
   def synthRecipe(fn: String): String = fn match {
     case "rst_frombands"     => "frombands"
-    case "rst_merge"         => "merge"
     case other               => throw new IllegalArgumentException(s"no synth recipe for: $other")
-  }
-
-  // bench.synth recipe whose tiles form a tile aggregator's fixed consistency group
-  // (mirrors spec.agg_synth_recipe). combineavg over aligned copies, merge over
-  // offset copies, frombands/derivedband over the per-band split.
-  def aggSynthRecipe(fn: String): String = fn match {
-    case "rst_combineavg_agg" => "combineavg"
-    case "rst_frombands_agg"  => "frombands"
-    case "rst_derivedband_agg" => "frombands"
-    case other => throw new IllegalArgumentException(s"no agg synth recipe for: $other")
   }
 
 
@@ -371,8 +323,6 @@ object BenchDispatch {
     case "rst_skewx"       => BenchFingerprint.ofScalar(RST_SkewX.execute(ds))
     case "rst_skewy"       => BenchFingerprint.ofScalar(RST_SkewY.execute(ds))
     case "rst_rotation"    => BenchFingerprint.ofScalar(RST_Rotation.execute(ds))
-    // bool -> 1.0/0.0 to match the pyrx core_fn's numeric coercion
-    case "rst_isempty"     => BenchFingerprint.ofScalar(if (RST_IsEmpty.execute(ds)) 1.0 else 0.0)
     case "rst_format"      => BenchFingerprint.ofScalar(RST_Format.execute(ds))
     // timing-only (per-band string array; no cross-engine fingerprint)
     // timing-only (file size vs in-memory size; not comparable)
@@ -427,106 +377,16 @@ object BenchDispatch {
       val sub = RST_GetSubdataset.execute(ds, argS(a, "name", "0"))
       if (sub != null) RasterDriver.releaseDataset(sub)
       BenchFingerprint.empty
-    // bucket C, group C4: tiling fns -> a COLLECTION of tiles. Each reduces ONE
+    // bucket C, group C4: the tiling fn -> a COLLECTION of tiles. It reduces ONE
     // input tile to MANY output tiles; the output is fingerprinted as a
-    // raster_collection (tile count + pooled, order-independent agg). The tiling
-    // *Iter operations UNLINK the input ds when exhausted, but HeavyRunner reuses
-    // the same open ds across its warmup+measured loop, so we feed each iterator a
-    // CLONE (it destroys the clone, not the shared input). Each output tile is
-    // released after pooling. xyzpyramid uses RST_TileXYZ.execute, which does NOT
-    // close the source, so it runs directly on the shared ds.
-    case "rst_maketiles" =>
-      collectAndFingerprint(
-        BalancedSubdivision.splitRasterIter(cloneDs(ds), Map.empty, argI(a, "size_in_mb", 1)))
-    // overlap default 25 mirrors the authoritative pyrx FnSpec (bench/spec.py:
-    // rst_tooverlappingtiles args {overlap: 25}). The heavy runner passes an empty
-    // args map, so this default IS the value compared cross-engine; a mismatched
-    // default (was 32) produced different window positions -> a ~3% pooled-pixel
-    // divergence even though the tile COUNT matched.
-    case "rst_tooverlappingtiles" =>
-      collectAndFingerprint(
-        OverlappingTiles.reTileIter(cloneDs(ds), Map.empty,
-          argI(a, "tile_width", 128), argI(a, "tile_height", 128), argI(a, "overlap", 25)))
-    case "rst_separatebands" =>
-      collectAndFingerprint(SeparateBands.separateIter(cloneDs(ds), Map.empty))
+    // raster_collection (tile count + pooled, order-independent agg). xyzpyramid uses
+    // RST_TileXYZ.execute, which does NOT close the source, so it runs directly on
+    // the shared ds.
     case "rst_xyzpyramid" =>
       fpXyzPyramid(ds, argI(a, "min_z", 10), argI(a, "max_z", 11),
         argS(a, "format", "PNG"), argI(a, "size", 256), argS(a, "resampling", "bilinear"))
-    // tessellate: one tile per overlapping H3 cell, NO scalar measure. Drain the
-    // iterator (a CLONE of the shared input ds, since the iterator closes its
-    // source on exhaustion), collect the cell ids, RELEASE each output tile, and
-    // fingerprint the id-only dggs_grid (count + hash, empty agg) -- mirroring the
-    // light tessellate path that emits agg == {}.
-    case "rst_h3_tessellate" =>
-      val iter = RasterTessellate.tessellateH3Iter(cloneDs(ds), Map.empty, argI(a, "resolution", 7), "covering", "complete")
-      val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
-      iter.foreach { case (cell, resDs, _) =>
-        ids += cell
-        if (resDs != null) RasterDriver.releaseDataset(resDs)
-      }
-      BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // The default assignment (centroid + complete) as its own case; the case above
-    // times covering. Same drain-release-fingerprint shape; mirrors the spec.py args.
-    case "rst_h3_tessellate_centroid" =>
-      val iter = h3TessellateCentroidChips(ds, a)
-      val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
-      iter.foreach { case (cell, resDs, _) =>
-        ids += cell
-        if (resDs != null) RasterDriver.releaseDataset(resDs)
-      }
-      BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // quadbin tessellate: LONG cell ids, 4326-native. Same drain-release-fingerprint
-    // shape as H3 tessellate (id-only dggs_grid, empty agg).
-    case "rst_quadbin_tessellate" =>
-      val iter = RasterTessellate.tessellateQuadbinIter(cloneDs(ds), Map.empty, argI(a, "resolution", 15), "covering", "complete")
-      val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
-      iter.foreach { case (cell, resDs, _) =>
-        ids += cell
-        if (resDs != null) RasterDriver.releaseDataset(resDs)
-      }
-      BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // rst_isoband: reclassify into half-open bins and return one polygon per
-    // contiguous same-bin region. Defaults match the pyrx FnSpec. Output struct
-    // is (geom_wkb, band, lower, upper); fingerprint over geoms and band indices.
-    case "rst_isoband" =>
-      fpIsoband(RST_Isoband.execute(
-        ds, argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))))
     case other            => throw new IllegalArgumentException(s"unknown bench fn: $other")
     }
-  }
-
-  /** Decode isoband output (struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE))
-    * into (JTS Geometry, band_index) pairs and fingerprint as vector (feature count +
-    * total polygon area + agg over band indices). */
-  private def fpIsoband(arr: ArrayData): String = {
-    val features = (0 until arr.numElements()).map { i =>
-      val row = arr.getStruct(i, 4)
-      val wkb = row.getBinary(0)
-      val band = row.getInt(1).toDouble  // Use band index as the measure
-      (JTS.fromWKB(wkb), band)
-    }
-    BenchFingerprint.ofVector(features)
-  }
-
-  /** Clone an open Dataset into an in-memory (MEM driver) copy. The tiling
-    * iterators unlink their source ds on exhaustion; feed them a clone so the
-    * HeavyRunner's reused input ds survives the warmup+measured loop. */
-  private def cloneDs(ds: Dataset): Dataset =
-    org.gdal.gdal.gdal.GetDriverByName("MEM").CreateCopy("", ds)
-
-  /** The chips the rst_h3_tessellate_centroid case drains: the default assignment (centroid +
-    * complete) over a clone of `ds`. The caller releases each chip. */
-  private[bench] def h3TessellateCentroidChips(
-      ds: Dataset, a: Map[String, String]): Iterator[(Long, Dataset, Map[String, String])] =
-    RasterTessellate.tessellateH3Iter(cloneDs(ds), Map.empty, argI(a, "resolution", 7), "centroid", "complete")
-
-  /** Drain a (Dataset, metadata) tiling iterator into a raster_collection
-    * fingerprint, pooling pixels across all output tiles, then release each
-    * output tile. The iterator owns (and destroys) its CLONED source ds. */
-  private def collectAndFingerprint(iter: Iterator[(Dataset, Map[String, String])]): String = {
-    val tiles = iter.map(_._1).filter(_ != null).toSeq
-    try BenchFingerprint.ofCollection(tiles)
-    finally tiles.foreach(RasterDriver.releaseDataset)
   }
 
   /** Heavy xyzpyramid pure-core: enumerate intersecting (z, x, y) tiles across the
@@ -560,19 +420,6 @@ object BenchDispatch {
   def pureCoreBytes(fn: String, bytes: Array[Byte], a: Map[String, String]): String = {
     Files.createDirectories(NodeFilePathUtil.rootPath)
     fn match {
-      // rst_tryopen: "do the bytes open?" The Spark expression has no ds-in
-      // execute (it succeeds iff the row deserializes), so replicate its work:
-      // open + release, mapping success/failure to 1.0/0.0 to match the heavy
-      // scalar fingerprint convention (same as rst_isempty).
-      case "rst_tryopen" =>
-        val ok =
-          try {
-            val d = RasterDriver.readFromBytes(bytes, Map.empty)
-            val opened = d != null
-            if (opened) RasterDriver.releaseDataset(d)
-            opened
-          } catch { case _: Throwable => false }
-        BenchFingerprint.ofScalar(if (ok) 1.0 else 0.0)
       // rst_fromcontent: build a tile from bytes + driver. The comparable output
       // is the decoded raster grid, so open the bytes and fingerprint the
       // dataset (the pyrx side returns the same GTiff bytes -> raster fp).
@@ -611,10 +458,6 @@ object BenchDispatch {
       // one N-band tile. Fingerprint the stacked dataset.
       case "rst_frombands" =>
         val (out, _) = RST_FromBands.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      // merge: mosaic the offset-origin copies into their union extent.
-      case "rst_merge" =>
-        val (out, _) = RST_Merge.execute(dss, Map.empty[String, String])
         try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
       case other => throw new IllegalArgumentException(s"unknown bench tile_array fn: $other")
     }
@@ -694,7 +537,6 @@ object BenchDispatch {
       case "rst_skewx"       => rst_skewx(tile)
       case "rst_skewy"       => rst_skewy(tile)
       case "rst_rotation"    => rst_rotation(tile)
-      case "rst_isempty"     => rst_isempty(tile)
       case "rst_format"      => rst_format(tile)
       case "rst_memsize"     => rst_memsize(tile)
       // coordinate / index accessors
@@ -720,41 +562,21 @@ object BenchDispatch {
       // tile-out transforms with geometry / function args
       case "rst_derivedband" =>
         rst_derivedband(tile, derivedBandPyFunc, derivedBandFuncName)
-      // bucket C, group C1/C2. tryopen takes the tile; fromcontent reads the
-      // tile's raster (binary content) column; buildoverviews takes the tile +
-      // an ARRAY<INT> levels literal. subdatasets / getsubdataset are
-      // pure-core-only here; their column form exists only to keep the match
-      // exhaustive (the spark-path runner filters by modes). rst_fromfile is
-      // lightweight-only now (issue #34) and is not dispatched on the heavy tier.
-      case "rst_tryopen"     => rst_tryopen(tile)
+      // bucket C, group C1/C2. fromcontent reads the tile's raster (binary
+      // content) column. getsubdataset is pure-core-only here; its column form
+      // exists only to keep the match exhaustive (the spark-path runner filters
+      // by modes). rst_fromfile is lightweight-only now (issue #34) and is not
+      // dispatched on the heavy tier.
       case "rst_fromcontent" =>
         rst_fromcontent(tile.getField("raster"), argS(a, "driver", "GTiff"))
       case "rst_getsubdataset" => rst_getsubdataset(tile, argS(a, "name", "0"))
       // bucket C, group C3: multi-tile fns. The `tile` Column passed here IS the
       // ARRAY<tile> column the runner built from the synthesized tiles (the same
-      // files the pure-core path reads). Each binding takes a single array column.
+      // files the pure-core path reads). The binding takes a single array column.
       case "rst_frombands"     => rst_frombands(tile)
-      case "rst_merge"        => rst_merge(tile)
-      // bucket C, group C4: tiling fns -> ARRAY column (spark-path is timing-only,
-      // not fingerprint-compared, so the args only need to be valid). maketiles takes
-      // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
-      case "rst_maketiles"   => rst_maketiles(tile, argI(a, "size_in_mb", 1))
-      case "rst_tooverlappingtiles" =>
-        rst_tooverlappingtiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128), argI(a, "overlap", 25))
-      case "rst_separatebands" => rst_separatebands(tile)
+      // bucket C, group C4: the tiling fn -> ARRAY column (spark-path is timing-only,
+      // not fingerprint-compared, so the args only need to be valid).
       case "rst_xyzpyramid"  => rst_xyzpyramid(tile, argI(a, "min_z", 10), argI(a, "max_z", 11))
-      // bucket B, group B-grid: DGGS fns -> ARRAY<...> column (spark-path is
-      // timing-only, not fingerprint-compared, so the args only need to be valid).
-      // The Scala wrappers take an Int resolution overload.
-      case "rst_h3_tessellate"             => rst_h3_tessellate(tile, argI(a, "resolution", 7))
-      case "rst_h3_tessellate_centroid"    =>
-        rst_h3_tessellate(tile, argI(a, "resolution", 7), "centroid", "complete")
-      case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
-      // rst_isoband: vector-out fn. Defaults match the pyrx FnSpec.
-      case "rst_isoband" =>
-        val breaks = argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))
-        rst_isoband(tile, org.apache.spark.sql.functions.array(
-          breaks.map(org.apache.spark.sql.functions.lit): _*))
       // bucket A aggregators have no scalar column form; they are aggregate
       // expressions handled by aggregateColumn (the spark-path runner routes them
       // through the aggregate branch, not column()).
@@ -765,50 +587,24 @@ object BenchDispatch {
     }
   }
 
-  // bucket A: the aggregate Column for a *_agg fn over an already-keyed DataFrame.
-  // The 4 tile aggregators consume the `tile` struct column (frombands also a
-  // per-row `band_index` INT -- the ascending-sort key, supplied identically to the
-  // pyrx side). The 3 geometry aggregators consume (geom_wkb BINARY, value DOUBLE)
-  // plus the per-group extent constants (xmin,ymin,xmax,ymax,w,h,srid). derivedband
-  // rides the SAME fixed mean-bands pyfunc as the non-agg rst_derivedband. dtmfrom-
-  // geoms rides breaklines=NULL + tolerances 0.0 (unconstrained Delaunay, mirrored
-  // on the light side). The result is a tile struct; the runner collects it and
-  // fingerprints the raster bytes via BenchFingerprint.ofDataset.
+  // bucket A: the aggregate Column for a grid *_agg fn over an already-keyed DataFrame.
+  // The grid aggregators consume (cellid, value) rows; `ext` is unused (the grid rides
+  // as literals or is derived from the cell set). The runner collects the result and
+  // fingerprints it (the raster bytes, or the cell set of a cellfill).
   def aggregateColumn(fn: String, df: org.apache.spark.sql.DataFrame,
                       ext: (Double, Double, Double, Double, Int, Int, Int),
                       a: Map[String, String]): Column = {
     import functions._
-    import org.apache.spark.sql.functions.{call_function, col, expr, lit}
-    val (xmin, ymin, xmax, ymax, w, h, srid) = ext
+    import org.apache.spark.sql.functions.{col, expr}
     fn match {
-      case "rst_combineavg_agg" => rst_combineavg_agg(col("tile"))
-      // No Scala wrapper for the 2-arg frombands_agg; call the registered UDAF.
-      // band_index is the per-row ascending-sort key (0,1,... supplied by both tiers).
-      case "rst_frombands_agg"  => expr("gbx_rst_frombands_agg(tile, band_index)")
-      case "rst_derivedband_agg" =>
-        rst_derivedband_agg(col("tile"), derivedBandPyFunc, derivedBandFuncName)
-      // Geometry aggregators: the extent/size/srid are per-group constants baked in
-      // as SQL literals; geom_wkb/value are the streamed per-row columns.
-      case "rst_rasterize_agg" =>
-        expr(s"gbx_rst_rasterize_agg(geom_wkb, value, " +
-          s"$xmin, $ymin, $xmax, $ymax, $w, $h, $srid)")
-      // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
-      // aggregators): stream one (x, y, z) point per row -> bin z values by statistic
-      // (max/min/mean/median/count) into a DSM tile. The corpus supplies x/y/z DOUBLE
-      // columns decoded from the SAME zpoints the light tier bins, so both tiers run
-      // the identical function shape. Extent/size/srid are per-group constants.
-      case "rst_binpoints_agg" =>
-        rst_binpoints_agg(col("x"), col("y"), col("z"),
-          lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
-          lit(argS(a, "statistic", RST_BinPoints.DefaultStatistic)))
       // rst_h3_rasterize_agg: stream (cellid, value) per row; the EXPLICIT grid
       // (xmin..height, srid, mode, kring_pad) rides as hardcoded SQL literals --
       // the SAME constants the pyrx tier passes (PARITY CONTRACT, see h3Ragg*
       // above). value is NULL on every row -> presence-mask burn (1.0). pixel_size
       // is supplied too (unused once the explicit extent is given, but keeps the
       // 12-arg signature). The HEAVY UDAF returns a tile STRUCT directly (dataType =
-      // tileDataType(BinaryType); only the lightweight SQL form returns BINARY), so --
-      // exactly like rst_rasterize_agg -- it is NOT wrapped in gbx_rst_fromcontent;
+      // tileDataType(BinaryType); only the lightweight SQL form returns BINARY), so
+      // it is NOT wrapped in gbx_rst_fromcontent;
       // the consistency collect reads `raster` straight off the struct to fingerprint.
       case "rst_h3_rasterize_agg" =>
         expr(

@@ -1,13 +1,11 @@
 package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_Custom_RasterizeAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Custom_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.constructor.{RST_FromBands, RST_FromContent}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
-import com.databricks.labs.gbx.rasterx.expressions.generators._
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
-import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -43,18 +41,6 @@ object functions extends Serializable {
     def rst_width(tile: Column): Column = ColumnAdapter(RST_Width.name, Seq(tile))
 
     // Aggregators
-def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.name, Seq(tile))
-    def rst_derivedband_agg(tile: Column, pythonFunc: String, funcName: String): Column =
-      ColumnAdapter(RST_DerivedBandAgg.name, Seq(tile, lit(pythonFunc), lit(funcName)))
-    def rst_frombands_agg(tile: Column, bandIndex: Column): Column =
-        ColumnAdapter(RST_FromBandsAgg.name, Seq(tile, bandIndex))
-    /** Burn a group's `(geom, value)` features into one tile; the overlap rule is the tier-wide one (see the docs). */
-    def rst_rasterize_agg(
-        geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, outSrid: Column
-    ): Column =
-        ColumnAdapter(RST_RasterizeAgg.name, Seq(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, outSrid))
-
     /** UDAF: rasterize a group's H3 cells into one tile (pixel-centroid burn).
      *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0, an untyped NULL value). */
     def rst_h3_rasterize_agg(cellid: Column): Column =
@@ -196,30 +182,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper (see register/#34).
     def rst_frombands(bands: Column): Column = ColumnAdapter(RST_FromBands.name, Seq(bands))
 
-    // Generators
-    def rst_h3_tessellate(tile: Column, resolution: Column): Column = ColumnAdapter(RST_H3_Tessellate.name, Seq(tile, resolution))
-    def rst_h3_tessellate(tile: Column, resolution: Column, assignment: String): Column =
-        ColumnAdapter(RST_H3_Tessellate.name, Seq(tile, resolution, lit(assignment)))
-    def rst_h3_tessellate(tile: Column, resolution: Column, assignment: String, coverage: String): Column =
-        ColumnAdapter(RST_H3_Tessellate.name, Seq(tile, resolution, lit(assignment), lit(coverage)))
-    def rst_quadbin_tessellate(tile: Column, resolution: Column): Column =
-        ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tile, resolution))
-    def rst_quadbin_tessellate(tile: Column, resolution: Column, assignment: String): Column =
-        ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tile, resolution, lit(assignment)))
-    def rst_quadbin_tessellate(tile: Column, resolution: Column, assignment: String, coverage: String): Column =
-        ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tile, resolution, lit(assignment), lit(coverage)))
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column): Column =
-        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution))
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String): Column =
-        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment)))
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String, coverage: String): Column =
-        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment), lit(coverage)))
-    def rst_maketiles(tile: Column, sizeInMb: Column): Column =
-        ColumnAdapter(RST_MakeTiles.name, Seq(tile, sizeInMb))
-    def rst_separatebands(tile: Column): Column = ColumnAdapter(RST_SeparateBands.name, Seq(tile))
-    def rst_tooverlappingtiles(tile: Column, tileWidth: Column, tileHeight: Column, overlap: Column): Column =
-        ColumnAdapter(RST_ToOverlappingTiles.name, Seq(tile, tileWidth, tileHeight, overlap))
-
     /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in the output CRS
      *  (`srid`, an EPSG or ESRI code; or an `outCrs` string that wins over it). */
     def gbx_h3_cell_bbox(cellid: Column): Column =
@@ -240,13 +202,10 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
     def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
-    def rst_isempty(tile: Column): Column = ColumnAdapter(RST_IsEmpty.name, Seq(tile))
-    def rst_merge(tiles: Column): Column = ColumnAdapter(RST_Merge.name, Seq(tiles))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
-    def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
     def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
@@ -260,27 +219,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_fromcontent(content: Column, driver: String): Column = rst_fromcontent(content, lit(driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper or scalar
     // overloads (the JVM cannot read UC Volumes -- see register/#34). Use the Python/SQL binding.
-    def rst_h3_tessellate(tile: Column, resolution: Int): Column = rst_h3_tessellate(tile, lit(resolution))
-    def rst_h3_tessellate(tile: Column, resolution: Int, assignment: String): Column =
-        rst_h3_tessellate(tile, lit(resolution), assignment)
-    def rst_h3_tessellate(tile: Column, resolution: Int, assignment: String, coverage: String): Column =
-        rst_h3_tessellate(tile, lit(resolution), assignment, coverage)
-    def rst_quadbin_tessellate(tile: Column, resolution: Int): Column = rst_quadbin_tessellate(tile, lit(resolution))
-    def rst_quadbin_tessellate(tile: Column, resolution: Int, assignment: String): Column =
-        rst_quadbin_tessellate(tile, lit(resolution), assignment)
-    def rst_quadbin_tessellate(tile: Column, resolution: Int, assignment: String, coverage: String): Column =
-        rst_quadbin_tessellate(tile, lit(resolution), assignment, coverage)
-    def rst_maketiles(tile: Column, sizeInMb: Int): Column =
-        rst_maketiles(tile, lit(sizeInMb))
-    def rst_tooverlappingtiles(tile: Column, tileWidth: Int, tileHeight: Int, overlap: Int): Column =
-        rst_tooverlappingtiles(tile, lit(tileWidth), lit(tileHeight), lit(overlap))
-    // BNG reducer resolution accepts an Int index (±1..±6) or a String key ("1km", "100m", ...).
-    // Custom-grid reducer resolution is an Int in [0, conf.max_resolution].
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int): Column = rst_custom_tessellate(tile, grid, lit(resolution))
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String): Column =
-        rst_custom_tessellate(tile, grid, lit(resolution), assignment)
-    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String, coverage: String): Column =
-        rst_custom_tessellate(tile, grid, lit(resolution), assignment, coverage)
     def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
@@ -322,27 +260,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     ): Column =
         rst_xyzpyramid(tile, lit(minZ), lit(maxZ), lit(format), lit(size), lit(resampling))
 
-    // Vector<->raster bridge (Column form)
-    def rst_isoband(tile: Column, breaks: Column): Column =
-        ColumnAdapter(RST_Isoband.name, Seq(tile, breaks))
-
     // Terrain analysis (DEM processing) - Column form
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
-
-    // Bin one (x,y,z) point per row — aggregator form
-    def rst_binpoints_agg(
-        x: Column, y: Column, z: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column
-    ): Column =
-        ColumnAdapter(RST_BinPointsAgg.name, Seq(x, y, z, xmin, ymin, xmax, ymax, widthPx, heightPx, srid))
-    def rst_binpoints_agg(
-        x: Column, y: Column, z: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column,
-        statistic: Column
-    ): Column =
-        ColumnAdapter(RST_BinPointsAgg.name, Seq(x, y, z, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, statistic))
 
     // Pixel ops + extraction — Column form + scalar overloads
 

@@ -1,11 +1,10 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
+import com.databricks.labs.gbx.rasterx.operations.Convolve
 import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -17,8 +16,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.util.UUID
 
 /**
-  * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve / proximity /
-  * band / DEM) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
+  * Derived heavy tiles (warp / translate / VRT / convolve / band / DEM / grid rasterize) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
   * the Databricks image preview) when the caller passes no `compression` option. The default is decided in two places that have to agree: the
   * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
   * into `OperatorOptions.appendOptions`) and the `appendOptions` fallback itself. Each test therefore
@@ -33,10 +31,8 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
     override def beforeAll(): Unit =
         GDALManager.init(ExpressionConfig(Map.empty[String, String], new SerializableConfiguration(new Configuration())))
 
-    // Copied from WindowedExtractTest (private there).
     private def mem(path: String): String = s"/vsimem/dtctest_${UUID.randomUUID().toString.replace("-", "")}_$path"
 
-    // Copied from WindowedExtractTest (private there).
     /** Builds a single-/multi-band GTiff with a known per-pixel ramp; band i pixel = base*i + idx. */
     private def buildRamp(
         path: String,
@@ -93,47 +89,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         val bytes = RasterDriver.writeToBytes(ds, meta)
         assert(bytes != null && bytes.nonEmpty)
         assert(storedCompression(bytes) == expected)
-    }
-
-    test("WindowedExtract.extract (retile fast path) defaults to DEFLATE") {
-        withRamp("we.tif") { src =>
-            // WindowedExtract.extract(ds: Dataset, options: Map[String, String], xStart: Int, yStart: Int,
-            //                         xOffset: Int, yOffset: Int): (Dataset, Map[String, String])
-            val (out, meta) = WindowedExtract.extract(src, Map.empty, 0, 0, 16, 16)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("WindowedExtract.extract fallback (gdal_translate -srcwin) defaults to DEFLATE") {
-        withRamp("wefb.tif") { src =>
-            // applyScale + a non-identity scale routes to the executeTranslate fallback.
-            src.GetRasterBand(1).SetScale(0.5)
-            // WindowedExtract.extract(ds: Dataset, options: Map[String, String], xStart: Int, yStart: Int,
-            //                         xOffset: Int, yOffset: Int): (Dataset, Map[String, String])
-            val (out, meta) = WindowedExtract.extract(src, Map("applyScale" -> "true"), 0, 0, 16, 16)
-            try {
-                assert(meta("last_command").startsWith("gdal_translate"), "expected the translate fallback")
-                assertCodec(out, meta, DerivedDefault)
-            } finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("RasterTessellate.tessellateH3Iter first chip defaults to DEFLATE") {
-        // RasterTessellate.tessellateH3Iter(ds: Dataset, options: Map[String, String], resolution: Int,
-        //     assignment: String = "centroid", coverage: String = "complete"):
-        //     Iterator[(Long, Dataset, Map[String, String])]   (AutoCloseable at runtime)
-        // The tessellation owns its input and releases it when closed.
-        val iter = RasterTessellate.tessellateH3Iter(ramp("tess.tif"), Map.empty, 7)
-        try {
-            assert(iter.hasNext, "tessellation emitted no chips")
-            val (_, chip, meta) = iter.next()
-            try assertCodec(chip, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(chip)
-        } finally iter match {
-            case ac: AutoCloseable => ac.close()
-            case _                 =>
-        }
     }
 
     test("GDALWarp.executeWarp defaults to DEFLATE") {
@@ -234,20 +189,19 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("the rasterize and binpoints tile writers emit the heavyweight default codec, not raw bytes") {
-        // RST_BinPoints.execute(x, y, z, xmin, ymin, xmax, ymax, w, h, srid, statistic): Array[Byte]
-        val pts = RST_BinPoints.execute(
-          Array(1.0, 2.0, 3.0), Array(1.0, 2.0, 3.0), Array(5.0, 6.0, 7.0), 0.0, 0.0, 64.0, 64.0, 64, 64, 4326, "mean")
-        assert(storedCompression(pts) == DerivedDefault, s"binpoints wrote ${storedCompression(pts)}")
-        // the other callers of VectorRasterBridge.toGTiffBytes (the rasterize aggregates) share its encoder: a larger
-        // canvas, so an explicit NONE stays raw and the default is much smaller than raw
-        val big = RST_BinPoints.execute(
-          Array(1.0, 2.0, 3.0), Array(1.0, 2.0, 3.0), Array(5.0, 6.0, 7.0), 0.0, 0.0, 200.0, 200.0, 200, 200, 4326, "mean")
-        assert(storedCompression(big) == DerivedDefault, s"binpoints wrote ${storedCompression(big)}")
-        val raw = VectorRasterBridge.toGTiffBytes(
-          { val p = mem("cells.tif"); gdal.FileFromMemBuffer(p, big); gdal.Open(p) }, "NONE")
+    test("the grid rasterize tile writer emits the heavyweight default codec, not raw bytes") {
+        // VectorRasterBridge.toGTiffBytes is the encoder of the grid rasterize aggregates: on a canvas of
+        // 200 x 200 an explicit NONE stays raw, and the default is much smaller than raw
+        def encoded(compression: Option[String]): Array[Byte] = {
+            val canvas = VectorRasterBridge.buildEmptyRaster(0.0, 0.0, 200.0, 200.0, 200, 200, 4326)
+            try compression.fold(VectorRasterBridge.toGTiffBytes(canvas))(VectorRasterBridge.toGTiffBytes(canvas, _))
+            finally canvas.delete()
+        }
+        val default = encoded(None)
+        assert(storedCompression(default) == DerivedDefault, s"the writer wrote ${storedCompression(default)}")
+        val raw = encoded(Some("NONE"))
         assert(storedCompression(raw) == null, "an explicit NONE must stay raw")
-        assert(big.length < raw.length / 4, s"${big.length} B vs raw ${raw.length} B")
+        assert(default.length < raw.length / 4, s"${default.length} B vs raw ${raw.length} B")
     }
 
 }

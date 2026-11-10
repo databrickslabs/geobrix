@@ -17,7 +17,7 @@ import scala.collection.mutable.ArrayBuffer
 /** Generator: explode one source raster into one row per intersecting (z, x, y) tile across
  *  a zoom range.
  *
- *  Pattern-mirrors `RST_MakeTiles` -- extends `CollectionGenerator`, single-input row ->
+ *  Extends `CollectionGenerator`, single-input row ->
  *  many output rows, codegen-fallback. Output schema is
  *  `STRUCT<z INT, x INT, y INT, bytes BINARY>`.
  *
@@ -49,7 +49,7 @@ case class RST_XYZPyramid(
 
     private def rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     /** Element schema is a single column "tile" wrapping the (z, x, y, bytes) struct --
-     *  mirrors `RST_MakeTiles` so callers `select(rst_xyzpyramid(...).alias("t"))` and
+     *  so callers `select(rst_xyzpyramid(...).alias("t"))` and
      *  unpack via `t.tile.z`, `t.tile.bytes`, etc. */
     override def dataType: DataType = RST_XYZPyramid.tileStruct
     override def position: Boolean = false
@@ -182,7 +182,7 @@ object RST_XYZPyramid extends WithExpressionInfo {
     ))
 
     /** Generator element schema: a single column named "tile" wrapping the inner struct.
-     *  Matches `RST_MakeTiles` so generator outputs are aliased once and unpacked via
+     *  Generator outputs are aliased once and unpacked via
      *  `t.tile.z`, `t.tile.bytes`, etc. */
     val elementSchemaStatic: StructType = StructType(Seq(
         StructField("tile", tileStruct, nullable = true)

@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
@@ -86,6 +86,19 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
         )
     }
 
+    /** The fill-marking arguments of a warp of `s`: NoData for the warp fill where a band declares none
+      * ([[GDAL.dstNoDataArgs]] with [[GDAL.srcNoDataArgs]]), none for an alpha source (its alpha band marks the fill). */
+    private def fillNoDataArgs(s: WarpSource): Seq[String] =
+        if (GDAL.hasAlpha(s.ds)) Seq.empty
+        else GDAL.dstNoDataArgs(s.ds) ++ GDAL.srcNoDataArgs(s.ds, maskAsAlpha = s.masked)
+
+    /** A fill-marking warp of `ds` to `outputPath` through its [[WarpSource]]. The caller owns the result. */
+    private def fillWarp(ds: Dataset, outputPath: String, command: String): (Dataset, Map[String, String]) = {
+        val source = new WarpSource(ds)
+        try source.warp(outputPath, Map.empty[String, String], command, fillNoDataArgs(source))
+        finally source.close()
+    }
+
     private def noDataOf(ds: Dataset, b: Int): Option[Double] = {
         val nd = new Array[java.lang.Double](1)
         ds.GetRasterBand(b).GetNoDataValue(nd)
@@ -101,8 +114,8 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             a.masked shouldBe false
             (a.dataset eq plain) shouldBe true
             a.alphaArgs shouldBe empty
-            a.fillNoDataArgs shouldBe Seq("-dstnodata", "65535.0", "-srcnodata", "65535.0", "-wo", "UNIFIED_SRC_NODATA=NO")
-            b.fillNoDataArgs shouldBe empty // the warp carries the source NoData
+            fillNoDataArgs(a) shouldBe Seq("-dstnodata", "65535.0", "-srcnodata", "65535.0", "-wo", "UNIFIED_SRC_NODATA=NO")
+            fillNoDataArgs(b) shouldBe empty // the warp carries the source NoData
             WarpSource.viewsBuilt.get() shouldBe built
         } finally {
             a.close(); b.close()
@@ -115,8 +128,8 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
         val src = new WarpSource(rgba)
         try {
             src.masked shouldBe false
-            src.fillNoDataArgs shouldBe empty
-            val (out, _) = WarpSource.warpFillAsNoData(rgba, "/vsimem/warpsource_rgba_out.tif", ToBng)
+            fillNoDataArgs(src) shouldBe empty
+            val (out, _) = fillWarp(rgba, "/vsimem/warpsource_rgba_out.tif", ToBng)
             try {
                 out.GetRasterCount shouldBe 4
                 (1 to 4).map(noDataOf(out, _)) shouldBe Seq.fill(4)(None)
@@ -137,7 +150,7 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             (src.dataset eq masked) shouldBe false
             src.dataset.GetRasterCount shouldBe 4
             src.alphaArgs shouldBe Seq("-srcalpha")
-            src.fillNoDataArgs shouldBe Seq("-dstnodata", "65535.0", "-srcnodata", "65535.0", "-wo", "UNIFIED_SRC_NODATA=NO")
+            fillNoDataArgs(src) shouldBe Seq("-dstnodata", "65535.0", "-srcnodata", "65535.0", "-wo", "UNIFIED_SRC_NODATA=NO")
             WarpSource.viewsBuilt.get() shouldBe built + 1
         } finally src.close()
         src.close() // idempotent
@@ -151,7 +164,7 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             val (masked, path) = source(masked = true, declared = declared, bands = 3)
             val outPath = s"/vsimem/warpsource_out_${UUID.randomUUID().toString.replace("-", "")}.tif"
             try {
-                val (out, metadata) = WarpSource.warpFillAsNoData(masked, outPath, ToBng)
+                val (out, metadata) = fillWarp(masked, outPath, ToBng)
                 try {
                     val noData = declared.getOrElse(65535.0)
                     out.GetRasterCount shouldBe 3
@@ -212,7 +225,7 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             source.dataset.GetRasterBand(4).GetColorInterpretation shouldBe GCI_Undefined
             src.GetRasterBand(4).GetColorInterpretation shouldBe GCI_AlphaBand // the source is untouched
             val outPath = s"/vsimem/warpsource_relabel_out_${UUID.randomUUID().toString.replace("-", "")}.tif"
-            val (out, _) = source.warp(outPath, Map.empty[String, String], ToBng, source.fillNoDataArgs)
+            val (out, _) = source.warp(outPath, Map.empty[String, String], ToBng, fillNoDataArgs(source))
             try {
                 out.GetRasterCount shouldBe 5
                 // band 4 is written as data, with the zeros it holds
@@ -266,8 +279,8 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             WarpSource.viewsBuilt.get() shouldBe built + 1
             source.dataset.GetRasterCount shouldBe 5 // the four bands, then the mask
             source.alphaArgs shouldBe Seq("-srcalpha")
-            source.fillNoDataArgs shouldBe empty // an alpha band marks the fill; a NoData would shadow it
-            val (out, outMeta) = WarpSource.warpFillAsNoData(src, s"/vsimem/warpsource_am_out_${UUID.randomUUID().toString.replace("-", "")}.tif", ToBng)
+            fillNoDataArgs(source) shouldBe empty // an alpha band marks the fill; a NoData would shadow it
+            val (out, outMeta) = fillWarp(src, s"/vsimem/warpsource_am_out_${UUID.randomUUID().toString.replace("-", "")}.tif", ToBng)
             withClue(s"the warp failed: ${outMeta("last_error")} ") { out should not be null }
             try {
                 out.GetRasterCount shouldBe 4

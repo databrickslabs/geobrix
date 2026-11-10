@@ -29,8 +29,9 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # is 1.67x slower than the engine, so it is light. Its bespoke JVM expression and Java UDF are gone; the row's L1
     # block is the GDAL spec engine's alone, and that switch records its own order here.
     "gbx_rst_transformcrs": ("L3",),
-    # The CRS functions have JVM companions that are not timed against light yet, so they take the highest
-    # available level; the other vector scalars have no companion (the legacy decode is light by family).
+    # The CRS functions have JVM companions and take the highest available level. Of the three, only transformcrs is
+    # timed against light: 5.7x and 6.4x faster on the JVM at 4x and 16x rows (dedicated compute). crs and setcrs are
+    # not timed yet. The other vector scalars have no companion (the legacy decode is light by family).
     "gbx_st_crs": ("L1", "L3"),
     "gbx_st_setcrs": ("L1", "L3"),
     "gbx_st_transformcrs": ("L1", "L3"),
@@ -100,16 +101,15 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_color_relief": ("L3",),
     # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) were faster on the JVM, and they pass the
     # 1.2x line, but a virtual tile at L1 raises VirtualTileException, and a virtual tile is the light default input. A SQL
-    # wrapper that would send it to light cannot sit under explode (UNSUPPORTED_SQL_UDF_USAGE in Generate). Light first until
-    # the JVM level reads a virtual tile; the isoband L1 block stays for a forced L1. The contour JVM expression is deleted
-    # (the user ruled light only), so contour has the light level alone.
+    # wrapper that would send it to light cannot sit under explode (UNSUPPORTED_SQL_UDF_USAGE in Generate). Both JVM
+    # expressions are deleted, so contour and isoband have the light level alone.
     "gbx_rst_contour": ("L3",),
     "gbx_rst_isoband": ("L3",),
     # The array merge: the JVM level refuses a group over the memory budget with an error tile (its merge holds the group),
     # where light streams the members through a VRT and gives the mosaic, so a hot key on a JAR cluster came back as a NULL
     # raster. On the dedicated finalize shape (`gbx_rst_merge(collect_list(tile))`, 250 rows) the JVM level is no faster:
     # 34.3 s against 37.5 s at 1x, 103.8 s against 62.5 s at 4x, 297 s against 310 s at 16x (none within the 0.8 rule).
-    # Light first; the JVM block stays for a forced L1.
+    # The JVM expression is deleted, so merge has the light level alone.
     "gbx_rst_merge": ("L3",),
     # The seven combine functions have no JVM level: it ran at 0.93x and 0.67x the speed of the best lightweight SQL form
     # at 4x and 16x rows (131.56 s against 122.16 s, 576.44 s against 387.95 s), and the DataFrame `combine_by_key` form is

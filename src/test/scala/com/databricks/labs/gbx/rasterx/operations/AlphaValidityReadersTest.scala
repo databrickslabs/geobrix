@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
-import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -19,7 +18,7 @@ import java.util.UUID
   * transparent pixel (alpha 0) for no band, whatever the band count of the raster: GDAL derives a mask from the
   * alpha band for 2- and 4-band rasters only, so a 3-band gray+x+alpha or a 6-band RGB+extra+alpha raster read
   * as all valid. The alpha band itself is summarised by its own values over every pixel, as GDAL's mask for it
-  * does; `isEmpty` is true for a raster with no valid pixel (the rule of both tiers, [[ValidMask]]).
+  * does (the rule of both tiers, [[ValidMask]]).
   *
   * Fixtures are 4 x 4 (rows: 0 = every band 7 and alpha 0; 1 = every band 0 and alpha 255; 2 = every band 0 and
   * alpha 0; 3 = every band 7 and alpha 255), the lightweight tier's `al.pattern`, so band 1 of an alpha layout
@@ -115,20 +114,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    for (l <- Seq(Rgba, GrayA, GrayXA, RgbXA)) {
-        test(s"${l.name} is empty exactly when it is entirely transparent") {
-            val opaque      = fixture(l)
-            val transparent = fixture(l, (_, last) => if (last) 0.0 else 9.0)
-            try {
-                assert(!RasterAccessors.isEmpty(opaque))
-                assert(RasterAccessors.isEmpty(transparent))
-            } finally {
-                RasterDriver.releaseDataset(opaque)
-                RasterDriver.releaseDataset(transparent)
-            }
-        }
-    }
-
     // ------------------------------------------------------------------------------------------------
     // a band masked by its own mask band (no alpha band): GDAL's multi-dimensional statistics ignore it
     // ------------------------------------------------------------------------------------------------
@@ -143,7 +128,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
             // band 4 of the fixture holds the pattern's last-band values (0 and 255): 6 of each over the 12 pixels
             assert(st.map(_.mean) == Seq(3.5, 3.5, 3.5, 127.5))
             assert(st.head.min == 0.0 && st.head.max == 7.0)
-            assert(!RasterAccessors.isEmpty(ds))
         } finally RasterDriver.releaseDataset(ds)
     }
 
@@ -225,7 +209,7 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // convolution, isoband: a transparent pixel is skipped like NoData, at any band count
+    // convolution: a transparent pixel is skipped like NoData, at any band count
     // ------------------------------------------------------------------------------------------------
 
     /** 6 x 6: 5 over rows 0-1 and 4-5, 99 over rows 2-3, which are transparent (alpha 0; the others 255). */
@@ -249,15 +233,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
                 RasterDriver.releaseDataset(ds)
                 RasterDriver.releaseDataset(plain)
             }
-        }
-
-        test(s"isoband of ${l.name} leaves out the transparent pixels") {
-            val ds = striped(l)
-            try {
-                val bands = RST_Isoband.execute(ds, Array(0.0, 10.0, 200.0), 1)
-                val idx = (0 until bands.numElements()).map(i => bands.getStruct(i, 4).getInt(1)).toSet
-                assert(idx == Set(0), idx.toString)
-            } finally RasterDriver.releaseDataset(ds)
         }
     }
 }

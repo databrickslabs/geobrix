@@ -60,7 +60,6 @@ SCALA_FILE_ALLOW = {
     "operations/SpatialRefOps.scala": "the canonical resolver: every CRS text is parsed here, classified first",
 }
 SCALA_SITES = {
-    ("rasterx/expressions/RST_BinPoints.scala", "sr.ImportFromEPSG(srid)"): INT_EPSG,
     (
         "rasterx/expressions/accessors/RST_Crs.scala",
         "val sr = new SpatialReference(proj)",
@@ -114,59 +113,11 @@ SCALA_SITES = {
         "try Try(sr.ImportFromEPSG(4326)).toOption.contains(0)",
     ): CONST_CRS,  # the probe that PROJ's database reads at all: EPSG:4326 resolves, the result is discarded
     (
-        "rasterx/expressions/vector/RST_Isoband.scala",
-        "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
-    ): CONST_CRS,
-    (
         "rasterx/expressions/web/RST_TileXYZ.scala",
         'command = s"gdalwarp -t_srs EPSG:3857 -te $xmin $ymin $xmax $ymax -ts $size $size -r $resampling -dstalpha"',
     ): WARP_CONST,
     ("rasterx/gdal/GDAL.scala", "wsg84.ImportFromEPSG(4326)"): CONST_CRS,
     ("rasterx/gdal/GDAL.scala", "epsg3857.ImportFromEPSG(3857)"): CONST_CRS,
-    (
-        "rasterx/operations/CustomGridBounds.scala",
-        "gridSR.ImportFromEPSG(grid.crsSrid)",
-    ): GRID_INT,
-    (
-        "rasterx/operations/RasterAlignment.scala",
-        "val sa = new SpatialReference(); sa.ImportFromWkt(wa)",
-    ): DATASET_WKT,
-    (
-        "rasterx/operations/RasterAlignment.scala",
-        "val sb = new SpatialReference(); sb.ImportFromWkt(wb)",
-    ): DATASET_WKT,
-    (
-        "rasterx/operations/RasterAlignment.scala",
-        "val sr = new SpatialReference(); sr.ImportFromWkt(wkt)",
-    ): DATASET_WKT,
-    (
-        "rasterx/operations/MergeRasters.scala",
-        's"gdalwarp -t_srs ${wktFile.toString} -te $left $bottom $right $top -tr $xres $yres -r near"',
-    ): WARP_DATASET,
-    (
-        "rasterx/operations/RasterProject.scala",
-        'command = s"gdalwarp -t_srs $authName:$authCode"',
-    ): WARP_RESOLVED,
-    (
-        "rasterx/operations/RasterProject.scala",
-        'command = s"gdalwarp -t_srs ${wktFile.toString}"',
-    ): WARP_RESOLVED,
-    (
-        "rasterx/operations/RasterTessellate.scala",
-        "sr.ImportFromEPSG(27700)",
-    ): CONST_CRS,
-    (
-        "rasterx/operations/RasterTessellate.scala",
-        "s.ImportFromWkt(srcWkt)",
-    ): DATASET_WKT,
-    (
-        "rasterx/operations/RasterTessellate.scala",
-        'val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, "gdalwarp -t_srs EPSG:27700 -r near")',
-    ): WARP_CONST,
-    (
-        "rasterx/operations/RasterTessellate.scala",
-        "sr.ImportFromEPSG(grid.crsSrid)",
-    ): GRID_INT,
     ("rasterx/operator/GDALWarp.scala", 'srsVec.add("-s_srs")'): WARP_CONST,
     ("vectorx/mvt/MvtWriter.scala", "srs.ImportFromEPSG(3857)"): CONST_CRS,
 }
@@ -383,15 +334,15 @@ def test_the_guard_finds_a_planted_unrouted_parse():
 
 
 def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():
-    """The allowlist is by line: a PROJ4 parse of a user column planted inside RST_BinPoints.scala (a file the
+    """The allowlist is by line: a PROJ4 parse of a user column planted inside RST_H3_RasterizeAgg.scala (a file the
     allowlist names) is a new site; the file's own lines are allowed as they stand.
     """
-    rel = "rasterx/expressions/RST_BinPoints.scala"
+    rel = "rasterx/expressions/agg/RST_H3_RasterizeAgg.scala"
     real = (SCALA_ROOT / rel).read_text()
     assert [
         l for _, _, l in _scala_hits_in(rel, real) if not _scala_allowed(rel, l)
     ] == []
-    anchor = "sr.ImportFromEPSG(srid)\n"
+    anchor = "dstSR.ImportFromEPSG(srid)\n"
     assert real.count(anchor) == 1
     planted = real.replace(anchor, anchor + "        sr.ImportFromProj4(userCol)\n")
     new = [

@@ -5,22 +5,18 @@ import com.databricks.labs.gbx.gridx.grid.{BNG, Quadbin}
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Quadbin_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdal.gdal
-import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.should.Matchers._
 
 /**
- * End-to-end integration test for the BNG/quadbin raster-grid functions wired up in
- * [[com.databricks.labs.gbx.rasterx.functions]] (Task 7). This closes the deferred
- * registration + Spark-path assertions from Tasks 2/4/5/6:
+ * End-to-end integration test for the BNG/quadbin raster-grid aggregates wired up in
+ * [[com.databricks.labs.gbx.rasterx.functions]]:
  *
- *  - all 4 functions resolve in the session function registry after `register`;
- *  - both quadbin and BNG `tessellate` generators emit tile rows over real rasters;
+ *  - both functions resolve in the session function registry after `register`;
  *  - `rasterize_agg` (quadbin and BNG) burns a group of cells into a tile whose band
  *    declares GetNoDataValue == -9999.0 (spec §2.6).
  *
@@ -39,24 +35,8 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         gdal.AllRegister()
     }
 
-    /** The SQL names Task 7 registers. */
-    private val theNine = Seq(
-        "gbx_rst_quadbin_tessellate", "gbx_rst_quadbin_rasterize_agg", "gbx_rst_bng_rasterize_agg"
-    )
-
-    // ---- raster fixtures (written to temp GTiffs so udfs.rasterFromPath can read them) ----
-
-    /** A 4x4 EPSG:4326 raster over London (~lon -0.1, lat 51.5), ~0.01deg pixels, values 1..16. */
-    private def writeLondon4326(path: String): Unit = {
-        val drv = gdal.GetDriverByName("GTiff")
-        val ds = drv.Create(path, 4, 4, 1, gdalconstConstants.GDT_Float64)
-        ds.SetGeoTransform(Array(-0.12, 0.01, 0.0, 51.52, 0.0, -0.01))
-        val sr = new org.gdal.osr.SpatialReference(); sr.ImportFromEPSG(4326)
-        sr.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-        ds.SetProjection(sr.ExportToWkt())
-        ds.GetRasterBand(1).WriteRaster(0, 0, 4, 4, (1 to 16).map(_.toDouble).toArray)
-        ds.FlushCache(); ds.delete(); sr.delete()
-    }
+    /** The SQL names this suite installs. */
+    private val theNames = Seq("gbx_rst_quadbin_rasterize_agg", "gbx_rst_bng_rasterize_agg")
 
     /** Read back the tile-struct `raster` bytes and return the band-1 declared NoData value. */
     private def declaredNoData(rasterBytes: Array[Byte]): java.lang.Double = {
@@ -75,34 +55,10 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
 
     // ---- 1. registration ----------------------------------------------------
 
-    test("all 4 grid functions are registered") {
+    test("the grid rasterize aggregates are registered") {
         TestL1.installAll(spark)
         val fns = spark.sessionState.functionRegistry.listFunction().map(_.funcName).toSet
-        theNine.foreach(n => assert(fns.contains(n), s"$n not registered"))
-    }
-
-    // ---- 3a. quadbin tessellate generator: real raster -> tile rows ---------
-
-    test("quadbin tessellate generator emits tile rows end-to-end") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tmp = java.nio.file.Files.createTempDirectory("gbx_grid_int_qb_").toFile
-        try {
-            val p = s"${tmp.getAbsolutePath}/london_4326.tif"
-            writeLondon4326(p)
-
-            // zoom 12 -> quadbin tiles overlap this ~0.04deg raster.
-            val n = Seq(p).toDF("path")
-                .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .select(rst_quadbin_tessellate(col("raster"), lit(12)).alias("tile"))
-                .collect()
-            n.length should be > 0
-        } finally {
-            tmp.listFiles().foreach(_.delete()); tmp.delete()
-        }
+        theNames.foreach(n => assert(fns.contains(n), s"$n not registered"))
     }
 
     // ---- 4. rasterize_agg: cell set -> tile with NoData == -9999 (spec 2.6) --

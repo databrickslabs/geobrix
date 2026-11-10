@@ -39,8 +39,13 @@ class PixelCombineRastersTest extends AnyFunSuite {
                 p
             }
             val dss = inputs.map(p => gdal.Open(p, gdalconstConstants.GA_ReadOnly)).toArray
+            // the mean of the inputs' bands, as rst_derivedband runs a pixel function
+            val mean =
+                "import numpy as np\n" +
+                "def mean_bands(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n" +
+                "    out_ar[:] = np.mean(np.asarray(in_ar, dtype=np.float64), axis=0)\n"
             val (out, _) =
-                try CombineAVG.compute(dss, Map.empty)
+                try PixelCombineRasters.combine(dss, Map.empty, mean, "mean_bands")
                 finally dss.foreach(_.delete())
             try {
                 assert(out != null)

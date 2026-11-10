@@ -56,8 +56,10 @@ def clip_shape(ds_crs, geom, geom_crs=None):
     return mask_shape
 
 
-# the pixels `holds_no_pixel_centre` rasterizes at a time: what it holds, not the size of the cutline's window
+# the pixels `holds_no_pixel_centre` rasterizes at a time (what it holds, not the size of the cutline's window), and the
+# most it scans for one cutline (a fixed number, so every tile of a raster stops at the same point)
 _CENTRE_STRIP_PIXELS = 1 << 20
+_CENTRE_SCAN_PIXELS = 1 << 24
 
 
 def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
@@ -69,7 +71,9 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     The centres are the grid's, also past the raster's edge: the tiles of one raster, clipped one at a time, then decide
     as the whole raster does (a tile the cutline only grazes keeps nothing, not the pixels it touches). It looks at the
     pixel of the cutline's representative point first (most cutlines hold its centre), then rasterizes the window the
-    cutline's bounds cover, a strip of rows at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found.
+    cutline's bounds cover, a block at a time (``_CENTRE_STRIP_PIXELS``), until a centre is found. A cutline whose window
+    is over ``_CENTRE_SCAN_PIXELS`` and holds no centre in that much of it keeps the caller's rule: the scan's cost is
+    bounded, and the fallback is never taken for a cutline that may hold a centre.
     """
     import math
 
@@ -92,17 +96,23 @@ def holds_no_pixel_centre(shape, transform, width: int, height: int) -> bool:
     if geom.contains(shapely.Point(*(transform * (col + 0.5, row + 0.5)))):
         return False
     c1, r1 = max(c1, c0 + 1), max(r1, r0 + 1)
-    rows = max(1, _CENTRE_STRIP_PIXELS // (c1 - c0))
+    cols = min(c1 - c0, _CENTRE_STRIP_PIXELS)
+    rows = max(1, _CENTRE_STRIP_PIXELS // cols)
+    scanned = 0
     for r in range(r0, r1, rows):
-        k = min(rows, r1 - r)
-        held = geometry_mask(
-            [geom],
-            out_shape=(k, c1 - c0),
-            transform=transform * transform.translation(c0, r),
-            invert=True,
-        )
-        if held.any():
-            return False
+        for c in range(c0, c1, cols):
+            if scanned >= _CENTRE_SCAN_PIXELS:
+                return False
+            shape_rc = (min(rows, r1 - r), min(cols, c1 - c))
+            held = geometry_mask(
+                [geom],
+                out_shape=shape_rc,
+                transform=transform * transform.translation(c, r),
+                invert=True,
+            )
+            if held.any():
+                return False
+            scanned += shape_rc[0] * shape_rc[1]
     return True
 
 

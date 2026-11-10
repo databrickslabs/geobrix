@@ -391,6 +391,11 @@ def test_the_centre_check_scans_past_the_representative_point_and_judges_the_gri
     )  # the tile of columns 10 to 14: the foot reaches 0.3 into it
     assert not edit.holds_no_pixel_centre(foot, grazed, 5, N)
     assert not edit.holds_no_pixel_centre(box(100.2, 1.1, 100.3, 1.2), t, N, N)
+    # a scan over its cap stops and keeps the caller's rule, in blocks no wider than a strip
+    monkeypatch.setattr(edit, "_CENTRE_STRIP_PIXELS", 4)
+    assert edit.holds_no_pixel_centre(leg, t, N, N)
+    monkeypatch.setattr(edit, "_CENTRE_SCAN_PIXELS", 8)
+    assert not edit.holds_no_pixel_centre(leg, t, N, N)
 
 
 # ---------------------------------------------------------------------------

@@ -50,7 +50,7 @@ The JVM level (L1) needs a built JAR. [Functions the JAR speeds up](./api/jar-fu
 - **Scala suites.** `gbx:test:scala --suite '<pattern>'` runs one suite, and `--suites 'A,B'` runs several.
 - **Timing.** `gbx:bench:local-timing --set <family>` times one function of a family at its JVM level against each Python form, on `local[8]` in the dev container.
 
-The keep rule: the JVM level is the default only where it measured at least 1.2x faster than the best Python form, with the same output. The test runs on dedicated compute at 4x or 16x rows. Otherwise its Scala is removed.
+The keep rule: the JVM level is the default only where it measured at least 1.2x faster than the best Python form. The output must match. The test runs on dedicated compute at 4x or 16x rows. Otherwise its Scala is removed.
 
 ### Testing on a Databricks cluster
 

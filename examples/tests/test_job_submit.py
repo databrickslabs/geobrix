@@ -347,6 +347,8 @@ def fake_sdk(monkeypatch):
     compute.Environment = container("Environment")
     compute.ClusterSpec = container("ClusterSpec")
     compute.Library = container("Library")
+    compute.AwsAttributes = container("AwsAttributes")
+    compute.AwsAvailability = SimpleNamespace(ON_DEMAND="ON_DEMAND")
     compute.DataSecurityMode = SimpleNamespace(
         SINGLE_USER="SINGLE_USER", USER_ISOLATION="USER_ISOLATION"
     )
@@ -458,6 +460,17 @@ def test_a_new_cluster_run_without_a_jar_attaches_no_library(fake_sdk):
     task = _new_cluster_task(rns.JobCluster(user_name="me@example.com"))
 
     assert not hasattr(task, "libraries")
+
+
+@pytest.mark.parametrize("node_type,on_demand", [("m6gd.xlarge", True), ("Standard_D4ds_v5", False)])
+def test_a_new_cluster_run_asks_for_on_demand_nodes_on_aws_only(fake_sdk, node_type, on_demand):
+    task = _new_cluster_task(rns.JobCluster(user_name="me@example.com", node_type=node_type, num_workers=2))
+
+    aws = task.new_cluster.aws_attributes
+    if on_demand:
+        assert (aws.availability, aws.first_on_demand) == ("ON_DEMAND", 3)  # the driver and both workers
+    else:
+        assert aws is None
 
 
 def _run_main(monkeypatch, tmp_path, *flags):

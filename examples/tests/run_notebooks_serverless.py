@@ -356,6 +356,22 @@ def _cluster_spec(cluster: JobCluster):
         spark_conf=_spark_conf(cluster),
         custom_tags={"ResourceClass": "SingleNode"} if cluster.num_workers == 0 else None,
         docker_image=compute.DockerImage(url=cluster.docker_image) if cluster.docker_image else None,
+        aws_attributes=_aws_attributes(cluster),
+    )
+
+
+def _aws_attributes(cluster: JobCluster):
+    """On-demand nodes, the driver and every worker. A spot request with fallback loses minutes to capacity retries
+    before a start (a DCS image start measured 2.5 min of them), and a probe's timing must not include that.
+    ``None`` for an Azure node type (``Standard_*``), where ``aws_attributes`` does not apply."""
+    if cluster.node_type.startswith("Standard_"):
+        return None
+    from databricks.sdk.service import compute
+
+    return compute.AwsAttributes(
+        availability=compute.AwsAvailability.ON_DEMAND,
+        first_on_demand=cluster.num_workers + 1,
+        zone_id="auto",  # the workspace's default zone can be throttled for hours: let Databricks pick one
     )
 
 

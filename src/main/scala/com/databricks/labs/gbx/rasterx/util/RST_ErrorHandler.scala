@@ -112,8 +112,8 @@ object RST_ErrorHandler extends Logging {
       *
       * VirtualTileExceptions are always re-thrown regardless of crashExpressions: they indicate
       * a virtual tile reaching a heavyweight function and must surface as hard failures. Ordinary
-      * per-row IllegalArgumentExceptions (e.g. non-Point geometry for rst_sample, bad EPSG code
-      * for rst_transform) fall through to the null-tolerant path so they remain swallowable.
+      * per-row IllegalArgumentExceptions (e.g. non-Point geometry for rst_sample, a bad EPSG code
+      * in a reprojection) fall through to the null-tolerant path so they remain swallowable.
       */
     def safeEval(eval: () => Any, row: InternalRow, rasterType: DataType, conf: UTF8String): Any = {
         try {

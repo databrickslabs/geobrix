@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Summary
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
@@ -152,14 +151,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         GDAL.requireOk(CE_None, "a call that worked")
         val e = intercept[IllegalStateException](GDAL.requireOk(CE_Failure, "writing the validity"))
         assert(e.getMessage.startsWith("writing the validity failed"), e.getMessage)
-    }
-
-    test("the heavy summary holds no statistics to judge: it is the gdalinfo structure of the raster") {
-        val ds = fixture(GrayXA)
-        try {
-            val json = RST_Summary.execute(ds)
-            assert(json.contains("\"bands\"") && !json.contains("\"mean\"") && !json.contains("STATISTICS_MEAN"), json)
-        } finally RasterDriver.releaseDataset(ds)
     }
 
     // ------------------------------------------------------------------------------------------------

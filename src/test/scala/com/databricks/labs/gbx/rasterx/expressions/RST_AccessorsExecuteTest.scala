@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_Format, RST_GetSubdataset, RST_Height, RST_MemSize, RST_NumBands, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Summary, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_Format, RST_GetSubdataset, RST_Height, RST_MemSize, RST_NumBands, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -142,14 +142,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally {
             mem.delete(); sr.delete()
         }
-    }
-
-    test("RST_Summary should return a summary of the raster") {
-        val summary = RST_Summary.execute(ds)
-        summary should not be null
-        summary.contains("driverShortName") shouldBe true
-        summary.contains("size") shouldBe true
-        summary.contains("coordinateSystem") shouldBe true
     }
 
     test("RST_UpperLeftX should return the upper left x coordinate of the raster") {

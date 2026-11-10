@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for the 7 pixel-ops + extraction expressions.
+/** Direct-execute tests for the pixel-ops + extraction expressions.
  *
  *  Each test runs `execute(...)` against a small synthetic MEM/GTiff raster —
  *  no Spark session bootstrap, ~1s per test. One happy-path test per function
@@ -105,39 +105,9 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         buf(0)
     }
 
-    private def countPixelsEqual(ds: Dataset, value: Double, band: Int = 1): Int = {
-        val w = ds.GetRasterXSize
-        val h = ds.GetRasterYSize
-        val buf = new Array[Double](w * h)
-        ds.GetRasterBand(band).ReadRaster(0, 0, w, h, buf)
-        buf.count(v => math.abs(v - value) < 1e-9)
-    }
-
     // ------------------------------------------------------------------
-    // Per-function happy-path tests (7).
+    // Per-function happy-path tests.
     // ------------------------------------------------------------------
-
-    test("RST_FillNodata fills a hole - output has fewer NoData pixels than input") {
-        val nd = -9999.0
-        // Constant value 10.0 everywhere EXCEPT a 3x3 NoData square at (5,5)..(7,7).
-        val src = buildRaster(20, 20,
-            (c, r) => if (c >= 5 && c <= 7 && r >= 5 && r <= 7) nd.toFloat else 10.0f,
-            nodata = Some(nd)
-        )
-        try {
-            val (out, _) = track(RST_FillNodata.execute(src, Map.empty, 50.0, 0))
-            out should not be null
-            val nodataCountBefore = countPixelsEqual(src, nd)
-            val nodataCountAfter = countPixelsEqual(out, nd)
-            nodataCountBefore shouldBe 9
-            // Within max_search_dist=50, the 3x3 hole should be fully filled.
-            nodataCountAfter shouldBe 0
-            // And the fill value should be 10.0 (the only neighbour value).
-            pixel(out, 6, 6) shouldBe 10.0 +- 1e-6
-        } finally {
-            src.delete()
-        }
-    }
 
     test("RST_SetSrid stamps the requested EPSG code on the output without warping pixels") {
         import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps

@@ -3148,9 +3148,9 @@ def test_light_container_tile_answers_its_header_and_has_no_pixel(spark):
 
 @pytest.mark.integration
 def test_heavy_container_tile_answers_its_header_and_has_no_pixel(jvm_spark):
-    # the JVM answers the header and the summary; subdatasets and avg are light only
-    jvm_names = ["rst_width", "rst_height", "rst_numbands", "rst_summary"]
-    light_names = ["rst_subdatasets", "rst_avg"]
+    # the JVM answers the header; subdatasets, avg and the summary are light only
+    jvm_names = ["rst_width", "rst_height", "rst_numbands"]
+    light_names = ["rst_subdatasets", "rst_avg", "rst_summary"]
 
     def register_it():
         _light(jvm_spark, light_names)()

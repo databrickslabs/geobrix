@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_CombineAvgAgg, RST_Custom_RasterizeAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg, RST_RasterizeAgg}
-import com.databricks.labs.gbx.rasterx.expressions.analysis._
 import com.databricks.labs.gbx.rasterx.expressions.constructor.{RST_FromBands, RST_FromContent}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.generators._
@@ -40,7 +39,6 @@ object functions extends Serializable {
     def rst_skewy(tile: Column): Column = ColumnAdapter(RST_SkewY.name, Seq(tile))
     def rst_crs(tile: Column): Column = ColumnAdapter(RST_Crs.name, Seq(tile))
     def rst_srid(tile: Column): Column = ColumnAdapter(RST_SRID.name, Seq(tile))
-    def rst_summary(tile: Column): Column = ColumnAdapter(RST_Summary.name, Seq(tile))
     def rst_upperleftx(tile: Column): Column = ColumnAdapter(RST_UpperLeftX.name, Seq(tile))
     def rst_upperlefty(tile: Column): Column = ColumnAdapter(RST_UpperLeftY.name, Seq(tile))
     def rst_width(tile: Column): Column = ColumnAdapter(RST_Width.name, Seq(tile))
@@ -249,7 +247,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
-    def rst_transform(tile: Column, srid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, srid))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
     def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
@@ -290,7 +287,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
     def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordy(tile, lit(x), lit(y))
-    def rst_transform(tile: Column, srid: Int): Column = rst_transform(tile, lit(srid))
     def rst_updatetype(tile: Column, newType: String): Column = rst_updatetype(tile, lit(newType))
     def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordx(tile, lit(x), lit(y))
@@ -342,16 +338,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     // Terrain analysis (DEM processing) - Column form
     def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
 
-    // Resample family - gdal.Warp -tr / -ts wrappers
-    def rst_resample(tile: Column, factor: Column): Column =
-        ColumnAdapter(RST_Resample.name, Seq(tile, factor, lit("bilinear")))
-    def rst_resample(tile: Column, factor: Column, algorithm: Column): Column =
-        ColumnAdapter(RST_Resample.name, Seq(tile, factor, algorithm))
-    def rst_resample(tile: Column, factor: Double): Column =
-        rst_resample(tile, lit(factor))
-    def rst_resample(tile: Column, factor: Double, algorithm: String): Column =
-        rst_resample(tile, lit(factor), lit(algorithm))
-
+    // Resample to size - gdal.Warp -ts wrapper
     def rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column): Column =
         ColumnAdapter(RST_ResampleToSize.name, Seq(tile, widthPx, heightPx, lit("bilinear")))
     def rst_resample_to_size(tile: Column, widthPx: Column, heightPx: Column, algorithm: Column): Column =
@@ -361,14 +348,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_resample_to_size(tile: Column, widthPx: Int, heightPx: Int, algorithm: String): Column =
         rst_resample_to_size(tile, lit(widthPx), lit(heightPx), lit(algorithm))
 
-    def rst_resample_to_res(tile: Column, xRes: Column, yRes: Column): Column =
-        ColumnAdapter(RST_ResampleToRes.name, Seq(tile, xRes, yRes, lit("bilinear")))
-    def rst_resample_to_res(tile: Column, xRes: Column, yRes: Column, algorithm: Column): Column =
-        ColumnAdapter(RST_ResampleToRes.name, Seq(tile, xRes, yRes, algorithm))
-    def rst_resample_to_res(tile: Column, xRes: Double, yRes: Double): Column =
-        rst_resample_to_res(tile, lit(xRes), lit(yRes))
-    def rst_resample_to_res(tile: Column, xRes: Double, yRes: Double, algorithm: String): Column =
-        rst_resample_to_res(tile, lit(xRes), lit(yRes), lit(algorithm))
 
     // Bin one (x,y,z) point per row — aggregator form
     def rst_binpoints_agg(
@@ -386,16 +365,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_BinPointsAgg.name, Seq(x, y, z, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, statistic))
 
     // Pixel ops + extraction — Column form + scalar overloads
-    def rst_fillnodata(tile: Column): Column =
-        ColumnAdapter(RST_FillNodata.name, Seq(tile, lit(100.0), lit(0)))
-    def rst_fillnodata(tile: Column, maxSearchDist: Column): Column =
-        ColumnAdapter(RST_FillNodata.name, Seq(tile, maxSearchDist, lit(0)))
-    def rst_fillnodata(tile: Column, maxSearchDist: Column, smoothingIter: Column): Column =
-        ColumnAdapter(RST_FillNodata.name, Seq(tile, maxSearchDist, smoothingIter))
-    def rst_fillnodata(tile: Column, maxSearchDist: Double): Column =
-        rst_fillnodata(tile, lit(maxSearchDist))
-    def rst_fillnodata(tile: Column, maxSearchDist: Double, smoothingIter: Int): Column =
-        rst_fillnodata(tile, lit(maxSearchDist), lit(smoothingIter))
 
     def rst_setsrid(tile: Column, srid: Column): Column =
         ColumnAdapter(RST_SetSrid.name, Seq(tile, srid))
@@ -411,26 +380,5 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Band.name, Seq(tile, bandIndex))
     def rst_band(tile: Column, bandIndex: Int): Column =
         rst_band(tile, lit(bandIndex))
-
-    // Analysis (proximity) — Column form + scalar overloads
-    // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
-    // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
-    // runs (this silently broke rst_proximity(tile)). eval maps NaN -> None. target_values stays a
-    // nullable string (object type — not force-null-checked). Mirrors RST_Proximity.builder().
-    def rst_proximity(tile: Column): Column =
-        ColumnAdapter(RST_Proximity.name, Seq(
-            tile, lit(null).cast("string"), lit("GEO"), lit(Double.NaN)
-        ))
-    def rst_proximity(tile: Column, targetValues: Column): Column =
-        ColumnAdapter(RST_Proximity.name, Seq(
-            tile, targetValues, lit("GEO"), lit(Double.NaN)
-        ))
-    def rst_proximity(tile: Column, targetValues: Column, distUnits: Column): Column =
-        ColumnAdapter(RST_Proximity.name, Seq(
-            tile, targetValues, distUnits, lit(Double.NaN)
-        ))
-    def rst_proximity(
-        tile: Column, targetValues: Column, distUnits: Column, maxDistance: Column
-    ): Column = ColumnAdapter(RST_Proximity.name, Seq(tile, targetValues, distUnits, maxDistance))
 
 }

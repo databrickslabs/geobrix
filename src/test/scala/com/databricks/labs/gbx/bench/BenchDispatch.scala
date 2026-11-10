@@ -4,7 +4,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
-import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
@@ -15,17 +14,13 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
-import com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample
-import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToSize
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_ToWebMercator
@@ -57,9 +52,9 @@ object BenchDispatch {
 
   private val ACC = "accessor"; private val TER = "terrain"
   private val WARP = "warp"
-  private val EDIT = "edit"; private val FEAT = "features"
+  private val EDIT = "edit"
   private val FOCAL = "focal"; private val FMT = "format"; private val RES = "resample"
-  private val ANALYSIS = "analysis"; private val DGGS = "dggs"
+  private val DGGS = "dggs"
   private val VECTOR = "vector"
 
   // Functions that need a >=2-band source (rst_band selects band 2 on the 2-band corpus).
@@ -79,7 +74,7 @@ object BenchDispatch {
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
     "rst_tri" -> TER,
-    "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
+    "rst_to_webmercator" -> WARP,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
@@ -92,16 +87,16 @@ object BenchDispatch {
     "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
     // timing-only accessors
-    "rst_boundingbox" -> ACC, "rst_summary" -> ACC,
+    "rst_boundingbox" -> ACC,
     // (the accessors and statistics that return an array, a map or a struct have no heavyweight level)
     // tile-out transforms with scalar / fixed args
     "rst_band" -> EDIT, "rst_initnodata" -> EDIT,
-    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
+    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT,
     "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT,
-    "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
+    "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
-    "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
+    "rst_derivedband" -> FMT,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
     // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
@@ -367,7 +362,6 @@ object BenchDispatch {
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
-    case "rst_transform"  => fpDerived(RST_Transform.execute(ds, Map.empty, argI(a, "target_srid", 3857)))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
@@ -407,7 +401,6 @@ object BenchDispatch {
       BenchFingerprint.empty
     // timing-only accessors (polygon, JSON bytes).
     case "rst_boundingbox"   => { RST_BoundingBox.execute(ds); BenchFingerprint.empty }
-    case "rst_summary"       => { RST_Summary.execute(ds); BenchFingerprint.empty }
     // tile-out transforms with scalar / fixed args: all produce a raster
     // tile -> fpDerived raster fingerprint (same path as terrain).
     case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
@@ -416,8 +409,6 @@ object BenchDispatch {
     // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
     case "rst_setcrs"      => fpDerived(RST_SetCrs.execute(ds, Map.empty, argS(a, "crs", "4326")))
     case "rst_updatetype"  => fpDerived(RST_UpdateType.execute(ds, Map.empty, argS(a, "new_type", "Float64")))
-    case "rst_fillnodata"  =>
-      fpDerived(RST_FillNodata.execute(ds, Map.empty, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0)))
     case "rst_convolve"    => fpDerived(RST_Convolve.execute((0L, ds, Map.empty), convolveKernel))
     // RST_AsFormat is a no-op when newFormat == the input driver: execute returns
     // the *input* ds unchanged. fpDerived would then release that input ds, and
@@ -427,27 +418,15 @@ object BenchDispatch {
     // dataset (identity != input ds). The GTiff round-trip still times correctly
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
-    case "rst_resample" =>
-      fpDerived(RST_Resample.execute(ds, Map.empty, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear")))
     case "rst_resample_to_size" =>
       fpDerived(RST_ResampleToSize.execute(ds, Map.empty, argI(a, "width_px", 128),
         argI(a, "height_px", 128), argS(a, "algorithm", "bilinear")))
-    // rst_resample_to_res: pure-core-only, fingerprint suppressed (a single fixed
-    // ground resolution is not sane across the multi-CRS corpus).
-    case "rst_resample_to_res" =>
-      val res = RST_ResampleToRes.execute(ds, Map.empty, argD(a, "x_res", 5.0),
-        argD(a, "y_res", 5.0), argS(a, "algorithm", "bilinear"))
-      RasterDriver.releaseDataset(res._1)
-      BenchFingerprint.empty
     // tile-out transforms with geometry / expression / band-map / function args
     // SIX are full raster comparisons (same algorithm + CRS-independent
     // args); FOUR are timing-only (no in-extent geometry across the multi-CRS
     // corpus, and/or divergent interpolation/scan engines).
     case "rst_derivedband" =>
       fpDerived(RST_DerivedBand.execute(Seq(ds), Map.empty, derivedBandPyFunc, derivedBandFuncName))
-    case "rst_proximity" =>
-      fpDerived(RST_Proximity.execute(ds, Map.empty,
-        Some(argS(a, "target_values", "1")), argS(a, "distunits", "GEO"), None))
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -712,7 +691,6 @@ object BenchDispatch {
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
       case "rst_tri"        => rst_tri(tile)
-      case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors
       case "rst_srid"        => rst_srid(tile)
@@ -738,36 +716,23 @@ object BenchDispatch {
       case "rst_worldtorastercoordy" => rst_worldtorastercoordy(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
       case "rst_boundingbox"   => rst_boundingbox(tile)
-      case "rst_summary"       => rst_summary(tile)
       // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
       case "rst_initnodata"  => rst_initnodata(tile)
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
       case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
       case "rst_updatetype"  => rst_updatetype(tile, argS(a, "new_type", "Float64"))
-      case "rst_fillnodata"  =>
-        rst_fillnodata(tile, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0))
       case "rst_convolve"    =>
         import org.apache.spark.sql.functions.{array, lit}
         val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
-      case "rst_resample" =>
-        rst_resample(tile, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear"))
       case "rst_resample_to_size" =>
         rst_resample_to_size(tile, argI(a, "width_px", 128),
           argI(a, "height_px", 128), argS(a, "algorithm", "bilinear"))
-      // rst_resample_to_res is pure-core-only; the column form is here only to keep
-      // the match exhaustive (the spark-path runner filters by modes).
-      case "rst_resample_to_res" =>
-        rst_resample_to_res(tile, argD(a, "x_res", 5.0),
-          argD(a, "y_res", 5.0), argS(a, "algorithm", "bilinear"))
       // tile-out transforms with geometry / function args
       case "rst_derivedband" =>
         rst_derivedband(tile, derivedBandPyFunc, derivedBandFuncName)
-      case "rst_proximity" =>
-        import org.apache.spark.sql.functions.lit
-        rst_proximity(tile, lit(argS(a, "target_values", "1")), lit(argS(a, "distunits", "GEO")))
       // bucket C, group C1/C2. tryopen takes the tile; fromcontent reads the
       // tile's raster (binary content) column; buildoverviews takes the tile +
       // an ARRAY<INT> levels literal. subdatasets / getsubdataset are

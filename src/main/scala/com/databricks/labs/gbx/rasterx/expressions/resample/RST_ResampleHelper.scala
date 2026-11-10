@@ -5,16 +5,12 @@ import com.databricks.labs.gbx.rasterx.operator.GDALWarp
 import org.gdal.gdal.Dataset
 
 /**
-  * Shared thin wrapper around `gdal.Warp` for the three resample expressions.
+  * Shared thin wrapper around `gdal.Warp` for the two JVM resample forms that remain.
   *
-  *  - `gbx_rst_resample(tile, factor, algorithm)` - multiplicative resample
   *  - `gbx_rst_resample_to_size(tile, width_px, height_px, algorithm)` - explicit pixel dims
-  *  - `gbx_rst_resample_to_res(tile, x_res, y_res, algorithm)` - explicit ground resolution
+  *  - `gbx_rst_to_webmercator(tile, resampling)` - validates its algorithm here
   *
-  * All three forms pass `-r <algorithm>` plus exactly one of `-ts <w> <h>` (size) or
-  * `-tr <xres> <yres>` (resolution) to `gdalwarp`. Multiplicative `factor` is converted
-  * to an explicit pixel size up-front so the same `-ts` path can serve both `factor`
-  * and `to_size` callers.
+  * `warpToSize` passes `-r <algorithm>` and `-ts <w> <h>` to `gdalwarp`.
   *
   * Caller is responsible for releasing the returned Dataset (via
   * `RasterDriver.releaseDataset` or `Dataset.delete()`).
@@ -42,21 +38,10 @@ object RST_ResampleHelper {
         word
     }
 
-    /** A multiplicative factor must be a positive finite number. */
-    def checkFactor(factor: Double): Unit =
-        require(factor > 0.0 && !java.lang.Double.isInfinite(factor) && !java.lang.Double.isNaN(factor),
-            s"rst_resample: factor must be a positive finite number; got $factor")
-
     /** An output size must be positive in both directions. */
     def checkSize(widthPx: Int, heightPx: Int): Unit = {
         require(widthPx > 0, s"rst_resample_to_size: width_px must be positive; got $widthPx")
         require(heightPx > 0, s"rst_resample_to_size: height_px must be positive; got $heightPx")
-    }
-
-    /** An output resolution must be positive in both directions. */
-    def checkRes(xRes: Double, yRes: Double): Unit = {
-        require(xRes > 0.0, s"rst_resample_to_res: x_res must be positive; got $xRes")
-        require(yRes > 0.0, s"rst_resample_to_res: y_res must be positive; got $yRes")
     }
 
     /** Resample by an explicit output pixel size (width x height). */
@@ -77,42 +62,6 @@ object RST_ResampleHelper {
             options,
             command = s"gdalwarp -ts $widthPx $heightPx -r $alg"
         )
-    }
-
-    /** Resample by an explicit ground resolution (xRes, yRes) in source CRS units. */
-    def warpToRes(
-        ds: Dataset,
-        options: Map[String, String],
-        xRes: Double,
-        yRes: Double,
-        algorithm: String
-    ): (Dataset, Map[String, String]) = {
-        require(ds != null, "rst_resample_to_res: source Dataset is null")
-        checkRes(xRes, yRes)
-        val alg = validateAlgorithm(algorithm, "rst_resample_to_res")
-        val outPath = newVsimemPath(ds)
-        GDALWarp.executeWarp(
-            outPath,
-            Array(ds),
-            options,
-            command = s"gdalwarp -tr $xRes $yRes -r $alg"
-        )
-    }
-
-    /** Resample by a multiplicative factor; >1 upsamples, 0<factor<1 downsamples. */
-    def warpByFactor(
-        ds: Dataset,
-        options: Map[String, String],
-        factor: Double,
-        algorithm: String
-    ): (Dataset, Map[String, String]) = {
-        require(ds != null, "rst_resample: source Dataset is null")
-        checkFactor(factor)
-        val srcW = ds.GetRasterXSize
-        val srcH = ds.GetRasterYSize
-        val newW = math.max(1, math.round(srcW * factor).toInt)
-        val newH = math.max(1, math.round(srcH * factor).toInt)
-        warpToSize(ds, options, newW, newH, algorithm)
     }
 
     /** Build a /vsimem path with the driver's natural extension (mirrors RST_ToWebMercator). */

@@ -358,9 +358,11 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
             .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
         // two error tiles with different reasons, computed once so both aggregates see the same rows
-        // srid 0 is refused by name ("requires a positive EPSG or ESRI code"), 999991 by GDAL: two different reasons
-        def failed(srid: Int) = good.select(rst_transform(col("tile"), srid).as("tile")).cache()
-        val (bad1, bad2) = (failed(0), failed(999991))
+        // a tile with no CRS cannot be reprojected ("the tile has no CRS"); bytes that are no raster fail when read:
+        // two different reasons
+        val bad1 = good.select(rst_to_webmercator(rst_setsrid(col("tile"), 0)).as("tile")).cache()
+        val bad2 = Seq(Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)).toDF("content")
+            .select(rst_to_webmercator(rst_fromcontent(col("content"), lit("GTiff"))).as("tile")).cache()
         def metadata(df: org.apache.spark.sql.DataFrame) =
             df.select(col("tile.metadata").as("md")).head().getAs[Map[String, String]]("md")
         val (md1, md2) = (metadata(bad1), metadata(bad2))

@@ -36,7 +36,6 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
               rst_skewx(col("raster")),
               rst_skewy(col("raster")),
               rst_srid(col("raster")),
-              rst_summary(col("raster")),
               rst_upperleftx(col("raster")),
               rst_upperlefty(col("raster")),
               rst_width(col("raster"))

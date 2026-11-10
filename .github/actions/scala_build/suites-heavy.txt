@@ -56,10 +56,8 @@ com.databricks.labs.gbx.rasterx.expressions.RST_NoVrtPayloadTest
 com.databricks.labs.gbx.rasterx.expressions.RST_ProjDatabaseTest
 com.databricks.labs.gbx.rasterx.expressions.RST_Tessellate_GridSystemMetadataTest
 com.databricks.labs.gbx.rasterx.expressions.RST_TileStructureTest
-com.databricks.labs.gbx.rasterx.expressions.RST_TransformationsEvalTest
 com.databricks.labs.gbx.rasterx.expressions.RST_V2RoundTripTest
 com.databricks.labs.gbx.rasterx.expressions.agg.*
-com.databricks.labs.gbx.rasterx.expressions.analysis.*
 com.databricks.labs.gbx.rasterx.expressions.constructor.*
 com.databricks.labs.gbx.rasterx.expressions.dem.*
 com.databricks.labs.gbx.rasterx.expressions.grid.*
@@ -98,7 +96,6 @@ com.databricks.labs.gbx.rasterx.operator.GDALBuildVRTTest
 com.databricks.labs.gbx.rasterx.operator.GDALInfoTest
 com.databricks.labs.gbx.rasterx.operator.GDALTranslateTest
 com.databricks.labs.gbx.rasterx.operator.GDALWarpTest
-com.databricks.labs.gbx.rasterx.operator.ProximityExactTest
 com.databricks.labs.gbx.rasterx.operator.WarpSourceTest
 com.databricks.labs.gbx.rasterx.parity.*
 com.databricks.labs.gbx.rasterx.tile.*

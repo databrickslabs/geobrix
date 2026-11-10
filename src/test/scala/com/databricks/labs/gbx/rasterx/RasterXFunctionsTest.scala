@@ -86,11 +86,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_summary should create Column") {
-        val result = functions.rst_summary(col("tile"))
-        result should not be null
-    }
-
     test("rst_upperleftx should create Column") {
         val result = functions.rst_upperleftx(col("tile"))
         result should not be null
@@ -194,11 +189,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_transform should accept tile and target SRID") {
-        val result = functions.rst_transform(col("tile"), col("srid"))
-        result should not be null
-    }
-
     test("rst_tryopen should create Column") {
         val result = functions.rst_tryopen(col("tile"))
         result should not be null
@@ -223,7 +213,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
         // int scalars
-        functions.rst_transform(col("tile"), 4326) should not be null
+        functions.rst_band(col("tile"), 1) should not be null
         // string scalars
         functions.rst_asformat(col("tile"), "GTiff") should not be null
         functions.rst_updatetype(col("tile"), "Float32") should not be null

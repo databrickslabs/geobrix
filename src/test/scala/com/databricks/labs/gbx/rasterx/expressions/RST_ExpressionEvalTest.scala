@@ -41,7 +41,7 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),
               rst_worldtorastercoordx(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0)),
-              rst_transform(col("clipped"), lit(4326)),
+              rst_to_webmercator(col("clipped")),
               rst_tryopen(col("clipped")),
               rst_updatetype(col("clipped"), lit("Float32"))
             ).foreach(f => base.select(f).collect())

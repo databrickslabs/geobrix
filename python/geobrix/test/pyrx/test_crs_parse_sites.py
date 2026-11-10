@@ -62,10 +62,6 @@ SCALA_FILE_ALLOW = {
 SCALA_SITES = {
     ("rasterx/expressions/RST_BinPoints.scala", "sr.ImportFromEPSG(srid)"): INT_EPSG,
     (
-        "rasterx/expressions/RST_Transform.scala",
-        "val rc = dstSR.ImportFromEPSG(srid)",
-    ): INT_EPSG,
-    (
         "rasterx/expressions/accessors/RST_Crs.scala",
         "val sr = new SpatialReference(proj)",
     ): DATASET_WKT,
@@ -391,21 +387,21 @@ def test_the_guard_finds_a_planted_unrouted_parse():
 
 
 def test_a_planted_user_text_parse_in_an_allowlisted_file_is_flagged():
-    """The allowlist is by line: a PROJ4 parse of a user column planted inside RST_Transform.scala (a file the
+    """The allowlist is by line: a PROJ4 parse of a user column planted inside RST_BinPoints.scala (a file the
     allowlist names) is a new site; the file's own lines are allowed as they stand.
     """
-    rel = "rasterx/expressions/RST_Transform.scala"
+    rel = "rasterx/expressions/RST_BinPoints.scala"
     real = (SCALA_ROOT / rel).read_text()
     assert [
         l for _, _, l in _scala_hits_in(rel, real) if not _scala_allowed(rel, l)
     ] == []
-    anchor = "        val rc = dstSR.ImportFromEPSG(srid)\n"
+    anchor = "sr.ImportFromEPSG(srid)\n"
     assert real.count(anchor) == 1
-    planted = real.replace(anchor, anchor + "        dstSR.ImportFromProj4(userCol)\n")
+    planted = real.replace(anchor, anchor + "        sr.ImportFromProj4(userCol)\n")
     new = [
         (n, l) for _, n, l in _scala_hits_in(rel, planted) if not _scala_allowed(rel, l)
     ]
-    assert [l for _, l in new] == ["dstSR.ImportFromProj4(userCol)"], new
+    assert [l for _, l in new] == ["sr.ImportFromProj4(userCol)"], new
 
 
 def test_a_planted_constructor_parse_is_flagged():

@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
-import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
@@ -179,20 +178,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             val (out, meta) = Convolve.convolve(src, Map.empty, kernel)
             try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("RST_Proximity.execute defaults to DEFLATE and honours an incoming compression") {
-        withRamp("prox.tif") { src =>
-            // RST_Proximity.execute(ds: Dataset, options: Map[String, String], targetValues: Option[String],
-            //                       distUnits: String, maxDistance: Option[Double]): (Dataset, Map[String, String])
-            val (out, meta) = RST_Proximity.execute(src, Map.empty, Some("1"), "PIXEL", None)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-
-            val (lzw, lzwMeta) = RST_Proximity.execute(src, Map("compression" -> "LZW"), Some("1"), "PIXEL", None)
-            try assertCodec(lzw, lzwMeta, "LZW")
-            finally RasterDriver.releaseDataset(lzw)
         }
     }
 

@@ -557,31 +557,6 @@ result.show(truncate = false)
 +----------+
 """.trim
 
-  val rst_summary_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
-val rasters = spark.table("multiband_rasters")
-val summary = rasters.select(rx.rst_summary(col("tile")).alias("summary"))
-val result = summary.select(
-  get_json_object(col("summary"), "$.driverShortName").alias("driver"),
-  get_json_object(col("summary"), "$.bands[0].maximum").alias("band1_max"),
-  get_json_object(col("summary"), "$.bands[0].mean").alias("band1_mean")
-)
-result.show(truncate = false)
-""".trim
-
-  val rst_summary_scala_example_output: String =
-    """
-+------+---------+----------+
-|driver|band1_max|band1_mean|
-+------+---------+----------+
-|GTiff |119.0    |83.594    |
-+------+---------+----------+
-""".trim
-
   val rst_upperleftx_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -731,26 +706,6 @@ result.show()
 (convolved tile; kernel is a 3x3 identity)
 """.trim
 
-  val rst_fillnodata_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_fillnodata(col("tile"), lit(100.0), lit(0)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_fillnodata_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(filled tile; NoData holes searched within 100 pixels)
-""".trim
-
   val rst_fromcontent_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -824,46 +779,6 @@ result.show()
 (tile with NoData initialized)
 """.trim
 
-  val rst_resample_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_resample(col("tile"), lit(2.0), lit("bilinear")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_resample_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(2x bilinear upsampled tile; source is 236x161 px)
-""".trim
-
-  val rst_resample_to_res_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_resample_to_res(col("tile"), lit(20.0), lit(20.0), lit("average")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_resample_to_res_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(downsampled tile; 10 m to 20 m resolution)
-""".trim
-
   val rst_resample_to_size_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -922,26 +837,6 @@ result.show()
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
-""".trim
-
-  val rst_transform_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_transform(col("tile"), lit(4326)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_transform_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326)
 """.trim
 
   val rst_updatetype_scala_example: String =
@@ -1285,26 +1180,6 @@ result.show(truncate = false)
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (TRI: mean absolute neighbour difference)
-""".trim
-
-  val rst_proximity_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_proximity(col("tile"), lit(""), lit("PIXEL"), lit(100.0)).alias("distance"))
-result.show(truncate = false)
-""".trim
-
-  val rst_proximity_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|distance                                                   |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(distance in pixels to nearest non-NoData, capped at 100)
 """.trim
 
   // ========================================================================

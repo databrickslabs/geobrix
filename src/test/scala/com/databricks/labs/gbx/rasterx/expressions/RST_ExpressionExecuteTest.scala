@@ -104,13 +104,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         y should not be 0.0
     }
 
-    test("RST_Transform should transform raster with given options") {
-        val (transformedDs, _) = RST_Transform.execute(ds, Map.empty, 4326)
-        transformedDs should not be null
-        transformedDs.getRasterCount shouldBe ds.getRasterCount
-        transformedDs.delete()
-    }
-
     test("RST_UpdateType should update raster data type") {
         val (updatedDs, _) = RST_UpdateType.execute(ds, Map.empty, "Float32")
         updatedDs should not be null

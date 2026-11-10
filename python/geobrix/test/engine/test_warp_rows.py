@@ -804,3 +804,37 @@ def test_a_json_row_holds_no_output_in_its_estimate():
     big = argv.RasterProps(4096, 4096, 3, "Float64")
     tokens = argv.build(summary, {}, [big])
     assert argv.estimate_output(summary, tokens, [big]) == 0
+
+
+def test_a_reproject_with_a_size_reads_no_warp_grid(engine, monkeypatch):
+    """With --size the output's pixels are fixed, so the budget never asks GDAL for the grid it would pick."""
+
+    def no_grid(*a, **kw):
+        raise AssertionError("the warp grid was read for a sized reproject")
+
+    monkeypatch.setattr(run, "_warp_grid", no_grid)
+    raw = _osgeo_tile()
+    res = engine.run(M["gbx_rst_resample_to_size"], [raw], {"width_px": 10, "height_px": 5, "algorithm": "nearest"})
+    assert res.error is None
+
+
+def test_the_warp_grid_is_none_where_gdal_suggests_none(engine, monkeypatch):
+    from osgeo import gdal
+
+    from databricks.labs.gbx.engine.run import _gdal_status
+
+    gdal.FileFromMemBuffer("/vsimem/gbx-nogrid.tif", _osgeo_tile())
+    try:
+        with _gdal_status() as g:
+            for suggest in (lambda *a: None, lambda *a: 1 / 0):
+                monkeypatch.setattr(g, "SuggestedWarpOutput", suggest)
+                assert run._warp_grid(g, "x", "/vsimem/gbx-nogrid.tif", []) is None
+    finally:
+        gdal.Unlink("/vsimem/gbx-nogrid.tif")
+
+
+def test_a_resolution_without_a_grid_takes_the_extent_from_the_pixel_size_else_the_input():
+    sized = argv.RasterProps(64, 48, 1, "Float32", px_x=2.0, px_y=2.0)
+    assert argv._output_pixels(["--resolution=4,4"], sized, None) == 32 * 24
+    # no pixel size (a rotated or GCP tile, no geotransform): the input's own size
+    assert argv._output_pixels(["--resolution=4,4"], PROPS, None) == 64 * 48

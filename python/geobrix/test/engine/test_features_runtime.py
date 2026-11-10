@@ -195,3 +195,17 @@ def test_the_engine_refuses_an_output_format_it_does_not_write(engine, monkeypat
             [_dem(None)],
             {"levels": [1.5], "interval": 0.0, "base": 0.0, "attr_field": "elev"},
         )
+
+
+def test_a_reason_that_recurs_is_kept_as_the_most_recent(monkeypatch, caplog):
+    """A reason seen again moves to the end of the log's order, so the next eviction takes an older one."""
+    monkeypatch.setattr(l3, "_LOGGED_MAX", 2)
+    with caplog.at_level(logging.WARNING, logger="databricks.labs.gbx.engine"):
+        l3._log_once("gbx_rst_contour", "a")
+        l3._log_once("gbx_rst_contour", "b")
+        l3._log_once("gbx_rst_contour", "a")  # recurs: now the most recent
+        l3._log_once("gbx_rst_contour", "c")  # evicts b, not a
+        l3._log_once("gbx_rst_contour", "a")
+        l3._log_once("gbx_rst_contour", "b")
+    got = [r.getMessage().rsplit(", ", 1)[1] for r in caplog.records]
+    assert got == ["a", "b", "c", "b"]

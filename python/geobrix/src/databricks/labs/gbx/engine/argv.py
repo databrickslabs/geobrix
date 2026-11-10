@@ -88,7 +88,9 @@ class RasterProps:
     px_x: float = 0.0
     px_y: float = 0.0
     # True when a reprojection of this input carries a mask band (``run._mask_to_carry``): the output estimate then holds
-    # the mask's working memory. Not part of the template cache key.
+    # the mask's working memory. Read from the header the call is judged by, which for a tile in another driver is its
+    # own header before the translation to GeoTIFF: an approximation (a per-band mask there is band 1's per-dataset
+    # mask after it), as the header is all the budget reads. Not part of the template cache key.
     mask: bool = field(default=False, compare=False)
     # True when a fill of this input runs a mask step (it has its own mask band, ``run._unmask_filled``, or an alpha
     # band, ``run._fill_under_alpha``): the estimate holds that step's arrays. Like `mask`, it is read from the header the
@@ -164,7 +166,13 @@ def _count(fn, arg, value) -> int:
     """
     try:
         x = float(value)
-        ok = math.isfinite(x) and x == int(x) and 0 <= x <= _COUNT_MAX
+        # a bool is no count: True would pass as 1 (a search of one pixel, one smoothing pass)
+        ok = (
+            not isinstance(value, bool)
+            and math.isfinite(x)
+            and x == int(x)
+            and 0 <= x <= _COUNT_MAX
+        )
     except (TypeError, ValueError, OverflowError):
         ok = False
     if not ok:
@@ -1532,9 +1540,12 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
 
 
 def _hashable(v):
-    """A list or array value as a tuple, so a call with the same levels shares one bound template."""
+    """A list or array value as a tuple, so a call with the same levels shares one bound template. A bool is kept apart
+    from the number it equals (True == 1): a binder that refuses a bool must not be handed the template of a 1."""
     if isinstance(v, list) or getattr(v, "ndim", 0) > 0:
         return tuple(v)
+    if isinstance(v, bool):
+        return (bool, v)
     return v
 
 

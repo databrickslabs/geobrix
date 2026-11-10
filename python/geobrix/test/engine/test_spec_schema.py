@@ -621,3 +621,22 @@ def test_a_command_kind_outside_the_vocabulary_is_refused_at_load():
     }
     with pytest.raises(ValueError, match="path"):
         manifest._parse_gdal_section(raw)
+
+
+def test_a_row_whose_l3_is_null_is_judged_like_one_without_l3():
+    """A manifest row that writes ``"L3": null`` has no L3 keys: the check reads none, it does not fail on the null."""
+    import dataclasses
+
+    spec.validate(dataclasses.replace(SLOPE, levels={**SLOPE.levels, "L3": None}), MAN.gdal)
+
+
+@pytest.mark.parametrize(
+    "text", ["2024/relief.txt", "2024 palettes/relief.txt", "10%/a.clr", "./relief.txt"]
+)
+def test_a_color_table_that_names_a_file_with_a_digit_first_is_refused(text):
+    """A path that starts with a digit is refused as a file path, or (spaces in it, so its first word reads as a value)
+    as a table line that is no color: either way no file name reaches GDAL."""
+    from databricks.labs.gbx.engine import argv
+
+    with pytest.raises(spec.ParamError):
+        argv._color_table("gbx_rst_color_relief", "color_table", text)

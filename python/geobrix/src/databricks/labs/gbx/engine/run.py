@@ -821,9 +821,26 @@ def _cleanup(gdal, prefix: str, scratch: Optional[str]) -> None:
 
 
 def _shown(text: str, names: Mapping[str, str]) -> str:
+    """`text` with the call's own file names shown as their placeholders (`names`: real name -> placeholder), and the
+    call's own ``/vsimem`` folder (``PREFIX/<uuid hex>/``, taken from `names`) dropped from any other file of it. Only
+    those are rewritten: a value of the tile's own (a metadata tag in a summary) that names some other ``/vsimem`` path,
+    or merely holds ``PREFIX``, is the user's text and is kept as it is."""
     for real, placeholder in names.items():
         text = text.replace(real, placeholder)
-    return text.replace(PREFIX + "/", "")
+    for own in _own_folders(names):
+        text = text.replace(own, "")
+    return text
+
+
+def _own_folders(names) -> set:
+    """The call folders (``PREFIX/<uuid hex>/``) the names in `names` lie in."""
+    out = set()
+    for name in names:
+        if name.startswith(PREFIX + "/"):
+            uid = name[len(PREFIX) + 1 :].split("/", 1)[0]
+            if len(uid) == 32:
+                out.add(f"{PREFIX}/{uid}/")
+    return out
 
 
 def _same(x):
@@ -1684,7 +1701,9 @@ def _judge_budget(
         need = decoded + out
     else:
         grid = None
-        if fn.gdal.alg == "raster reproject":
+        # a --size fixes the output's pixels (argv._output_pixels), so the grid GDAL would pick is not read for it
+        sized = argv_mod._token_value(tokens, "size") is not None
+        if fn.gdal.alg == "raster reproject" and not sized:
             grid = (
                 _warp_grid(gdal, fn.sql_name, sources[0], tokens, drivers)
                 if 0 in sources

@@ -252,3 +252,17 @@ def test_equivalent_spellings_of_one_crs_share_one_transformer():
     _transformer_cache().clear()
     assert get_transformer(4326, 3857) is get_transformer("EPSG:4326", "3857")
     assert len(_transformer_cache()) == 1
+
+
+def test_crs_equal_of_two_texts_is_kept_for_the_next_call(monkeypatch):
+    """A per-row caller asks the same pair of CRS texts again and again: the pair is parsed once."""
+    from databricks.labs.gbx.core import crs as crs_mod
+
+    crs_mod._crs_text_equal.cache_clear()
+    calls = []
+    real = crs_mod.to_pyproj_crs
+    monkeypatch.setattr(crs_mod, "to_pyproj_crs", lambda c: calls.append(c) or real(c))
+    wkt = resolve_crs(32632).to_wkt()
+    assert crs_mod.crs_equal(wkt, "EPSG:32632") and crs_mod.crs_equal(wkt, "EPSG:32632")
+    assert len(calls) == 2  # both texts, once
+    assert not crs_mod.crs_equal(wkt, "EPSG:4326")

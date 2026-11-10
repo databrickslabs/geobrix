@@ -269,7 +269,7 @@ def test_a_null_number_is_a_null_result_and_a_wrong_one_raises_naming_it():
     assert (
         run.run(FILL, [raw], {"max_search_dist": 5.0, "smoothing_iter": None}) is None
     )
-    for bad in (2.5, -1, 3e9, float("inf"), "x"):
+    for bad in (2.5, -1, 3e9, float("inf"), "x", True, False):  # a bool is no count
         with pytest.raises(ParamError, match=r"max_search_dist must be a whole number"):
             run.run(FILL, [raw], {"max_search_dist": bad, "smoothing_iter": 0})
     with pytest.raises(ParamError, match="smoothing_iter"):
@@ -414,3 +414,90 @@ def test_the_props_of_a_tile_say_when_a_fill_runs_a_mask_step():
             gdal.Unlink(name)
     assert got == {"rgba": True, "plain": False}
 
+
+
+def test_the_summary_keeps_a_tag_of_the_tiles_own_that_names_the_engines_folder():
+    """Only the call's own names and its own /vsimem folder are rewritten in GDAL's text: a value of the tile's that
+    happens to name the engine's prefix is the user's, and comes back as it was."""
+    from affine import Affine
+
+    tag = "/vsimem/gbx-spec/theirs/a.tif"
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=4, height=4, count=1, dtype="float32", crs="EPSG:3857",
+            transform=Affine(1, 0, 0, 0, -1, 4),
+        ) as ds:
+            ds.write(_gradient(4)[np.newaxis].astype("float32"))
+            ds.update_tags(SOURCE=tag, NOTE="/vsimem/gbx-spec")
+        raw = mf.read()
+    res = run.run(SUMMARY, [raw], {})
+    info = json.loads(res.text)
+    assert info["metadata"][""]["SOURCE"] == tag
+    assert info["metadata"][""]["NOTE"] == "/vsimem/gbx-spec"
+    assert info["description"] == "<input>"
+
+
+def test_an_engine_core_fn_raises_the_engines_reason(monkeypatch):
+    """The bench's pure-core bodies of engine rows (raster, JSON, features) raise the reason of a call that fails."""
+    from databricks.labs.gbx.bench import spec as bench_spec
+
+    monkeypatch.setattr(
+        run, "run", lambda *a, **kw: run.Result(None, "GDAL said no", None)
+    )
+    cores = [
+        bench_spec._engine_core("gbx_rst_fillnodata", {}),
+        bench_spec._engine_json("gbx_rst_summary", {}),
+        bench_spec._engine_features("gbx_rst_contour", {}),
+    ]
+    with MemoryFile(_tif(_gradient()[np.newaxis])) as mf, mf.open() as ds:
+        for core in cores:
+            with pytest.raises(RuntimeError, match="GDAL said no"):
+                core(ds)
+
+
+def _fill_case(expect="partial"):
+    from databricks.labs.gbx.bench.oracles import Case
+
+    return Case("fill_case", "gbx_rst_fillnodata", (), "fill_mask", expect)
+
+
+def test_the_fill_mask_check_names_each_way_a_result_can_fail():
+    raw = _masked_tile()
+    case = _fill_case()
+    assert "no raster in the result" in oracles._check_fill_mask(case, None, [raw])
+    # the input itself is no fill: its mask is the input's, not input-valid OR filled
+    assert "mask differs" in oracles._check_fill_mask(case, raw, [raw, 100.0])
+    full = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0}).raster
+    assert oracles._check_fill_mask(_fill_case(None), full, [raw, 100.0]) is None
+    # a reference that reaches every pixel proves nothing for a row that expects a partial fill
+    assert "leaves no pixel masked" in oracles._check_fill_mask(case, full, [raw, 100.0])
+    # a tile with nothing masked: a reference that fills nothing proves nothing either
+    whole = _tif(_gradient()[np.newaxis], nodata=None)
+    assert "fills no masked pixel" in oracles._check_fill_mask(_fill_case(None), whole, [whole, 1.0])
+
+
+def test_the_json_ref_check_names_a_null_a_non_json_and_a_different_text():
+    from databricks.labs.gbx.bench.oracles import Case
+
+    raw = _tif(_gradient()[np.newaxis])
+    case = Case("json_case", "gbx_rst_summary", (), "json_ref", None)
+    assert "got NULL" in oracles._check_json_ref(case, None, [raw])
+    assert "not JSON" in oracles._check_json_ref(case, "<xml/>", [raw])
+    good = run.run(SUMMARY, [raw], {}).text
+    assert oracles._check_json_ref(case, good, [raw]) is None
+    other = run.run(SUMMARY, [_tif(_gradient()[np.newaxis] + 1)], {}).text
+    assert oracles._check_json_ref(case, other, [raw])
+
+
+def test_a_fill_whose_work_copy_cannot_be_made_is_an_error_tile(monkeypatch):
+    gdal = run._gdal()
+    real = gdal.Translate
+
+    def no_copy(dst, *a, **kw):
+        return None if str(dst).endswith("/work.tif") else real(dst, *a, **kw)
+
+    monkeypatch.setattr(gdal, "Translate", no_copy)
+    z = np.stack([_gradient()] * 2)
+    z[:, 4, 4] = NODATA
+    res = run.run(FILL, [_tif(z)], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert res.raster is None and "could not be copied" in res.error

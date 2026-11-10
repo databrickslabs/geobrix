@@ -348,10 +348,23 @@ def crs_equal(a, b) -> bool:
         return True
     if a is None or b is None:
         return False
+    if isinstance(a, str) and isinstance(b, str):
+        return _crs_text_equal(a, b)
+    return _crs_equal(a, b)
+
+
+def _crs_equal(a, b) -> bool:
     try:
         return to_pyproj_crs(a).equals(to_pyproj_crs(b))
     except Exception:
         return str(a) == str(b)
+
+
+@lru_cache(maxsize=256)
+def _crs_text_equal(a: str, b: str) -> bool:
+    """:func:`crs_equal` of two CRS texts, kept: a per-row caller (the engine's ``same_crs`` check of each tile) asks the
+    same pair again and again, and each answer parses both texts (about 0.4 ms)."""
+    return _crs_equal(a, b)
 
 
 def crs_to_proj4(crs: Optional[CRS]) -> Optional[str]:

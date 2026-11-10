@@ -1,7 +1,8 @@
 """The viewshed row on the engine: the window a distance limit gives, and the edge of the DEM.
 
-The rows of SPEC_ANALYSIS judge the masks; these two pin what a mask cannot say: where the window lies on the DEM's pixel grid,
-and which pixel an observer near the edge stands in. They run where the engine does (the dev container).
+The rows of SPEC_ANALYSIS judge the masks; these pin what a mask cannot say: where the window lies on the DEM's pixel grid,
+which pixel an observer near the edge stands in, and that an observer outside the DEM gets GDAL's own result. They run where
+the engine does (the dev container).
 """
 
 import math
@@ -70,6 +71,71 @@ def test_an_observer_between_the_edge_and_the_first_pixel_centre_stands_in_that_
     """GDAL takes the pixel the observer stands in, so an observer within half a pixel of the edge gets a real viewshed."""
     with MemoryFile(_viewshed(40, 0.2, 20.0, 5.0, None)) as mf, mf.open() as o:
         assert int((o.read(1) == 255).sum()) > 0
+
+
+@pytest.mark.parametrize("x, limit", [(-3.0, None), (-200.0, 300.0)])
+def test_an_observer_outside_the_dem_gets_the_mask_gdal_gives_and_its_error(x, limit):
+    """GDAL takes an observer outside the DEM as it is (nothing between it and the DEM blocks the view) and writes the
+    DEM's cells; the row passes that through."""
+    n = 40
+    dem = np.zeros((1, n, n), dtype="float32")
+    dem[0, :, 25] = 30.0  # a wall
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=n,
+            height=n,
+            count=1,
+            dtype="float32",
+            crs="EPSG:27700",
+            transform=from_origin(0.0, float(n), 1.0, 1.0),
+        ) as dst:
+            dst.write(dem)
+        data = mf.read()
+    gdal = run._gdal()
+    gdal.FileFromMemBuffer("/vsimem/outside_dem.tif", data)
+    try:
+        src = gdal.Open("/vsimem/outside_dem.tif")
+        want = gdal.ViewshedGenerate(
+            src.GetRasterBand(1),
+            "GTiff",
+            "/vsimem/outside_mask.tif",
+            [],
+            x,
+            20.0,
+            2.0,
+            1.6,
+            255.0,
+            0.0,
+            0.0,
+            0.0,
+            0.85714,
+            gdal.GVM_Edge,
+            limit or 0.0,
+        ).ReadAsArray()
+    finally:
+        src = None
+        gdal.Unlink("/vsimem/outside_dem.tif")
+        gdal.Unlink("/vsimem/outside_mask.tif")
+    values = {
+        "observer_geom": f"POINT({x} 20.0)",
+        "observer_height": 2.0,
+        "target_height": 1.6,
+        "max_distance": limit,
+        "crs": None,
+    }
+    res = run.run(manifest.load().functions[FN], [data], values)
+    assert res.error is None, res.error
+    with MemoryFile(res.raster) as mf, mf.open() as o:
+        assert o.nodata is None and (o.read(1) == want).all()
+    assert 0 < int((want == 255).sum()) < want.size
+
+
+def test_a_distance_limit_that_leaves_no_part_of_the_dem_is_gdals_error():
+    """An observer 200 m from the DEM with a 5 m limit: GDAL cannot size the window, and says so in the tile's error."""
+    values = {**_VALUES, "observer_geom": "POINT(-200.0 20.0)", "max_distance": 5.0}
+    res = run.run(manifest.load().functions[FN], [_flat_dem(40)], values)
+    assert res.raster is None and "Invalid target raster size" in res.error, res
 
 
 def _file_tile(path) -> dict:

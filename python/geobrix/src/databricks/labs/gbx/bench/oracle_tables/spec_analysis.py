@@ -421,13 +421,31 @@ SPEC_ANALYSIS = (
         ONLY,
     ),
     Case("viewshed_null_target", VS, (WALL, OBSERVER, 2.0, None), "null", None, ONLY),
-    # an observer outside the DEM is placed by GDAL, which extends the DEM: the same mask as its own call
+    # an observer outside the DEM is judged by GDAL as it stands (nothing between it and the DEM blocks the view): the same
+    # mask as its own call; a limit that leaves no part of the DEM is GDAL's error. A limit that cuts through the DEM is not
+    # a row: GDAL's own call flips the pixels at the limit from run to run when the observer is outside.
     Case(
         "viewshed_outside_dem",
         VS,
         (WALL, "POINT(399000 5761000)", 2.0),
         "ref",
         "viewshed_gdal",
+        ONLY,
+    ),
+    Case(
+        "viewshed_outside_dem_distance",
+        VS,
+        (WALL, "POINT(399000 5761000)", 2.0, 1.6, 5000.0),
+        "ref",
+        "viewshed_gdal",
+        ONLY,
+    ),
+    Case(
+        "viewshed_outside_dem_out_of_reach",
+        VS,
+        (WALL, "POINT(399000 5761000)", 2.0, 1.6, 100.0),
+        "error_tile_has",
+        "Invalid target raster size",
         ONLY,
     ),
     Case(

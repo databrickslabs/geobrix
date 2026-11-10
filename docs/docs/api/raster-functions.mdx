@@ -4924,7 +4924,7 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 ### rst_resample_to_size
 
 {/* BEGIN GENERATED gbx_rst_resample_to_size: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4958,7 +4958,6 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
   name="rst_resample_to_size"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -5244,7 +5243,7 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
 ### rst_to_webmercator
 
 {/* BEGIN GENERATED gbx_rst_to_webmercator: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5272,7 +5271,6 @@ Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by defa
   name="rst_to_webmercator"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
@@ -6411,7 +6409,7 @@ With a `maxDistance`, the result is the window around the observer, aligned to t
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible or out of range) from a DEM tile and an observer POINT. The observer is a WKB, EWKB, WKT or EWKT POINT. The call moves it from its own CRS into the DEM's CRS. An embedded SRID wins, then the optional `crs` argument, then the DEM's own CRS. Any other geometry raises. A NULL `observer_height` is 0, and a NULL `target_height` gives NULL. Heights are above the DEM at each pixel. A `max_distance` limits the search radius; NULL means no limit. An observer outside the DEM is placed by GDAL, which extends the DEM past its edge. GDAL reads a virtual tile that is a whole file from the file, block by block. A large DEM then needs no more memory than GDAL's block cache. A tile with bytes, or a window of a file, is read whole under the compute's read cap. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible or out of range) from a DEM tile and an observer POINT. The observer is a WKB, EWKB, WKT or EWKT POINT. The call moves it from its own CRS into the DEM's CRS. An embedded SRID wins, then the optional `crs` argument, then the DEM's own CRS. Any other geometry raises. A NULL `observer_height` is 0, and a NULL `target_height` gives NULL. Heights are above the DEM at each pixel. A `max_distance` limits the search radius; NULL means no limit. For an observer outside the DEM, GDAL assumes nothing blocks the view to the DEM and takes the observer's height from elevation 0. A `max_distance` that leaves no part of the DEM gives an error tile. GDAL reads a virtual tile that is a whole file from the file, block by block. A large DEM then needs no more memory than GDAL's block cache. A tile with bytes, or a window of a file, is read whole under the compute's read cap. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_viewshed"

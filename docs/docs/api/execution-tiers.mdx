@@ -110,10 +110,22 @@ Install the JAR only when you want the JVM level on a dedicated cluster. The whe
 
 Almost everything runs on every compute through the wheel. These features need more:
 
+:::tip Use the DCS image on a dedicated cluster
+The [GeoBrix DCS image](../installation/dcs.mdx) pre-packages everything the JVM level needs. It holds the env6 wheel, the GeoBrix JAR, and native GDAL, PROJ and GEOS with GDAL's Java bindings. The cluster needs no libraries and no init script.
+
+Limits today:
+
+- It runs on dedicated access mode on DBR 19 only, for Graviton (arm64) and x86.
+- There is no DBR 17.3 or 18 image. Install the env5 wheel and the JAR as [cluster libraries](../installation.mdx#heavyweight).
+- Standard access mode and Serverless cannot use it. Use the [env wheel](../installation.mdx#whl-only).
+- The image passes its in-image checks but has not yet run on a cluster. The env wheel and JAR route is the one verified on clusters.
+- STAC search and the sample-data downloaders are not in the image. Add them with `%pip`, as the [DCS page](../installation/dcs.mdx#the-image) describes.
+:::
+
 | Feature | Dedicated cluster | Standard access mode | Serverless | SQL warehouse |
 |---|---|---|---|---|
 | Every function at its Python level (L3), readers and writers | Yes | Yes | Yes | No (use UC functions) |
-| The JVM level (L1) and the [Scala surface](./language-bindings) | Yes, with the JAR | No. GeoBrix runs the Python level and says why | No | No |
+| The JVM level (L1) and the [Scala surface](./language-bindings) | Yes, with the [DCS image](../installation/dcs.mdx) or the JAR | No. GeoBrix runs the Python level and says why | No | No |
 | [UC functions](./uc-functions) | Yes | Yes | Yes | Yes |
 | The Scala form of three UC grid functions (`gbx_bng_kring`, `gbx_bng_aswkb`, `gbx_bng_centroid`) | Not verified | Not verified | Not verified | Yes |
 | `gbx_rst_merge_tvf` and `gbx_rst_bng_rasterize_tvf` (`TABLE(...) PARTITION BY`) | Yes | Yes | No. Use `gbx_rst_merge_agg` and `gbx_rst_bng_rasterize_agg` | No |

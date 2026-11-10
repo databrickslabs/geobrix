@@ -360,6 +360,22 @@ def test_a_clip_shrinks_the_state_and_a_type_step_changes_the_bytes():
     assert _peak("clip --bbox=0,0,64000,48000") == 64 * 48 * 4
 
 
+class _NoGrid(argv.NoGeo):
+    """GDAL gives no output grid, and a box moves from metres into a CRS whose unit is 10 km (as a degree is ~111 km)."""
+
+    def envelope(self, bbox, from_crs, to_crs):
+        return tuple(v / 1e4 for v in bbox)
+
+
+def test_a_box_with_no_grid_from_gdal_is_sized_in_the_target_crss_units():
+    # 640 x 480 m of 10 m pixels: in the target's units the pixel is 0.001, so a box twice the tile is 128 x 96 pixels
+    box = "reproject --output-crs=4326 --bbox=0,0,0.128,0.096"
+    assert _peak(box, geo=_NoGrid()) == 128 * 96 * 4
+    # with no way to move the tile into the target CRS, the source's metres are not divided into degrees
+    with pytest.raises(spec.DataError, match="give --size"):
+        _peak(box, geo=argv.NoGeo())
+
+
 def test_a_step_whose_output_cannot_be_bounded_is_refused_with_a_fix():
     unknown = argv.PipeState(64, 48, 0.0, 0.0, 0.0, 0.0, "EPSG:32633", 1, 4, True)
     with pytest.raises(spec.DataError, match="give --size"):

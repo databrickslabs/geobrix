@@ -967,6 +967,19 @@ def _cut(step, st: PipeState, geo, box, box_crs) -> PipeState:
     return dataclasses.replace(st, width=w, height=h, ox=box[0], oy=box[3], fresh=False)
 
 
+def _target_pixel(st: PipeState, target: str, geo) -> Tuple[float, float]:
+    """The pixel size of `st` in the units of `target`, where GDAL gives no output grid: the tile's extent moved into
+    `target` over its pixel counts, as GDAL's own grid picks it. (0, 0), not bounded, when the extent is unknown or
+    cannot be moved: the source's pixel size is in another CRS's units."""
+    if st.extent is None:
+        return 0.0, 0.0
+    w, h = st.extent
+    env = geo.envelope((st.ox, st.oy - h, st.ox + w, st.oy), st.crs, target)
+    if env is None:
+        return 0.0, 0.0
+    return (env[2] - env[0]) / st.width, (env[3] - env[1]) / st.height
+
+
 def _reproject(step, st: PipeState, geo) -> PipeState:
     if _token_value(step, "input-crs") is not None:
         st = dataclasses.replace(st, crs=_token_value(step, "input-crs"), fresh=False)
@@ -1009,7 +1022,12 @@ def _reproject(step, st: PipeState, geo) -> PipeState:
             px_y=ext[1] / sh if ext else 0.0,
         )
     if res is not None or bbox:
-        rx, ry = (_numbers(res) * 2)[:2] if res is not None else (out.px_x, out.px_y)
+        if res is not None:
+            rx, ry = (_numbers(res) * 2)[:2]
+        elif g is not None or target == st.crs:
+            rx, ry = out.px_x, out.px_y  # in the target CRS's units
+        else:
+            rx, ry = _target_pixel(st, target, geo)
         if ext is None or rx <= 0 or ry <= 0:
             raise _unbounded(
                 "reproject", "the extent or pixel size after the CRS change is unknown"

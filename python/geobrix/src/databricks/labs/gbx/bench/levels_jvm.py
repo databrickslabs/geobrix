@@ -94,8 +94,12 @@ class Spec:
     call: str  # the call, `{fn}` standing for the SQL name
     value: str  # a key of `_VALUE`: what the value fingerprint hashes
     floor: str  # "udf:<ddl>" (a constant of that type), "tile" (the input tile back) or "scan:<column>"
-    floor_args: str = ""  # the input columns the floor UDF takes (default: the call's first argument)
-    gen_value: str = ""  # a generator's per-row expression, `t.<column>` (default: `t.cellid`)
+    floor_args: str = (
+        ""  # the input columns the floor UDF takes (default: the call's first argument)
+    )
+    gen_value: str = (
+        ""  # a generator's per-row expression, `t.<column>` (default: `t.cellid`)
+    )
 
 
 _G = "jv_custom_grid"  # the custom grid column of the custom-grid inputs
@@ -352,7 +356,9 @@ def _bng_points_wkt(spark, n, corpus, schema):
         f"mvp_in_jv_bng_points_wkt_v{lf.RECIPE_VERSION}_{n}",
         lambda: spark.range(n).select(
             F.format_string(
-                "POINT(%f %f)", F.rand(61) * 600000 + 50000, F.rand(62) * 1100000 + 50000
+                "POINT(%f %f)",
+                F.rand(61) * 600000 + 50000,
+                F.rand(62) * 1100000 + 50000,
             ).alias("wkt")
         ),
         rows=n,
@@ -368,7 +374,8 @@ def _bng_cells_gen(spark, n, corpus, schema):
 
 def _bng_chips(spark, n, corpus, schema):
     """`n` pairs of chips of one 1 km cell: the cell's chip of a rectangle of `bng_polys` and of the rectangle moved 400 m
-    east and north (both tessellated at the 1 km resolution with their core geometry, paired by rectangle and cell)."""
+    east and north (both tessellated at the 1 km resolution with their core geometry, paired by rectangle and cell).
+    """
     from databricks.labs.gbx import register
     from databricks.labs.gbx.bench import levels_forms as lf
 
@@ -403,7 +410,8 @@ def _shift_wkt(wkt):
     return pd.Series(
         [
             shapely.to_wkt(
-                affinity.translate(shapely.from_wkt(w), 400.0, 400.0), rounding_precision=3
+                affinity.translate(shapely.from_wkt(w), 400.0, 400.0),
+                rounding_precision=3,
             )
             for w in wkt
         ],
@@ -430,16 +438,20 @@ def _custom_cells_of(pdf):
 
     conf = _custom.CustomGridConf(*GRID)
     xs, ys = pdf["x"].to_numpy(), pdf["y"].to_numpy()
-    cells = [_custom.point_to_cell_id(conf, float(x), float(y), 0) for x, y in zip(xs, ys)]
+    cells = [
+        _custom.point_to_cell_id(conf, float(x), float(y), 0) for x, y in zip(xs, ys)
+    ]
     cells2 = [
-        _custom.point_to_cell_id(conf, float(x) + 5000.0, float(y) + 3000.0, 0) for x, y in zip(xs, ys)
+        _custom.point_to_cell_id(conf, float(x) + 5000.0, float(y) + 3000.0, 0)
+        for x, y in zip(xs, ys)
     ]
     return pd.DataFrame({"cellid": cells, "cellid2": cells2}, index=pdf.index)
 
 
 def _custom_cells(spark, n, corpus, schema):
     """`(key, cellid, cellid2, value, point, jv_custom_grid)`: random 1 km cells of the custom grid in the 100 km square
-    500..600 km east, 100..200 km north (as `bng_cells` in TQ), a second cell 5 km east and 3 km north, and the point."""
+    500..600 km east, 100..200 km north (as `bng_cells` in TQ), a second cell 5 km east and 3 km north, and the point.
+    """
     import pandas as pd
     from pyspark.sql import functions as F
 
@@ -498,7 +510,10 @@ def _h3_ids(lat, lng):
     import pandas as pd
 
     return pd.Series(
-        [h3.str_to_int(h3.latlng_to_cell(float(a), float(b), 7)) for a, b in zip(lat, lng)],
+        [
+            h3.str_to_int(h3.latlng_to_cell(float(a), float(b), 7))
+            for a, b in zip(lat, lng)
+        ],
         index=lat.index,
     )
 
@@ -539,7 +554,8 @@ def _quadbin_cells(spark, n, corpus, schema):
         from databricks.labs.gbx.pygx import _quadbin
 
         return pd.Series(
-            _quadbin.point_as_cell_vec(lng.to_numpy(), lat.to_numpy(), 13), index=lng.index
+            _quadbin.point_as_cell_vec(lng.to_numpy(), lat.to_numpy(), 13),
+            index=lng.index,
         )
 
     ids.__annotations__ = {"lng": pd.Series, "lat": pd.Series, "return": pd.Series}
@@ -594,9 +610,7 @@ def _legacy_polys(spark, n, corpus, schema):
         base = spark.range(n).select(
             "id", (F.rand(77) * 1000).alias("x"), (F.rand(78) * 1000).alias("y")
         )
-        ring = (
-            "array(array(x, y), array(x + 10D, y), array(x + 10D, y + 10D), array(x, y + 10D), array(x, y))"
-        )
+        ring = "array(array(x, y), array(x + 10D, y), array(x + 10D, y + 10D), array(x, y + 10D), array(x, y))"
         hole = (
             "array(array(x + 2D, y + 2D), array(x + 4D, y + 2D), array(x + 4D, y + 4D), array(x + 2D, y + 4D), "
             "array(x + 2D, y + 2D))"
@@ -635,7 +649,9 @@ def _pm_tiles(spark, n, corpus, schema):
     pngs = [(i, _png(i)) for i in range(4)]
 
     def build():
-        four = client_dataframe(spark, pngs, "idx int, bytes binary", what="jv_pm_tiles PNGs")
+        four = client_dataframe(
+            spark, pngs, "idx int, bytes binary", what="jv_pm_tiles PNGs"
+        )
         r = F.floor(F.col("id") / _PM_KEYS)
         return (
             spark.range(n)
@@ -743,7 +759,9 @@ def _vsql(s: Spec, name: str) -> str:
     if s.shape == "gen":
         sample = _GEN_SAMPLE.get(s.inp)
         src = (
-            "(SELECT first(tile) AS tile FROM {src} GROUP BY " + _REPLICATED[s.inp] + ")"
+            "(SELECT first(tile) AS tile FROM {src} GROUP BY "
+            + _REPLICATED[s.inp]
+            + ")"
             if s.inp in _REPLICATED
             else f"(SELECT * FROM {{src}} WHERE {sample})"
         )
@@ -762,7 +780,11 @@ def _vsql(s: Spec, name: str) -> str:
     o = "t" if s.shape == "tile" else "c"
     v = _VALUE[s.value].format(o=o)
     if s.inp in _REPLICATED:
-        cols = "first(tiles) AS tiles" if s.inp == "se_pair_512_mem" else "first(tile) AS tile"
+        cols = (
+            "first(tiles) AS tiles"
+            if s.inp == "se_pair_512_mem"
+            else "first(tile) AS tile"
+        )
         src = f"(SELECT {cols} FROM {{src}} GROUP BY {_REPLICATED[s.inp]})"
     elif s.inp == "tiles_n" and s.value in ("raster", "png"):
         src = f"(SELECT * FROM {{src}} WHERE {_CORPUS_SAMPLE})"
@@ -775,9 +797,7 @@ def _vsql(s: Spec, name: str) -> str:
     )
 
 
-_ERR_TEXT = (
-    "substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), ';,', '  '), 1, 160)"
-)
+_ERR_TEXT = "substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), ';,', '  '), 1, 160)"
 
 
 def _nullsql(s: Spec, name: str) -> str:
@@ -807,11 +827,15 @@ def _nullsql(s: Spec, name: str) -> str:
 def _floor(s: Spec, common) -> Form:
     kind, _, arg = s.floor.partition(":")
     if kind == "scan":
-        if s.shape == "agg":  # the grouping without the work: the largest value of each group
+        if (
+            s.shape == "agg"
+        ):  # the grouping without the work: the largest value of each group
             sql = _AGG.format(call=f"CAST(max({arg}) AS STRING)")
         else:
             sql = f"SELECT count(*) AS n, sum(length(CAST({arg} AS STRING))) AS fp, count(*) AS n_out FROM {{src}}"
-        return Form(level="L3", variant=f"floor@{s.tag}", sql=sql, register=False, **common)
+        return Form(
+            level="L3", variant=f"floor@{s.tag}", sql=sql, register=False, **common
+        )
     ddl = "tile" if kind == "tile" else arg
     args = s.floor_args or _first_arg(s.call)
     call = f"{floor_name(ddl)}({args})"
@@ -955,13 +979,23 @@ def main(argv=None) -> int:
     """`python -m databricks.labs.gbx.bench.levels_jvm --part <name>` (or `--fns a,b`): print the `--levels-forms` value."""
     import argparse
 
-    ap = argparse.ArgumentParser(description="the --levels-forms value of a JV run part")
+    ap = argparse.ArgumentParser(
+        description="the --levels-forms value of a JV run part"
+    )
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--part", choices=sorted(PARTS))
     g.add_argument("--fns", help="comma-separated SQL names")
-    ap.add_argument("--no-floor", action="store_true", help="leave the floors out (a 16x rerun of a part's functions)")
+    ap.add_argument(
+        "--no-floor",
+        action="store_true",
+        help="leave the floors out (a 16x rerun of a part's functions)",
+    )
     a = ap.parse_args(argv)
-    fns = PARTS[a.part] if a.part else tuple(x.strip() for x in a.fns.split(",") if x.strip())
+    fns = (
+        PARTS[a.part]
+        if a.part
+        else tuple(x.strip() for x in a.fns.split(",") if x.strip())
+    )
     print(",".join(part_forms(fns, floors=not a.no_floor)))
     return 0
 

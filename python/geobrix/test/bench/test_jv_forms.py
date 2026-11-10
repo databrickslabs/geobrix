@@ -46,7 +46,12 @@ def test_the_set_covers_both_halves_of_the_list():
         "gbx_rst_quadbin_rasterize_agg",
         "gbx_rst_custom_rasterize_agg",
     } <= never
-    assert {"gbx_st_crs", "gbx_st_setcrs", "gbx_rst_frombands", "gbx_h3_cell_bbox"} <= first
+    assert {
+        "gbx_st_crs",
+        "gbx_st_setcrs",
+        "gbx_rst_frombands",
+        "gbx_h3_cell_bbox",
+    } <= first
 
 
 @pytest.mark.parametrize("fn", FNS)
@@ -74,7 +79,9 @@ def test_every_form_but_the_floor_is_fingerprinted_by_value_and_reports_its_null
     for f in forms[:-1]:
         assert f.vsql and f.vsql.format(src="t", uc="")
         assert f.sql.format(src="t", uc="")
-        assert f.allows_null  # an error tile under load is a counted NULL, not a lost row
+        assert (
+            f.allows_null
+        )  # an error tile under load is a counted NULL, not a lost row
         if jv.spec_of(fn).shape != "gen":
             assert f.nullsql.format(src="t", uc="")
     assert not forms[-1].vsql and not forms[-1].nullsql
@@ -124,9 +131,10 @@ def test_output_flags_name_a_difference_and_a_missing_fingerprint():
     diff = {("l1@x", 1): "v1:5", ("c0@x", 1): "v1:6"}
     assert "OUTPUTS DIFFER" in lt.output_flags(diff, forms=forms, ns=(1,))[0]
     missing = {("l1@x", 1): "123", ("c0@x", 1): "v1:6"}
-    assert "no value fingerprint for l1@x" in lt.output_flags(
-        missing, forms=forms, ns=(1,)
-    )[0]
+    assert (
+        "no value fingerprint for l1@x"
+        in lt.output_flags(missing, forms=forms, ns=(1,))[0]
+    )
 
 
 def test_no_input_of_the_jv_forms_is_built_on_the_client_at_16x():
@@ -155,7 +163,9 @@ def test_a_part_times_one_floor_per_input_and_every_form_of_its_functions():
     assert [n for n in names if ":floor@" in n] == ["gbx_rst_crs:floor@n"]
     assert {n.split(":")[0] for n in names} == set(jv.PARTS["acc1"])
     assert all(lf.form_named(f, names) for fn in jv.PARTS["acc1"] for f in _of(fn)[:-1])
-    assert not [n for n in jv.part_forms(jv.PARTS["acc1"], floors=False) if ":floor@" in n]
+    assert not [
+        n for n in jv.part_forms(jv.PARTS["acc1"], floors=False) if ":floor@" in n
+    ]
 
 
 def test_the_custom_aggregates_take_the_grid_as_a_constant():
@@ -163,4 +173,6 @@ def test_the_custom_aggregates_take_the_grid_as_a_constant():
     for fn in ("gbx_custom_cellfill", "gbx_rst_custom_rasterize_agg"):
         call = jv.spec_of(fn).call
         assert jv._G not in call and "named_struct('bound_x_min', 0L" in call, fn
-    assert jv._GRID_SQL.count("CAST(") == 8  # the column form of the same grid (the scalars and explodes read it)
+    assert (
+        jv._GRID_SQL.count("CAST(") == 8
+    )  # the column form of the same grid (the scalars and explodes read it)

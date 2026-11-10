@@ -460,7 +460,11 @@ _JV_TILES = dict(
     corpus_dir="/tmp/gbx-local-timing/IO",
 )
 _JV_NS = {  # small n per input: the pass checks that every form runs, scales and returns what the others return
-    "tiles_n": (4, 8, 16),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
+    "tiles_n": (
+        4,
+        8,
+        16,
+    ),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
     "dem_1024_mem": (8, 32, 128),
     "se_pair_512_mem": (8, 32, 128),
     "jv_nc_512_mem": (8, 32, 128),
@@ -498,7 +502,9 @@ def _jv_sets() -> Dict[str, SetSpec]:
             reference=forms[1],  # the first light form
             ns=_JV_NS[s.inp],
             fn=s.fn,
-            peer_exempt=(forms[0],),  # the JVM form is what the pass measures, not a peer of the light forms
+            peer_exempt=(
+                forms[0],
+            ),  # the JVM form is what the pass measures, not a peer of the light forms
             compare_outputs=True,
             **(_JV_TILES if s.inp == "tiles_n" else {}),
         )
@@ -515,7 +521,9 @@ def expand_sets(name: str) -> List[str]:
     out: List[str] = []
     for part in [p.strip() for p in name.split(",") if p.strip()]:
         if part == "JV":
-            out += [jv_set_name(s.fn) for s in levels_jvm.SPECS if jv_set_name(s.fn) in SETS]
+            out += [
+                jv_set_name(s.fn) for s in levels_jvm.SPECS if jv_set_name(s.fn) in SETS
+            ]
         elif part.startswith("JV@"):
             inp = part[3:]
             out += [
@@ -543,6 +551,8 @@ def output_flags(outputs: Dict[Tuple[str, int], str], *, forms, ns) -> List[str]
                 + ", ".join(f"{f}={v}" for f, v in got.items())
             )
     return found
+
+
 # the BNG scalar's forms are the grid-scalar family's
 SETS["grid-scalar"] = dataclasses.replace(
     SETS["S"],

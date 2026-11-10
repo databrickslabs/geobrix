@@ -620,7 +620,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **A coordinate without Z has Z 0 in both modes (fix).** In the `conforming` mode, the JVM level gave a 2D break line a NaN Z. A 2D mass point had a NaN Z on the JVM level in both modes.
 - **The `conforming` mode raises with a `Fix:` where it cannot fit the break lines (behavior change).** Crossing break lines are the usual cause. The JVM level raised JTS's own exception.
 - **Any `split_point_finder` other than `'NONENCROACHING'` or `'MIDPOINT'` raises on the Python level too (behavior change).** The JVM level already raised, in both modes.
-- **A multi-line break line adds each of its lines, and a polygon adds its rings (behavior change).** Any other geometry in `breaklines_array` is ignored. Before, the Python level raised for a multi-line string, and a point added a site. The JVM `st_interpolateelevationbbox` still takes line strings only.
+- **A multi-line break line adds each of its lines, and a polygon adds its rings (behavior change).** Any other geometry in `breaklines_array` is ignored. Before, the Python level raised for a multi-line string, and a point added a site. The JVM `st_interpolateelevationbbox` raised for anything but a line string.
 - **`merge_tolerance` 0 merges only points with the same X and Y (fix).** Before, points under 1e-12 apart merged too. A coordinate above about 9.2 million then overflowed the merge key, so distant points could merge.
 - **The JAR no longer holds `ST_InterpolateElevationGeom`.** `gbx_st_interpolateelevationgeom` ran its Python level by default and still does. Its Scala Column wrapper is gone. From Scala, call it with `call_function("gbx_st_interpolateelevationgeom", ...)`.
 

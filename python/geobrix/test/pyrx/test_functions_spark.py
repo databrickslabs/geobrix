@@ -288,7 +288,6 @@ def test_separatebands_stamps_band_marker(spark):
 # Grouped aggregators (rst_*_agg) via .agg()
 # ---------------------------------------------------------------------------
 import numpy as np  # noqa: E402
-import pytest  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 

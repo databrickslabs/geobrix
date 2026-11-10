@@ -52,9 +52,7 @@ CENTRES_4 = [
     (x, y, _z(x, y)) for x in (1.25, 3.75, 6.25, 8.75) for y in (1.25, 3.75, 6.25, 8.75)
 ]
 # Two break lines, as one multi-line, from the square's east corners to x = 20, on the plane.
-MULTILINE_EAST = (
-    f"MULTILINESTRING Z ((10 0 {_z(10, 0)}, 20 0 {_z(20, 0)}), (10 10 {_z(10, 10)}, 20 10 {_z(20, 10)}))"
-)
+MULTILINE_EAST = f"MULTILINESTRING Z ((10 0 {_z(10, 0)}, 20 0 {_z(20, 0)}), (10 10 {_z(10, 10)}, 20 10 {_z(20, 10)}))"
 # Cell centres of a 4 x 2 grid over (0, 0)-(20, 10).
 CENTRES_EAST = [(x, y, _z(x, y)) for x in (2.5, 7.5, 12.5, 17.5) for y in (2.5, 7.5)]
 M = "MIDPOINT"

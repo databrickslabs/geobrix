@@ -104,6 +104,10 @@ def test_a_worker_that_knows_its_memory_keeps_its_own_budget(monkeypatch):
     monkeypatch.setenv(budget.CLASSIC_MEMORY_ENV[0], "16g")
     with _gdal_policy.carried(None, 4096 << 20):
         assert budget.call_decoded_budget() == budget.decoded_budget_bytes("classic")
+    with _gdal_policy.carried(
+        None, 32 << 20
+    ):  # a cap lowered on the driver still holds
+        assert budget.call_decoded_budget() == 32 << 20
     monkeypatch.delenv(budget.CLASSIC_MEMORY_ENV[0])
     with _gdal_policy.carried(None, 4096 << 20):
         assert (

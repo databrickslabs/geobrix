@@ -190,17 +190,20 @@ def _worker_knows_its_memory() -> bool:
 
 def call_decoded_budget() -> int:
     """Worker side: the decoded bytes one call may hold, its inputs and its output together (the GDAL spec engine's
-    budget): this process's decoded budget (``decoded_budget_bytes("auto")``) where it has a memory signal of its own,
-    else the cap the registration carried (:func:`session_read_cap`). A worker of standard access mode (Spark Connect
-    over classic compute) reads neither ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so its own budget would be
-    Serverless's 64 MiB: the carried cap, the classic budget there, is the one that holds. Where the worker can tell
-    its own budget, a read cap raised on the driver does not raise what one call may hold.
+    budget): the cap the registration carried (:func:`session_read_cap`), no more than this process's decoded budget
+    (``decoded_budget_bytes("auto")``) where it has a memory signal of its own; that budget where nothing is carried. A
+    worker of standard access mode (Spark Connect over classic compute) reads neither ``SPARK_WORKER_MEMORY`` nor a
+    cgroup limit, so its own budget would be Serverless's 64 MiB: the carried cap, the classic budget there, is the one
+    that holds. Where the worker can tell its own budget, a read cap lowered on the driver lowers what one call may hold,
+    and one raised there does not raise it.
     """
     from databricks.labs.gbx._gdal_policy import carried_read_cap
 
     carried = carried_read_cap()
-    if carried is None or _worker_knows_its_memory():
+    if carried is None:
         return decoded_budget_bytes("auto")
+    if _worker_knows_its_memory():
+        return min(carried, decoded_budget_bytes("auto"))
     return carried
 
 

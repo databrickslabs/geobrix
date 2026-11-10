@@ -352,9 +352,13 @@ def _rgba(nodata=None, n=9, dtype="uint8", top=255, masked=None):
     from rasterio.enums import ColorInterp
 
     z = np.zeros((4, n, n), dtype)
-    z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype(
-        dtype
-    )
+    z[:3] = (
+        50
+        + 40
+        * np.arange(3)[:, None, None]  # each band its own values: a band mix-up shows
+        + np.arange(n)[None, None, :]
+        + 3 * np.arange(n)[None, :, None]
+    ).astype(dtype)
     alpha = 100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)
     z[3] = (alpha * (top / 255)).astype(dtype)
     z[3, 3:6, 3:6] = 0
@@ -473,7 +477,11 @@ def test_the_fill_estimate_counts_its_mask_step():
 
 def test_the_props_of_a_tile_say_when_a_fill_runs_a_mask_step():
     gdal = run._gdal()
-    names = {"rgba": _rgba()[0], "plain": _tif(_gradient()[np.newaxis])}
+    names = {
+        "rgba": _rgba()[0],
+        "plain": _tif(_gradient()[np.newaxis]),
+        "masked": _masked_tile(),
+    }
     got = {}
     for key, data in names.items():
         name = f"{run.PREFIX}/props_{key}.tif"
@@ -482,7 +490,7 @@ def test_the_props_of_a_tile_say_when_a_fill_runs_a_mask_step():
             got[key] = run._props(gdal, "t", name, False).fill_mask
         finally:
             gdal.Unlink(name)
-    assert got == {"rgba": True, "plain": False}
+    assert got == {"rgba": True, "plain": False, "masked": True}
 
 
 def test_the_summary_keeps_a_tag_of_the_tiles_own_that_names_the_engines_folder():
@@ -565,6 +573,14 @@ def test_the_json_ref_check_names_a_null_a_non_json_and_a_different_text():
     assert oracles._check_json_ref(case, good, [raw]) is None
     other = run.run(SUMMARY, [_tif(_gradient()[np.newaxis] + 1)], {}).text
     assert oracles._check_json_ref(case, other, [raw])
+
+
+def test_a_bool_in_a_value_keeps_its_own_template_key():
+    from databricks.labs.gbx.engine import argv
+
+    assert argv._hashable([1, 2]) != argv._hashable([True, 2])
+    assert argv._hashable((1,)) != argv._hashable((True,))
+    assert argv._hashable(np.array([1, 2])) == (1, 2)
 
 
 def test_a_bool_count_is_refused_after_the_number_it_equals_was_bound():

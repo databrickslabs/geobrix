@@ -1551,7 +1551,7 @@ def _hashable(v):
     """A list or array value as a tuple, so a call with the same levels shares one bound template. A bool is kept apart
     from the number it equals (True == 1): a binder that refuses a bool must not be handed the template of a 1.
     """
-    if isinstance(v, list) or getattr(v, "ndim", 0) > 0:
+    if isinstance(v, (list, tuple)) or getattr(v, "ndim", 0) > 0:
         return tuple(_hashable(x) for x in v)
     if _is_bool(v):
         return (bool, bool(v))

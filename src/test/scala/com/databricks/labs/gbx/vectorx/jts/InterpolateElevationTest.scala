@@ -315,6 +315,29 @@ class InterpolateElevationTest extends AnyFunSuite {
         e.getMessage should include("Fix: split the break lines where they cross")
     }
 
+    test("constrained: a point location that does not converge raises with a Fix, the same text as the Python level") {
+        // 12 sites within a few units of one line: JTS's DelaunayTriangulationBuilder fails to locate a point
+        val near = pts(
+          (1.705614180421661, 0.3556616138089565, 0.0),
+          (2.1370135135414468, -0.03827484299550774, 0.0),
+          (3.6849469793638447, -1.451785198900048, 0.0),
+          (4.164986438772758, -1.8901378555866342, 0.0),
+          (6.171084233788748, -3.7220253822936145, 0.0),
+          (7.783777556195663, -5.194671825084469, 0.0),
+          (8.358689901978432, -5.719658571895044, 0.0),
+          (9.510282923560982, -6.771246833105947, 0.0),
+          (9.552398189041536, -6.809704793485267, 0.0),
+          (13.445510021916174, -10.364737366890585, 0.0),
+          (15.91439202650987, -12.61922075267712, 0.0),
+          (22.65232113531493, -18.77202562635853, 0.0)
+        )
+        val e = intercept[IllegalArgumentException] {
+            InterpolateElevation.triangulate(near, Seq.empty, 0.0, 0.0, None, "constrained")
+        }
+        e.getMessage shouldBe InterpolateElevation.ConstrainedLocateFailed
+        e.getCause shouldBe a[org.locationtech.jts.triangulate.quadedge.LocateFailureException]
+    }
+
     test("constrained: a point exactly on a break line splits it, and every segment is an edge") {
         // a 3 x 3 grid with a break line along its middle row through (5, 5)
         val grid = pts((for (x <- Seq(0.0, 5.0, 10.0); y <- Seq(0.0, 5.0, 10.0)) yield (x, y, 0.0)): _*)

@@ -198,6 +198,14 @@ VECTOR_GENERATOR = (
         "triangles_exact",
         R.GRID_DIAGONAL_CONSTRAINED,
     ),
+    # Sites on which JTS cannot locate a point: the constrained mode raises with a Fix on every level.
+    Case(
+        "tri_constrained_locate_failure_raises",
+        TRI,
+        (R.points(R.NEAR_LINE), [], 0.0, 0.0, F, "constrained"),
+        "raises",
+        "merge close sites with a merge_tolerance above 0",
+    ),
     # A thin hull triangle whose circle holds a vertex of JTS's frame: still the Delaunay triangles, in both modes.
     *(
         Case(

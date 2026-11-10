@@ -525,13 +525,12 @@ def test_a_thin_hull_triangle_is_certified_and_is_the_ports():
     }
 
 
-def test_a_locate_failure_raises_the_constrained_error(monkeypatch):
-    # the JVM level raises the same text when DelaunayTriangulationBuilder's point location does not converge
-    from databricks.labs.gbx.pyvx import _conforming, _quadedge
+def test_a_locate_failure_raises_the_constrained_error():
+    # 12 sites within a few units of one line: JTS's DelaunayTriangulationBuilder fails to locate a point, and the JVM
+    # level raises the same text (InterpolateElevationTest)
+    from databricks.labs.gbx.bench.oracle_tables import _tin_rows
 
-    monkeypatch.setattr(_conforming, "unique_delaunay", lambda xy, origin=None: None)
-    monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
-    pts = _sites([(0, 0), (10, 0), (10, 10), (0, 10), (5, 5)])
+    pts = np.array(_tin_rows.NEAR_LINE)
     with pytest.raises(_tin.ConstrainedError) as e:
         _tin.triangulate(pts, [], 0.0, 0.0)
     assert str(e.value) == _tin.CONSTRAINED_LOCATE_FAILED

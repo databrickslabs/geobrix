@@ -243,3 +243,28 @@ def test_the_certificate_refuses_a_folded_or_non_convex_tiling(monkeypatch):
         )
         is not None
     )
+
+
+def test_the_certificate_refuses_broken_neighbours_and_a_non_disk(monkeypatch):
+    import scipy.spatial
+
+    quad = np.array([[0.0, 0.0], [4.0, 0.0], [4.0, 3.0], [-1.0, 3.0]])
+
+    def fake(simplices, neighbors):
+        class Fake:
+            def __init__(self, p):
+                self.simplices = np.array(simplices)
+                self.neighbors = np.array(neighbors)
+                self.coplanar = []
+
+        monkeypatch.setattr(scipy.spatial, "Delaunay", Fake)
+
+    # the second triangle does not name the first as its neighbour across 0-2
+    fake([[0, 1, 2], [0, 2, 3]], [[-1, 1, -1], [-1, -1, -1]])
+    assert _conforming.unique_delaunay(quad) is None
+    # two triangles apart: two hull cycles, not one disk
+    two = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [5.0, 5.0], [6.0, 5.0], [5.0, 6.0]]
+    )
+    fake([[0, 1, 2], [3, 4, 5]], [[-1, -1, -1], [-1, -1, -1]])
+    assert _conforming.unique_delaunay(two) is None

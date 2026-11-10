@@ -281,10 +281,35 @@ def test_the_first_streamed_call_of_a_process_sweeps_the_stale_folders_once(
     monkeypatch.setattr(
         local_temp,
         "gc_stale_local_temp",
-        lambda prefix: (sweeps.append(prefix), sweep(prefix)),
+        lambda prefix, **kw: (sweeps.append(prefix), sweep(prefix, **kw)),
     )
     names = [run._output_name(POLY.gdal, "/vsimem/x") for _ in range(2)]
     assert sweeps == [run.SCRATCH_PREFIX]
     assert not stale.exists() and recent.exists()
     for out, scratch in names:
         assert out == f"{scratch}/out.gpkg" and os.path.isdir(scratch)
+
+
+def test_the_sweep_keeps_the_folder_of_a_live_process_however_old_and_removes_a_dead_ones(
+    monkeypatch, tmp_path
+):
+    """A streamed folder is not written while it is read back: its age says nothing, its owner process does."""
+    import os
+    import subprocess
+    import sys
+    import time
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(run, "_swept", False)
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    live = tmp_path / f"{run.SCRATCH_PREFIX}{os.getppid()}_old"  # the parent is alive
+    dead = tmp_path / f"{run.SCRATCH_PREFIX}{gone.pid}_old"
+    live.mkdir()
+    dead.mkdir()
+    old = time.time() - 10 * 3600
+    for d in (live, dead):
+        os.utime(d, (old, old))
+    out, scratch = run._output_name(POLY.gdal, "/vsimem/x")
+    assert os.path.basename(scratch).startswith(f"{run.SCRATCH_PREFIX}{os.getpid()}_")
+    assert live.exists() and not dead.exists() and os.path.isdir(scratch)

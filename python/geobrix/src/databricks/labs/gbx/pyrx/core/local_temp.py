@@ -94,10 +94,16 @@ def new_staged_local_file(source_name: str) -> str:
 
 
 def gc_stale_local_temp(
-    prefix: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS
+    prefix: str,
+    ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS,
+    pid_owned: bool = False,
 ) -> None:
     """Best-effort GC of stale prefixed local-temp dirs under local_temp_root().
-    Age-based; never raises. (Relocated from ds/_scratch.py; now follows the base.)"""
+    Age-based; never raises. (Relocated from ds/_scratch.py; now follows the base.)
+
+    With ``pid_owned`` the dirs are named ``<prefix><pid>_...`` (as :class:`StageCache` names its dir): one whose owner
+    process is alive is kept however old it is (a folder that is only read for an hour is not stale), and one whose owner
+    is gone is removed. A name that carries no pid falls back to the age."""
     root = local_temp_root()
     now = time.time()
     try:
@@ -109,7 +115,13 @@ def gc_stale_local_temp(
             continue
         p = os.path.join(root, name)
         try:
-            if os.path.isdir(p) and (now - os.path.getmtime(p)) > ttl_seconds:
+            if not os.path.isdir(p):
+                continue
+            if pid_owned:
+                stale = _stale_by_owner(prefix, name, p, now, ttl_seconds)
+            else:
+                stale = (now - os.path.getmtime(p)) > ttl_seconds
+            if stale:
                 shutil.rmtree(p, ignore_errors=True)
         except OSError:
             continue
@@ -139,6 +151,15 @@ def _pid_alive(pid: int) -> bool:
     except OSError:  # e.g. PermissionError: exists, owned by another user
         return True
     return True
+
+
+def _stale_by_owner(prefix: str, name: str, path: str, now: float, ttl: int) -> bool:
+    """Whether the dir *name* (``<prefix><pid>_...``) is an orphan: its owner process is gone. A name with no pid in it
+    is judged by its age."""
+    owner = name[len(prefix) :].split("_", 1)[0]
+    if owner.isdigit():
+        return int(owner) != os.getpid() and not _pid_alive(int(owner))
+    return (now - os.path.getmtime(path)) > ttl
 
 
 # A staged copy is named ``<uuid hex>_<source name>``; the sidecars staged with it carry the same prefix.
@@ -424,12 +445,10 @@ class StageCache:
             if not name.startswith(self._prefix):
                 continue
             path = os.path.join(root, name)
-            owner = name[len(self._prefix) :].split("_", 1)[0]
             try:
-                if owner.isdigit():
-                    stale = int(owner) != os.getpid() and not _pid_alive(int(owner))
-                else:
-                    stale = (now - os.path.getmtime(path)) > DEFAULT_STALE_TTL_SECONDS
+                stale = _stale_by_owner(
+                    self._prefix, name, path, now, DEFAULT_STALE_TTL_SECONDS
+                )
                 if stale and os.path.isdir(path):
                     shutil.rmtree(path, ignore_errors=True)
             except OSError:

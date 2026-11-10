@@ -78,6 +78,23 @@ def test_gc_stale_local_temp_uses_root_and_ages(monkeypatch, tmp_path):
     assert os.path.exists(fresh)
 
 
+def test_gc_stale_local_temp_pid_owned_keeps_a_live_owner_however_old(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path))
+    old = __import__("time").time() - 10_000
+    mine = tmp_path / f"gbx_gc_{os.getpid()}_a"
+    unowned = tmp_path / "gbx_gc_nopid"
+    gone = tmp_path / "gbx_gc_4194303_a"  # above the pid limit of every kernel here
+    for d in (mine, unowned, gone):
+        d.mkdir()
+        os.utime(d, (old, old))
+    gc_stale_local_temp("gbx_gc_", ttl_seconds=3600, pid_owned=True)
+    assert mine.exists()  # the owner is alive: age says nothing
+    assert not gone.exists()  # the owner is gone
+    assert not unowned.exists()  # no pid in the name: judged by age
+
+
 def test_gc_stale_local_temp_missing_root_no_raise(monkeypatch, tmp_path):
     monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "does_not_exist"))
     # resolver will create it; removing then GC'ing must not raise

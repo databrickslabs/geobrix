@@ -33,6 +33,7 @@ import contextlib
 import dataclasses
 import functools
 import math
+import os
 import shutil
 import threading
 import uuid
@@ -734,10 +735,11 @@ def _output_name(block, prefix: str):
         global _swept
         if (
             not _swept
-        ):  # a worker ended with os._exit leaves its folder: sweep the old ones once a process
+        ):  # a worker ended with os._exit leaves its folder: sweep the ones whose process is gone, once a process
             _swept = True
-            gc_stale_local_temp(SCRATCH_PREFIX)
-        scratch = new_local_temp_dir(SCRATCH_PREFIX)
+            gc_stale_local_temp(SCRATCH_PREFIX, pid_owned=True)
+        # the folder is named for this process: a stream read longer than the stale age is no orphan while its owner lives
+        scratch = new_local_temp_dir(f"{SCRATCH_PREFIX}{os.getpid()}_")
         return f"{scratch}/out.gpkg", scratch
     return f"{prefix}/out.tif", None
 

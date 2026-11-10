@@ -240,7 +240,7 @@ rst_viewshed_python_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(binary viewshed: 1=visible, 0=not visible)
+(binary viewshed: 255=visible, 0=not visible)
 """
 
 

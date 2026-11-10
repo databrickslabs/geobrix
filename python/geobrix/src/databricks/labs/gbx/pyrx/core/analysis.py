@@ -1,10 +1,9 @@
 """Spark-free RasterX *Analysis* ports: proximity (distance-to-source),
-COG conversion, contour extraction, and viewshed.
+COG conversion and contour extraction.
 
 Faithful ports of the heavyweight ``gbx_rst_proximity`` (``gdal.ComputeProximity``),
-``gbx_rst_cog_convert`` (``gdal.Translate -of COG``), ``gbx_rst_contour``
-(``gdal.ContourGenerateEx``), and ``gbx_rst_viewshed`` (``gdal.ViewshedGenerate``)
-expressions, implemented without the JAR:
+``gbx_rst_cog_convert`` (``gdal.Translate -of COG``) and ``gbx_rst_contour``
+(``gdal.ContourGenerateEx``) expressions, implemented without the JAR:
 
   * ``proximity`` uses ``scipy.ndimage.distance_transform_edt`` (scipy is already
     a pyrx dependency) instead of GDAL's ComputeProximity.
@@ -15,10 +14,8 @@ expressions, implemented without the JAR:
     1 GB Python UDF cap.
   * ``contour`` uses ``skimage.measure.find_contours`` instead of GDAL's
     ContourGenerateEx.
-  * ``viewshed`` uses ``GDALViewshedGenerate`` (via ctypes against the bundled
-    libgdal) for every DEM size, with the heavyweight's parameters, so the two
-    tiers give the same mask. It streams block-by-block (peak RSS ≈ GDAL cache,
-    independent of DEM size).
+
+The viewshed is a GDAL spec (``raster viewshed``, run by the engine); this module no longer holds a copy of it.
 """
 
 import math
@@ -34,10 +31,7 @@ from databricks.labs.gbx.pyrx.core.budget import (
     STREAMING_BLOCK_CACHE_MAX,
     block_cache_bytes,
 )
-from databricks.labs.gbx.pyrx.core.local_temp import (
-    new_local_temp_dir,
-    new_local_temp_file,
-)
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
@@ -497,15 +491,8 @@ def contour(ds, levels, interval, base, attr_field):
 
 
 # ---------------------------------------------------------------------------
-# Viewshed helpers
+# The bundled libgdal
 # ---------------------------------------------------------------------------
-
-# GDALViewshedMode / GDALViewshedOutputType (gdal_alg.h). GVM_Edge is the heavyweight's mode
-# (RST_Viewshed.scala) and the GDAL CLI default; GVOT_NORMAL gives the binary 0/255 mask.
-_GVM_EDGE = 2
-_GVOT_NORMAL = 1
-# GDAL's default earth-curvature coefficient, as the heavyweight passes it.
-_CURV_COEFF = 0.85714
 
 
 def _load_libgdal():
@@ -533,238 +520,9 @@ def _load_libgdal():
                 return ctypes.CDLL(hits[0])
     # last resort: symbol may be global after rasterio dlopened libgdal
     lib = ctypes.CDLL(None)
-    if hasattr(lib, "GDALViewshedGenerate"):
+    if hasattr(lib, "CPLSetThreadLocalConfigOption"):
         return lib
-    raise RuntimeError(
-        "rst_viewshed: GDALViewshedGenerate not found in bundled libgdal"
-    )
-
-
-def _viewshed_gdal_ctypes(
-    ds, observer_x, observer_y, observer_height, target_height, max_distance
-):
-    """GDALViewshedGenerate ctypes engine (every DEM size; the heavyweight's parameters).
-
-    Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
-    against the bundled libgdal, reads the binary 0/255 output, and returns a
-    ``(uint8 numpy array, affine transform)`` pair: the transform is the output's
-    own, because with a max distance GDAL writes only the window around the
-    observer.  Peak RSS ≈ GDAL block cache (independent of DEM size).
-
-    The scratch dir is cleaned up unconditionally in a finally block.
-    """
-    import ctypes
-    import os as _os
-
-    import rasterio as _rasterio
-
-    scratch = new_local_temp_dir(prefix="gbx_viewshed_")
-    try:
-        dem_path = _os.path.join(scratch, "dem.tif")
-        out_path = _os.path.join(scratch, "viewshed.tif")
-
-        # Stage the DEM to a local scratch file without loading the whole band into
-        # Python memory.  Preferred path: rasterio.shutil.copy streams GDAL-to-GDAL
-        # from the open dataset (block-by-block internally, no numpy array), so the
-        # source is never reopened by name.
-        # Fallback: windowed block copy (O(block_size) peak RAM) for the rare case
-        # where the copy fails (e.g., unusual source format).
-        import rasterio.shutil as _rio_shutil
-
-        dem_profile = {
-            "driver": "GTiff",
-            "width": ds.width,
-            "height": ds.height,
-            "count": 1,
-            "dtype": ds.dtypes[0],
-            "crs": ds.crs,
-            "transform": ds.transform,
-        }
-        if ds.nodata is not None:
-            dem_profile["nodata"] = ds.nodata
-
-        # The DEM is copied from the dataset the caller opened (open_data), not reopened by its name.
-        try:
-            _rio_shutil.copy(ds, dem_path, driver="GTiff")
-            copied = True
-        except Exception:
-            copied = False
-        if not copied:
-            # Windowed block copy: each read is bounded by ds.block_shapes[0].
-            with _rasterio.open(dem_path, "w", **dem_profile) as wdst:
-                for _, window in ds.block_windows(1):
-                    wdst.write(ds.read(1, window=window), 1, window=window)
-
-        gdal = _load_libgdal()
-
-        c_vp = ctypes.c_void_p
-        c_cp = ctypes.c_char_p
-        c_d = ctypes.c_double
-        c_i = ctypes.c_int
-
-        gdal.GDALAllRegister.restype = None
-        gdal.GDALOpen.argtypes = [c_cp, c_i]
-        gdal.GDALOpen.restype = c_vp
-        gdal.GDALGetRasterBand.argtypes = [c_vp, c_i]
-        gdal.GDALGetRasterBand.restype = c_vp
-        gdal.GDALClose.argtypes = [c_vp]
-        gdal.GDALViewshedGenerate.restype = c_vp
-        gdal.GDALViewshedGenerate.argtypes = [
-            c_vp,
-            c_cp,
-            c_cp,
-            c_vp,  # hBand, driver, targetRasterName, creationOpts(NULL)
-            c_d,
-            c_d,
-            c_d,
-            c_d,  # obsX, obsY, obsHeight, targetHeight
-            c_d,
-            c_d,
-            c_d,
-            c_d,
-            c_d,  # visibleVal, invisibleVal, outOfRangeVal, nodataVal, curvCoeff
-            c_i,  # eMode (GVM_Edge = 2)
-            c_d,  # maxDistance (0 = unlimited)
-            c_vp,
-            c_vp,  # pfnProgress(NULL), pProgressArg(NULL)
-            c_i,  # heightMode (GVOT_NORMAL = 1)
-            c_vp,  # extraOptions(NULL)
-        ]
-
-        gdal.GDALAllRegister()
-        ds_h = gdal.GDALOpen(dem_path.encode(), 0)  # GA_ReadOnly = 0
-        out_h = None
-        try:
-            band_h = gdal.GDALGetRasterBand(ds_h, 1)
-            out_h = gdal.GDALViewshedGenerate(
-                band_h,
-                b"GTiff",
-                out_path.encode(),
-                None,
-                float(observer_x),
-                float(observer_y),
-                float(observer_height),
-                float(target_height),
-                255.0,
-                0.0,
-                0.0,
-                0.0,
-                _CURV_COEFF,
-                _GVM_EDGE,
-                float(max_distance) if max_distance is not None else 0.0,
-                None,
-                None,
-                _GVOT_NORMAL,  # binary 0/255 mask
-                None,
-            )
-            if not out_h:
-                raise RuntimeError("rst_viewshed: GDALViewshedGenerate returned NULL")
-        finally:
-            if out_h:
-                gdal.GDALClose(out_h)
-            gdal.GDALClose(ds_h)
-
-        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed. With a max distance GDAL
-        # writes only the window around the observer, so its transform goes back with the array.
-        with _rasterio.open(out_path) as result_ds:
-            return result_ds.read(1).astype("uint8"), result_ds.transform
-    finally:
-        import shutil as _shutil
-
-        _shutil.rmtree(scratch, ignore_errors=True)
-
-
-def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_distance):
-    """Compute a binary viewshed (255 visible / 0 invisible) from band 1.
-
-    Mirrors the heavyweight ``gbx_rst_viewshed`` (``gdal.ViewshedGenerate``,
-    GVOT_NORMAL binary 0/255 mask).
-
-    ``GDALViewshedGenerate`` is called via ctypes against the bundled libgdal for
-    every DEM size, with the heavyweight's parameters (GVM_Edge, curvature
-    coefficient 0.85714, GVOT_NORMAL), so both tiers give the same mask. It streams
-    the DEM block-by-block (peak RSS ≈ GDAL cache, independent of DEM size).
-
-    The result is a single-band Byte (uint8) GTiff in the CRS of ``ds`` (no NoData;
-    0 = invisible), pixel-aligned with it. With a ``max_distance`` it is the window
-    around the observer (the observer's cell plus ``max_distance`` each way, clipped to
-    ``ds``), as the heavyweight returns it; without one it is the whole of ``ds``.
-
-    Args:
-        ds:              Open rasterio DatasetReader (the DEM).
-        observer_x:      Observer X in the raster's CRS (world units).
-        observer_y:      Observer Y in the raster's CRS (world units).
-        observer_height: Observer height above the DEM (>= 0).
-        target_height:   Target height above the DEM at each tested cell (>= 0).
-        max_distance:    Optional analysis-distance cap in CRS ground units;
-                         must be ``> 0`` and finite when given. ``None`` =
-                         unlimited (bounded only by the raster extent).
-
-    Returns:
-        Single-band uint8 GTiff bytes (255 visible / 0 invisible).
-    """
-    observer_height = float(observer_height)
-    target_height = float(target_height)
-    if (
-        not (observer_height >= 0.0)
-        or math.isinf(observer_height)
-        or math.isnan(observer_height)
-    ):
-        raise ValueError(
-            f"rst_viewshed: observer_height must be >= 0 and finite; got {observer_height}"
-        )
-    if (
-        not (target_height >= 0.0)
-        or math.isinf(target_height)
-        or math.isnan(target_height)
-    ):
-        raise ValueError(
-            f"rst_viewshed: target_height must be >= 0 and finite; got {target_height}"
-        )
-    if max_distance is not None:
-        max_distance = float(max_distance)
-        if (
-            not (max_distance > 0.0)
-            or math.isinf(max_distance)
-            or math.isnan(max_distance)
-        ):
-            raise ValueError(
-                f"rst_viewshed: max_distance must be > 0 and finite; got {max_distance}"
-            )
-
-    # Graceful out-of-bounds: an observer outside the raster extent has no valid
-    # line-of-sight origin. Mirror with an all-invisible (0) raster rather than
-    # crashing the job. The extent is the raster's edges, so an observer within half a
-    # pixel of one is inside, as it is for GDAL.
-    left, bottom, right, top = ds.bounds
-    transform = ds.transform
-    if not (left <= observer_x <= right and bottom <= observer_y <= top):
-        out = np.zeros((ds.height, ds.width), dtype="uint8")
-    else:
-        out, transform = _viewshed_gdal_ctypes(
-            ds, observer_x, observer_y, observer_height, target_height, max_distance
-        )
-
-    decoded_bytes = out.nbytes
-    profile = _comp.source_profile(ds.profile)
-    # The output's own grid: writing a window into the DEM's full-size profile would make
-    # GDAL resample it up to the DEM's size.
-    profile.update(
-        driver="GTiff",
-        count=1,
-        dtype="uint8",
-        nodata=None,
-        height=out.shape[0],
-        width=out.shape[1],
-        transform=transform,
-    )
-    profile.update(
-        _comp.creation_opts("uint8", decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out, 1)
-        return mf.read()
+    raise RuntimeError("libgdal not found in the bundled GDAL")
 
 
 # --- per-tower viewshed pipeline guards ------------------------------------

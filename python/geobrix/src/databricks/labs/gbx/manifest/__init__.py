@@ -126,6 +126,7 @@ GDAL_FIELD_TYPES = frozenset({"DOUBLE", "INT", "BIGINT", "STRING"})
 GDAL_BINDERS = frozenset(
     {
         "double",
+        "nonneg_double",
         "int",
         "bool",
         "choice",

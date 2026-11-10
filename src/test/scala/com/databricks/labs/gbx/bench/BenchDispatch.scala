@@ -17,7 +17,6 @@ import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
-import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
 import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
@@ -114,7 +113,7 @@ object BenchDispatch {
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
-    "rst_clip" -> EDIT, "rst_viewshed" -> ANALYSIS,
+    "rst_clip" -> EDIT,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
     // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
@@ -470,16 +469,6 @@ object BenchDispatch {
         argB(a, "cutline_all_touched", false))
       RasterDriver.releaseDataset(res._1)
       BenchFingerprint.empty
-    // timing-only: observer must be in-extent. A fixed (0,0) is outside the
-    // UTM/3857 tile ranges, so derive the observer from the tile center (the
-    // dataset geotransform + size), in the tile's own CRS. Output is not
-    // compared.
-    case "rst_viewshed" =>
-      val (ox, oy) = tileCenterXY(ds)
-      val res = RST_Viewshed.execute(ds, Map.empty, ox, oy,
-        argD(a, "observer_height", 2.0), argD(a, "target_height", 1.6), None)
-      RasterDriver.releaseDataset(res._1)
-      BenchFingerprint.empty
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -737,18 +726,6 @@ object BenchDispatch {
     finally if (!(out eq input)) RasterDriver.releaseDataset(out)
   }
 
-  // Tile center (x, y) in the dataset's own CRS, from the geotransform + size.
-  // GT = (originX, pixelW, rowRotation, originY, colRotation, pixelH); pixelH<0
-  // for north-up rasters. Center = origin + (size/2) along each axis.
-  private def tileCenterXY(ds: Dataset): (Double, Double) = {
-    val gt = ds.GetGeoTransform()
-    val w = ds.GetRasterXSize().toDouble
-    val h = ds.GetRasterYSize().toDouble
-    val cx = gt(0) + (w / 2.0) * gt(1) + (h / 2.0) * gt(2)
-    val cy = gt(3) + (w / 2.0) * gt(4) + (h / 2.0) * gt(5)
-    (cx, cy)
-  }
-
   // WKT of the tile's bounds box shrunk 50% about its center, in the tile's CRS.
   // Guarantees an in-extent cutline for the timing-only rst_clip on every CRS.
   private def shrunkBoundsBoxWkt(ds: Dataset): String = {
@@ -832,10 +809,6 @@ object BenchDispatch {
       case "rst_clip" =>
         import org.apache.spark.sql.functions.lit
         org.apache.spark.sql.functions.call_function("gbx_rst_clip", tile, lit(clipGeomWkt), lit(argB(a, "cutline_all_touched", false)))
-      case "rst_viewshed" =>
-        import org.apache.spark.sql.functions.lit
-        org.apache.spark.sql.functions.call_function("gbx_rst_viewshed", tile, lit("POINT (0 0)"),
-          lit(argD(a, "observer_height", 2.0)), lit(argD(a, "target_height", 1.6)))
       // bucket C, group C1/C2. tryopen takes the tile; fromcontent reads the
       // tile's raster (binary content) column; buildoverviews takes the tile +
       // an ARRAY<INT> levels literal. subdatasets / getsubdataset are

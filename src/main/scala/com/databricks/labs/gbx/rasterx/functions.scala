@@ -412,7 +412,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_band(tile: Column, bandIndex: Int): Column =
         rst_band(tile, lit(bandIndex))
 
-    // Analysis (proximity / viewshed) — Column form + scalar overloads
+    // Analysis (proximity) — Column form + scalar overloads
     // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
     // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
     // runs (this silently broke rst_proximity(tile)). eval maps NaN -> None. target_values stays a

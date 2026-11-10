@@ -53,10 +53,11 @@ from databricks.labs.gbx.rasterx import functions as rx
 from databricks.labs.gbx.vectorx import functions as vx
 
 
-def _engine_core(sql_name: str, values: dict) -> Callable:
+def _engine_core(sql_name: str, values) -> Callable:
     """The pure-core body of an engine-only row: the GDAL spec engine on the open dataset's GeoTIFF bytes,
     returning the result raster's bytes (what ``col_fn`` runs, minus Spark). Raises the engine's reason when
-    it has no raster."""
+    it has no raster. `values` is a dict, or a function of the open dataset that gives one (an argument that
+    depends on the tile, such as a point at its centre)."""
 
     def _core(ds):
         from databricks.labs.gbx import manifest
@@ -65,7 +66,7 @@ def _engine_core(sql_name: str, values: dict) -> Callable:
         res = run.run(
             manifest.load().functions[sql_name],
             [prx._dataset_to_gtiff_bytes(ds)],
-            dict(values),
+            dict(values(ds) if callable(values) else values),
         )
         if res.raster is None:
             raise RuntimeError(res.error)
@@ -185,8 +186,7 @@ _SAMPLE_POINT_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 # world point is in-extent across the multi-CRS corpus, and a fixed (0, 0)
 # observer falls outside the UTM/3857 tile x/y ranges. The core_fn derives the
 # observer from the tile center (``ds.bounds``) so it is in-extent on every CRS.
-# (Both tiers run GDALViewshedGenerate with the same parameters, so the masks
-# are comparable; the observer is what keeps it timing-only.) The col_fn is
+# (The observer is what keeps it timing-only.) The col_fn is
 # mode-filtered out (viewshed is pure-core-only), so the static WKB below is
 # unused at runtime and kept only for the col_fn signature.
 _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
@@ -1869,13 +1869,19 @@ REGISTRY: Dict[str, FnSpec] = {
         {"observer_height": 2.0, "target_height": 1.6},
         # Observer = tile center (in the tile's own CRS) so it is in-extent on
         # every CRS; a fixed (0,0) falls outside the UTM/3857 tile ranges.
-        core_fn=lambda ds, a: analysis_core.viewshed(
-            ds, *_tile_center_xy(ds), a["observer_height"], a["target_height"], None
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_viewshed",
+            lambda d: {
+                "observer_geom": shapely.geometry.Point(*_tile_center_xy(d)).wkt,
+                "observer_height": a["observer_height"],
+                "target_height": a["target_height"],
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_viewshed(
             t, F.lit(_VIEWSHED_OBSERVER_WKB), a["observer_height"], a["target_height"]
         ),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Viewshed.scala",),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),

@@ -74,7 +74,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs",
         "com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity",
-        "com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed",
         // gridx/bng
         "com.databricks.labs.gbx.gridx.bng.BNG_AsWKB",
         "com.databricks.labs.gbx.gridx.bng.BNG_AsWKT",

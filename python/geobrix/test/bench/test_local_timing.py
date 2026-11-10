@@ -135,6 +135,8 @@ _SE_DEM_SETS = tuple(
         "resample_to_res",
         "fillnodata",
         "summary",
+        "polygonize",
+        "viewshed",
     )
 )
 

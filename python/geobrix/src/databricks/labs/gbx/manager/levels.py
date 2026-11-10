@@ -223,6 +223,10 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # (c1). They took the same time in the local pass (1024 px Byte tiles of six classes, median of 3 runs, 24 / 96 / 384 tiles):
 # 1.1 / 3.4 / 12.6 s against 1.1 / 3.3 / 12.3 s (and 1.3 / 3.8 / 14.5 against 1.3 / 3.8 / 13.8 in the pass before). The row
 # UDTF is the default: it needs no Arrow capability. The rasterio UDTF it replaced took 2.1 / 6.9 / 25.7 s (2.0x).
+# The viewshed took the row-wise form in the local pass (1024 px DEM tiles, an observer at the centre of each, median of 3 runs,
+# two passes, c0 against c1 against a floor): 0.5 / 1.5 to 2.0 / 5.9 to 6.1 s against 0.6 to 1.3 / 2.0 to 2.3 / 6.0 to 6.1 s at 24 /
+# 96 / 384 tiles. The two meet the floor at 384 (the call itself costs about as much as reading the tile); c0 is faster at the
+# smaller rungs and needs no wrapper. The batch wrapper also types the geometry by its first session type (BINARY).
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -248,6 +252,7 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "fillnodata",
             "summary",
             "polygonize",
+            "viewshed",
         )
     },
 }

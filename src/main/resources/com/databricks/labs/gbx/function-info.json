@@ -1792,7 +1792,7 @@
     },
     "gbx_rst_viewshed": {
       "examples": "Examples:\n      > SELECT gbx_rst_viewshed(tile, 'POINT(-73.5 40.5)', 100.0, 1.6, 5000.0) AS vs FROM dem_rasters;",
-      "usage_args": "tile, observer_geom, observer_height, [target_height], [max_distance], [crs]",
+      "usage_args": "tile, observer_geom, [observer_height], [target_height], [max_distance], [crs]",
       "description": "Compute a binary viewshed from a DEM tile and an observer point.",
       "surfaces": [
         "session",

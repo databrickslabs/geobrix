@@ -46,7 +46,7 @@ Behavior changes that alter results or signatures:
 - [`bng_tessellate` defaults `keep_core_geom` to false](#bng-tessellate-default)
 - [Centroid tiles are cropped; heavyweight tiling keeps all-NoData windows](#tessellation-parity)
 - [NoData, alpha and mask bands follow one rule](#nodata-alpha-mask)
-- [Lightweight `rst_viewshed` uses GDAL's viewshed](#viewshed)
+- [`rst_viewshed` runs GDAL's `raster viewshed`](#viewshed)
 
 New:
 
@@ -669,17 +669,24 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A tile that cannot be read or rendered still returns a transparent PNG, never NULL.
 - **Corrupt tiles yield an error row again (fix).** The lightweight `rst_separatebands`, `rst_retile` and `rst_tooverlappingtiles` failed with `UDTF_RETURN_SCHEMA_MISMATCH` on an unreadable input. They emit one error tile (NULL raster, error in `metadata.last_error`).
 
-### Raster viewshed: GDAL's viewshed on both tiers (behavior change) {#viewshed}
+### Raster viewshed: GDAL's `raster viewshed` (behavior change) {#viewshed}
 
-- **The lightweight `rst_viewshed` uses GDAL's viewshed for every DEM size,** with the heavyweight tier's settings and line-of-sight mode. Small DEMs used xarray-spatial, and large DEMs another line-of-sight mode.
+- **`rst_viewshed` runs GDAL's `raster viewshed` in the worker,** in the edge line-of-sight mode with a curvature coefficient of 0.85714. Small DEMs used xarray-spatial, and large DEMs another line-of-sight mode.
   - A mask changes by a fraction of a percent on smooth terrain to a few percent on rough terrain.
   - xarray-spatial and `numba` are no longer needed.
   - There is no first-call compile delay.
-- **The lightweight `rst_viewshed` with a `max_distance` returns the window around the observer, as the heavyweight tier does (fix).** In v0.5.2 the lightweight tier was wrong on a DEM above its small-DEM size limit (about 366 × 366 pixels by default). The visible area came out several times too large and in the wrong place. The `rst_viewshed_towers` counts (`visible_px`, `total_px`) were inflated.
-  - The result is now the window: the observer's pixel plus `max_distance` each way, clipped to the DEM. It is aligned to the DEM's pixel grid.
+- **One rule places the observer.** A POINT in WKB, EWKB, WKT or EWKT is moved into the DEM's CRS. Its own CRS is its SRID, else the `crs` argument, else the DEM's CRS. A bad `crs` raises.
+  - `observer_height` is optional and defaults to 0. A NULL height is 0.
+  - A NULL `target_height` gives NULL. It used the default of 1.6.
+  - A POINT EMPTY, and text that is no geometry, raise.
+- **An observer outside the DEM is placed by GDAL,** which extends the DEM past its edge. It got an all-invisible raster.
+  - An observer within half a pixel of the DEM's edge gets a viewshed, as before.
+- **The call reads the whole tile.** A tile over the compute's read cap gives an error tile that says to retile it first. The earlier code streamed the DEM from disk.
+- **`rst_viewshed` with a `max_distance` returns the window around the observer (fix).** In v0.5.2 the lightweight tier was wrong on a DEM above its small-DEM size limit (about 366 × 366 pixels by default). The visible area came out several times too large and in the wrong place. The `rst_viewshed_towers` counts (`visible_px`, `total_px`) were inflated.
+  - The result is the window: the observer's pixel plus `max_distance` each way, clipped to the DEM. It is aligned to the DEM's pixel grid.
   - Without a `max_distance` it returns the whole DEM.
+  - Pixels beyond the distance but inside the window are 0, as before.
 - **Smaller changes.**
-  - An observer within half a pixel of the DEM's edge gets a viewshed. It got an all-invisible raster.
   - `rst_viewshed_towers` gives no row for a tower in a grid cell with no DSM tile.
 
 ### Raster tessellation and tiling: tier parity and large rasters (behavior change) {#tessellation-parity}

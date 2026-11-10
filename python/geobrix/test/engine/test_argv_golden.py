@@ -52,6 +52,49 @@ def test_a_refused_binding_names_the_value(case):
     assert case["names"] in str(exc.value) and fn.sql_name in str(exc.value)
 
 
+def _flat_raster(crs: str) -> bytes:
+    """A 3 x 3 Float32 GeoTIFF in `crs`."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    profile = dict(
+        driver="GTiff",
+        width=3,
+        height=3,
+        count=1,
+        dtype="float32",
+        crs=crs,
+        transform=from_origin(0, 3, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(np.zeros((1, 3, 3), dtype="float32"))
+        return mf.read()
+
+
+@pytest.mark.parametrize("case", GOLDEN["observer"], ids=lambda c: c["id"])
+def test_the_observer_is_placed_in_the_rasters_crs(case):
+    """The point is moved from its own CRS (its SRID, else the `crs` argument) into the raster's, x east and y north, and
+    written as x,y,height: the digits are OSR's, computed once in the container and pinned here.
+    """
+    from databricks.labs.gbx.engine import run
+
+    if run.unavailable_reason():
+        pytest.skip(run.unavailable_reason())
+    fn = MAN.functions["gbx_rst_viewshed"]
+    values = {
+        "observer_geom": case["geom"],
+        "observer_height": case["height"],
+        "target_height": 1.6,
+        "max_distance": None,
+        "crs": case["crs"],
+    }
+    res = run.run(fn, [_flat_raster(case["raster_crs"])], values)
+    assert res.error is None, res.error
+    assert f"--position={case['position']} " in res.command + " "
+
+
 def test_a_byte_hillshade_is_written_striped_not_tiled_and_compressed():
     """GDAL 3.13.3's `raster hillshade` leaves the NoData neighbours of a hole unmasked in a tiled, compressed Byte
     GeoTIFF (see `engine_creation_options`): the hillshade output is striped, every other output keeps its tiling.

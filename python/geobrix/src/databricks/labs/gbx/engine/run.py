@@ -392,6 +392,52 @@ def _read(gdal, name: str) -> bytes:
         gdal.VSIFCloseL(fh)
 
 
+def _position(
+    gdal, osr, sql_name: str, name: str, x: float, y: float, h: float, src_text: str
+) -> str:
+    """The observer as ``x,y,h`` in the CRS of the input `name`: moved from its own CRS when it has one that differs. Both
+    references take the traditional GIS axis order (x east, y north), so the same digits come out on every tier. A point
+    that cannot be moved into the input's CRS is a DataError.
+    """
+    ds = _open_source(gdal, sql_name, name, ("GTiff",))
+    try:
+        dst = ds.GetSpatialRef()
+        if src_text and dst is not None:
+            src = argv_mod._osr_reference(src_text)
+            dst = dst.Clone()
+            for sr in (src, dst):
+                sr.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+            if not src.IsSame(dst):
+                with osr.ExceptionMgr(useExceptions=True):
+                    try:
+                        x, y, _z = osr.CoordinateTransformation(
+                            src, dst
+                        ).TransformPoint(x, y)
+                    except RuntimeError as exc:
+                        raise DataError(
+                            f"{sql_name}: the observer cannot be moved into the raster's CRS ({exc})"
+                        ) from None
+                if not (math.isfinite(x) and math.isfinite(y)):
+                    raise DataError(
+                        f"{sql_name}: the observer cannot be moved into the raster's CRS"
+                    )
+    finally:
+        ds = None
+    f = argv_mod.fmt_double
+    return f"{f(x)},{f(y)},{f(h)}"
+
+
+def _place_observer(gdal, fn, values, tokens, name: str, command, shown):
+    """``(tokens, command)`` with the observer's placeholder replaced by its position in the input's CRS; both as they
+    were for a row without an observer."""
+    if argv_mod.observer_arg(fn) is None:
+        return tokens, command
+    obs = argv_mod.observer_of(fn, values)
+    pos = _position(gdal, argv_mod._osgeo().osr, fn.sql_name, name, *obs)
+    tokens = [t.replace(argv_mod.OBSERVER, pos) for t in tokens]
+    return tokens, _shown(" ".join([fn.gdal.alg] + tokens), shown)
+
+
 def _remask_zero_for_flat(gdal, src: str, out: str) -> None:
     """Aspect with ``--zero-for-flat``: GDAL drops the output's NoData value, so every cell it cannot compute (the
     border, a cell whose 3 x 3 window holds NoData) comes out 0, which reads as a valid aspect. Declare NoData -9999
@@ -1159,6 +1205,9 @@ def run(
             if 0 in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
             _prepare_input(gdal, fn, tokens, props, names, prefix, shown)
+            tokens, command = _place_observer(
+                gdal, fn, values, tokens, names[0], command, shown
+            )
             if block.out_kind == "json":
                 text = _execute(
                     gdal,

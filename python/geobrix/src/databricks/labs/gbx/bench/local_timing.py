@@ -224,6 +224,17 @@ SETS: Dict[str, SetSpec] = {
         ns=(24, 96, 384),
         fn="gbx_rst_polygonize",
     ),
+    # the viewshed, over replicated 1024 px DEM tiles from an observer at the centre of each, with its two light UDFs and a floor
+    "SE-viewshed": SetSpec(
+        mvp="SE",
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_viewshed",
+        peer_exempt=(
+            "engine-c1@mem",
+        ),  # the batch UDF behind the wrapper: recorded, not a peer
+    ),
     # the fill (every band, each by its own mask), over replicated 1024 px EPSG:4326 tiles with NoData holes, with its two light
     # UDFs and a floor
     "SE-fillnodata": SetSpec(

@@ -304,34 +304,12 @@ OPEN_SITES = {
         "the calc_bands_vrt fixture: a VRT over the GeoTIFF `_calc_file` wrote a line above, in the builder's scratch "
         "directory (GeoBrix's own fixture, never user data)",
     ),
-    ("pyrx/core/analysis.py", '_rio_shutil.copy(ds, dem_path, driver="GTiff")'): (
-        1,
-        "copies the DEM from the dataset the caller opened (through open_data or open_bytes); no name is opened here",
-    ),
-    (
-        "pyrx/core/analysis.py",
-        "ds_h = gdal.GDALOpen(dem_path.encode(), 0)  # GA_ReadOnly = 0",
-    ): (
-        1,
-        "the ctypes viewshed engine opens the DEM copy written a few lines above (GeoBrix's scratch file)",
-    ),
     (
         "pyrx/core/analysis.py",
         'rio_shutil.copy(_src, dst_path, driver="COG", **creation)',
     ): (
         1,
         "the COG conversion copies from the dataset open_data opened on the line above",
-    ),
-    (
-        "pyrx/core/analysis.py",
-        'with _rasterio.open(dem_path, "w", **dem_profile) as wdst:',
-    ): (
-        1,
-        "the windowed fallback writes GeoBrix's scratch DEM (a write, not a read of data)",
-    ),
-    ("pyrx/core/analysis.py", "with _rasterio.open(out_path) as result_ds:"): (
-        1,
-        "reads the viewshed output GDAL wrote into GeoBrix's scratch file",
     ),
     (
         "pyrx/core/xyz.py",
@@ -363,8 +341,8 @@ OPEN_SITES = {
         "the netCDF fixture is copied from the dataset open_data opened above (GDAL writes netCDF by copy, built locally then moved to the target); no name is opened here",
     ),
     ("bench/oracles.py", "ds = gdal.Open(name)"): (
-        2,
-        "the independent contour and polygonize references read the tile bytes the oracle wrote to a unique /vsimem name just above and unlink it after; no caller-supplied name is opened",
+        3,
+        "the independent contour, polygonize and viewshed references read the tile bytes the oracle wrote to a unique /vsimem name just above and unlink it after; no caller-supplied name is opened",
     ),
     (
         "bench/oracles.py",

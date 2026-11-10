@@ -57,6 +57,8 @@ _ENVELOPE_KEYS = frozenset(
     {"calc"} | {f"{v}_{k}" for v in _VARS for k in ("index", "band")}
 )
 _TEMPLATE_CACHE_SIZE = 512
+# The placeholder of the observer's position in a template: the point in the input's own CRS, written by the engine at run time.
+OBSERVER = "<observer>"
 _templates: "OrderedDict" = OrderedDict()
 _templates_lock = threading.Lock()
 _MISSING = object()
@@ -171,6 +173,11 @@ def _bind_value(fn, arg, value) -> Optional[str]:
         if math.isinf(x):
             raise _fail(fn, arg, f"{arg.source} must be finite (got {value})")
         return fmt_double(x)
+    if t == "nonneg_double":
+        x = float(value)
+        if not (math.isfinite(x) and x >= 0.0):
+            raise _fail(fn, arg, f"{arg.source} must be >= 0 and finite; got {value}")
+        return fmt_double(x)
     if t == "int":
         return str(int(value))
     if t == "bool":
@@ -251,7 +258,21 @@ def canonical_crs(text: str) -> str:
         crs = resolve_crs(v)
         auth = crs.to_authority(confidence_threshold=100)
         return f"{auth[0]}:{auth[1]}" if auth else crs.to_wkt()
+    return _export_crs(_osr_reference(v))
+
+
+def _osr_reference(text: str):
+    """The OSR reference of a CRS text (an integer code, ``AUTHORITY:CODE``, WKT or PROJJSON): the one parse of a CRS value in
+    the engine. File and network access are off, and the parse is judged as the JVM judges it, with osr's exceptions off: a
+    failing return, or a failure GDAL reports during it (PROJ cannot build the CRS, e.g. a required grid it cannot find,
+    which would otherwise leave a reprojection without its datum shift), raises a ValueError. The caller has already
+    judged the text's kind (``core.crs.crs_text_kind``).
+    """
+    from databricks.labs.gbx.core.crs import _is_intlike
+
+    b = _osgeo()
     gdal, osr = b.gdal, b.osr
+    v = text.strip()
     with osr.ExceptionMgr(useExceptions=False), gdal.ExceptionMgr(useExceptions=False):
         gdal.ErrorReset()
         sr = osr.SpatialReference()
@@ -264,8 +285,12 @@ def canonical_crs(text: str) -> str:
         if rc != 0 or gdal.GetLastErrorType() >= gdal.CE_Failure:
             why = gdal.GetLastErrorMsg() or f"OGR error {rc}"
             raise ValueError(f"GDAL cannot build the CRS ({why}). {CRS_BUILD_FIX}")
-        name, code = sr.GetAuthorityName(None), sr.GetAuthorityCode(None)
-        return f"{name}:{code}" if name and code else sr.ExportToWkt()
+        return sr
+
+
+def _export_crs(sr) -> str:
+    name, code = sr.GetAuthorityName(None), sr.GetAuthorityCode(None)
+    return f"{name}:{code}" if name and code else sr.ExportToWkt()
 
 
 _TEXT_MAX = 64 * 1024
@@ -690,6 +715,86 @@ def _sized_token(fn, a, values, first: "RasterProps") -> str:
     )
 
 
+def observer_arg(fn):
+    """The ``observer_xy`` argument of a row, or None."""
+    return next((a for a in fn.gdal.args if a.type == "observer_xy"), None)
+
+
+def _observer_source_crs(fn, a, geom, values: Mapping[str, Any]) -> str:
+    """The canonical text of the CRS the observer is in, or "" when it has none (it is then in the raster's own CRS).
+
+    Rule 1: a geometry's embedded SRID wins, else the row's ``crs`` parameter, else none. The text is bound as every
+    target CRS is (``canonical_crs``), so a value that names a file or a URL is refused.
+    """
+    import shapely
+
+    srid = int(shapely.get_srid(geom))
+    text = str(srid) if srid > 0 else values.get("crs")
+    if text is None or str(text).strip() == "":
+        return ""
+    try:
+        return canonical_crs(str(text))
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - any refusal or parse failure is this value's
+        raise ParamError(
+            f"{fn.sql_name}: crs: {str(exc).removeprefix('resolve_crs: ')}"
+        ) from None
+
+
+def observer_of(
+    fn, values: Mapping[str, Any]
+) -> Optional[Tuple[float, float, float, str]]:
+    """``(x, y, height, source CRS text)`` of the observer a ``observer_xy`` argument binds, or None for a NULL geometry (the
+    result is NULL).
+
+    The geometry is a POINT as WKB, EWKB, WKT or EWKT; any other geometry, and text that is no geometry, raises a
+    ParamError naming the parameter. A NULL height is 0.0, and a height that is negative or not finite raises. The
+    source CRS is "" when the observer has none; the engine puts the point in the input's own CRS at run time
+    (``run._position``).
+    """
+    a = observer_arg(fn)
+    geom_in, height = values.get(a.source), values.get(a.and_)
+    if _is_null(geom_in):
+        return None
+    from databricks.labs.gbx._geom import parse_geom
+
+    if isinstance(geom_in, (bytes, bytearray, memoryview)) and bytes(
+        geom_in[:1]
+    ) not in (
+        b"\x00",
+        b"\x01",
+    ):
+        # A WKB starts with its byte order (0 or 1). Text that came as bytes is WKT or EWKT: the batch form's SQL wrapper
+        # types the geometry by its first session type (BINARY), which casts a STRING argument to its UTF-8 bytes.
+        try:
+            geom_in = bytes(geom_in).decode("utf-8")
+        except UnicodeDecodeError:
+            pass
+    try:
+        geom = parse_geom(geom_in)
+    except Exception:  # noqa: BLE001 - text or bytes that are no geometry
+        geom = None
+    if geom is None:
+        raise ParamError(
+            f"{fn.sql_name}: {a.source} is not a geometry (WKB, EWKB, WKT or EWKT)"
+        )
+    if geom.geom_type != "Point":
+        raise ParamError(
+            f"{fn.sql_name}: {a.source} must be a POINT (got {geom.geom_type.upper()})"
+        )
+    if geom.is_empty or not (math.isfinite(geom.x) and math.isfinite(geom.y)):
+        raise ParamError(
+            f"{fn.sql_name}: {a.source} must be a POINT with finite coordinates"
+        )
+    h = 0.0 if _is_null(height) else float(height)
+    if not (math.isfinite(h) and h >= 0.0):
+        raise ParamError(
+            f"{fn.sql_name}: {a.and_} must be >= 0 and finite; got {height}"
+        )
+    return float(geom.x), float(geom.y), h, _observer_source_crs(fn, a, geom, values)
+
+
 # The bands of a result by algorithm, where they are not the input's: a terrain algorithm writes one band, a color
 # relief up to four (RGB and an alpha band). A reprojection keeps the input's bands; a calc's come from its expression.
 _OUT_BANDS = {
@@ -699,6 +804,7 @@ _OUT_BANDS = {
     "raster tri": 1,
     "raster tpi": 1,
     "raster roughness": 1,
+    "raster viewshed": 1,
     "raster color-map": 4,
 }
 
@@ -815,6 +921,8 @@ def _special_token(fn, a, v) -> Optional[str]:
             raise _fail(fn, a, f"{a.source} must be non-empty (got '{v}')")
         return f"--{a.arg}={a.map['*']}"
     if a.type == "positive_double":
+        if _is_null(v) and a.null == "omit":
+            return ""  # no limit: GDAL's own default
         if _is_null(v) or not 0.0 < float(v) < math.inf:
             why = f"{a.when_empty} is empty so " if a.when_empty else ""
             got = "NULL" if v is None else v
@@ -905,6 +1013,7 @@ def _null_argument(block, values: Mapping[str, Any]) -> bool:
         and a.with_ is None
         and a.when_empty is None
         and a.type not in _SPECIAL
+        and a.type != "observer_xy"
         and not a.type.startswith("calc_")
         and _is_null_value(a, values.get(a.source), values)
         for a in block.args
@@ -956,6 +1065,13 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             continue
         if a.when_empty is not None and _has_items(values.get(a.when_empty)):
             continue  # the fixed values replace this argument (levels over an interval)
+        if a.type == "observer_xy":
+            if observer_of(fn, values) is None:
+                return None
+            tokens.append(
+                f"--{a.arg}={OBSERVER}"
+            )  # the engine writes the point at run time (run._position)
+            continue
         if a.type in _SPECIAL:
             tok = _special_token(fn, a, values.get(a.source))
             if tok is None:

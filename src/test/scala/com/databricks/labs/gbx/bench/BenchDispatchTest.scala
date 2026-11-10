@@ -67,7 +67,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_aspect, tpi, roughness and color_relief (measured under 1.2x of light) and the orphan rst_hillshade left with
     // their companions: 71 - 5 = 66.
     // rst_polygonize left with its companion (its light level is the GDAL spec engine's table function): 66 - 1 = 65.
-    assert(BenchDispatch.all.size == 65)
+    // rst_viewshed left with its expression (its light level is the GDAL spec engine): 65 - 1 = 64.
+    assert(BenchDispatch.all.size == 64)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")

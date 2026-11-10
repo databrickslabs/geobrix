@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
-import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_Proximity, RST_Viewshed}
+import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
@@ -18,7 +18,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.util.UUID
 
 /**
-  * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve / proximity / viewshed /
+  * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve / proximity /
   * band / DEM) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
   * the Databricks image preview) when the caller passes no `compression` option. The default is decided in two places that have to agree: the
   * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
@@ -78,17 +78,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
     /** The 32x32 ramp of [[withRamp]], unreleased (for a consumer that owns its input). */
     private def ramp(name: String): Dataset =
         buildRamp(mem(name), 32, 32, 1, gdalconstConstants.GDT_Float32, Array(-0.0160, 0.001, 0.0, 51.5160, 0.0, -0.001))
-
-    /** A 32x32 float32 ramp in a metric CRS (EPSG:32633, 1 m pixels, origin (0, 32)); viewshed needs linear units. */
-    private def withMetricRamp(name: String)(f: Dataset => Unit): Unit = {
-        withRamp(name) { src =>
-            val srs = new org.gdal.osr.SpatialReference()
-            srs.ImportFromEPSG(32633)
-            src.SetProjection(srs.ExportToWkt())
-            src.SetGeoTransform(Array(0.0, 1.0, 0.0, 32.0, 0.0, -1.0))
-            f(src)
-        }
-    }
 
     /** The codec GDAL recorded for the serialized tile (IMAGE_STRUCTURE / COMPRESSION), read back from the bytes. */
     private def storedCompression(bytes: Array[Byte]): String = {
@@ -202,21 +191,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             finally RasterDriver.releaseDataset(out)
 
             val (lzw, lzwMeta) = RST_Proximity.execute(src, Map("compression" -> "LZW"), Some("1"), "PIXEL", None)
-            try assertCodec(lzw, lzwMeta, "LZW")
-            finally RasterDriver.releaseDataset(lzw)
-        }
-    }
-
-    test("RST_Viewshed.execute defaults to DEFLATE and honours an incoming compression") {
-        withMetricRamp("view.tif") { src =>
-            // RST_Viewshed.execute(ds: Dataset, options: Map[String, String], observerX: Double,
-            //     observerY: Double, observerHeight: Double, targetHeight: Double,
-            //     maxDistance: Option[Double]): (Dataset, Map[String, String])
-            val (out, meta) = RST_Viewshed.execute(src, Map.empty, 16.0, 16.0, 100.0, 1.6, None)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-
-            val (lzw, lzwMeta) = RST_Viewshed.execute(src, Map("compression" -> "LZW"), 16.0, 16.0, 100.0, 1.6, None)
             try assertCodec(lzw, lzwMeta, "LZW")
             finally RasterDriver.releaseDataset(lzw)
         }

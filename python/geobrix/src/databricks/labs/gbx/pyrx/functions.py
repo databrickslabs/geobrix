@@ -15,7 +15,6 @@ import dataclasses
 import functools
 import itertools
 import json
-import math
 import os
 import threading
 import warnings
@@ -2555,102 +2554,6 @@ def _isoband_udf(tile, breaks):
         return None
     with _open_or_none(tile) as ds:
         return None if ds is None else features.isoband(ds, breaks)
-
-
-def _viewshed_bytes(
-    tile, observer_geom, observer_height, target_height, max_distance, crs=None
-):
-    from databricks.labs.gbx._geom import parse_geom
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    geom = parse_geom(
-        observer_geom
-    )  # a POINT as WKB, EWKB, WKT or EWKT (checked by _check_viewshed)
-    oh = float(observer_height)
-    th = 1.6 if target_height is None else float(target_height)
-    md = None if max_distance is None else float(max_distance)
-    with _open_op(tile) as ds:
-        # CRS-align the observer (Rule 1): embedded SRID wins; else the explicit
-        # `crs` (int SRID or CRS string incl. ESRI/WKT); else assume aligned. When
-        # a source CRS is known and the raster has a CRS, reproject so a 4326
-        # observer over a UTM DEM lands correctly. Transform failure -> use as-is.
-        import shapely as _shapely
-
-        from databricks.labs.gbx.pyrx.core.crs import (
-            get_transformer,
-            resolve_source_crs,
-        )
-
-        ox, oy = geom.x, geom.y
-        src_crs = resolve_source_crs(_shapely.get_srid(geom), crs=crs)
-        if src_crs is not None and ds.crs is not None:
-            try:
-                if src_crs != ds.crs:
-                    ox, oy = get_transformer(src_crs, ds.crs).transform(ox, oy)
-            except Exception:
-                ox, oy = geom.x, geom.y
-        return analysis_core.viewshed(ds, ox, oy, oh, th, md)
-
-
-def _check_viewshed(
-    *, observer_geom, observer_height, target_height=None, max_distance=None, **_
-):
-    from databricks.labs.gbx._geom import parse_geom
-
-    geom = parse_geom(observer_geom)
-    if geom is None:
-        raise ValueError(
-            f"rst_viewshed: observer_geom {observer_geom!r} is not a geometry (WKB, EWKB, WKT or EWKT)"
-        )
-    if geom.geom_type != "Point":
-        raise ValueError(
-            f"rst_viewshed requires a POINT observer_geom; got {geom.geom_type}"
-        )
-    for name, v in (
-        ("observer_height", observer_height),
-        ("target_height", target_height),
-    ):
-        if v is not None and not (math.isfinite(float(v)) and float(v) >= 0):
-            raise ValueError(f"rst_viewshed: {name} must be >= 0 and finite; got {v}")
-    if max_distance is not None and not (
-        math.isfinite(float(max_distance)) and float(max_distance) > 0
-    ):
-        raise ValueError(
-            f"rst_viewshed: max_distance must be > 0 and finite; got {max_distance}"
-        )
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("observer_geom", "observer_height", check=_check_viewshed)
-def _viewshed_udf(
-    tile, observer_geom, observer_height, target_height=1.6, max_distance=None, crs=None
-):
-    new_bytes = _viewshed_bytes(
-        tile, observer_geom, observer_height, target_height, max_distance, crs
-    )
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("observer_geom", "observer_height", check=_check_viewshed)
-def _viewshed_v2_udf(
-    tile,
-    observer_geom,
-    observer_height,
-    target_height,
-    max_distance,
-    crs,
-    virtualize_dir,
-    virtualize_prefix,
-    materialize,
-):
-    new_bytes = _viewshed_bytes(
-        tile, observer_geom, observer_height, target_height, max_distance, crs
-    )
-    return _shaped_result_row(
-        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
-    )
 
 
 def _cog_convert_bytes(tile, compression, blocksize, overview_resampling):

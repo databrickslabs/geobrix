@@ -400,7 +400,7 @@ The compute under each UDF shape comes from established Python libraries.
 | **NumPy** (Horn 3 by 3) | Terrain analysis: slope, aspect, hillshade, TRI, TPI, roughness |
 | **SciPy** | Focal filters (`rst_filter`, `rst_convolve`). Delaunay triangulation and interpolation for the TIN functions. |
 | **rio-tiler** | XYZ and web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
-| **GDAL** (`GDALViewshedGenerate`) | Viewshed |
+| **GDAL** (`raster viewshed`) | Viewshed |
 | **shapely** | WKB geometry handling: clip, polygonize, rasterize, grid aggregation, legacy-struct decode |
 | **pyogrio** | Vector reader I/O in Arrow-native columnar batches |
 | **mapbox-vector-tile** | MVT protobuf encode and decode (`st_asmvt`, `st_asmvt_pyramid`) |

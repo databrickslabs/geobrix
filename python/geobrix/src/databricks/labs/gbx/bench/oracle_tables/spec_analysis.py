@@ -19,6 +19,10 @@ VS = "gbx_rst_viewshed"
 # The observer of the viewshed rows: pixel (6, 10) of the 21 x 21 `vs_wall` DEM (10 m pixels from (400000, 5760000)).
 OBSERVER = "POINT(400065 5759895)"
 OBSERVER_WKB = bytes.fromhex("010100000000000000046b1841000000c0e5f85541")
+# The same cell in EPSG:4326 (pyproj's longitude and latitude of (400065, 5759895)), as text and as EWKB with the SRID.
+OBSERVER_4326 = "POINT(3.593845041412763 45.87221388776825)"
+OBSERVER_EWKT = "SRID=4326;" + OBSERVER_4326
+OBSERVER_EWKB = bytes.fromhex("0101000020E6100000A0133ED431C00C40738A65B4A4EF4640")
 STATS, VIRT, ERR = Build("acc_stats"), Build("tile_virtual"), Build("tile_error")
 CLASSES, DEM, CORRUPT = (
     Build("analysis_classes"),
@@ -324,6 +328,119 @@ SPEC_ANALYSIS = (
         ONLY,
     ),
     Case("viewshed_negative_height", VS, (WALL, OBSERVER, -1.0), "raises", "-1", ONLY),
+    # the observer's CRS: an embedded SRID wins, then the `crs` argument, then the tile's own CRS
+    Case(
+        "viewshed_ewkt_observer",
+        VS,
+        (WALL, OBSERVER_EWKT, 2.0),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    Case(
+        "viewshed_ewkb_observer",
+        VS,
+        (WALL, OBSERVER_EWKB, 2.0),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    Case(
+        "viewshed_crs_argument",
+        VS,
+        (WALL, OBSERVER_4326, 2.0, 1.6, None, "EPSG:4326"),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    Case(
+        "viewshed_srid_wins_over_crs",
+        VS,
+        (WALL, OBSERVER_EWKT, 2.0, 1.6, None, "EPSG:3857"),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    Case(
+        "viewshed_bad_crs",
+        VS,
+        (WALL, OBSERVER_4326, 2.0, 1.6, None, "not a crs"),
+        "raises",
+        "crs",
+        ONLY,
+    ),
+    # a NULL observer height is 0, as an absent one: the same mask as GDAL's call with a height of 0
+    Case(
+        "viewshed_null_height",
+        VS,
+        (WALL, OBSERVER, None),
+        "ref",
+        "viewshed_gdal",
+        ONLY,
+    ),
+    Case("viewshed_default_height", VS, (WALL, OBSERVER), "ref", "viewshed_gdal", ONLY),
+    Case(
+        "viewshed_target_height",
+        VS,
+        (WALL, OBSERVER, 2.0, 30.0),
+        "ref",
+        "viewshed_gdal",
+        ONLY,
+    ),
+    # a distance limit: the window around the observer, with the values of GDAL's own call
+    Case(
+        "viewshed_max_distance_values",
+        VS,
+        (WALL, OBSERVER, 2.0, 1.6, 30.0),
+        "ref",
+        "viewshed_gdal",
+        ONLY,
+    ),
+    Case(
+        "viewshed_null_max_distance",
+        VS,
+        (WALL, OBSERVER, 2.0, 1.6, None),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    Case(
+        "viewshed_zero_max_distance",
+        VS,
+        (WALL, OBSERVER, 2.0, 1.6, 0.0),
+        "raises",
+        "max_distance",
+        ONLY,
+    ),
+    Case(
+        "viewshed_negative_target",
+        VS,
+        (WALL, OBSERVER, 2.0, -1.0),
+        "raises",
+        "target_height",
+        ONLY,
+    ),
+    Case("viewshed_null_target", VS, (WALL, OBSERVER, 2.0, None), "null", None, ONLY),
+    # an observer outside the DEM is placed by GDAL, which extends the DEM: the same mask as its own call
+    Case(
+        "viewshed_outside_dem",
+        VS,
+        (WALL, "POINT(399000 5761000)", 2.0),
+        "ref",
+        "viewshed_gdal",
+        ONLY,
+    ),
+    Case(
+        "viewshed_not_a_geometry",
+        VS,
+        (WALL, "not wkt", 2.0),
+        "raises",
+        "geometry",
+        ONLY,
+    ),
+    Case(
+        "viewshed_empty_point", VS, (WALL, "POINT EMPTY", 2.0), "raises", "POINT", ONLY
+    ),
     Case("viewshed_null_tile", VS, (None, OBSERVER, 2.0), "null", None, ONLY),
     Case("viewshed_null_observer", VS, (WALL, None, 2.0), "null", None, ONLY),
     Case(

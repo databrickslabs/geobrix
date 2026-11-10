@@ -2505,6 +2505,31 @@ FORMS["SE"] += [
 ]
 
 
+# The viewshed over the same replicated 1024 px DEM tiles (10 m pixels from (400000, 5760000), EPSG:3857) from an observer at the
+# centre of each tile, a mast of 10 m: the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor.
+_SE_VIEWSHED_CALL = "{fn}(tile, 'POINT(405120 5754880)', 10.0)"
+FORMS["SE"] += [
+    _se(
+        "gbx_rst_viewshed",
+        "L3",
+        f"{v}@mem",
+        "se_dem_1024_mem",
+        _SE_FP.format(call=_SE_VIEWSHED_CALL),
+    )
+    for v in ("engine-c0", "engine-c1")
+] + [
+    _se(
+        "gbx_rst_viewshed",
+        "L3",
+        "floor-c0@mem",
+        "se_dem_1024_mem",
+        _SE_FP.format(call="gbx_bench_floor_c0(tile)"),
+        setup="setup_se_floor",
+        register=False,
+    )
+]
+
+
 # --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
 #
 # The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF

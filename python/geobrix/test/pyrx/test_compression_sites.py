@@ -541,12 +541,6 @@ def _case_proximity(tmp_path):
     return _on_ycbcr(lambda ds: proximity(ds, None, "PIXEL", None))
 
 
-def _case_viewshed(tmp_path):
-    from databricks.labs.gbx.pyrx.core.analysis import viewshed
-
-    return _on_ycbcr(lambda ds: viewshed(ds, 500320.0, 4490320.0, 2.0, 0.0, None))
-
-
 def _case_derivedband(tmp_path):
     from databricks.labs.gbx.pyrx.core.derivedband import derivedband
 
@@ -648,7 +642,6 @@ _YCBCR_OPS = [
     (_case_windowed_materialize_bytes, 3),
     (_case_tile_to_bytes, 3),
     (_case_proximity, 1),
-    (_case_viewshed, 1),
     (_case_derivedband, 1),
     (_case_cog_convert, 3),
     (_case_encode_tile_gtiff, 3),

@@ -6039,7 +6039,7 @@ def rst_upperlefty(
 def rst_viewshed(
     tile: ColLike,
     observer_geom: ColLike,
-    observer_height: ColLike,
+    observer_height: ColLike = None,
     target_height: ColLike = None,
     max_distance: ColLike = None,
     crs: ColLike = None,
@@ -6053,7 +6053,8 @@ def rst_viewshed(
         tile: The DEM tile.
         observer_geom: The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS
             (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises.
-        observer_height: The observer's height above the DEM, 0 or more.
+        observer_height: The observer's height above the DEM, 0 or more. NULL is 0. SQL
+            default: ``0.0``.
         target_height: The height of the target above the DEM at each cell, 0 or more.
             SQL default: ``1.6``.
         max_distance: The largest distance to analyse in the DEM's CRS units, above 0.
@@ -6070,7 +6071,7 @@ def rst_viewshed(
         observer gives NULL; an error tile comes out as itself; a tile that cannot be
         read gives an error tile.
 
-    SQL: ``gbx_rst_viewshed(tile, observer_geom, observer_height, [target_height], [max_distance], [crs])``
+    SQL: ``gbx_rst_viewshed(tile, observer_geom, [observer_height], [target_height], [max_distance], [crs])``
     """
     if _api.forced(virtualize_dir, virtualize_prefix, materialize):
         return _api.force_output(

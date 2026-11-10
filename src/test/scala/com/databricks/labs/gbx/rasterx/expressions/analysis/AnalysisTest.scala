@@ -9,7 +9,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for the analysis expressions (proximity, viewshed).
+/** Direct-execute tests for the analysis expressions (proximity).
  *
  *  Each test builds a tiny synthetic raster with a property the corresponding
  *  GDAL primitive must respect, invokes `execute(...)` directly (no Spark),
@@ -114,41 +114,6 @@ class AnalysisTest extends AnyFunSuite with BeforeAndAfterAll {
             val far = pixel(out, 0, 0)
             far should be > 10.0
             far shouldBe (math.sqrt(200.0) +- 0.5)
-        } finally {
-            src.delete()
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // RST_Viewshed
-    // ------------------------------------------------------------------
-
-    test("RST_Viewshed over a uniform-height DEM is fully visible (every pixel == visible)") {
-        // 31x31 EPSG:32633 (metric) raster, uniform 0 m elevation. Observer at
-        // the center with height 100 m has unobstructed sight everywhere.
-        // Use a projected CRS so observer coords are in metres.
-        val src = buildRaster(31, 31, (_, _) => 0.0, epsg = 32633)
-        // Override geotransform to a metric one centered on (1500, 1500): pixel
-        // (0,0) is upper-left at (0, 31), pixel (15,15) at (15.5, 15.5).
-        src.SetGeoTransform(Array(0.0, 1.0, 0.0, 31.0, 0.0, -1.0))
-        try {
-            // Observer center: world coords ~ (15.5, 15.5). Top-down y-axis means
-            // pixel (15, 15) maps to world (15.5, 15.5).
-            val (out, _) = track(RST_Viewshed.execute(
-                src, Map.empty,
-                observerX = 15.5, observerY = 15.5,
-                observerHeight = 100.0, targetHeight = 1.6,
-                maxDistance = None
-            ))
-            out should not be null
-            val pixels = readAllPixels(out)
-            // Visible = 255, invisible = 0. With flat terrain + 100 m observer
-            // every pixel inside the raster MUST be visible.
-            val visibleCount = pixels.count(_ >= 254.0)
-            val total = pixels.length
-            // Allow a few border cells at most (some viewshed implementations
-            // mark the very edge as out-of-range); require >= 90% visible.
-            (visibleCount.toDouble / total) should be >= 0.9
         } finally {
             src.delete()
         }

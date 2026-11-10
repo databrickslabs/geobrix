@@ -58,7 +58,10 @@ def test_every_allowed_and_engine_argument_exists(usage, alg):
     names = set(_args(usage[alg]))
     want = set(MAN.gdal.allow[alg]) | _ENGINE_ARGS_BY_KIND[_KIND_OF[alg]]
     assert want <= names, sorted(want - names)
-    assert ("num-threads" in names) == (alg in spec.THREADED)
+    # `raster viewshed` lists --num-threads, but GDAL refuses it outside its cumulative mode, which the engine does not use
+    assert ("num-threads" in names) == (
+        alg in spec.THREADED or alg == "raster viewshed"
+    )
 
 
 @pytest.mark.parametrize(

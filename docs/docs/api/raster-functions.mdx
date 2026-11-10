@@ -6339,32 +6339,32 @@ Compute a Float32 raster where each pixel holds the exact Euclidean distance to 
 
 | Surface | Call | Returns |
 |---|---|---|
-| SQL (session) | `gbx_rst_viewshed(tile, observer_geom, observer_height, [target_height], [max_distance], [crs])` | `TILE` |
-| Python | `rasterx.functions.rst_viewshed(tile, observer_geom, observer_height, target_height=None, max_distance=None, crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
+| SQL (session) | `gbx_rst_viewshed(tile, observer_geom, [observer_height], [target_height], [max_distance], [crs])` | `TILE` |
+| Python | `rasterx.functions.rst_viewshed(tile, observer_geom, observer_height=None, target_height=None, max_distance=None, crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `tile` | `TILE` |  | The DEM tile. |
 | `observer_geom` | `BINARY` or `STRING` |  | The observer: a POINT as WKB, EWKB, WKT or EWKT, in the DEM's CRS (an SRID in EWKB or EWKT wins over `crs`). Any other geometry raises. |
-| `observer_height` | `DOUBLE` |  | The observer's height above the DEM, 0 or more. |
+| `observer_height` | `DOUBLE` | `0.0` | The observer's height above the DEM, 0 or more. NULL is 0. |
 | `target_height` | `DOUBLE` | `1.6` | The height of the target above the DEM at each cell, 0 or more. |
 | `max_distance` | `DOUBLE` | `NULL` | The largest distance to analyse in the DEM's CRS units, above 0. NULL for no limit: the whole DEM. A limit gives the window around the observer. |
 | `crs` | `STRING` | `NULL` | The CRS of the observer when it has no SRID (`EPSG:n`, `ESRI:n` or WKT). NULL means the DEM's CRS. |
 {/* END GENERATED gbx_rst_viewshed */}
 
 :::note Implementation
-Runs GDAL's viewshed (`GDALViewshedGenerate`) with the same settings as the JVM level. Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer.
+Runs GDAL's `raster viewshed` in the worker, in its edge line-of-sight mode with a curvature coefficient of 0.85714. Returns a Byte tile (255 visible, 0 invisible) from a DEM tile and a POINT observer.
 :::
 
 :::info Changed in 0.6.0
-With a `maxDistance`, the Python level returns the window around the observer, aligned to the DEM's pixel grid. The JVM level always did. In v0.5.2, DEMs above the small-DEM limit (about 366 × 366 pixels by default) stretched that window over the whole DEM.
+With a `maxDistance`, the result is the window around the observer, aligned to the DEM's pixel grid. In v0.5.2, DEMs above the small-DEM limit (about 366 × 366 pixels by default) stretched that window over the whole DEM.
 :::
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is a WKB / WKT POINT. It is reprojected from its source CRS to the raster CRS. An EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else the point is assumed already aligned. Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible or out of range) from a DEM tile and an observer POINT. The observer is a WKB, EWKB, WKT or EWKT POINT. The call moves it from its own CRS into the DEM's CRS. An embedded SRID wins, then the optional `crs` argument, then the DEM's own CRS. Any other geometry raises. A NULL `observer_height` is 0, and a NULL `target_height` gives NULL. Heights are above the DEM at each pixel. A `max_distance` limits the search radius; NULL means no limit. An observer outside the DEM is placed by GDAL, which extends the DEM past its edge. The call reads the whole tile, so a tile over the compute's read cap gives an error tile that says to retile it first. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_viewshed"

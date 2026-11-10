@@ -3538,6 +3538,67 @@ def _ref_viewshed_wall(args):
     return out, np.zeros(out.shape, bool)
 
 
+def _ref_viewshed_gdal(args):
+    """GDAL's older `gdal.ViewshedGenerate` (GVM_Edge, curvature 0.85714, visible 255, invisible and out-of-range 0) on band 1
+    of the tile `args[0]` (written under a `/vsimem` name), an entry point apart from the `raster viewshed` algorithm the
+    engine runs. The observer is `args[1]` (a POINT; its embedded SRID, else `args[5]`, else the tile's own CRS, moved into
+    the tile's CRS by pyproj), its height `args[2]` (NULL is 0), the target height `args[3]` (1.6 when absent) and the
+    distance limit `args[4]` (none when absent): the window GDAL writes, as 255 / 0 values.
+    """
+    import uuid
+
+    import numpy as np
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.core.crs import get_transformer, resolve_source_crs
+
+    n = len(args)
+    height = float(args[2]) if n > 2 and args[2] is not None else 0.0
+    target = float(args[3]) if n > 3 and args[3] is not None else 1.6
+    limit = float(args[4]) if n > 4 and args[4] is not None else 0.0
+    geom = parse_geom(args[1])
+    x, y = geom.x, geom.y
+    with _ref_dataset(args) as rio:
+        tile_crs = rio.crs
+    src = resolve_source_crs(shapely.get_srid(geom), crs=args[5] if n > 5 else None)
+    if src is not None and tile_crs is not None and src != tile_crs:
+        x, y = get_transformer(src, tile_crs).transform(x, y)
+    b = _osgeo.bindings("the viewshed reference")
+    gdal = b.gdal
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    out = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        res = gdal.ViewshedGenerate(
+            ds.GetRasterBand(1),
+            "GTiff",
+            out,
+            [],
+            float(x),
+            float(y),
+            height,
+            target,
+            255.0,
+            0.0,
+            0.0,
+            0.0,
+            0.85714,
+            gdal.GVM_Edge,
+            limit,
+        )
+        if res is None:
+            raise RuntimeError(f"ViewshedGenerate failed: {gdal.GetLastErrorMsg()}")
+        got = res.ReadAsArray().astype("float64")
+        return got, np.zeros(got.shape, bool)
+    finally:
+        res = ds = None
+        gdal.Unlink(name)
+        gdal.Unlink(out)
+
+
 def _ref_color_relief(args):
     """rst_color_relief of the DEM args[0] through the table text args[1] (oracle_refs.color_relief)."""
     from databricks.labs.gbx.bench import oracle_refs
@@ -3653,6 +3714,7 @@ _REFS = {
     "agg_derived_sum": _ref_agg_derived_sum,
     "agg_frombands": _ref_agg_frombands,
     "viewshed_wall": _ref_viewshed_wall,
+    "viewshed_gdal": _ref_viewshed_gdal,
     "color_relief": _ref_color_relief,
     "combine_avg": _ref_combine("avg"),
     "combine_count": _ref_combine("count"),

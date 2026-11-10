@@ -1,9 +1,7 @@
-"""Spark-free RasterX *Analysis* ports: proximity (distance-to-source),
-COG conversion and contour extraction.
+"""Spark-free RasterX *Analysis* ports: proximity (distance-to-source) and COG conversion.
 
-Faithful ports of the heavyweight ``gbx_rst_proximity`` (``gdal.ComputeProximity``),
-``gbx_rst_cog_convert`` (``gdal.Translate -of COG``) and ``gbx_rst_contour``
-(``gdal.ContourGenerateEx``) expressions, implemented without the JAR:
+Faithful ports of the heavyweight ``gbx_rst_proximity`` (``gdal.ComputeProximity``) and
+``gbx_rst_cog_convert`` (``gdal.Translate -of COG``) expressions, implemented without the JAR:
 
   * ``proximity`` uses ``scipy.ndimage.distance_transform_edt`` (scipy is already
     a pyrx dependency) instead of GDAL's ComputeProximity.
@@ -12,10 +10,9 @@ Faithful ports of the heavyweight ``gbx_rst_proximity`` (``gdal.ComputeProximity
     array without re-decoding (unlike rio-cogeo's ``cog_translate``), keeping
     peak RSS at ~2.8× the decoded tile size — safe under Databricks Serverless's
     1 GB Python UDF cap.
-  * ``contour`` uses ``skimage.measure.find_contours`` instead of GDAL's
-    ContourGenerateEx.
 
-The viewshed is a GDAL spec (``raster viewshed``, run by the engine); this module no longer holds a copy of it.
+The viewshed and the contour lines are GDAL specs (``raster viewshed``, ``raster contour``, run by the engine); this
+module holds no copy of them.
 """
 
 import math
@@ -390,104 +387,6 @@ def cog_convert_file(
         ),
     ):
         rio_shutil.copy(_src, dst_path, driver="COG", **creation)
-
-
-def check_contour(levels, interval, attr_field) -> None:
-    """ValueError for the arguments of :func:`contour` that make no contour: an empty value field, or no levels and an
-    interval that is not above 0 and finite. Found from the arguments alone, before any pixel is read.
-    """
-    if attr_field is None or str(attr_field).strip() == "":
-        raise ValueError("rst_contour: attr_field must be non-empty")
-    bad = next((v for v in levels or () if v is not None and math.isinf(v)), None)
-    if bad is not None:
-        raise ValueError(f"rst_contour: levels must be finite (got {bad})")
-    if not levels:
-        if not (interval > 0.0) or math.isinf(interval) or math.isnan(interval):
-            raise ValueError(
-                "rst_contour: levels is empty so interval must be > 0 and finite; "
-                f"got {interval}"
-            )
-
-
-def contour(ds, levels, interval, base, attr_field):
-    """Generate contour lines from band 1 as ``(geom_wkb, value)`` features.
-
-    The Unity Catalog handler's kernel (``uc/tier_b.py``), implemented with ``skimage.measure.find_contours``. The
-    session function ``gbx_rst_contour`` runs GDAL's ``raster contour`` instead (the GDAL spec engine); its lines
-    run to the tile's edge, half a pixel past the outermost pixel centres, where these stop at the centres.
-
-      * ``levels`` (list[float]): explicit fixed contour values. When non-empty,
-        one contour is generated at each level.
-      * ``interval`` (float): when ``levels`` is empty, equal-step contours are
-        generated at ``base + k*interval`` for every such value inside the
-        band's finite data range (min..max). ``interval`` must then be ``> 0``
-        and finite, else ``ValueError``.
-      * ``base`` (float): contour base value; only meaningful with ``interval``.
-      * ``attr_field`` (str): name of the contour value field; in pyrx it does
-        not change the output shape (the struct field is always ``value``), but
-        it must be non-empty (parity with the heavyweight ``require``).
-
-    Output geometries are LineStrings in the source CRS — pixel (row, col)
-    coordinates from ``find_contours`` are mapped to world (x, y) via the
-    raster transform (``rasterio.transform.xy(..., offset="center")``). NoData
-    pixels (and, where the tile declares none, pixels equal to -9999) are masked
-    to NaN before contouring so contours do not trace the sentinel. Paths with
-    fewer than 2 points are skipped.
-
-    Args:
-        ds:         Open rasterio DatasetReader.
-        levels:     List of fixed contour values (possibly empty).
-        interval:   Equal-interval step (used only when ``levels`` is empty).
-        base:       Contour base value for the interval mode.
-        attr_field: Non-empty value-field name (parity-only).
-
-    Returns:
-        list[dict]: one ``{"geom_wkb": bytes, "value": float}`` per contour
-        LineString.
-    """
-    # sorted, without repeats, NULLs and NaN: the same list the GDAL spec engine's binder writes. A list of only
-    # NULL or NaN is then empty, so the interval is checked (it would divide by 0 unchecked).
-    levels = sorted(
-        {float(v) for v in (levels or ()) if v is not None and not math.isnan(v)}
-    )
-    check_contour(levels, interval, attr_field)
-
-    band = ds.read(1).astype("float64")
-    # Mask NoData so contours do not trace the sentinel value: the declared one, and -9999 where none is declared.
-    msk = ds.read_masks(1)  # 0 where NoData, 255 where valid
-    band = np.where(msk == 0, np.nan, band)
-    if ds.nodata is None:
-        band = np.where(band == -9999.0, np.nan, band)
-
-    if not levels:
-        finite = band[np.isfinite(band)]
-        if finite.size == 0:
-            return []
-        lo = float(finite.min())
-        hi = float(finite.max())
-        # Equal-step levels at base + k*interval within [lo, hi].
-        k_start = math.ceil((lo - base) / interval)
-        k_end = math.floor((hi - base) / interval)
-        levels = [base + k * interval for k in range(k_start, k_end + 1)]
-
-    # skimage is a pyrx (contour) dependency; import lazily.
-    import shapely.wkb
-    from rasterio.transform import xy as _xy
-    from shapely.geometry import LineString
-    from skimage.measure import find_contours
-
-    out = []
-    for level in levels:
-        for path in find_contours(band, level):
-            if path.shape[0] < 2:
-                continue
-            rows = path[:, 0]
-            cols = path[:, 1]
-            xs, ys = _xy(ds.transform, rows, cols, offset="center")
-            coords = list(zip(np.asarray(xs).tolist(), np.asarray(ys).tolist()))
-            line = LineString(coords)
-            out.append({"geom_wkb": shapely.wkb.dumps(line), "value": float(level)})
-    return out
 
 
 # ---------------------------------------------------------------------------

@@ -223,7 +223,7 @@ def fingerprint_dggs_grid_str(cells) -> str:
 def _vector_features(features):
     """Split features into (geometries, attributes).
 
-    `analysis.contour` returns ``[{"geom_wkb": bytes, "value": float}]`` and
+    A contour row is ``{"geom_wkb": bytes, "value": float}`` and
     `features.polygonize` returns ``[(geom_wkb, value)]``; both are accepted.
     """
     import shapely.wkb

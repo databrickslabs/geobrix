@@ -146,12 +146,6 @@ def _site_reproject(tp):
     return _on_src(tp, "float32", lambda ds: reproject_to_srid(ds, 3857))
 
 
-def _site_resample(tp):
-    from databricks.labs.gbx.pyrx.core.resample import resample_by_factor
-
-    return _on_src(tp, "float32", lambda ds: resample_by_factor(ds, 0.5))
-
-
 def _site_proximity(tp):
     from databricks.labs.gbx.pyrx.core.analysis import proximity
 
@@ -168,12 +162,6 @@ def _site_focal_convolve(tp):
     from databricks.labs.gbx.pyrx.core import focal
 
     return _on_lzw(lambda ds: focal.convolve(ds, np.ones((3, 3)) / 9.0))
-
-
-def _site_slope(tp):
-    from databricks.labs.gbx.pyrx.core import terrain
-
-    return _on_lzw(terrain.slope)
 
 
 def _site_rasterize_geom(tp):
@@ -202,12 +190,6 @@ def _site_getsubdataset(tp):
     return accessors.getsubdataset(
         SimpleNamespace(subdatasets=[str(sub)]), "prAdjust.tif"
     )
-
-
-def _site_fill_nodata(tp):
-    from databricks.labs.gbx.pyrx.core import features
-
-    return _on_lzw(features.fill_nodata)
 
 
 def _site_bin_points(tp):
@@ -255,15 +237,12 @@ _CANONICAL_SITES = [
     ("agg.merge_tiles", _site_merge_tiles, "int16"),
     ("tiling.retile", _site_retile, "int16"),
     ("warp.reproject_to_srid", _site_reproject, "float32"),
-    ("resample.resample_by_factor", _site_resample, "float32"),
     ("analysis.proximity", _site_proximity, "float32"),
     ("focal.filt", _site_focal_filt, "float32"),
     ("focal.convolve", _site_focal_convolve, "float64"),
-    ("terrain.slope", _site_slope, "float32"),
     ("features.rasterize_geom", _site_rasterize_geom, "float64"),
     ("chm.chm", _site_chm, "float32"),
     ("accessors.getsubdataset", _site_getsubdataset, "float32"),
-    ("features.fill_nodata", _site_fill_nodata, "float32"),
     ("binning.bin_points", _site_bin_points, "float32"),
     ("tin.idw_grid", _site_idw_grid, "float64"),
     ("stretch.percentile_stretch", _site_percentile_stretch, "uint8"),
@@ -425,12 +404,6 @@ def _ycbcr_vtile(tmp_path):
 def _on_ycbcr_window(fn):
     """Call fn(ds, window) on an open YCbCr dataset and its top-left 32x32 window."""
     return _on_ycbcr(lambda ds: fn(ds, Window(0, 0, 32, 32)))
-
-
-def _case_resample_by_factor(tmp_path):
-    from databricks.labs.gbx.pyrx.core.resample import resample_by_factor
-
-    return _on_ycbcr(lambda ds: resample_by_factor(ds, 2))
 
 
 def _case_reproject_to_srid(tmp_path):
@@ -622,7 +595,6 @@ def _case_apply_compression(tmp_path):
 
 # (case, bands in the result)
 _YCBCR_OPS = [
-    (_case_resample_by_factor, 3),
     (_case_reproject_to_srid, 3),
     (_case_reproject_to_srid_identity, 3),
     (_case_reproject_to_crs, 3),
@@ -831,15 +803,11 @@ def _striped_sites():
     from databricks.labs.gbx.bench import grouped_file, spec, synth
     from databricks.labs.gbx.ds import _write, _xyz_mosaic
     from databricks.labs.gbx.pyrx import functions as F
-    from databricks.labs.gbx.pyrx.core import gridagg, ops, resample, tiling, warp
+    from databricks.labs.gbx.pyrx.core import gridagg, ops, tiling, warp
     from databricks.labs.gbx.stac import _download
     from databricks.labs.gbx.vizx import _simplify
 
     return {
-        "resample_to_size": (
-            "ds",
-            lambda ds, tp: resample.resample_to_size(ds, 32, 32),
-        ),
         "reproject_to_srid": ("ds", lambda ds, tp: warp.reproject_to_srid(ds, 3857)),
         "build_overviews": ("ds", lambda ds, tp: ops.build_overviews(ds, [2])),
         "dataset_to_gtiff_bytes": ("ds", lambda ds, tp: F._dataset_to_gtiff_bytes(ds)),
@@ -883,7 +851,6 @@ def _striped_sites():
 @pytest.mark.parametrize(
     "op",
     [
-        "resample_to_size",
         "reproject_to_srid",
         "build_overviews",
         "dataset_to_gtiff_bytes",

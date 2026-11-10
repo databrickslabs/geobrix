@@ -5,15 +5,11 @@ production edit were reverted:
 
 - test_srid_accessor_returns_esri_aware_code: calls accessors.srid() on a
   rasterio dataset opened from an ESRI:54008 GTiff; old to_epsg() returns None.
-- test_summary_epsg_field_esri_aware: calls accessors.summary() and inspects the
-  coordinateSystem.epsg field; old to_epsg() returns None.
 - test_agg_crs_equal_replaces_inline: calls agg._crs_equal() directly; after the
   edit the function routes through crs_equal.
 - test_binning_resolves_esri_srid: calls bin_points() with srid=54008; old
   CRS.from_epsg(54008) raises CRSError (EPSG 54008 does not exist).
 """
-
-import json
 
 import numpy as np
 import pytest
@@ -68,38 +64,6 @@ def test_srid_accessor_returns_esri_aware_code(crs_str, expected_srid):
         with mf.open() as ds:
             result = accessors.srid(ds)
     assert result == expected_srid, f"Expected {expected_srid!r}, got {result!r}"
-
-
-# ---------------------------------------------------------------------------
-# accessors.summary() epsg field — BEHAVIOR-CHANGING fix
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "crs_str,expected_srid",
-    [
-        (
-            "ESRI:54008",
-            54008,
-        ),  # fail-on-revert (old summary to_epsg()->None); matrix central
-    ],
-)
-def test_summary_epsg_field_esri_aware(crs_str, expected_srid):
-    """accessors.summary() coordinateSystem.epsg must return ESRI code, not None.
-
-    Proves fail-on-revert: revert accessors.py:303 to ds.crs.to_epsg() and the
-    ESRI:54008 case produces {"epsg": null, ...}.
-    """
-    from databricks.labs.gbx.pyrx.core import accessors
-
-    b = _make_geotiff_bytes(crs_str)
-    with MemoryFile(b) as mf:
-        with mf.open() as ds:
-            info = json.loads(accessors.summary(ds))
-    cs = info["coordinateSystem"]
-    assert (
-        cs["epsg"] == expected_srid
-    ), f"Expected coordinateSystem.epsg={expected_srid!r}, got {cs['epsg']!r}"
 
 
 # ---------------------------------------------------------------------------

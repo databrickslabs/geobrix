@@ -22,9 +22,9 @@ from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx.core import _nodata as nd
-from databricks.labs.gbx.pyrx.core import agg, analysis, edit, features, focal
+from databricks.labs.gbx.pyrx.core import agg, analysis, edit, focal
 from databricks.labs.gbx.pyrx.core import open_tile as ot
-from databricks.labs.gbx.pyrx.core import ops, resample, stretch, tiling
+from databricks.labs.gbx.pyrx.core import ops, stretch, tiling
 from databricks.labs.gbx.pyrx.core.gridagg import _stamp_crs_bytes
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
@@ -35,14 +35,11 @@ from . import _alpha_layouts as al
 WRITERS = {
     "update_type": lambda ds: edit.update_type(ds, "Byte"),
     "init_nodata": edit.init_nodata,
-    "threshold": lambda ds: edit.threshold(ds, ">", 1.0),
     "set_srid": lambda ds: edit.set_srid(ds, 4326),
     "set_crs": lambda ds: edit.set_crs(ds, "EPSG:4326"),
     "focal_filt": lambda ds: focal.filt(ds, 3, "max"),
     "focal_convolve": lambda ds: focal.convolve(ds, np.ones((3, 3)) / 9.0),
-    "fill_nodata": features.fill_nodata,
     "percentile_stretch": lambda ds: stretch.percentile_stretch(ds, 2.0, 98.0),
-    "resample": lambda ds: resample.resample_by_factor(ds, 2.0),
     "as_format": lambda ds: ops.as_format(ds, "GTiff"),
     "build_overviews": lambda ds: ops.build_overviews(ds, [2]),
     "cog_convert": lambda ds: analysis.cog_convert(ds, "DEFLATE", 256, "NEAREST"),

@@ -13,7 +13,6 @@ from databricks.labs.gbx.bench.fingerprint import fingerprint_output
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import open_tile as ot
-from databricks.labs.gbx.pyrx.core import terrain
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
 
@@ -35,15 +34,15 @@ def _one_tile(tmp_path):
     return Path(tmp_path) / te.path, te
 
 
-def test_slope_virtual_equals_materialized(tmp_path):
+def test_a_pixel_statistic_virtual_equals_materialized(tmp_path):
     p, te = _one_tile(tmp_path)
     with _serde.open_tile(p.read_bytes()) as ds:
-        mat = terrain.slope(ds, unit="degrees", xscale=None, yscale=None)
+        mat = accessors.avg(ds)
     vt = VirtualTile(
         cellid=0, raster=None, path=str(p), window=(0, 0, te.tile_px, te.tile_px)
     )
     with ot._open(vt.to_row()) as ds:
-        virt = terrain.slope(ds, unit="degrees", xscale=None, yscale=None)
+        virt = accessors.avg(ds)
     assert fingerprint_output(mat) == fingerprint_output(virt)
 
 

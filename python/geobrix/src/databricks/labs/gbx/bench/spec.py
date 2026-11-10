@@ -38,9 +38,7 @@ from databricks.labs.gbx.pyrx.core import (
     gridagg,
     mapalgebra,
     ops,
-    resample,
     stretch,
-    terrain,
     tessellate,
     tiling,
     tin,
@@ -441,8 +439,11 @@ _GDAL_BLOCK = _GDAL + "GDALBlock.scala"
 # pyrx core module + shared _nodata, by module (added to per-function sources
 # together with that function's heavy Scala expression / helpers).
 _ACCESSORS_LIGHT = (_PYRX + "accessors.py", _NODATA)
-_TERRAIN_LIGHT = (_PYRX + "terrain.py", _NODATA)
-_INDICES_LIGHT = (_PYRX + "indices.py", _NODATA)
+# the GDAL spec engine: the light form of every function with a `gdal` block (terrain, band math, warps)
+_ENGINE_LIGHT = (
+    "python/geobrix/src/databricks/labs/gbx/engine/run.py",
+    "python/geobrix/src/databricks/labs/gbx/engine/argv.py",
+)
 _EDIT_LIGHT = (_PYRX + "edit.py", _NODATA)
 _FOCAL_LIGHT = (_PYRX + "focal.py", _NODATA)
 _FEATURES_LIGHT = (_PYRX + "features.py", _NODATA)
@@ -457,7 +458,6 @@ _TILING_LIGHT = (_PYRX + "tiling.py",)
 _XYZ_LIGHT = (_PYRX + "xyz.py",)
 _OPS_LIGHT = (_PYRX + "ops.py",)
 _ANALYSIS_LIGHT = (_PYRX + "analysis.py",)
-_RESAMPLE_LIGHT = (_PYRX + "resample.py",)
 _STRETCH_LIGHT = (_PYRX + "stretch.py", _NODATA)
 _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 # multi-tile reducers (bucket C, group C3) live in core/agg.py; it does NOT
@@ -812,7 +812,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"unit": "degrees"},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the GDAL spec engine's JVM form measured no faster than light
         core=True,
         core_fn=lambda ds, a: _engine_core(
@@ -828,7 +828,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         ("pure-core",),
         {"command": "slope --unit=degree"},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the light level only
         core=False,
         fingerprint=False,
@@ -844,7 +844,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"red_band": 1, "nir_band": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
@@ -935,19 +935,23 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: accessors.pixelcount(ds),
         col_fn=lambda t, a: rx.rst_pixelcount(t),
     ),
-    # --- terrain (bytes; terrain.py) ---
+    # --- terrain (bytes; the GDAL spec engine) ---
     "rst_aspect": FnSpec(
         "rst_aspect",
         "gbx_rst_aspect",
         "terrain",
         _BOTH,
         {"trigonometric": False, "zero_for_flat": False},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.aspect(
-            ds, a["trigonometric"], a["zero_for_flat"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_aspect",
+            {
+                "trigonometric": a["trigonometric"],
+                "zero_for_flat": a["zero_for_flat"],
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_aspect(t, a["trigonometric"], a["zero_for_flat"]),
     ),
     "rst_hillshade": FnSpec(
@@ -956,12 +960,19 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"azimuth": 315.0, "altitude": 45.0, "z_factor": 1.0},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.hillshade(
-            ds, a["azimuth"], a["altitude"], a["z_factor"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_hillshade",
+            {
+                "azimuth": a["azimuth"],
+                "altitude": a["altitude"],
+                "z_factor": a["z_factor"],
+                "xscale": None,
+                "yscale": None,
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_hillshade(
             t, a["azimuth"], a["altitude"], a["z_factor"]
         ),
@@ -972,9 +983,9 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_TRI.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT + (_HEAVY + "dem/RST_TRI.scala", _DEM_HELPER),
         core=True,
-        core_fn=lambda ds, a: terrain.tri(ds),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_tri", {})(ds),
         col_fn=lambda t, a: rx.rst_tri(t),
     ),
     "rst_tpi": FnSpec(
@@ -983,10 +994,10 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.tpi(ds),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_tpi", {})(ds),
         col_fn=lambda t, a: rx.rst_tpi(t),
     ),
     "rst_roughness": FnSpec(
@@ -995,13 +1006,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
-        core_fn=lambda ds, a: terrain.roughness(ds),
+        core_fn=lambda ds, a: _engine_core("gbx_rst_roughness", {})(ds),
         col_fn=lambda t, a: rx.rst_roughness(t),
     ),
-    # --- band-math (bytes; indices.py) ---
+    # --- band-math (bytes; the GDAL spec engine) ---
     "rst_ndwi": FnSpec(
         "rst_ndwi",
         "gbx_rst_ndwi",
@@ -1009,7 +1020,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"green_idx": 1, "nir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
@@ -1024,7 +1035,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"nir_idx": 1, "swir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
@@ -1644,18 +1655,18 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         heavy=False,
     ),
-    # --- resample (resample.py) ---
+    # --- resample (the GDAL spec engine) ---
     "rst_resample": FnSpec(
         "rst_resample",
         "gbx_rst_resample",
         "resample",
         _BOTH,
         {"factor": 2.0, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_by_factor(
-            ds, a["factor"], a["algorithm"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample", {"factor": a["factor"], "algorithm": a["algorithm"]}
+        )(ds),
         col_fn=lambda t, a: rx.rst_resample(t, a["factor"], a["algorithm"]),
-        sources=_RESAMPLE_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
@@ -1665,13 +1676,18 @@ REGISTRY: Dict[str, FnSpec] = {
         "resample",
         _BOTH,
         {"width_px": 128, "height_px": 128, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_to_size(
-            ds, a["width_px"], a["height_px"], a["algorithm"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample_to_size",
+            {
+                "width_px": a["width_px"],
+                "height_px": a["height_px"],
+                "algorithm": a["algorithm"],
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_resample_to_size(
             t, a["width_px"], a["height_px"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
@@ -1687,13 +1703,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "resample",
         ("pure-core",),
         {"x_res": 5.0, "y_res": 5.0, "algorithm": "bilinear"},
-        core_fn=lambda ds, a: resample.resample_to_res(
-            ds, a["x_res"], a["y_res"], a["algorithm"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_resample_to_res",
+            {"x_res": a["x_res"], "y_res": a["y_res"], "algorithm": a["algorithm"]},
+        )(ds),
         col_fn=lambda t, a: rx.rst_resample_to_res(
             t, a["x_res"], a["y_res"], a["algorithm"]
         ),
-        sources=_RESAMPLE_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
@@ -1712,7 +1729,7 @@ REGISTRY: Dict[str, FnSpec] = {
     #   clip, sample, viewshed -- need an in-extent geometry; no single literal
     #                             is in-extent across the multi-CRS corpus
     #   color_relief           -- the engine's GDAL color-map rounds each channel to a Byte; no JVM form to compare
-    # --- band-index (indices.py): full comparison ---
+    # --- band-index (the GDAL spec engine): full comparison ---
     "rst_evi": FnSpec(
         "rst_evi",
         "gbx_rst_evi",
@@ -1752,7 +1769,7 @@ REGISTRY: Dict[str, FnSpec] = {
             a["c2"],
             a["g"],
         ),
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
@@ -1768,11 +1785,11 @@ REGISTRY: Dict[str, FnSpec] = {
             {"red_idx": a["red_idx"], "nir_idx": a["nir_idx"], "l": a["l"]},
         )(ds),
         col_fn=lambda t, a: rx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- generic named-index dispatcher (indices.py): full comparison ---
+    # --- generic named-index dispatcher (the GDAL spec engine): full comparison ---
     # The band-map cannot ride the stringly args map, so index_name + band_map are
     # hardcoded identically here and in the Scala BenchDispatch case (the args
     # dict carries them only for documentation / the language-neutral dump).
@@ -1794,7 +1811,7 @@ REGISTRY: Dict[str, FnSpec] = {
                 *[x for k, v in _INDEX_BAND_MAP.items() for x in (F.lit(k), F.lit(v))]
             ),
         ),
-        sources=_INDICES_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
@@ -1887,7 +1904,7 @@ REGISTRY: Dict[str, FnSpec] = {
             "gbx_rst_color_relief", {"color_table": _COLOR_RAMP_TEXT}
         )(ds),
         col_fn=lambda t, a: rx.rst_color_relief(t, _COLOR_RAMP_TEXT),
-        sources=_TERRAIN_LIGHT,
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,

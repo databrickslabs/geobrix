@@ -299,52 +299,6 @@ def init_nodata(ds, default: float | None = None) -> bytes:
     return _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp)
 
 
-_THRESHOLD_OPS = {
-    ">": np.greater,
-    "<": np.less,
-    ">=": np.greater_equal,
-    "<=": np.less_equal,
-    "==": np.equal,
-    "!=": np.not_equal,
-}
-
-
-def check_threshold_op(op) -> str:
-    """The comparison operator of ``rst_threshold`` (``>`` for NULL); a ``ValueError`` that lists the known ones when
-    it names none."""
-    op = ">" if op is None else str(op)
-    if op not in _THRESHOLD_OPS:
-        known = ", ".join(sorted(_THRESHOLD_OPS))
-        raise ValueError(f"rst_threshold: unknown operator {op!r}. Known: {known}")
-    return op
-
-
-def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
-    """Keep pixels satisfying ``op value``; set others to NoData.
-
-    Args:
-        ds:    Open rasterio DatasetReader.
-        op:    Comparison operator string: one of ">", "<", ">=",
-               "<=", "==", "!=".  Defaults to ">".
-        value: Threshold scalar.  Defaults to 0.0.
-
-    Returns:
-        GTiff bytes with the same dtype and band count; pixels that fail
-        the comparison are replaced with the raster's NoData value (the
-        dtype's fallback no-data value when not set, as the heavyweight tier).
-    """
-    op = check_threshold_op(op)
-    value = 0.0 if value is None else float(value)
-    fn = _THRESHOLD_OPS[op]
-    data = ds.read()
-    nd = ds.nodata if ds.nodata is not None else _nd.fallback_nodata(data.dtype.name)
-    keep = fn(data, value)
-    out = np.where(keep, data, nd).astype(data.dtype)
-    profile = ds.profile.copy()
-    profile.update(driver="GTiff", nodata=nd)
-    return _comp.write_gtiff(profile, out, alpha_like=ds.colorinterp)
-
-
 def set_srid(ds, srid: int) -> bytes:
     """Stamp the CRS from a SRID integer WITHOUT reprojecting.
 

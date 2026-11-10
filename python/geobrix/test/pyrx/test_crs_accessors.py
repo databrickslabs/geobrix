@@ -1,9 +1,8 @@
-"""Tests for the rst_crs accessor + summary crs key.
+"""Tests for the rst_crs accessor.
 
 Tests:
 - accessors.crs() returns canonical CRS string (EPSG:x or ESRI:54008).
 - accessors.srid() returns ESRI-aware int code (ESRI:54008 → 54008, not None).
-- accessors.summary() JSON includes 'coordinateSystem.crs' string.
 - rst_crs Spark Column UDF returns StringType result.
 
 Uses REAL rasters:
@@ -11,7 +10,6 @@ Uses REAL rasters:
 - ESRI:54008 MODIS TIF from target/test-classes/modis/ — the key non-EPSG case.
 """
 
-import json
 import os
 
 import pytest
@@ -73,33 +71,6 @@ def test_crs_esri_raster():
         assert "ESRI" in crs_str, f"Expected 'ESRI' in crs string, got: {crs_str!r}"
         assert "54008" in crs_str, f"Expected '54008' in crs string, got: {crs_str!r}"
         assert crs_str == "ESRI:54008", f"Expected exact 'ESRI:54008', got: {crs_str!r}"
-
-
-# ---------------------------------------------------------------------------
-# accessors.summary — crs key in coordinateSystem
-# ---------------------------------------------------------------------------
-
-
-def test_summary_epsg_includes_crs_key():
-    """summary JSON coordinateSystem has both 'epsg' and 'crs' for EPSG raster."""
-    b = make_geotiff_bytes(epsg=4326)
-    with _ds_from_bytes(b) as ds:
-        info = json.loads(accessors.summary(ds))
-    cs = info["coordinateSystem"]
-    assert cs["epsg"] == 4326
-    assert cs["crs"] == "EPSG:4326"
-
-
-@pytest.mark.skipif(not os.path.exists(_MODIS_TIF), reason="MODIS TIF not built yet")
-def test_summary_esri_includes_crs_key():
-    """summary JSON coordinateSystem.crs is non-null for ESRI:54008; epsg == 54008."""
-    with _ds_from_file(_MODIS_TIF) as ds:
-        info = json.loads(accessors.summary(ds))
-    cs = info["coordinateSystem"]
-    assert cs["epsg"] == 54008, "epsg must return 54008 for ESRI:54008 (not None)"
-    crs_str = cs["crs"]
-    assert crs_str is not None, "coordinateSystem.crs must be non-null for ESRI:54008"
-    assert "ESRI" in crs_str and "54008" in crs_str, f"Got: {crs_str!r}"
 
 
 # ---------------------------------------------------------------------------

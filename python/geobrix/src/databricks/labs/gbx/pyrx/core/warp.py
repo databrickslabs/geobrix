@@ -67,12 +67,6 @@ def gcp_georef(ds):
     return (crs, gcps) if gcps and crs else None
 
 
-def source_crs(ds):
-    """The CRS a tile is georeferenced in: its own, else its GCP projection; ``None`` for a tile with neither."""
-    georef = gcp_georef(ds)
-    return ds.crs if georef is None else georef[0]
-
-
 def _source_georef(ds, window=None) -> dict:
     """The ``reproject`` arguments that place ``ds`` (or a window of it) on the ground."""
     georef = gcp_georef(ds)
@@ -323,12 +317,6 @@ def _warp_bands(
             if mask is not None:
                 dst.write_mask(mask)
         return mf.read()
-
-
-def target_grid(ds, dst_crs) -> tuple:
-    """The ``(width, height)`` a reprojection of ``ds`` to ``dst_crs`` makes, from the header alone."""
-    _, width, height = _default_transform(ds, dst_crs)
-    return width, height
 
 
 def _identity(ds, window=None) -> bytes:

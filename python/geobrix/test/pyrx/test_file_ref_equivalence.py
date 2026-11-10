@@ -23,7 +23,7 @@ from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import coords, edit
 from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
-from databricks.labs.gbx.pyrx.core import resample, terrain, warp
+from databricks.labs.gbx.pyrx.core import warp
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
 
@@ -124,44 +124,7 @@ PIXEL_OPS = [
         "tile",
         0,
     ),
-    (
-        "resample",
-        False,
-        lambda ds: resample.resample_by_factor(ds, 2.0, "bilinear"),
-        "tile",
-        1e-5,
-    ),
-    (
-        "resample_to_size",
-        False,
-        lambda ds: resample.resample_to_size(ds, 8, 6, "bilinear"),
-        "tile",
-        1e-5,
-    ),
-    (
-        "resample_to_res",
-        False,
-        lambda ds: resample.resample_to_res(ds, 0.25, 0.25, "bilinear"),
-        "tile",
-        1e-5,
-    ),
     ("updatetype", False, lambda ds: edit.update_type(ds, "Float64"), "tile", 0),
-    ("threshold", False, lambda ds: edit.threshold(ds, ">", 5.0), "tile", 0),
-    ("slope", False, lambda ds: terrain.slope(ds, unit="degrees"), "tile", 1e-5),
-    (
-        "aspect",
-        False,
-        lambda ds: terrain.aspect(ds, trigonometric=False, zero_for_flat=False),
-        "tile",
-        1e-5,
-    ),
-    (
-        "hillshade",
-        False,
-        lambda ds: terrain.hillshade(ds, azimuth=315.0, altitude=45.0, z_factor=1.0),
-        "tile",
-        0,
-    ),
     ("transform", False, lambda ds: warp.reproject_to_srid(ds, 32632), "tile", 1e-5),
     (
         "to_webmercator",

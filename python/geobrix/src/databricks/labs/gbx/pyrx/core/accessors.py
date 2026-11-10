@@ -4,7 +4,6 @@ These contain ALL the raster logic; the Spark layer (functions.py) only wraps
 them in Arrow UDFs. Keeping them Spark-free makes them fast to unit test.
 """
 
-import json
 import math
 from typing import Dict, List, Optional
 
@@ -287,48 +286,6 @@ def getsubdataset(ds, name: str):
         profile = sub.profile
         profile.update(driver="GTiff")
         return write_gtiff(profile, sub.read(), alpha_like=sub.colorinterp)
-
-
-def summary(ds) -> str:
-    """gdalinfo-style JSON summary string with per-band statistics.
-
-    Heavyweight emits GDAL's ``gdalinfo -json``; rasterio has no exact
-    equivalent, so we emit a stable JSON dict (driver, size, crs, bands with
-    min/max/mean/stdDev over valid pixels). Shape is GeoBrix-specific, not a
-    byte-for-byte gdalinfo match.
-    """
-    bands = []
-    for bi in range(1, ds.count + 1):
-        vals = _valid_values(ds, bi)
-        if vals.size:
-            stats = {
-                "min": float(np.min(vals)),
-                "max": float(np.max(vals)),
-                "mean": float(np.mean(vals, dtype=np.float64)),
-                "stdDev": float(np.std(vals, dtype=np.float64)),
-            }
-        else:
-            stats = {"min": None, "max": None, "mean": None, "stdDev": None}
-        nd = ds.nodatavals[bi - 1] if ds.nodatavals else None
-        bands.append(
-            {
-                "band": bi,
-                "type": _NP_TO_GDAL.get(str(ds.dtypes[bi - 1]), str(ds.dtypes[bi - 1])),
-                "noDataValue": None if nd is None else float(nd),
-                **stats,
-            }
-        )
-    info = {
-        "driverShortName": ds.driver,
-        "size": [int(ds.width), int(ds.height)],
-        "coordinateSystem": {
-            "epsg": authority_srid_of(ds.crs),
-            "crs": crs_to_canonical(ds.crs),
-        },
-        "geoTransform": list(_gdal_gt(ds)),
-        "bands": bands,
-    }
-    return json.dumps(info)
 
 
 def check_n_buckets(n_buckets) -> None:

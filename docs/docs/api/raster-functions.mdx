@@ -81,7 +81,7 @@ Unless noted, a RasterX function returns a **materialized** tile whose `raster` 
 
 See **[Tile structure](./tile-structure)** for the full tile-struct schema (the shared `cellid` / `raster` / `path` / `window` / … struct). See **[Virtual Tiles](./virtual-tiles)** for the bytes-free variant and how tiles move between materialized and virtual.
 
-Functions that internally build via an intermediate VRT — `gbx_rst_merge`, `gbx_rst_merge_agg`, `gbx_rst_frombands`, `gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband`, `gbx_rst_derivedband_agg` — materialize the result to GTiff before returning, so downstream stages on different executors see real raster bytes. Inspect a tile's payload format from `tile.metadata.driver`; for any of the functions above, it will read `GTiff` (not `VRT`). See [Release Notes](../release-notes-0-5-and-earlier#whats-new-in-v030) for the v0.3.0 correctness fix that introduced this invariant. See [Tile structure](./tile-structure) for the full tile-struct schema.
+`gbx_rst_merge`, `gbx_rst_merge_agg`, `gbx_rst_frombands`, `gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband` and `gbx_rst_derivedband_agg` return GTiff bytes, so downstream stages on different executors see real raster bytes. Inspect a tile's payload format from `tile.metadata.driver`; for any of the functions above, it will read `GTiff` (not `VRT`). See [Release Notes](../release-notes-0-5-and-earlier#whats-new-in-v030) for the v0.3.0 correctness fix that introduced this invariant. See [Tile structure](./tile-structure) for the full tile-struct schema.
 
 ## Virtual-tile force-output params {#virtual-tile-overrides}
 
@@ -132,7 +132,7 @@ Prefer pure SQL? After `register(spark)`, create the same four views directly so
 
 ## Implementation notes
 
-Each function below carries an `:::note Implementation` admonition. It names the library behind the function and any behavior worth knowing. For the VRT Python pixel-function configuration (used by `gbx_rst_combineavg` and `gbx_rst_derivedband`), see **[VRT Python pixel functions](#vrt-python-pixel-functions)** at the end of this page.
+Each function below carries an `:::note Implementation` admonition. It names the library behind the function and any behavior worth knowing. For how `gbx_rst_derivedband` runs your Python code, see **[VRT Python pixel functions](#vrt-python-pixel-functions)** at the end of this page.
 
 ## Examples — Conventions
 
@@ -1361,7 +1361,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` (same grid). All t
 <Impl groupedAgg/>
 
 :::note Implementation
-Powered by **rasterio** with GDAL VRT Python pixel functions. Aggregate — `groupBy(...).agg(rx.rst_derivedband_agg("tile", pyfunc, funcName))` stacks the group's tiles as bands and applies your pixel function, returning one tile per group.
+Powered by **rasterio** and NumPy. Aggregate — `groupBy(...).agg(rx.rst_derivedband_agg("tile", pyfunc, funcName))` stacks the group's tiles as bands and applies your pixel function, returning one tile per group. The function runs with `exec` in the query's Python process, with that process's permissions. Pass only code you trust, as a literal. Unity Catalog does not run it.
 :::
 
 :::note The aggregate returns BINARY
@@ -1409,7 +1409,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 <Impl groupedAgg/>
 
 :::note Implementation
-Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — builds one TIN DTM tile per group from the group's Z-valued points. It uses barycentric interpolation over an **unconstrained** Delaunay triangulation. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted but not enforced. The JVM level builds a constrained TIN. The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only.
+Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — builds one TIN DTM tile per group from the group's Z-valued points. It uses barycentric interpolation over an **unconstrained** Delaunay triangulation. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted but not enforced. The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only.
 :::
 
 :::note The aggregate returns BINARY
@@ -1917,8 +1917,8 @@ Create or load rasters from path, binary content, or bands (4 total).
 |---|---|---|---|---|
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | Break lines, as an array; NULL or empty for none. The Python level uses their vertices as extra points and does not enforce them as edges. |
-| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
-| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for signature compatibility; not applied. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for signature compatibility; not applied. |
 | `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
 | `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
 | `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
@@ -1931,7 +1931,7 @@ Create or load rasters from path, binary content, or bands (4 total).
 {/* END GENERATED gbx_rst_dtmfromgeoms */}
 
 :::note Implementation
-Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced — the JVM level builds a constrained TIN that honors them.
+Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced.
 :::
 
 Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries. An optional array of breakline WKB geometries preserves sharp terrain transitions.
@@ -2464,7 +2464,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 <Impl udtf/>
 
 :::note Implementation
-The implementation is backed by BNG cell math and `rasterio`. It auto-warps the input to **EPSG:27700** with `rasterio.warp`, enumerates the overlapping BNG cells, and clips one tile per cell. BNG cell IDs are **STRING** at the row boundary. The cell set and clip windows match the JVM level's.
+The implementation is backed by BNG cell math and `rasterio`. It auto-warps the input to **EPSG:27700** with `rasterio.warp`, enumerates the overlapping BNG cells, and clips one tile per cell. BNG cell IDs are **STRING** at the row boundary.
 :::
 
 Tessellate a raster to British National Grid (BNG) cells — one row per overlapping cell, each clipped to that cell's extent. The raster is automatically reprojected to **EPSG:27700** (British National Grid) before tessellation, so any projected or geographic input is handled transparently. Resolution accepts integer indices **±1..±6** , where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. Negative indices address quadrant sub-cells. Resolution also accepts string keys from `BNG.resolutionMap` (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING** (e.g. `"TQ28"`, `"SU3412"`).
@@ -4477,14 +4477,14 @@ _Example kernel: 3×3 identity (`[[0,0,0],[0,1,0],[0,0,0]]`), which passes pixel
 {/* END GENERATED gbx_rst_derivedband */}
 
 :::note Implementation
-Powered by **rasterio** with GDAL VRT Python pixel functions. A pixel function authored for one level runs unchanged in the other.
+Powered by **rasterio** and NumPy. GeoBrix runs your Python source with `exec` in the query's Python process. It does not use GDAL's VRT pixel-function API.
 :::
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Apply a Python pixel function to derive a band. The function runs in the session's Python (`exec`), so only code you trust belongs in `python_func`. A source that does not parse, or that defines no function of the name `func_name`, raises an error that names it.
+Apply a Python pixel function to derive a band. The function runs in the session's Python (`exec`), with the permissions of that process, as any Python you run does. Only code you trust belongs in `python_func`. Write it as a literal in your query. Do not pass a column of code from a table that others can write. GeoBrix adds no sandbox, and Unity Catalog does not run this function (see [Security](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). A source that does not parse, or that defines no function of the name `func_name`, raises an error that names it.
 
 <FunctionExamples
   name="rst_derivedband"
@@ -6472,19 +6472,15 @@ tower needs before minting the per-tower VRT.
 
 ---
 
-## JVM-level specifics
+## VRT Python pixel functions
 
-This section documents one detail of the JVM level: the GDAL VRT Python pixel-function configuration used by `gbx_rst_derivedband`.
+GDAL can run Python code that a VRT file carries in a `<PixelFunctionCode>` element. GeoBrix keeps that off: `GDAL_VRT_ENABLE_PYTHON` is `NO` in the process. A VRT from a table or a Volume does not run its Python code. See [Security](../security#6-vrt-python-pixel-functions-off-by-default-by-design).
 
-### VRT Python pixel functions
+`gbx_rst_derivedband` and `gbx_rst_derivedband_agg` do not use that GDAL API. They run the Python source you pass with `exec`, in the query's Python process. You set nothing on the cluster.
 
-The JVM form of `gbx_rst_derivedband` evaluates a Python expression on each pixel via GDAL's [VRT Python pixel-function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python). That API is gated behind the GDAL config option `GDAL_VRT_ENABLE_PYTHON`, which **GeoBrix sets to `NO` at executor startup** (see [Security - Restrict GDAL drivers](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). When you call it, GeoBrix flips the option to `YES` for the duration of that call only. It does so via the internal `GDALManager.withVrtPython` bracket and restores `NO` immediately on return. You don't need to set anything on the cluster or in your notebook to use the built-in functions.
+### When you read a Python-pixel VRT yourself
 
-#### When you need to enable it yourself
-
-Suppose you invoke the GDAL Python bindings (`from osgeo import gdal`) **directly**, outside the built-in RasterX functions. If you then read a VRT that declares a `<PixelFunctionLanguage>Python</...>` band, you get an empty/null read unless you enable the option in the same process. Pick one of:
-
-**Python — programmatic, scoped to your read.** Recommended in all cases. Mirrors what GeoBrix does internally. It works for both driver-side `pyspark.sql` calls and inside `mapPartitions` / `mapInPandas` UDFs that load VRT-with-pyfunc via `osgeo.gdal`. It also survives interleaving with GeoBrix built-in calls (each GeoBrix call resets the option to `NO` on exit, so re-set it on every read):
+Suppose you call the GDAL Python bindings (`from osgeo import gdal`) directly, outside the RasterX functions. A VRT that declares a `<PixelFunctionLanguage>Python</...>` band then reads as empty unless you enable the option. Enable it only for a VRT you wrote, and only around your own read:
 
 ```python
 from osgeo import gdal
@@ -6498,23 +6494,7 @@ finally:
     gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")
 ```
 
-**Cluster env var — for Python-worker processes only.** Setting `spark.executorEnv.GDAL_VRT_ENABLE_PYTHON YES` on the cluster works for Python UDF workers (a separate process from the JVM, where GDAL initializes from env vars). It does **not** help JVM-side reads — GeoBrix calls `gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")` at executor JVM startup, and `SetConfigOption` takes precedence over the env var. Prefer the programmatic form above unless you have a strong reason to globally enable.
-
-**Scala / JVM code.** If you're writing custom Spark expressions that consume Python-pixel VRTs, wrap the read/translate in the same helper GeoBrix uses internally. The helper refcounts the option so concurrent tasks on the same executor JVM compose safely:
-
-```scala
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-
-val result = GDALManager.withVrtPython {
-    val ds = org.gdal.gdal.gdal.Open(vrtPath)
-    // ... GDAL reads / translates here see the Python pixel function ...
-    ds
-}
-```
-
-#### Trusted-modules variant
-
-GDAL also accepts `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` plus a `GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist if you want pixel-function code restricted to specific Python module prefixes. GeoBrix uses the plain `YES` form because the pixel-function source is constructed in-process from trusted (geobrix-generated) strings, never from user-supplied VRT XML on disk. If your custom code path reads VRTs whose `<PixelFunctionCode>` originates from less-trusted sources, switch to the `TRUSTED_MODULES` form and allowlist only what you intend to load.
+GDAL also accepts `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a `GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist. It limits the pixel-function code to the module prefixes you name. Use it if the `<PixelFunctionCode>` may come from a less-trusted source.
 
 ---
 

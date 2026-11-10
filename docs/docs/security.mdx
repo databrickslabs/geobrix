@@ -227,23 +227,22 @@ for what to include in the report.
 ### 6. VRT Python pixel functions: off by default by design
 
 GDAL's [VRT Python pixel function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python)
-lets a `<PixelFunctionCode>` element in a VRT XML file execute arbitrary
-Python in-process at band-read time. GeoBrix sets `GDAL_VRT_ENABLE_PYTHON=NO`
-at executor startup and only flips it to `YES` for the duration of an
-individual `derivedband` call (via the internal
-`GDALManager.withVrtPython` bracket). The VRT it reads is the one the call
-builds, never a VRT from elsewhere.
+lets a `<PixelFunctionCode>` element in a VRT file run Python in the process that reads the band.
+With the driver policy on (§ 7), GeoBrix sets `GDAL_VRT_ENABLE_PYTHON=NO` for the whole process.
+A value you set does not apply. A VRT from a table or a Volume does not run its Python code.
 
-If your own code consumes Python-pixel VRTs from less-trusted sources,
-keep the option `NO` and pre-translate to GTiff. For example, you might pull VRT XML from object storage that other principals can
-write to. With the
-driver policy on (§ 7), GeoBrix sets `GDAL_VRT_ENABLE_PYTHON=NO` for the
-whole process on both tiers, and a value you set does not apply. On the
-lightweight tier, `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
-`GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist works only with the policy
-switched off. The heavyweight tier keeps the setting `NO` whatever the
-switch, outside its own `derivedband` calls. See
-[RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
+`gbx_rst_derivedband` and `gbx_rst_derivedband_agg` take Python source from you. They do not use GDAL's pixel function API.
+They run your source with `exec` in the Python process of the query, and call your function on the band arrays.
+That code has the permissions of that process, as any Python you run does. GeoBrix adds no sandbox around it.
+
+- **Write the code yourself.** Pass `python_func` as a literal in your query. Never pass a column of code from a table that others can write.
+- **Unity Catalog does not run it.** Neither function is a working UC function, because UC does not run caller-supplied Python.
+  An optional stub for the scalar raises and names the session route.
+
+If your own code reads Python-pixel VRTs from less-trusted sources, keep the option `NO` and pre-translate to GTiff.
+For example, the VRT XML may come from object storage that other principals can write to.
+`GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow `GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist works only with the policy switched off.
+See [RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
 for the full how-to.
 
 ### 7. Raster data other principals can write

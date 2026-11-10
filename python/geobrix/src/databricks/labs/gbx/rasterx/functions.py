@@ -2359,8 +2359,8 @@ def rst_dtmfromgeoms(
             array.
         breaklines_array: Break lines, as an array; NULL or empty for none. The Python
             level uses their vertices as extra points and does not enforce them as edges.
-        merge_tolerance: Accepted for compatibility with the JVM level; not applied.
-        snap_tolerance: Accepted for compatibility with the JVM level; not applied.
+        merge_tolerance: Accepted for signature compatibility; not applied.
+        snap_tolerance: Accepted for signature compatibility; not applied.
         xmin: The west edge of the output in the output CRS.
         ymin: The south edge of the output.
         xmax: The east edge of the output, above `xmin`.

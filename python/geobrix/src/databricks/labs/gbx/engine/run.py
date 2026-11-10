@@ -1325,12 +1325,7 @@ class _PipeGeo:
                 ds = None
         if st.crs is None or st.px_x <= 0:
             return None
-        try:
-            sr = argv_mod._osr_reference(st.crs)
-        except (
-            ValueError
-        ):  # GDAL cannot build the state's CRS: no grid it can suggest, the step is unbounded
-            return None
+        sr = self._reference(st.crs)
         vrt = gdal.GetDriverByName("VRT").Create("", st.width, st.height, 0)
         try:
             vrt.SetGeoTransform((st.ox, st.px_x, 0.0, st.oy, 0.0, -st.px_y))
@@ -1341,12 +1336,7 @@ class _PipeGeo:
 
     def envelope(self, bbox, from_crs, to_crs):
         osr = argv_mod._osgeo().osr
-        try:
-            src, dst = argv_mod._osr_reference(from_crs), argv_mod._osr_reference(
-                to_crs
-            )
-        except ValueError:  # GDAL cannot build one of the CRSs: the box cannot be moved
-            return None
+        src, dst = self._reference(from_crs), self._reference(to_crs)
         for sr in (src, dst):
             sr.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         if src.IsSame(dst):
@@ -1362,6 +1352,13 @@ class _PipeGeo:
                 ]
         except RuntimeError:
             return None
+    def _reference(self, crs_text: str):
+        """The OSR reference of a CRS the estimate re-reads: a DataError, with the Fix, where GDAL cannot build it."""
+        try:
+            return argv_mod._osr_reference(crs_text)
+        except ValueError as exc:
+            raise DataError(f"{self.sql_name}: {exc}") from None
+
         xs, ys = [p[0] for p in pts], [p[1] for p in pts]
         if not all(map(math.isfinite, xs + ys)):
             return None

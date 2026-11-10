@@ -656,15 +656,17 @@ def test_a_viewshed_with_a_distance_limit_leaves_the_window_for_the_steps_after_
 
 
 @needs_engine
-def test_a_crs_gdal_cannot_rebuild_while_sizing_is_unbounded_not_a_crash(monkeypatch):
+def test_a_crs_gdal_cannot_rebuild_while_sizing_is_a_refusal_with_its_fix(monkeypatch):
     def refuse(text):
-        raise ValueError("GDAL cannot build the CRS")
+        raise ValueError(f"GDAL cannot build the CRS. {argv.CRS_BUILD_FIX}")
 
     monkeypatch.setattr(argv, "_osr_reference", refuse)
     geo = run._PipeGeo(run._gdal(), "gbx_rst_gdal", "x", ("GTiff",))
     state = argv.PipeState(8, 8, 1.0, 1.0, 0.0, 0.0, "EPSG:32633", 1, 4, False)
-    assert geo.warp(state, "EPSG:3857") is None
-    assert geo.envelope((0.0, 0.0, 1.0, 1.0), "EPSG:4326", "EPSG:3857") is None
+    with pytest.raises(run.DataError, match="cannot build the CRS"):
+        geo.warp(state, "EPSG:3857")
+    with pytest.raises(run.DataError, match="cannot build the CRS"):
+        geo.envelope((0.0, 0.0, 1.0, 1.0), "EPSG:4326", "EPSG:3857")
 
 
 @needs_engine

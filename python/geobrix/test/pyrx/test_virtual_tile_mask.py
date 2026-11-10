@@ -454,6 +454,9 @@ def test_a_bound_on_a_pixel_edge_is_snapped_and_the_cap_is_exact(monkeypatch):
     # on the raster's right edge too: the column left of it is the raster's
     on_edge = box(N - 1e-8, N - 10, N + 1e-8, N - 2)
     assert edit.holds_no_pixel_centre(on_edge, t, N, N)
+    # and on the row axis: inside the raster and on its bottom edge (y = 0 is row N)
+    assert edit.holds_no_pixel_centre(box(2, N - 4 - 1e-8, 10, N - 4 + 1e-8), t, N, N)
+    assert edit.holds_no_pixel_centre(box(2, -1e-8, 10, 1e-8), t, N, N)
 
 
 # ---------------------------------------------------------------------------

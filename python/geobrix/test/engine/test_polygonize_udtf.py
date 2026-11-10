@@ -1,6 +1,7 @@
 """The engine's table function (polygonize): how its eval takes arguments and what it gives for a NULL, error, refused or
-failed call. The engine run is replaced by a stub, so every row runs on the host; the oracle rows
-(SPEC_ANALYSIS, `gbx_rst_polygonize`) hold the polygons themselves.
+failed call. The engine run is replaced by a stub, so those rows run on the host; the oracle rows
+(SPEC_ANALYSIS, `gbx_rst_polygonize`) hold the polygons themselves. The rows at the end run the engine (they skip where
+``osgeo`` is not rasterio's GDAL): the alpha band read a strip at a time, the budget and the stale-folder sweep.
 """
 
 import inspect
@@ -155,3 +156,66 @@ def test_the_polygonize_row_is_the_engines_alone():
     assert set(POLY.levels) == {"L3"} and POLY.levels["L3"].get("engine") == "gdal"
     assert levels.engine_only(POLY, "L3")
     assert levels.engine_form(POLY) == "engine-c0"
+
+
+# --- the run (needs the engine) ------------------------------------------------------------------------------------------
+@pytest.fixture
+def engine():
+    why = run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    return run
+
+
+def _tile(values, alpha=None) -> bytes:
+    """A Byte tile of `values` (rows x cols) with no NoData, and when `alpha` is given a second band holding it, read as
+    an alpha band (a third band of zeros sits between: GDAL derives no mask from alpha for 3 bands).
+    """
+    import numpy as np
+    from rasterio.enums import ColorInterp
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    bands = [values] if alpha is None else [values, np.zeros_like(values), alpha]
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=values.shape[1],
+            height=values.shape[0],
+            count=len(bands),
+            dtype="uint8",
+            crs="EPSG:3857",
+            transform=from_origin(0, values.shape[0], 1, 1),
+        ) as dst:
+            dst.write(np.stack(bands).astype("uint8"))
+            if alpha is not None:
+                dst.colorinterp = [
+                    ColorInterp.gray,
+                    ColorInterp.undefined,
+                    ColorInterp.alpha,
+                ]
+        return mf.read()
+
+
+def test_a_transparent_pixel_is_left_out_and_the_alpha_is_read_a_strip_at_a_time(
+    engine, monkeypatch
+):
+    import numpy as np
+
+    values = np.ones((32, 32), "uint8")
+    values[:, 16:] = 2
+    alpha = np.full((32, 32), 255, "uint8")
+    alpha[:, 16:] = 0  # the 2s are transparent
+    gdal = run._gdal()
+    reads, read = [], gdal.Band.ReadRaster
+
+    def recorded(self, xoff=0, yoff=0, xsize=None, ysize=None, *a, **k):
+        reads.append(self.YSize if ysize is None else ysize)
+        return read(self, xoff, yoff, xsize, ysize, *a, **k)
+
+    monkeypatch.setattr(run, "_MASK_STRIP_BYTES", 8 * 32 * 4)  # four rows a strip
+    monkeypatch.setattr(gdal.Band, "ReadRaster", recorded)
+    res = run.run(POLY, [_tile(values, alpha)], {"band": 1, "connectedness": 4})
+    assert res.error is None, res.error
+    assert {row[1] for row in res.features} == {1.0}
+    assert reads and max(reads) <= 4  # no read of the whole tile

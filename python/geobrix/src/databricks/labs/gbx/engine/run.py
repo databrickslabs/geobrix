@@ -1020,15 +1020,24 @@ def _unmask_filled(
             od = None
 
 
-def _alpha_into_mask(gdal, src: str, band: int) -> None:
+# the bytes of one strip of rows `_alpha_into_mask` reads at a time (as Float64): what it holds, not the tile's size
+_MASK_STRIP_BYTES = 4 << 20
+
+
+def _alpha_into_mask(gdal, src: str, band: int, prefix: str) -> None:
     """A tile whose last band is an alpha band that GDAL does not read as the mask of `band` (GDAL derives a mask from alpha
     only for 2 and 4 bands, and not over a declared NoData): the pixels the algorithm leaves out are made the tile's own
     mask band, ``valid for the band AND opaque``. The tile's transparent pixels are no data on every level, as its NoData
     pixels are. The alpha band itself is judged by its own mask, as GDAL judges it.
+
+    It works a strip of rows at a time (``_MASK_STRIP_BYTES``), so it holds a strip, not the tile: the mask is built into a
+    DEFLATE GeoTIFF under the call's `prefix` first (the band's mask is read before the tile has a mask band of its own,
+    which would then be what GDAL reads), then copied into the tile's mask band.
     """
     import numpy as np
 
     ds = _open_geotiff(gdal, src)
+    built = f"{prefix}/alpha_mask.tif"
     try:
         n = ds.RasterCount
         alpha, data = ds.GetRasterBand(n), ds.GetRasterBand(band)
@@ -1040,23 +1049,46 @@ def _alpha_into_mask(gdal, src: str, band: int) -> None:
         ):
             return
         w, h = ds.RasterXSize, ds.RasterYSize
-        valid = np.frombuffer(data.GetMaskBand().ReadRaster(0, 0, w, h), "u1") != 0
-        opaque = (
-            np.frombuffer(alpha.ReadRaster(0, 0, w, h, buf_type=gdal.GDT_Float64), "f8")
-            > 0
-        )  # 0, negative and NaN are transparent
-        mask = np.where(valid & opaque, 255, 0).astype("u1").tobytes()
+        rows = max(1, _MASK_STRIP_BYTES // (8 * w))
+        mds = gdal.GetDriverByName("GTiff").Create(
+            built, w, h, 1, gdal.GDT_Byte, options=["COMPRESS=DEFLATE", "TILED=YES"]
+        )
+        if mds is None:
+            raise DataError(
+                gdal.GetLastErrorMsg() or "the alpha mask could not be made"
+            )
+        valid_band, out = data.GetMaskBand(), mds.GetRasterBand(1)
+        for y in range(0, h, rows):
+            k = min(rows, h - y)
+            valid = np.frombuffer(valid_band.ReadRaster(0, y, w, k), "u1") != 0
+            opaque = (
+                np.frombuffer(
+                    alpha.ReadRaster(0, y, w, k, buf_type=gdal.GDT_Float64), "f8"
+                )
+                > 0
+            )  # 0, negative and NaN are transparent
+            strip = np.where(valid & opaque, np.uint8(255), np.uint8(0))
+            out.WriteRaster(0, y, w, k, strip.tobytes())
+        out = mds = None
     finally:
-        ds = alpha = data = None
-    with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
-        od = _open_geotiff(gdal, src, update=True)
-        try:
-            if od.GetRasterBand(1).GetMaskFlags() != gdal.GMF_PER_DATASET:
-                od.CreateMaskBand(gdal.GMF_PER_DATASET)
-            od.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, mask)
-            od.FlushCache()
-        finally:
-            od = None
+        ds = alpha = data = valid_band = None
+    try:
+        with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
+            od, mds = _open_geotiff(gdal, src, update=True), _open_geotiff(gdal, built)
+            try:
+                if od.GetRasterBand(1).GetMaskFlags() != gdal.GMF_PER_DATASET:
+                    od.CreateMaskBand(gdal.GMF_PER_DATASET)
+                dst, built_band = od.GetRasterBand(1).GetMaskBand(), mds.GetRasterBand(
+                    1
+                )
+                for y in range(0, h, rows):
+                    k = min(rows, h - y)
+                    dst.WriteRaster(0, y, w, k, built_band.ReadRaster(0, y, w, k))
+                od.FlushCache()
+            finally:
+                od = mds = dst = built_band = None
+    finally:
+        gdal.Unlink(built)
 
 
 def _prepare_input(gdal, fn, tokens, props, names, prefix: str, shown) -> None:
@@ -1068,7 +1100,7 @@ def _prepare_input(gdal, fn, tokens, props, names, prefix: str, shown) -> None:
         _check_expression(gdal, fn, tokens, props, names, prefix, shown)
     elif alg == "raster polygonize":
         _alpha_into_mask(
-            gdal, names[0], int(argv_mod._token_value(tokens, "band") or 1)
+            gdal, names[0], int(argv_mod._token_value(tokens, "band") or 1), prefix
         )
 
 

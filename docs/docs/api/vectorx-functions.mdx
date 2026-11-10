@@ -51,9 +51,9 @@ Every function runs on every compute through its Python level. On a dedicated cl
 |---|---|---|
 | `st_asmvt` | Python | |
 | `st_asmvt_pyramid` | Python | |
-| `st_triangulate` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
-| `st_interpolateelevationbbox` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
-| `st_interpolateelevationgeom` | Python, JVM | Python level by default; `conforming` mode runs on the JVM level only |
+| `st_triangulate` | Python, JVM | JVM level by default on a dedicated cluster; both modes run on every level |
+| `st_interpolateelevationbbox` | Python, JVM | JVM level by default on a dedicated cluster; both modes run on every level |
+| `st_interpolateelevationgeom` | Python | Both modes run on every level |
 | `st_crs`, `st_setcrs`, `st_transformcrs` | Python, JVM | JVM level by default on a dedicated cluster |
 | `st_legacyaswkb` | Python, JVM, Unity Catalog | Python level by default |
 | `st_makevalid`, `st_explainvalidity` | Python, Unity Catalog | |
@@ -364,13 +364,26 @@ Each TIN function takes a trailing `mode` argument (default `'constrained'`):
 
 | Mode | Levels | Behavior |
 |---|---|---|
-| `constrained` *(default)* | Python and JVM | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your input mass points plus breakline vertices. The algorithm is the same at every level. |
-| `conforming` | JVM only | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
+| `constrained` *(default)* | Every level | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your input mass points plus breakline vertices. The algorithm is the same at every level. |
+| `conforming` | Every level | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
 
-The Python level raises `NotImplementedError` on `mode='conforming'` — it has no Steiner-point refinement. This divergence is intentional. The two levels agree exactly in the default `constrained` mode. The JVM level offers `conforming` as an opt-in superset. If you need a result that is byte-identical across levels, stay on `constrained` (the default).
+Both modes give the same vertices and triangles at every level, Unity Catalog included. The Python level reproduces JTS 1.20, the library the JVM level runs.
+
+In the `conforming` mode, `split_point_finder` places the extra points. `'NONENCROACHING'` projects the point that breaks the Delaunay rule onto the break line. `'MIDPOINT'` splits the segment in half. An extra point takes the Z of its break line.
+
+The `conforming` mode raises with a `Fix:` when it cannot fit the break lines, for example where two break lines cross. Split crossing break lines at the crossing, or use `'constrained'`.
+
+### Snapping points to break lines
+
+A `snap_tolerance` above 0 moves points onto break lines before either mode triangulates:
+
+1. A point within `snap_tolerance` of a break line moves onto the nearest one. On a tie, the first line wins.
+2. The point takes the line's Z there, interpolated along the segment. A 2D break line has Z 0.
+3. The point becomes a new vertex of the line, so no triangle has zero area.
+4. A point that lands within `merge_tolerance` of a line vertex merges into it. With `merge_tolerance` 0, only the same X and Y merges.
 
 :::note Invocation surface
-Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t`), or through the Python entry, which takes the DataFrame first. `mode='conforming'` runs on the JVM level only; see the note under `st_triangulate`.
+Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t`), or through the Python entry, which takes the DataFrame first.
 :::
 
 ### st_interpolateelevationbbox
@@ -391,8 +404,8 @@ Rows: `elevation_point` `BINARY`.
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
 | `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
 | `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the grid. |
 | `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the grid. |
 | `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the grid, above `xmin`. |
@@ -400,7 +413,7 @@ Rows: `elevation_point` `BINARY`.
 | `width_px` | `INT` | `INT` |  | The number of grid columns, above 0. |
 | `height_px` | `INT` | `INT` |  | The number of grid rows, above 0. |
 | `srid` | `INT` | `INT` |  | The SRID of the output points; 0 for none. |
-| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default, adds no points. `'conforming'` adds points along the break lines, so the triangles meet the Delaunay rule there. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationbbox */}
 
 <Impl udtf/>
@@ -422,7 +435,7 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 ### st_interpolateelevationgeom
 
 {/* BEGIN GENERATED gbx_st_interpolateelevationgeom: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -437,14 +450,14 @@ Rows: `elevation_point` `BINARY`.
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
 | `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
 | `grid_origin` | `BINARY` or `STRING` | `GEOMETRY` |  | The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID is the SRID of the output. |
 | `grid_cols` | `INT` | `INT` |  | The number of grid columns. |
 | `grid_rows` | `INT` | `INT` |  | The number of grid rows. |
 | `cell_size_x` | `DOUBLE` | `DOUBLE` |  | The cell width in the geometry's units; a positive value steps east. |
 | `cell_size_y` | `DOUBLE` | `DOUBLE` |  | The cell height in the geometry's units; a negative value steps south. |
-| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default, adds no points. `'conforming'` adds points along the break lines, so the triangles meet the Delaunay rule there. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationgeom */}
 
 <Impl udtf/>
@@ -457,7 +470,6 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
   name="st_interpolateelevationgeom"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
@@ -481,9 +493,9 @@ Rows: `triangle` `BINARY`.
 | `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
 | `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
 | `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
-| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Points within this distance of a break line are moved onto it, taking its Z, before triangulating. 0 snaps nothing. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does not use it. Any other word raises. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default, adds no points. `'conforming'` adds points along the break lines, so the triangles meet the Delaunay rule there. Any other word raises. |
 {/* END GENERATED gbx_st_triangulate */}
 
 <Impl udtf/>
@@ -500,8 +512,8 @@ Builds a Delaunay TIN from mass-point geometries (with Z values) and optional br
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
-:::note `mode='conforming'` runs on the JVM level only
-The `'constrained'` mode (default) runs at every level. The `'conforming'` mode inserts Steiner points along breakline segments for a smoother mesh. It runs on the JVM level only. The Python level raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
+:::note Both modes run at every level
+The `'constrained'` mode (default) and the `'conforming'` mode run at every level. The `'conforming'` mode inserts Steiner points along breakline segments for a smoother mesh. The examples on all tabs use the default `'constrained'` mode.
 :::
 
 ---

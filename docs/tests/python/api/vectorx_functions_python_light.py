@@ -199,8 +199,7 @@ st_asmvt_pyramid_python_example_output = """
 # the registered UDTF via SQL LATERAL (identical in behavior to the SQL tab,
 # just wrapped in spark.sql()).
 #
-# mode='constrained' is the default and is available in BOTH tiers.
-# mode='conforming' is HEAVYWEIGHT-ONLY (NotImplementedError in pyvx).
+# mode='constrained' is the default; it and mode='conforming' run in BOTH tiers.
 # ---------------------------------------------------------------------------
 
 # WKB POINT(0, 10) — plain 2D, used as grid_origin for st_interpolateelevationgeom.
@@ -215,7 +214,7 @@ def st_triangulate_python_example(spark):
     (no Python DataFrame Column form).  Reads the ``tin_survey`` setup view — 4
     WKB POINT Z corners of a 10×10 m square — and materialises the 2-triangle
     Delaunay mesh via SQL ``LATERAL``.  Returns the first triangle's WKB bytes.
-    ``mode='constrained'`` is both-tier; ``mode='conforming'`` is heavyweight-only.
+    ``mode='constrained'`` and ``mode='conforming'`` run in both tiers.
     """
     result = spark.sql("""
         SELECT t.triangle

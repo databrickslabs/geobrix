@@ -3766,7 +3766,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
         fingerprint=True,
         input_kind="tile",
-        sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationGeom.scala"),
+        sources=(_PYVX + "_tin.py",),
     ),
     "st_interpolateelevationbbox": FnSpec(
         "st_interpolateelevationbbox",

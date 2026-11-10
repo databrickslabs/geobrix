@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
-import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_InterpolateElevationBBox, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -14,9 +14,9 @@ import org.apache.spark.sql.Column
   * (The JAR registers no data source: the readers and writers are the lightweight `*_gbx` Python data sources.)
   *
   * This package exposes the `gbx_st_triangulate`
-  * constrained-Delaunay TIN generator (see [[ST_Triangulate]]), and the
-  * `gbx_st_interpolateelevationbbox`/`gbx_st_interpolateelevationgeom` elevation
-  * generators (see [[ST_InterpolateElevationBBox]], [[ST_InterpolateElevationGeom]]).
+  * Delaunay TIN generator (see [[ST_Triangulate]]), and the
+  * `gbx_st_interpolateelevationbbox` elevation generator (see [[ST_InterpolateElevationBBox]]).
+  * `gbx_st_interpolateelevationgeom` has no JVM form: call it with `call_function`.
   */
 object functions extends Serializable {
 
@@ -52,27 +52,6 @@ object functions extends Serializable {
         ColumnAdapter(
             ST_InterpolateElevationBBox.name,
             Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, mode)
-        )
-
-    /** TIN generator: the interpolated Z at each cell centre of a grid anchored at a point. */
-    def st_interpolateelevationgeom(
-        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
-        splitPointFinder: Column, gridOrigin: Column, gridCols: Column, gridRows: Column,
-        cellSizeX: Column, cellSizeY: Column
-    ): Column =
-        ColumnAdapter(
-            ST_InterpolateElevationGeom.name,
-            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY)
-        )
-
-    def st_interpolateelevationgeom(
-        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
-        splitPointFinder: Column, gridOrigin: Column, gridCols: Column, gridRows: Column,
-        cellSizeX: Column, cellSizeY: Column, mode: Column
-    ): Column =
-        ColumnAdapter(
-            ST_InterpolateElevationGeom.name,
-            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY, mode)
         )
 
     /** Decodes a legacy Mosaic geometry struct (`typeId`, `srid`, `boundaries`, `holes`) to ISO WKB, Z and holes kept. */

@@ -48,15 +48,7 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
             geomArrayLit(corners), emptyArrayLit, Literal(0.0), Literal(0.01), finder,
             Literal(0.0), Literal(0.0), Literal(100.0), Literal(100.0), Literal(10), Literal(10), Literal(32633), Literal("constrained")
           )
-      ),
-      "gbx_st_interpolateelevationgeom" -> (() => {
-          val origin = JTS.point(new Coordinate(0.0, 0.0))
-          origin.setSRID(32633)
-          ST_InterpolateElevationGeom(
-            geomArrayLit(corners), emptyArrayLit, Literal(0.0), Literal(0.01), finder,
-            Literal.create(JTS.toEWKB(origin), BinaryType), Literal(10), Literal(10), Literal(10.0), Literal(10.0), Literal("constrained")
-          )
-      })
+      )
     )
 
     private def checkCase(sqlName: String): Unit = {
@@ -70,10 +62,6 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
 
     test("st_interpolateelevationbbox emits exactly the declared elevation_point column") {
         checkCase("gbx_st_interpolateelevationbbox")
-    }
-
-    test("st_interpolateelevationgeom emits exactly the declared elevation_point column") {
-        checkCase("gbx_st_interpolateelevationgeom")
     }
 
     // The Column wrappers hand ColumnAdapter a positional Seq: a swapped argument would run, with another grid. Every
@@ -107,22 +95,6 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
         bbox.foreach { c =>
             val got = points(one.select(c))
             assert(got.size == 8 && got.map(_._1) == Set(12.5, 37.5, 62.5, 87.5) && got.map(_._2).size == 2)
-        }
-
-        // an origin at (0, 0) with 4 columns, 3 rows, cells 10 wide and 20 high: x = 5, 15, 25, 35 and y = 10, 30, 50
-        val origin = JTS.point(new Coordinate(0.0, 0.0))
-        origin.setSRID(32633)
-        val geom = Seq(
-          vectorx.functions.st_interpolateelevationgeom(
-            pts, none, lit(0.0), lit(0.01), finderCol, lit(JTS.toEWKB(origin)), lit(4), lit(3), lit(10.0), lit(20.0)
-          ),
-          vectorx.functions.st_interpolateelevationgeom(
-            pts, none, lit(0.0), lit(0.01), finderCol, lit(JTS.toEWKB(origin)), lit(4), lit(3), lit(10.0), lit(20.0), mode
-          )
-        )
-        geom.foreach { c =>
-            val got = points(one.select(c))
-            assert(got == (for (x <- Seq(5.0, 15.0, 25.0, 35.0); y <- Seq(10.0, 30.0, 50.0)) yield (x, y)).toSet)
         }
     }
 

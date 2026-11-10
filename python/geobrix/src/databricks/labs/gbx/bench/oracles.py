@@ -60,8 +60,9 @@ class Case:
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
     # cell_rows: `expect` is the cell ids the rows' `cellid` column must hold, each once, in any order, as Python ints
     # (a BIGINT id never passes through a float) or strings. triangles: `expect` is the triangles (three (x, y) vertices
-    # each) the `triangle` column's polygons must be, vertex order aside. elev_points: `expect` is the (x, y, z) of each
-    # `elevation_point` row (a dict may add "srid"). mvt_tiles: `expect` is {"tiles": [(z, x, y)], "layer": name,
+    # each) the `triangle` column's polygons must be, vertex order aside, to 1e-9. triangles_exact: the same, each X and Y
+    # exactly (the conforming mode's extra points included). elev_points: `expect` is the (x, y, z) of each
+    # `elevation_point` row (a dict may add "srid"), each to 1e-12 relative. mvt_tiles: `expect` is {"tiles": [(z, x, y)], "layer": name,
     # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
     # The raster generators and vectorizers (see bench/oracle_checks.py): tile_rows (the first band of each row, in
     # order), tessellation (the cells and the pixel sum of each), polygons (value and area per row), isobands and
@@ -180,15 +181,6 @@ HEAVY_PENDING.update(
                 "cgr_null_beside_big_id",
             )
         },
-    }
-)
-
-# The conforming TIN mode is the JVM's: the lightweight generators refuse it, so a row that expects the refusal is red there.
-_CONFORMING_L1 = "the JVM level triangulates in the conforming mode; the lightweight generators refuse it"
-HEAVY_PENDING.update(
-    {
-        cid: {"L1": _CONFORMING_L1}
-        for cid in ("tri_conforming_light_refused", "elevbbox_conforming_light_refused")
     }
 )
 
@@ -5220,19 +5212,23 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
     """Judge the rows of a vector fan-out (see `Case`): triangles, elevation points or MVT tiles."""
     from databricks.labs.gbx._geom import parse_geom
 
-    if case.kind == "triangles":
+    if case.kind in ("triangles", "triangles_exact"):
+
+        def xy(x, y):
+            return (
+                (float(x), float(y))
+                if case.kind == "triangles_exact"
+                else (round(x, 9), round(y, 9))
+            )
+
         got = []
         for r in rows:
             poly = parse_geom(bytes(_field(r, "triangle")))
-            ring = [
-                (round(x, 9), round(y, 9)) for x, y in list(poly.exterior.coords)[:-1]
-            ]
+            ring = [xy(x, y) for x, y in list(poly.exterior.coords)[:-1]]
             if len(ring) != 3:
                 return f"{case.cid}: a triangle with {len(ring)} vertices"
             got.append(frozenset(ring))
-        want = [
-            frozenset((round(x, 9), round(y, 9)) for x, y in t) for t in case.expect
-        ]
+        want = [frozenset(xy(x, y) for x, y in t) for t in case.expect]
         return (
             None
             if len(got) == len(want)
@@ -5251,7 +5247,7 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
         got.sort()
         want = sorted(want)
         ok = len(got) == len(want) and all(
-            all(abs(a - b) <= 1e-9 * max(1.0, abs(b)) for a, b in zip(g, w))
+            all(abs(a - b) <= 1e-12 * max(1.0, abs(b)) for a, b in zip(g, w))
             for g, w in zip(got, want)
         )
         return None if ok else f"{case.cid}: {len(got)} points {got}, want {want}"
@@ -5279,6 +5275,7 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
 _ROW_CHECKS = {
     "cell_rows": lambda case, rows, args: _check_cell_rows(case, rows),
     "triangles": lambda case, rows, args: _check_vector_rows(case, rows),
+    "triangles_exact": lambda case, rows, args: _check_vector_rows(case, rows),
     "elev_points": lambda case, rows, args: _check_vector_rows(case, rows),
     "mvt_tiles": lambda case, rows, args: _check_vector_rows(case, rows),
     "tile_rows": _oracle_check("check_tile_rows"),

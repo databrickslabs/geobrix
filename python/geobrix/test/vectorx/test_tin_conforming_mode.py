@@ -1,7 +1,7 @@
-"""The JVM TIN expressions take the trailing ``mode`` argument, and 'conforming' (Steiner points) is the JVM's alone.
+"""The JVM TIN expressions take the trailing ``mode`` argument and answer in the conforming mode (Steiner points).
 
-The lightweight functions refuse the conforming mode, so no oracle row can expect an answer for it (its rows expect the
-refusal and name the JVM as the level that differs). This is the one place the JVM's answer is pinned.
+The oracle table (``VECTOR_GENERATOR``) pins the conforming answers on every level; this checks the JVM expressions take
+the argument through their Column call. ``gbx_st_interpolateelevationgeom`` has no JVM form.
 
 Heavy generators are top-level Generator Columns in Spark 4.0: invoke directly in ``select(...)`` (the single-field struct
 unwraps to the WKB value). Needs the staged JAR (the geobrix-dev container).
@@ -44,8 +44,6 @@ _AFTER = {
     "gbx_st_triangulate": (),
     # xmin, ymin, xmax, ymax, width_px, height_px, srid
     "gbx_st_interpolateelevationbbox": (0.0, 0.0, 10.0, 10.0, 5, 5, 32633),
-    # grid origin, columns, rows, cell size x and y
-    "gbx_st_interpolateelevationgeom": ("POINT (1 1)", 3, 3, 3.0, 3.0),
 }
 
 

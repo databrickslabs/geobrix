@@ -33,7 +33,6 @@ object GeneratorContract {
       "gbx_custom_geomkloopexplode"     -> GridSuite,
       "gbx_st_triangulate"              -> VectorSuite,
       "gbx_st_interpolateelevationbbox" -> VectorSuite,
-      "gbx_st_interpolateelevationgeom" -> VectorSuite,
       "gbx_rst_xyzpyramid"              -> RasterSuite
     )
 

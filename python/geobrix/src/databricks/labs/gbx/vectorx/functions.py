@@ -337,11 +337,11 @@ def st_interpolateelevationbbox(
             triangulation.
         merge_tolerance: Points closer than this in X and Y become one point. 0 merges
             only identical points.
-        snap_tolerance: The distance within which a vertex takes the Z value of a break
-            line.
+        snap_tolerance: Points within this distance of a break line are moved onto it,
+            taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming
-            mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default,
-            does not use it.
+            mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does
+            not use it. Any other word raises.
         xmin: The west edge of the grid.
         ymin: The south edge of the grid.
         xmax: The east edge of the grid, above `xmin`.
@@ -349,8 +349,8 @@ def st_interpolateelevationbbox(
         width_px: The number of grid columns, above 0.
         height_px: The number of grid rows, above 0.
         srid: The SRID of the output points; 0 for none.
-        mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the Python level raises for it. Any other
+        mode: `'constrained'`, the default, adds no points. `'conforming'` adds points
+            along the break lines, so the triangles meet the Delaunay rule there. Any other
             word raises. SQL default: ``'constrained'``.
 
     Returns:
@@ -403,11 +403,11 @@ def st_interpolateelevationgeom(
             triangulation.
         merge_tolerance: Points closer than this in X and Y become one point. 0 merges
             only identical points.
-        snap_tolerance: The distance within which a vertex takes the Z value of a break
-            line.
+        snap_tolerance: Points within this distance of a break line are moved onto it,
+            taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming
-            mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default,
-            does not use it.
+            mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does
+            not use it. Any other word raises.
         grid_origin: The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID
             is the SRID of the output.
         grid_cols: The number of grid columns.
@@ -416,8 +416,8 @@ def st_interpolateelevationgeom(
             east.
         cell_size_y: The cell height in the geometry's units; a negative value steps
             south.
-        mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the Python level raises for it. Any other
+        mode: `'constrained'`, the default, adds no points. `'conforming'` adds points
+            along the break lines, so the triangles meet the Delaunay rule there. Any other
             word raises. SQL default: ``'constrained'``.
 
     Returns:
@@ -713,7 +713,7 @@ def st_triangulate(
     split_point_finder: ColLike,
     mode: ColLike = None,
 ) -> DataFrame:
-    """Build a constrained Delaunay triangulation of Z-valued points and break lines, one row per triangle.
+    """Build a Delaunay triangulation of Z-valued points and break lines, constrained or conforming, one row per triangle.
 
     Args:
         df: The input DataFrame; each row is joined with the rows generated from it.
@@ -724,13 +724,13 @@ def st_triangulate(
             triangulation.
         merge_tolerance: Points closer than this in X and Y become one point. 0 merges
             only identical points.
-        snap_tolerance: The distance within which a vertex takes the Z value of a break
-            line.
+        snap_tolerance: Points within this distance of a break line are moved onto it,
+            taking its Z, before triangulating. 0 snaps nothing.
         split_point_finder: The rule that places the extra points of the conforming
-            mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default,
-            does not use it.
-        mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the Python level raises for it. Any other
+            mode: `'NONENCROACHING'` or `'MIDPOINT'`, in any case. The constrained mode does
+            not use it. Any other word raises.
+        mode: `'constrained'`, the default, adds no points. `'conforming'` adds points
+            along the break lines, so the triangles meet the Delaunay rule there. Any other
             word raises. SQL default: ``'constrained'``.
 
     Returns:

@@ -4,14 +4,16 @@ level by test_family_cross_tier.py.
 Expected values come from the fixtures' definitions or an independent library, never from the function under test.
 The surface is the plane z = 2x + y + 1 sampled at the four corners of a 10 m square and its centre, so the
 triangulation is the four triangles that meet in the centre (a Delaunay triangulation of a square with its centre is
-unique) and every interpolated Z is the plane's. The MVT tiles come from `mercantile`, the layer from
-`mapbox_vector_tile`.
+unique) and every interpolated Z is the plane's. The conforming and snap rows take their triangles from JTS 1.20, the
+reference algorithm (see `_tin_rows`); their elevation rows keep every point and break line on the plane, so the Z is
+the plane's whatever the triangles. The MVT tiles come from `mercantile`, the layer from `mapbox_vector_tile`.
 """
 
 import mercantile
 from shapely import wkb as _wkb
 from shapely.geometry import Point
 
+from databricks.labs.gbx.bench.oracle_tables import _tin_rows as R
 from databricks.labs.gbx.bench.oracles import Case
 
 TRI, EBB, EGM, PYR = (
@@ -45,6 +47,12 @@ F = "NONENCROACHING"
 
 # Cell centres of a 2 x 2 grid over (0, 0)-(10, 10): 2.5 and 7.5 on both axes.
 CENTRES = [(x, y, _z(x, y)) for x in (2.5, 7.5) for y in (2.5, 7.5)]
+# ... and of a 4 x 4 grid: 1.25, 3.75, 6.25 and 8.75.
+CENTRES_4 = [
+    (x, y, _z(x, y)) for x in (1.25, 3.75, 6.25, 8.75) for y in (1.25, 3.75, 6.25, 8.75)
+]
+M = "MIDPOINT"
+SQUARE_BL = ([R.line(R.SQUARE_LINE)], R.points(R.SQUARE))
 
 # A feature at 100 E, 45 N is far from every tile seam of zoom 0 and 1 (the tiles keep a 64 px overhang), so it is in
 # one tile of each.
@@ -104,22 +112,188 @@ VECTOR_GENERATOR = (
         SQUARE_TRIANGLES,
         ("session",),
     ),
-    # The conforming mode is the JVM's; the lightweight function refuses it and says so.
+    # ---------------------------------------------------------------------------------------------- conforming mode
+    # No break line: the conforming triangulation is the Delaunay one.
     Case(
-        "tri_conforming_light_refused",
+        "tri_conforming_no_lines",
         TRI,
-        (KITE, [], 0.0, 0.0, "MIDPOINT", "conforming"),
-        "raises",
-        "conforming",
-        ("session",),
+        (KITE, [], 0.0, 0.0, M, "conforming"),
+        "triangles",
+        KITE_FREE,
+    ),
+    # The 2D break line P1-P2 has both kite points inside its circle: one extra point at (5, 0) splits it.
+    Case(
+        "tri_kite_conforming",
+        TRI,
+        (KITE, LINE_P1P2, 0.0, 0.0, F, "conforming"),
+        "triangles_exact",
+        R.KITE_CONFORMING,
+    ),
+    # The same input, both split rules: NONENCROACHING projects the centre onto the line, MIDPOINT halves the segment
+    # until no half's circle holds the centre.
+    Case(
+        "tri_square_bl_conforming",
+        TRI,
+        (SQUARE_BL[1], SQUARE_BL[0], 0.0, 0.0, F, "conforming"),
+        "triangles_exact",
+        R.SQUARE_BL_NON,
     ),
     Case(
-        "elevbbox_conforming_light_refused",
+        "tri_square_bl_conforming_midpoint",
+        TRI,
+        (SQUARE_BL[1], SQUARE_BL[0], 0.0, 0.0, M, "conforming"),
+        "triangles_exact",
+        R.SQUARE_BL_MID,
+    ),
+    # A grid: four points on every cell's circle, so the triangles are JTS's choice among the ties.
+    Case(
+        "tri_grid_conforming",
+        TRI,
+        (R.points(R.GRID), [R.line(R.GRID_LINE)], 0.0, 0.0, F, "conforming"),
+        "triangles_exact",
+        R.GRID_CONFORMING,
+    ),
+    Case(
+        "tri_crossing_lines_conforming_raises",
+        TRI,
+        (R.points(R.BOX), [R.line(c) for c in R.CROSSING], 0.0, 0.0, F, "conforming"),
+        "raises",
+        "split crossing break lines where they cross",
+    ),
+    Case(
+        "elevbbox_conforming_no_lines",
         EBB,
         (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, "conforming"),
-        "raises",
-        "conforming",
-        ("session",),
+        "elev_points",
+        CENTRES,
+    ),
+    # Every extra point takes the Z of its break line, so the surface is the plane at every cell.
+    Case(
+        "elevbbox_conforming_midpoint_plane",
+        EBB,
+        (
+            SQUARE_BL[1],
+            SQUARE_BL[0],
+            0.0,
+            0.0,
+            M,
+            0.0,
+            0.0,
+            10.0,
+            10.0,
+            4,
+            4,
+            0,
+            "conforming",
+        ),
+        "elev_points",
+        CENTRES_4,
+    ),
+    Case(
+        "elevgeom_conforming_plane",
+        EGM,
+        (
+            SQUARE_BL[1],
+            SQUARE_BL[0],
+            0.0,
+            0.0,
+            F,
+            "POINT (0 10)",
+            4,
+            4,
+            2.5,
+            -2.5,
+            "conforming",
+        ),
+        "elev_points",
+        CENTRES_4,
+    ),
+    # ---------------------------------------------------------------------------------------------- snap_tolerance
+    # A point within snap_tolerance of a break line moves onto the nearest one BEFORE either mode triangulates.
+    *(
+        Case(
+            f"tri_snap_no_zero_area_{mode}",
+            TRI,
+            (R.points(R.SLIVER), [R.line(R.SLIVER_LINE)], 0.0, 0.05, F, mode),
+            "triangles_exact",
+            want,
+        )
+        for mode, want in (
+            ("constrained", R.SLIVER_CONSTRAINED),
+            ("conforming", R.SLIVER_CONFORMING),
+        )
+    ),
+    *(
+        Case(
+            f"tri_snap_horizontal_vertical_{mode}",
+            TRI,
+            (R.points(R.HV), [R.line(ln) for ln in R.HV_LINES], 0.0, 0.05, F, mode),
+            "triangles_exact",
+            want,
+        )
+        for mode, want in (
+            ("constrained", R.HV_CONSTRAINED),
+            ("conforming", R.HV_CONFORMING),
+        )
+    ),
+    Case(
+        "tri_snap_nearest_line_and_one_spot",
+        TRI,
+        (
+            R.points(R.NEAR),
+            [R.line(ln) for ln in R.NEAR_LINES],
+            0.001,
+            0.05,
+            F,
+            "conforming",
+        ),
+        "triangles_exact",
+        R.NEAR_CONFORMING,
+    ),
+    Case(
+        "tri_snap_exact_tie_first_line",
+        TRI,
+        (
+            R.points(R.TIE),
+            [R.line(ln) for ln in R.TIE_LINES],
+            0.0,
+            0.05,
+            F,
+            "conforming",
+        ),
+        "triangles_exact",
+        R.TIE_CONFORMING,
+    ),
+    Case(
+        "tri_snap_merges_into_line_end",
+        TRI,
+        (R.points(R.END), [R.line(R.END_LINE)], 0.001, 0.05, F, "constrained"),
+        "triangles_exact",
+        R.END_CONSTRAINED,
+    ),
+    *(
+        Case(
+            f"elevbbox_snap_plane_{mode}",
+            EBB,
+            (
+                R.points(R.SNAP_SQUARE),
+                SQUARE_BL[0],
+                0.0,
+                0.05,
+                M,
+                0.0,
+                0.0,
+                10.0,
+                10.0,
+                4,
+                4,
+                0,
+                mode,
+            ),
+            "elev_points",
+            CENTRES_4,
+        )
+        for mode in ("constrained", "conforming")
     ),
     # ---------------------------------------------------------------------------------------------- bbox grid
     Case(
@@ -200,25 +374,8 @@ VECTOR_GENERATOR = (
         "no_rows",
     ),
     # ---------------------------------------------------------------------------------------------- Unity Catalog only
-    # The conforming mode runs on the JVM level; the table functions are Python, so they refuse it with a Fix. A grid whose
-    # rows could not fit the array cap is refused from its cell count before the surface is built (the price: a grid with
-    # cells outside the hull is refused too, as the estimate counts every cell).
-    Case(
-        "uc_tri_conforming_refused",
-        TRI,
-        (KITE, [], 0.0, 0.0, F, "conforming"),
-        "uc_refused",
-        None,
-        ("uc",),
-    ),
-    Case(
-        "uc_elevbbox_conforming_refused",
-        EBB,
-        (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, "conforming"),
-        "uc_refused",
-        None,
-        ("uc",),
-    ),
+    # A grid whose rows could not fit the array cap is refused from its cell count before the surface is built (the
+    # price: a grid with cells outside the hull is refused too, as the estimate counts every cell).
     Case(
         "uc_elevbbox_grid_over_cap_refused",
         EBB,

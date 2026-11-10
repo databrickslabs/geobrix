@@ -165,9 +165,9 @@ class _AsMvtPyramidUDTF:
             yield (z, x, y, blob)
 
 
-# --- st_triangulate: constrained-Delaunay TIN UDTF -----------------------------------------
+# --- st_triangulate: Delaunay TIN UDTF ------------------------------------------------------
 # Returns one 2D-WKB triangle (Polygon) per row.  Constrained mode (default) uses scipy +
-# Sloan recovery; conforming mode is heavy-only and raises.
+# Sloan recovery; conforming mode is JTS's conforming Delaunay (pyvx/_conforming.py).
 
 
 _geoms_from_array = _tin.geoms_from_array
@@ -200,12 +200,17 @@ class _TriangulateUDTF:
         ):
             return  # a NULL required argument: no rows, as explode(NULL)
         for blob in _tin.triangle_wkbs(
-            points, breaklines, merge_tolerance, snap_tolerance
+            points,
+            breaklines,
+            merge_tolerance,
+            snap_tolerance,
+            mode,
+            split_point_finder,
         ):
             yield (blob,)
 
 
-# --- st_interpolateelevation{bbox,geom}: barycentric Z over the constrained TIN -------------
+# --- st_interpolateelevation{bbox,geom}: barycentric Z over the TIN ---------------------------
 # One POINT Z WKB row per in-hull grid cell center (column-major); outside-hull cells dropped.
 
 
@@ -219,7 +224,9 @@ def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
     _validate_mode(mode)
     if mt is None or st is None or spf is None:
         return  # a NULL required argument: no rows, as explode(NULL)
-    for blob in _tin.elevation_wkbs(points, breaklines, mt, st, cell_iter, srid):
+    for blob in _tin.elevation_wkbs(
+        points, breaklines, mt, st, cell_iter, srid, mode=mode, split_point_finder=spf
+    ):
         yield (blob,)
 
 

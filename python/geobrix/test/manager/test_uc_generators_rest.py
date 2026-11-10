@@ -363,8 +363,9 @@ def test_the_triangle_array_is_estimated_from_the_point_count(monkeypatch):
         )
 
 
-def test_the_conforming_mode_is_refused_with_a_fix_that_names_the_jvm_level():
-    with pytest.raises(_Refusal, match="Fix:.*JAR"):
-        forms.st_triangulate_rows(
-            _geoms(SQUARE), None, 0.0, 0.0, "NONENCROACHING", "conforming"
-        )
+def test_the_conforming_mode_runs_here():
+    # no break lines: the conforming triangulation is the Delaunay one, the four triangles round the centre
+    rows = forms.st_triangulate_rows(
+        _geoms(SQUARE), None, 0.0, 0.0, "MIDPOINT", "conforming"
+    )
+    assert len(rows) == 4

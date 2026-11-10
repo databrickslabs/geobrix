@@ -24,6 +24,24 @@ object TriangulationSplitPointTypeEnum extends Enumeration {
             )
 }
 
+/** Places a split point with `inner`, then gives it the Z of the segment it splits, interpolated linearly at its
+ *  projection factor on the segment (`r = ((x - x0) * dx + (y - y0) * dy) / (dx * dx + dy * dy)`, `z = z0 + r * (z1 - z0)`).
+ *  JTS leaves a midpoint (and a point placed near an endpoint) without Z, and a projected point with the Z of the point
+ *  that encroached; the surface along a break line is the line's own. The Python level does the same operations in the
+ *  same order (`pyvx/_conforming.py`), so both agree bit for bit.
+ */
+final class LineZSplitPointFinder(inner: ConstraintSplitPointFinder) extends ConstraintSplitPointFinder {
+    override def findSplitPoint(seg: Segment, encroachPt: Coordinate): Coordinate = {
+        val p = inner.findSplitPoint(seg, encroachPt)
+        val a = seg.getStart
+        val b = seg.getEnd
+        val dx = b.x - a.x
+        val dy = b.y - a.y
+        val r = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (dx * dx + dy * dy)
+        new Coordinate(p.x, p.y, a.getZ + r * (b.getZ - a.getZ))
+    }
+}
+
 /** Builds a conforming Delaunay triangulation from a geometry (and optional constraint lines). Used by InterpolateElevation. */
 class JTSConformingDelaunayTriangulationBuilder(geom: Geometry) {
 
@@ -111,6 +129,10 @@ class JTSConformingDelaunayTriangulationBuilder(geom: Geometry) {
         }
         val sites = createSiteVertices(siteCoords)
         val cdt = new ConformingDelaunayTriangulator(sites, tolerance)
+        // The caller's rule, or JTS's own default (NonEncroachingSplitPointFinder), places each extra point; either way
+        // the point takes the Z of the break line segment it splits.
+        val finder = Option(splitPointFinder).getOrElse(new NonEncroachingSplitPointFinder)
+        cdt.setSplitPointFinder(new LineZSplitPointFinder(finder))
 
         cdt.setConstraints(segments, new util.ArrayList(constraintVertexMap.values()))
         cdt.formInitialDelaunay()

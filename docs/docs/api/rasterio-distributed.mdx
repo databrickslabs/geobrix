@@ -163,11 +163,9 @@ The test asserts `np.allclose` between the rasterio-computed NDVI array and the 
 
 Everything in the matrix above. Every `rst_*` function runs on the lightweight implementation. A dedicated cluster with the JAR adds the heavyweight one where it is faster.
 
-### Heavyweight differences (minor)
+### Heavyweight differences
 
-A small number of capabilities run only on the heavyweight implementation:
-
-- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes. Constrained mode, `mode='constrained'` (constrained Delaunay, the default), works in both tiers. Conforming mode, `mode='conforming'` (Steiner-point conforming Delaunay), requires a C-level refinement library not available in the lightweight stack. It raises in `pyrx` with an informative message.
+None. Every function and mode runs on the lightweight implementation, the conforming TIN mode included.
 
 See [Surfaces and levels](./execution-tiers) for how GeoBrix picks an implementation.
 

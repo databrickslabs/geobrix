@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
-import org.locationtech.jts.geom.{Coordinate, LineString}
+import org.locationtech.jts.geom.{Coordinate, Geometry, GeometryFactory, LineString}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
@@ -38,5 +38,151 @@ class InterpolateElevationTest extends AnyFunSuite {
         val grid = InterpolateElevation.pointGridBBox(-50.0, -50.0, 150.0, 150.0, 20, 20, 32633)
         val out = InterpolateElevation.interpolate(mp, Seq.empty[LineString], grid, 0.0, 0.0)
         out.size should be > 0  // interior (in-hull) cells still interpolate; out-of-hull skipped, not thrown
+    }
+
+    // ====== the shared pre-step and the conforming mode ======
+
+    private val gf = new GeometryFactory()
+
+    private def plane(x: Double, y: Double): Double = 2.0 * x + y + 1.0
+
+    /** The corners of a 10 m square and its centre, on the plane z = 2x + y + 1. */
+    private def squarePoints() = JTS.multiPoint(
+      Seq((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (5.0, 5.0))
+          .map { case (x, y) => JTS.point(new Coordinate(x, y, plane(x, y))) }
+          .toArray
+    )
+
+    private def line(cs: (Double, Double, Double)*): Geometry =
+        gf.createLineString(cs.map { case (x, y, z) => new Coordinate(x, y, z) }.toArray)
+
+    private def line2d(cs: (Double, Double)*): Geometry =
+        gf.createLineString(cs.map { case (x, y) => new Coordinate(x, y) }.toArray)
+
+    /** The XY of every triangle vertex that is not an input coordinate. */
+    private def steiner(tris: Seq[Geometry], inputs: Set[(Double, Double)]): Set[(Double, Double)] =
+        tris.flatMap(_.getCoordinates.map(c => (c.x, c.y))).toSet -- inputs
+
+    private val squareXY = Set((0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (5.0, 5.0))
+
+    test("conforming: split_point_finder takes effect (MIDPOINT and NONENCROACHING place different points)") {
+        val bl = Seq(line((0.0, 1.0, plane(0, 1)), (10.0, 9.5, plane(10, 9.5))))
+        val inputs = squareXY ++ Set((0.0, 1.0), (10.0, 9.5))
+        def run(f: TriangulationSplitPointTypeEnum.Value) =
+            InterpolateElevation.triangulate(squarePoints(), bl, 0.0, 0.0, Some(f), "conforming")
+        val mid = run(TriangulationSplitPointTypeEnum.MIDPOINT)
+        val non = run(TriangulationSplitPointTypeEnum.NONENCROACHING)
+        // MIDPOINT halves the segment towards the centre point until no half's circle holds it
+        steiner(mid, inputs) shouldBe
+            Set((5.0, 5.25), (2.5, 3.125), (3.75, 4.1875), (4.375, 4.71875), (4.6875, 4.984375), (4.84375, 5.1171875))
+        steiner(non, inputs) shouldBe Set((4.8766328011611035, 5.145137880986938))
+        // the default (no finder) is JTS's own, NONENCROACHING
+        steiner(InterpolateElevation.triangulate(squarePoints(), bl, 0.0, 0.0, None, "conforming"), inputs) shouldBe
+            steiner(non, inputs)
+    }
+
+    test("conforming: a split point takes the Z of the break line it splits") {
+        val bl = Seq(line((0.0, 1.0, plane(0, 1)), (10.0, 9.5, plane(10, 9.5))))
+        for (f <- Seq(TriangulationSplitPointTypeEnum.MIDPOINT, TriangulationSplitPointTypeEnum.NONENCROACHING)) {
+            val tris = InterpolateElevation.triangulate(squarePoints(), bl, 0.0, 0.0, Some(f), "conforming")
+            tris.flatMap(_.getCoordinates).foreach(c => c.getZ shouldBe plane(c.x, c.y) +- 1e-12)
+        }
+    }
+
+    test("conforming: a 2D break line has Z 0, as in the constrained mode") {
+        val kite = JTS.multiPoint(
+          Seq((0.0, 0.0), (10.0, 0.0), (5.0, 1.0), (5.0, -1.0)).map { case (x, y) => JTS.point(new Coordinate(x, y, 3.0)) }.toArray
+        )
+        val bl = Seq(line2d((0.0, 0.0), (10.0, 0.0)))
+        for (m <- Seq("conforming", "constrained")) {
+            val zs = InterpolateElevation.triangulate(kite, bl, 0.0, 0.0, None, m).flatMap(_.getCoordinates).map(_.getZ)
+            zs.exists(_.isNaN) shouldBe false
+            zs.min shouldBe 0.0
+        }
+    }
+
+    test("conforming: crossing break lines raise with a Fix") {
+        // two break lines crossing at a shallow angle away from any vertex: the split points chase the crossing
+        val box = JTS.multiPoint(
+          Seq((0.0, -5.0), (10.0, -5.0), (10.0, 5.0), (0.0, 5.0)).map { case (x, y) => JTS.point(new Coordinate(x, y, 0.0)) }.toArray
+        )
+        val bl = Seq(line((1.0, -0.5, 0.0), (9.0, 0.5, 0.0)), line((2.0, 0.5, 0.0), (8.63, -0.5, 0.0)))
+        val e = intercept[IllegalArgumentException] {
+            InterpolateElevation.triangulate(box, bl, 0.0, 0.0, None, "conforming")
+        }
+        e.getMessage should include("Fix: split crossing break lines where they cross")
+    }
+
+    /** The case whose old post-triangulation snap made a zero-area triangle in both modes: (5.007, 4.993) is 0.0099
+     *  from the diagonal break line, so it was moved onto the line AFTER triangulating. */
+    private def sliverPoints() = JTS.multiPoint(
+      Seq((0.0, 0.0), (10.0, 10.0), (5.007, 4.993), (4.3, 5.7)).map { case (x, y) => JTS.point(new Coordinate(x, y, 0.0)) }.toArray
+    )
+
+    test("snap before triangulating: no zero-area triangle, and the point becomes a break line vertex") {
+        val bl = Seq(line((0.0, 0.0, 0.0), (10.0, 10.0, 20.0)))
+        for (m <- Seq("constrained", "conforming")) {
+            val tris = InterpolateElevation.triangulate(sliverPoints(), bl, 0.0, 0.05, None, m)
+            tris should not be empty
+            tris.foreach(_.getArea should be > 0.0)
+            val vs = tris.flatMap(_.getCoordinates).toSeq
+            vs.exists(c => math.abs(c.x - 5.0) < 1e-9 && math.abs(c.y - 5.0) < 1e-9 && math.abs(c.getZ - 10.0) < 1e-9) shouldBe
+                true
+            vs.exists(_.x == 5.007) shouldBe false
+        }
+    }
+
+    test("snap: a horizontal and a vertical break line are found (the lookup grows by the tolerance)") {
+        val pts = JTS.multiPoint(
+          Seq((0.0, -5.0), (10.0, -5.0), (10.0, 5.0), (0.0, 5.0), (5.0, 0.01), (-3.0, 2.0))
+              .map { case (x, y) => JTS.point(new Coordinate(x, y, 0.0)) }
+              .toArray
+        )
+        val bl = Seq(line((1.0, 0.0, 7.0), (9.0, 0.0, 7.0)), line((-2.99, -4.0, 9.0), (-2.99, 4.0, 9.0)))
+        val (kept, lines) = InterpolateElevation.prepareSites(pts, bl, 0.0, 0.05)
+        kept.map(c => (c.x, c.y)).toSet.intersect(Set((5.0, 0.01), (-3.0, 2.0))) shouldBe empty
+        lines(0).map(c => (c.x, c.y, c.getZ)) shouldBe Array((1.0, 0.0, 7.0), (5.0, 0.0, 7.0), (9.0, 0.0, 7.0))
+        lines(1).map(c => (c.x, c.y, c.getZ)) shouldBe Array((-2.99, -4.0, 9.0), (-2.99, 2.0, 9.0), (-2.99, 4.0, 9.0))
+    }
+
+    test("snap: the nearest line wins, and two points landing on one spot merge into the first") {
+        val pts = JTS.multiPoint(
+          Seq((5.0, 0.03), (5.0, 1.0), (2.0, 0.0), (7.0, 0.02), (7.0, -0.02), (0.01, 0.01))
+              .map { case (x, y) => JTS.point(new Coordinate(x, y, 0.0)) }
+              .toArray
+        )
+        val bl = Seq(
+          line((0.0, 0.0, 1.0), (10.0, 0.0, 1.0)), // y = 0
+          line((0.0, 0.05, 2.0), (10.0, 0.05, 2.0)), // y = 0.05: (5, 0.03) is nearer to it
+          line((0.0, 2.0, 3.0), (10.0, 2.0, 3.0))
+        )
+        val (kept, lines) = InterpolateElevation.prepareSites(pts, bl, 0.001, 0.05)
+        // (5, 0.03) is nearer y = 0.05; (5, 1) is out of reach; (2, 0) lies on y = 0 and on the edge of the reach
+        // of y = 0.05, so the nearer wins; (7, 0.02) and (7, -0.02) both land on (7, 0), so the second merges into the
+        // first; (0.01, 0) is 0.01 from (0, 0), over merge_tolerance, so it is a vertex of its own
+        kept.map(c => (c.x, c.y)).toSeq shouldBe Seq((5.0, 1.0))
+        lines(0).map(c => (c.x, c.y, c.getZ)).toSeq shouldBe
+            Seq((0.0, 0.0, 1.0), (0.01, 0.0, 1.0), (2.0, 0.0, 1.0), (7.0, 0.0, 1.0), (10.0, 0.0, 1.0))
+        lines(1).map(c => (c.x, c.y, c.getZ)).toSeq shouldBe Seq((0.0, 0.05, 2.0), (5.0, 0.05, 2.0), (10.0, 0.05, 2.0))
+        lines(2).length shouldBe 2
+    }
+
+    test("snap: an exact tie between two lines goes to the first in input order") {
+        val pts = JTS.multiPoint(Array(JTS.point(new Coordinate(5.0, 0.025, 0.0)), JTS.point(new Coordinate(0.0, 9.0, 0.0)),
+          JTS.point(new Coordinate(9.0, 9.0, 0.0))))
+        val bl = Seq(line((0.0, 0.05, 2.0), (10.0, 0.05, 2.0)), line((0.0, 0.0, 1.0), (10.0, 0.0, 1.0)))
+        val (_, lines) = InterpolateElevation.prepareSites(pts, bl, 0.0, 0.05)
+        lines(0).length shouldBe 3
+        lines(1).length shouldBe 2
+    }
+
+    test("snap: a projection within merge_tolerance of a line vertex merges into it") {
+        val pts = JTS.multiPoint(Array(JTS.point(new Coordinate(9.9995, 0.01, 0.0))))
+        val bl = Seq(line((0.0, 0.0, 1.0), (10.0, 0.0, 1.0)))
+        val (kept, lines) = InterpolateElevation.prepareSites(pts, bl, 0.001, 0.05)
+        kept shouldBe empty
+        lines(0).length shouldBe 2
+        // with merge_tolerance 0 the same point is a new vertex
+        InterpolateElevation.prepareSites(pts, bl, 0.0, 0.05)._2(0).length shouldBe 3
     }
 }

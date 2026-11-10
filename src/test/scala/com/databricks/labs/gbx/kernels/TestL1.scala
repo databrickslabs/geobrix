@@ -94,7 +94,6 @@ object TestL1 {
         // vectorx
         "com.databricks.labs.gbx.vectorx.expressions.ST_Triangulate",
         "com.databricks.labs.gbx.vectorx.expressions.ST_InterpolateElevationBBox",
-        "com.databricks.labs.gbx.vectorx.expressions.ST_InterpolateElevationGeom",
         "com.databricks.labs.gbx.vectorx.expressions.ST_Crs",
         "com.databricks.labs.gbx.vectorx.expressions.ST_SetCrs",
         "com.databricks.labs.gbx.vectorx.expressions.ST_TransformCrs",

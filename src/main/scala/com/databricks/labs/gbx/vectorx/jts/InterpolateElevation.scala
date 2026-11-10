@@ -4,9 +4,10 @@ package com.databricks.labs.gbx.vectorx.jts
 import org.locationtech.jts.geom.util.{LinearComponentExtracter, PolygonExtracter}
 import org.locationtech.jts.geom._
 import org.locationtech.jts.index.strtree.STRtree
-import org.locationtech.jts.linearref.LengthIndexedLine
-import org.locationtech.jts.triangulate.DelaunayTriangulationBuilder
+import org.locationtech.jts.triangulate.{ConstraintEnforcementException, DelaunayTriangulationBuilder}
+import org.locationtech.jts.triangulate.quadedge.LocateFailureException
 
+import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters._
 
 /** Delaunay triangulation from points and breaklines; interpolates Z at grid points and builds point grids. */
@@ -63,9 +64,10 @@ object InterpolateElevation {
      *      forces each breakline segment to be a triangle edge where the quad is convex (un-recoverable
      *      segments are left as-is). Mirrors the pyvx light tier (`pyvx/_tin.py`).
      *    - `"conforming"` — JTS `ConformingDelaunayTriangulator` (may insert Steiner points to make the
-     *      triangulation conform to the constraints).
+     *      triangulation conform to the constraints). Mirrors `pyvx/_conforming.py`.
      *
-     *  Both paths Z-snap vertices lying within `snapTolerance` of a constraint line.
+     *  Both modes first run [[prepareSites]] (Z of 2D coordinates, then the snap of `snapTolerance`), the steps
+     *  documented once in `pyvx/_tin.py` `prepare_sites`.
      */
     def triangulate(
         multiPoint: Geometry,
@@ -74,59 +76,67 @@ object InterpolateElevation {
         snapTolerance: Double,
         splitPointFinder: Option[TriangulationSplitPointTypeEnum.Value] = None,
         mode: String = "constrained"
-    ): Seq[Geometry] = mode match {
-        case "conforming"  => triangulateConforming(multiPoint, breaklines, mergeTolerance, snapTolerance, splitPointFinder)
-        case "constrained" => triangulateConstrained(multiPoint, breaklines, mergeTolerance, snapTolerance)
-        case other         => throw new IllegalArgumentException(
-            s"mode must be 'constrained' or 'conforming'; got '$other'")
+    ): Seq[Geometry] = {
+        if (mode != "conforming" && mode != "constrained") {
+            throw new IllegalArgumentException(s"mode must be 'constrained' or 'conforming'; got '$mode'")
+        }
+        val (points, lines) = prepareSites(multiPoint, breaklines, mergeTolerance, snapTolerance)
+        val gf = multiPoint.getFactory
+        if (mode == "conforming") triangulateConforming(points, lines, mergeTolerance, splitPointFinder, gf)
+        else triangulateConstrained(points, lines, mergeTolerance, gf)
     }
+
+    /** The message of a conforming triangulation JTS stops after its 99 splitting passes. */
+    val ConformingTooManySplits: String =
+        "mode 'conforming' could not fit the triangulation to the break lines: too many splitting " +
+            "iterations (the limit is 99). Fix: split crossing break lines where they cross, move break lines " +
+            "apart where they meet at a sharp angle, or use mode 'constrained'"
+
+    /** The message of a conforming triangulation whose point location does not converge. */
+    val ConformingLocateFailed: String =
+        "mode 'conforming' could not fit the triangulation to the break lines: locating a point did not " +
+            "converge. Fix: split crossing break lines where they cross, or use mode 'constrained'"
 
     /** Conforming path: JTS ConformingDelaunayTriangulator (may insert Steiner points). */
     private def triangulateConforming(
-        multiPoint: Geometry,
-        breaklines: Seq[Geometry],
+        points: Array[Coordinate],
+        lines: Seq[Array[Coordinate]],
         mergeTolerance: Double,
-        snapTolerance: Double,
-        splitPointFinder: Option[TriangulationSplitPointTypeEnum.Value]
+        splitPointFinder: Option[TriangulationSplitPointTypeEnum.Value],
+        gf: GeometryFactory
     ): Seq[Geometry] = {
-        val multiLineString = JTS.multiLineString(breaklines)
-        val triangulator = JTSConformingDelaunayTriangulationBuilder(multiPoint)
-        if (breaklines.nonEmpty) triangulator.setConstraints(multiLineString)
+        val triangulator = JTSConformingDelaunayTriangulationBuilder(gf.createMultiPointFromCoords(points))
+        val segLines = lines.filter(_.length >= 2)
+        if (segLines.nonEmpty) {
+            triangulator.setConstraints(gf.createMultiLineString(segLines.map(l => gf.createLineString(l)).toArray))
+        }
         triangulator.setTolerance(mergeTolerance)
         splitPointFinder.foreach(triangulator.setSplitPointFinder)
 
-        val trianglesGeomCollection = triangulator.getTriangles
-        val trianglePolygons = PolygonExtracter.getPolygons(trianglesGeomCollection).asScala.map(_.asInstanceOf[Polygon])
-
-        val postProcessedTrianglePolygons = postProcessTriangulation(trianglePolygons.toSeq, multiLineString, snapTolerance)
-        postProcessedTrianglePolygons
+        val trianglesGeomCollection =
+            try triangulator.getTriangles
+            catch {
+                case e: ConstraintEnforcementException => throw new IllegalArgumentException(ConformingTooManySplits, e)
+                case e: LocateFailureException         => throw new IllegalArgumentException(ConformingLocateFailed, e)
+            }
+        PolygonExtracter.getPolygons(trianglesGeomCollection).asScala.map(_.asInstanceOf[Geometry]).toSeq
     }
 
     /** Constrained (no-Steiner) path. Faithful port of the pyvx light `triangulate`:
      *
-     *  1. Site set = breakline coords (first, so keep-first dedup retains breakline Z) ++ multipoint
-     *     coords; XY→Z=0 for 2D breakline coords; dedup by XY (keep-first).
+     *  1. Site set = breakline coords (first, so keep-first dedup retains breakline Z) ++ mass points;
+     *     dedup by XY (keep-first).
      *  2. Unconstrained Delaunay over the XY of all sites (JTS `DelaunayTriangulationBuilder`).
      *  3. Sloan edge-flip recovery: force each breakline segment to be a triangle edge.
-     *  4. Z-snap vertices within `snapTolerance` of a constraint line (reuses `postProcessTriangulation`).
      */
     private def triangulateConstrained(
-        multiPoint: Geometry,
-        breaklines: Seq[Geometry],
+        points: Array[Coordinate],
+        lines: Seq[Array[Coordinate]],
         mergeTolerance: Double,
-        snapTolerance: Double
+        gf: GeometryFactory
     ): Seq[Geometry] = {
-        val gf = multiPoint.getFactory
-
         // --- 1. site coordinate set: breaklines first, then mass points, dedup by XY (keep-first) ---
-        val blCoords: Seq[Coordinate] = breaklines.flatMap { bl =>
-            bl.getCoordinates.map { c =>
-                val z = if (java.lang.Double.isNaN(c.getZ)) 0.0 else c.getZ
-                new Coordinate(c.x, c.y, z)
-            }
-        }
-        val mpCoords: Seq[Coordinate] = multiPoint.getCoordinates.toSeq
-        val sites = dedupByXY(blCoords ++ mpCoords, mergeTolerance)
+        val sites = dedupByXY(lines.flatten ++ points.toSeq, mergeTolerance)
         if (sites.length < 3) return Seq.empty[Geometry]
 
         // --- 2. initial unconstrained Delaunay over XY ---
@@ -145,23 +155,156 @@ object InterpolateElevation {
         }.toArray
 
         // --- 3. Sloan constraint recovery ---
-        if (breaklines.nonEmpty) {
-            triangles = recoverConstraints(sites, triangles, breaklines)
+        if (lines.nonEmpty) {
+            triangles = recoverConstraints(sites, triangles, lines)
         }
 
-        // --- build triangle polygons carrying site Z ---
-        val polys: Seq[Geometry] = triangles.toSeq.map { t =>
+        // --- triangle polygons carrying site Z ---
+        triangles.toSeq.map { t =>
             val ring = Array(sites(t(0)), sites(t(1)), sites(t(2)), sites(t(0)))
             gf.createPolygon(ring)
         }
+    }
 
-        // --- 4. Z-snap (reuse the conforming post-process; equivalent to light _zsnap) ---
-        if (snapTolerance > 0.0 && breaklines.nonEmpty) {
-            val mls = JTS.multiLineString(breaklines)
-            postProcessTriangulation(polys.map(_.asInstanceOf[Polygon]), mls, snapTolerance)
+    /** A copy of `c` whose missing Z (NaN: a 2D point or line) is 0, as the constrained mode always did. */
+    private def withZ(c: Coordinate): Coordinate =
+        new Coordinate(c.x, c.y, if (java.lang.Double.isNaN(c.getZ)) 0.0 else c.getZ)
+
+    /** The shared pre-step of both modes: `(mass points, break lines)`, each break line one coordinate array.
+     *
+     *  Every coordinate without Z takes Z 0. When `snapTolerance` > 0 and a break line has a segment, the mass
+     *  points are merged (`dedupByXY`), then [[snapToBreaklines]] moves each one within reach onto its nearest break
+     *  line. A mirror of `pyvx/_tin.py` `prepare_sites`, whose docstring states the rules.
+     */
+    private[jts] def prepareSites(
+        multiPoint: Geometry,
+        breaklines: Seq[Geometry],
+        mergeTolerance: Double,
+        snapTolerance: Double
+    ): (Array[Coordinate], Seq[Array[Coordinate]]) = {
+        val points = multiPoint.getCoordinates.map(withZ)
+        val lines = breaklines
+            .flatMap(bl => LinearComponentExtracter.getLines(bl).asScala.map(_.asInstanceOf[LineString]))
+            .filter(!_.isEmpty)
+            .map(_.getCoordinates.map(withZ))
+        if (snapTolerance > 0.0 && lines.exists(_.length >= 2)) {
+            snapToBreaklines(dedupByXY(points.toSeq, mergeTolerance), lines, mergeTolerance, snapTolerance)
         } else {
-            polys
+            (points, lines)
         }
+    }
+
+    /** `org.locationtech.jts.algorithm.Distance.pointToSegment`, spelled out so the Python level can repeat each
+     *  operation in the same order (`pyvx/_tin.py` `_point_segment_distance`). */
+    private def pointToSegment(px: Double, py: Double, ax: Double, ay: Double, bx: Double, by: Double): Double = {
+        if (ax == bx && ay == by) return Math.hypot(px - ax, py - ay)
+        val len2 = (bx - ax) * (bx - ax) + (by - ay) * (by - ay)
+        val r = ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / len2
+        if (r <= 0.0) return Math.hypot(px - ax, py - ay)
+        if (r >= 1.0) return Math.hypot(px - bx, py - by)
+        val s = ((ay - py) * (bx - ax) - (ax - px) * (by - ay)) / len2
+        Math.abs(s) * Math.sqrt(len2)
+    }
+
+    /** The point of segment a-b nearest p, with the segment's Z interpolated there, and its projection factor. */
+    private def project(p: Coordinate, a: Coordinate, b: Coordinate): (Double, Coordinate) = {
+        if (a.x == b.x && a.y == b.y) return (0.0, a)
+        val len2 = (b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)
+        val r = ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / len2
+        if (r <= 0.0) (0.0, a)
+        else if (r >= 1.0) (1.0, b)
+        else (r, new Coordinate(a.x + r * (b.x - a.x), a.y + r * (b.y - a.y), a.getZ + r * (b.getZ - a.getZ)))
+    }
+
+    /** The break line vertices, to ask whether a point is within `tol` of one (`tol` <= 0: the same X and Y). */
+    private final class VertexIndex(tol: Double) {
+        private val exact = scala.collection.mutable.HashSet[(Double, Double)]()
+        private val cells = scala.collection.mutable.HashMap[(Long, Long), ArrayBuffer[Coordinate]]()
+        private def key(v: Double): Long = Math.floor(v / tol).toLong
+
+        def add(c: Coordinate): Unit =
+            if (tol > 0.0) cells.getOrElseUpdate((key(c.x), key(c.y)), ArrayBuffer[Coordinate]()) += c
+            else exact += ((c.x + 0.0, c.y + 0.0))
+
+        def near(c: Coordinate): Boolean =
+            if (tol > 0.0) {
+                val kx = key(c.x)
+                val ky = key(c.y)
+                (-2 to 2).exists(i =>
+                    (-2 to 2).exists(j =>
+                        cells.get((kx + i, ky + j)).exists(_.exists(v => Math.hypot(c.x - v.x, c.y - v.y) <= tol))
+                    )
+                )
+            } else {
+                exact.contains((c.x + 0.0, c.y + 0.0))
+            }
+    }
+
+    /** Moves each mass point within `snapTol` of a break line onto the nearest one (see `prepare_sites`): returns the
+     *  mass points left and the break lines with the snapped points inserted as vertices. */
+    private def snapToBreaklines(
+        points: Array[Coordinate],
+        lines: Seq[Array[Coordinate]],
+        mergeTol: Double,
+        snapTol: Double
+    ): (Array[Coordinate], Seq[Array[Coordinate]]) = {
+        // the segments in input order: line by line, then along each line
+        val segs = lines.flatMap(l => (0 until l.length - 1).map(k => (l(k), l(k + 1)))).toArray
+        val tree = new STRtree()
+        segs.indices.foreach { s =>
+            val (a, b) = segs(s)
+            tree.insert(new Envelope(a.x, b.x, a.y, b.y), Int.box(s))
+        }
+        val vertices = new VertexIndex(mergeTol)
+        lines.foreach(_.foreach(vertices.add))
+        val inserted = Array.fill(segs.length)(ArrayBuffer[(Double, Coordinate)]())
+        val kept = ArrayBuffer[Coordinate]()
+        val reach = 2.0 * snapTol // the query box only finds candidates: the test below decides
+        points.foreach { p =>
+            val candidates = tree
+                .query(new Envelope(p.x - reach, p.x + reach, p.y - reach, p.y + reach))
+                .asScala
+                .map(_.asInstanceOf[Integer].intValue)
+                .sorted
+            var best = -1
+            var bestD = 0.0
+            candidates.foreach { s =>
+                val (a, b) = segs(s)
+                if (
+                  Math.min(a.x, b.x) - snapTol <= p.x && p.x <= Math.max(a.x, b.x) + snapTol &&
+                  Math.min(a.y, b.y) - snapTol <= p.y && p.y <= Math.max(a.y, b.y) + snapTol
+                ) {
+                    val d = pointToSegment(p.x, p.y, a.x, a.y, b.x, b.y)
+                    if (d <= snapTol && (best < 0 || d < bestD)) {
+                        best = s
+                        bestD = d
+                    }
+                }
+            }
+            if (best < 0) {
+                kept += p
+            } else {
+                val (a, b) = segs(best)
+                val (r, q) = project(p, a, b)
+                if (!vertices.near(q)) {
+                    vertices.add(q)
+                    inserted(best) += ((r, q))
+                }
+            }
+        }
+        var s = 0
+        val out = lines.map { l =>
+            val buf = ArrayBuffer[Coordinate]()
+            l.indices.foreach { k =>
+                buf += l(k)
+                if (k < l.length - 1) {
+                    buf ++= inserted(s).sortBy(_._1).map(_._2)
+                    s += 1
+                }
+            }
+            buf.toArray
+        }
+        (kept.toArray, out)
     }
 
     /** Drop coincident XY coordinates, keeping the first occurrence (preserves breakline Z).
@@ -214,7 +357,7 @@ object InterpolateElevation {
     private def recoverConstraints(
         sites: Array[Coordinate],
         initial: Array[Array[Int]],
-        breaklines: Seq[Geometry]
+        breaklines: Seq[Array[Coordinate]]
     ): Array[Array[Int]] = {
         val triangles = scala.collection.mutable.ArrayBuffer[Array[Int]](initial.map(_.clone()): _*)
 
@@ -233,8 +376,7 @@ object InterpolateElevation {
             adj
         }
 
-        breaklines.foreach { bl =>
-            val segPts = bl.getCoordinates
+        breaklines.foreach { segPts =>
             var k = 0
             while (k < segPts.length - 1) {
                 val ia = vertexIndex(sites, segPts(k))
@@ -285,50 +427,6 @@ object InterpolateElevation {
             }
         }
         triangles.toArray
-    }
-
-    /** Snaps triangle vertices to constraint lines within tolerance and rebuilds polygons. */
-    private def postProcessTriangulation(
-        trianglePolygons: Seq[Polygon],
-        constraintLineGeom: Geometry,
-        tolerance: Double
-    ): Seq[Polygon] = {
-        val geomFact = constraintLineGeom.getFactory
-
-        val constraintLines = LinearComponentExtracter
-            .getLines(constraintLineGeom)
-            .iterator()
-            .asScala
-            .toSeq
-            .map(_.asInstanceOf[LineString])
-
-        val constraintLinesTree = new STRtree(4)
-        constraintLines.foreach(l => constraintLinesTree.insert(l.getEnvelopeInternal, l))
-
-        trianglePolygons.map(t => {
-            val coords = t.getCoordinates.map(c => {
-                /*
-                 * overwrite the z values for every coordinate lying
-                 * within a fraction of the value of `tolerance`.
-                 */
-                val coordPoint = geomFact.createPoint(c)
-                val originatingLineString = constraintLinesTree
-                    .query(new Envelope(c))
-                    .iterator()
-                    .asScala
-                    .toSeq
-                    .map(_.asInstanceOf[LineString])
-                    .find(l => l.intersects(coordPoint.buffer(tolerance)))
-                originatingLineString match {
-                    case Some(l) =>
-                        val indexedLine = new LengthIndexedLine(l)
-                        val index = indexedLine.indexOf(c)
-                        indexedLine.extractPoint(index)
-                    case None    => c
-                }
-            })
-            geomFact.createPolygon(coords)
-        })
     }
 
     /** Regular grid of cell-center points over a bbox.

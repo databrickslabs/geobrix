@@ -1257,14 +1257,9 @@ _POINT_ROW_BYTES = 29 + _ROW_OVERHEAD  # the WKB of a point with Z
 
 
 def _tin_mode(fn: str, mode) -> None:
-    """The mode: 'constrained' (the default) runs here; 'conforming' is the JVM level's; any other word is wrong."""
+    """The mode: 'constrained' (the default) or 'conforming'; any other word is wrong."""
     m = (mode or "constrained").lower()
-    if m == "conforming":
-        raise _Refusal(
-            f"{fn}: mode 'conforming' runs on the JVM level only. Fix: run {fn} in a notebook or job session on a "
-            "cluster with the geobrix JAR, or use mode 'constrained'"
-        )
-    if m != "constrained":
+    if m not in ("constrained", "conforming"):
         raise _parameter(
             fn, f"mode must be 'constrained' or 'conforming'; got {mode!r}"
         )
@@ -1303,8 +1298,8 @@ def st_triangulate_rows(
     split_point_finder,
     mode,
 ):
-    """gbx__st_triangulate_rows: the 2D WKB triangles of the constrained Delaunay triangulation of the points and break
-    lines, as an array, in the session's order. NULL points, an empty array or a NULL tolerance give no rows.
+    """gbx__st_triangulate_rows: the 2D WKB triangles of the triangulation of the points and break lines (either mode),
+    as an array, in the session's order. NULL points, an empty array or a NULL tolerance give no rows.
     """
     from databricks.labs.gbx.pyvx import _tin
     from databricks.labs.gbx.uc.handlers import _check_bytes
@@ -1332,7 +1327,15 @@ def st_triangulate_rows(
     )
     return _rows_within_cap(
         fn,
-        _tin.triangle_wkbs(None, None, merge_tolerance, snap_tolerance, parsed=parsed),
+        _tin.triangle_wkbs(
+            None,
+            None,
+            merge_tolerance,
+            snap_tolerance,
+            mode or "constrained",
+            split_point_finder,
+            parsed=parsed,
+        ),
         "the triangles it returns",
     )
 
@@ -1359,7 +1362,16 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     return _rows_within_cap(
         fn,
         _tin.elevation_wkbs(
-            None, None, mt, st, cell_iter, srid, flavor="iso", parsed=parsed
+            None,
+            None,
+            mt,
+            st,
+            cell_iter,
+            srid,
+            flavor="iso",
+            parsed=parsed,
+            mode=mode or "constrained",
+            split_point_finder=spf,
         ),
         "the points it returns",
     )

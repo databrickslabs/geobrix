@@ -172,11 +172,3 @@ computes = ["dedicated"]
 gate = "refusal"
 gate_detail = "access='auto' falls back to the Volume mount quietly; an explicit access='direct' raises ZarrAccessUnavailable with 'Fix: use access=\"auto\" or \"fuse\" on this compute; direct access needs dedicated compute where UC can vend volume credentials'"
 why = "Direct (cloud-storage) Zarr access needs Unity Catalog temporary Volume credentials, which only dedicated compute may get"
-
-[[feature]]
-path = "uc/forms.py"
-symbol = "_tin_mode"
-computes = ["dedicated"]
-gate = "refusal"
-gate_detail = "raises with 'Fix: run <function> in a notebook or job session on a cluster with the geobrix JAR, or use mode constrained'"
-why = "The conforming TIN mode exists only on the JVM level, so the Unity Catalog function refuses it"

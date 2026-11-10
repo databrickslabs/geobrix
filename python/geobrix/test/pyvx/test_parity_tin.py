@@ -1,7 +1,7 @@
-"""Light (pyvx) vs heavy (vectorx) TIN parity — constrained mode.
+"""Light (pyvx) vs heavy (vectorx) TIN parity — both modes.
 
-Both tiers implement ``mode="constrained"`` (default, no Steiner points) and the
-heavy-only ``mode="conforming"``. Light uses scipy/Qhull; heavy uses JTS
+Both tiers implement ``mode="constrained"`` (default, no Steiner points) and
+``mode="conforming"``. Light uses scipy/Qhull; heavy uses JTS
 ``DelaunayTriangulationBuilder`` + Sloan edge-flip constraint recovery.
 
 INVOCATION SURFACES DIFFER PER TIER (important):
@@ -30,9 +30,8 @@ Parity posture (per the pyvx TIN spec):
   a sample grid matches within 1e-6 — NOT triangle identity (no-Steiner recovery
   may pick different non-constraint diagonals). Observed max interp Z divergence:
   ~1.8e-15 (floating-point noise).
-- **mode="conforming"** → heavy returns rows; light raises (NotImplementedError
-  surfaces as a PythonException through the SQL UDTF call, message contains
-  "conforming").
+- **mode="conforming"** → both tiers run JTS 1.20's conforming Delaunay (light: a port
+  in ``pyvx/_conforming.py``): the triangles are the same, every X and Y bit for bit.
 
 Heavy requires the geobrix JAR (Scala/JTS). The JAR is present in the
 geobrix-dev Docker container; this test auto-skips when the JAR is not staged
@@ -339,51 +338,46 @@ def test_triangulate_breakline_edges_present_both(spark_with_jar):
     )
 
 
-def test_conforming_is_heavy_only(spark_with_jar):
-    """mode='conforming' returns rows in heavy; raises in light.
+def _exact_triangles(rows, col="triangle"):
+    out = set()
+    for r in rows:
+        ring = list(wkb.loads(bytes(r[col])).exterior.coords)[:-1]
+        out.add(frozenset((float(x), float(y)) for x, y in ring))
+    return out
 
-    Light is invoked via its SQL UDTF surface (which raises NotImplementedError,
-    surfacing as a PythonException whose message contains 'conforming'); heavy is
-    invoked via the JVM generator Column (which supports conforming).
-    """
-    from pyspark.sql import functions as f
 
-    from databricks.labs.gbx import register
+@pytest.mark.parametrize(
+    "spf,snap", [("NONENCROACHING", 0.0), ("MIDPOINT", 0.0), ("NONENCROACHING", 0.5)]
+)
+def test_conforming_parity_exact(spark_with_jar, spf, snap):
+    """mode='conforming' gives the same triangles on both levels, every X and Y bit for bit, the extra points and the
+    snap of points onto break lines included."""
+    import numpy as np
 
     spark = spark_with_jar
-    fn = "gbx_st_triangulate"
-
-    pts = _pts_wkb(_GENERAL_PTS)
+    rng = np.random.default_rng(11)
+    xy = rng.normal(50, 15, (300, 2))
+    pts = _pts_wkb([(x, y, 0.1 * x + 0.05 * y) for x, y in xy])
+    lines = [
+        [(20.0, 30.0, 4.0), (45.0, 41.0, 6.5), (80.0, 38.0, 9.0)],
+        [(30.0, 70.0, 6.0), (70.0, 75.0, 8.0)],
+        [(35.0, 10.0, 3.0), (60.0, 25.0, 5.0)],
+    ]
+    bl = [bytearray(to_wkb(LineString(ln))) for ln in lines]
     df = spark.createDataFrame(
-        [(pts, [], 0.0, 0.0, "NONENCROACHING")],
+        [(pts, bl, 0.0, snap, spf)],
         "pts array<binary>, bl array<binary>, mt double, st double, spf string",
     )
-    df.createOrReplaceTempView("tin_conf")
-
-    # Light (SQL UDTF, its level asked for by name) must raise — conforming is heavy-only. The manager's own
-    # choice for the name is the JVM generator, which supports conforming, so the lightweight level is selected.
-    register(spark, only=[fn], _levels={fn: ("L3", "-")})
-    with pytest.raises(Exception, match="conforming"):
-        spark.sql(
-            "SELECT t.triangle FROM tin_conf, LATERAL "
-            "gbx_st_triangulate(pts, bl, mt, st, spf, 'conforming') t"
-        ).collect()
-
-    # Heavy (JVM generator) supports conforming → rows.
-    register(spark, only=[fn], _levels={fn: ("L1", "-")})
-    heavy_rows = df.select(
-        f.call_function(
-            "gbx_st_triangulate",
-            f.col("pts"),
-            f.col("bl"),
-            f.col("mt"),
-            f.col("st"),
-            f.col("spf"),
-            f.lit("conforming"),
-        ).alias("triangle")
-    ).collect()
-
-    assert len(heavy_rows) > 0, "heavy conforming triangulation produced no triangles"
-    assert all(
-        wkb.loads(bytes(r["triangle"])).geom_type == "Polygon" for r in heavy_rows
+    view = f"tin_conf_{spf.lower()}_{int(snap * 10)}"
+    df.createOrReplaceTempView(view)
+    light = _exact_triangles(_light_triangles(spark, view, "conforming"))
+    heavy = _exact_triangles(_heavy_triangles(df, "conforming"))
+    assert len(light) > 500
+    inputs = {(float(x), float(y)) for x, y in xy.tolist()}
+    steiner = (
+        {v for t in heavy for v in t}
+        - inputs
+        - {(x, y) for ln in lines for x, y, _ in ln}
     )
+    assert steiner, "the break lines should need extra points"
+    assert light == heavy, f"{len(light ^ heavy)} triangles differ"

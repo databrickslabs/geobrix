@@ -1125,8 +1125,8 @@ result.show()
 """.trim
 
   // =========================================================================
-  // VectorX TIN family — st_triangulate, st_interpolateelevationbbox,
-  //                       st_interpolateelevationgeom
+  // VectorX TIN family — st_triangulate, st_interpolateelevationbbox
+  //                       (st_interpolateelevationgeom has no Scala form)
   //
   // Fixture: ``tin_survey`` view — 1 row: pts ARRAY<BINARY> (4 WKB POINT Z),
   //          bl ARRAY<BINARY> (empty).  The 4 points form a 10×10 m square:
@@ -1134,7 +1134,7 @@ result.show()
   //
   // These are Generator Column functions in the heavyweight (vectorx) tier.
   // In the lightweight (pyvx) tier, invoke the registered UDTF via SQL LATERAL.
-  // mode='constrained' (default) is both-tier; mode='conforming' is heavy-only.
+  // mode='constrained' (default) and mode='conforming' run in both tiers.
   // =========================================================================
 
   val st_triangulate_scala_example: String =
@@ -1189,36 +1189,6 @@ result.show()
 |...            |
 +---------------+
 ... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)""".trim
-
-  val st_interpolateelevationgeom_scala_example: String =
-    """
-import com.databricks.labs.gbx.vectorx.{functions => vx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-val origin = expr("unhex('010100000000000000000000000000000000002440')")
-val df = spark.table("tin_survey")
-val result = df.select(
-  vx.st_interpolateelevationgeom(
-    col("pts"), col("bl"),
-    lit(0), lit(0), lit("NONENCROACHING"),
-    origin, lit(3), lit(3), lit(3), lit(-3),
-    lit("constrained")
-  ).alias("elevation_point")
-)
-result.show()
-""".trim
-
-  val st_interpolateelevationgeom_scala_example_output: String =
-    """
-+---------------+
-|elevation_point|
-+---------------+
-|[binary]       |
-|[binary]       |
-|...            |
-+---------------+
-... (WKB binary — POINT Z geometries, 3×3 origin-anchored grid, 9 rows)""".trim
 
   // =========================================================================
   // VectorX CRS family — st_crs, st_setcrs, st_transformcrs

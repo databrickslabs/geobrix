@@ -93,8 +93,8 @@ def st_triangulate_sql_example():
     (4 WKB POINT Z forming a 10×10 m square with elevations 0, 0, 10, 5 m) and
     ``bl ARRAY<BINARY>`` (empty breaklines array).  Constrained Delaunay
     triangulation of a quadrilateral produces exactly 2 triangle polygons.
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
     A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """
@@ -121,8 +121,8 @@ def st_interpolateelevationbbox_sql_example():
     ``st_triangulate``).  Samples the TIN on a 3×3 grid spanning the full 10×10 m
     extent (0–10 in both X and Y, SRID=0).  All 9 cell centres fall inside the TIN
     convex hull, so the generator emits 9 rows.
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
     A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """
@@ -151,8 +151,8 @@ def st_interpolateelevationgeom_sql_example():
     3 columns, 3 rows, and cell sizes of 3.0 m × 3.0 m (negative Y steps
     downward per raster convention).  All 9 cell centres fall inside the TIN hull
     and the SRID of the output points is 0 (plain WKB origin carries no SRID).
-    ``mode='constrained'`` is available in both tiers; ``mode='conforming'``
-    (inserts Steiner points) is heavyweight-only.
+    ``mode='constrained'`` and ``mode='conforming'`` (inserts Steiner points) run
+    in both tiers.
     A table function, called as ``FROM t, LATERAL f(...)``.
     """
     return """

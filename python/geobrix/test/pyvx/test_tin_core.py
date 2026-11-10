@@ -67,22 +67,19 @@ def test_recovery_terminates_on_dense_constraints():
     assert len(tris) > 0
 
 
-def test_zsnap_sets_vertex_z_along_constraint():
-    # A vertex lying ON the constraint line must have its Z overwritten with
-    # the interpolated breakline Z (10.0), not the mass-point Z (0.0).
-    pts = np.array([[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0]], dtype=float)
+def test_snap_sets_vertex_z_along_constraint():
+    # A point within snap_tolerance of a break line moves onto it, BEFORE triangulating, and takes the line's Z there
+    # (10.0), not its own (0.0); the line keeps its own vertices and Z.
+    pts = np.array(
+        [[0, 0, 0], [4, 0, 0], [4, 4, 0], [0, 4, 0], [2, 2.01, 0]], dtype=float
+    )
     bl = [np.array([[0.0, 2.0, 10.0], [4.0, 2.0, 10.0]])]
-    tris = _tin.triangulate(pts, bl, 0.0, 1e-6)
-    assert len(tris) > 0  # must not crash; recovery + snap run
-    # The breakline endpoints (0,2) and (4,2) became vertices; on the
-    # constraint line their Z must be snapped to 10.0.
-    snapped = []
-    for t in tris:
-        for v in t:
-            if abs(v[1] - 2.0) < 1e-9 and (abs(v[0]) < 1e-9 or abs(v[0] - 4.0) < 1e-9):
-                snapped.append(v[2])
-    assert snapped, "expected vertices on the constraint line"
-    assert all(abs(z - 10.0) < 1e-9 for z in snapped)
+    for mode in ("constrained", "conforming"):
+        tris = _tin.triangulate(pts, bl, 0.0, 0.05, mode)
+        vs = {tuple(v) for t in tris for v in t.tolist()}
+        assert (2.0, 2.0, 10.0) in vs, mode
+        assert not any(v[1] == 2.01 for v in vs), mode
+        assert all(z == 10.0 for x, y, z in vs if y == 2.0), mode
 
 
 def test_interpolate_z_on_edge_at_utm_magnitude():
@@ -138,18 +135,110 @@ def test_triangulate_collinear_points_returns_empty():
     assert _tin.triangulate(pts, [], 0.0, 0.0) == []
 
 
-def test_zsnap_snaps_just_beyond_endpoint():
-    # A vertex within tol of a breakline ENDPOINT but just beyond it (s slightly
-    # > 1) must still be snapped to that endpoint's Z (heavy's circular buffer cap),
-    # not left at the mass-point Z.
-    tol = 0.1
-    # Breakline along x, endpoint at (4,2,10). Vertex just past it at x=4.05 (s>1),
-    # within tol of the endpoint.
+def test_snap_just_beyond_an_endpoint_merges_into_it():
+    # A point within reach of a break line END but past it (projection factor > 1) lands on the end and merges into
+    # that vertex: it leaves the mass points and the line keeps its two vertices.
     bl = [np.array([[0.0, 2.0, 5.0], [4.0, 2.0, 10.0]])]
-    tri = np.array([[4.05, 2.0, 0.0], [5.0, 0.0, 0.0], [5.0, 4.0, 0.0]])
-    out = _tin._zsnap([tri], bl, tol)
-    # The first vertex (just beyond the endpoint) should snap to endpoint Z=10.0.
-    assert abs(out[0][0, 2] - 10.0) < 1e-9
+    pts = np.array([[4.05, 2.0, 0.0], [5.0, 0.0, 0.0], [5.0, 4.0, 0.0]])
+    kept, lines = _tin.prepare_sites(pts, bl, 0.0, 0.1)
+    assert kept.tolist() == [[5.0, 0.0, 0.0], [5.0, 4.0, 0.0]]
+    assert lines[0].tolist() == bl[0].tolist()
+
+
+def _sites(xy, z=0.0):
+    return np.array([[x, y, z] for x, y in xy], dtype=float)
+
+
+def test_snap_finds_horizontal_and_vertical_lines():
+    # The lookup grows each segment's envelope by the tolerance: a flat envelope (a horizontal or vertical line) still
+    # holds a point beside it. The post-triangulation snap this replaced looked a point up in its own envelope only.
+    pts = _sites([(0, -5), (10, -5), (10, 5), (0, 5), (5, 0.01), (-3, 2)])
+    bl = [
+        np.array([[1.0, 0.0, 7.0], [9.0, 0.0, 7.0]]),
+        np.array([[-2.99, -4.0, 9.0], [-2.99, 4.0, 9.0]]),
+    ]
+    kept, lines = _tin.prepare_sites(pts, bl, 0.0, 0.05)
+    assert len(kept) == 4
+    assert lines[0].tolist() == [[1.0, 0.0, 7.0], [5.0, 0.0, 7.0], [9.0, 0.0, 7.0]]
+    assert lines[1].tolist() == [
+        [-2.99, -4.0, 9.0],
+        [-2.99, 2.0, 9.0],
+        [-2.99, 4.0, 9.0],
+    ]
+
+
+def test_snap_nearest_line_wins_and_landings_merge():
+    pts = _sites([(5, 0.03), (5, 1), (2, 0), (7, 0.02), (7, -0.02), (0.01, 0.01)])
+    bl = [
+        np.array([[0.0, 0.0, 1.0], [10.0, 0.0, 1.0]]),
+        np.array([[0.0, 0.05, 2.0], [10.0, 0.05, 2.0]]),
+        np.array([[0.0, 2.0, 3.0], [10.0, 2.0, 3.0]]),
+    ]
+    kept, lines = _tin.prepare_sites(pts, bl, 0.001, 0.05)
+    # (5, 0.03) is nearer y = 0.05; (5, 1) is out of reach; (7, +-0.02) both land on (7, 0): the second merges
+    assert kept.tolist() == [[5.0, 1.0, 0.0]]
+    assert lines[0].tolist() == [
+        [0.0, 0.0, 1.0],
+        [0.01, 0.0, 1.0],
+        [2.0, 0.0, 1.0],
+        [7.0, 0.0, 1.0],
+        [10.0, 0.0, 1.0],
+    ]
+    assert lines[1].tolist() == [[0.0, 0.05, 2.0], [5.0, 0.05, 2.0], [10.0, 0.05, 2.0]]
+    assert len(lines[2]) == 2
+
+
+def test_snap_exact_tie_goes_to_the_first_line():
+    pts = _sites([(5, 0.025), (0, 9), (9, 9)])
+    bl = [
+        np.array([[0.0, 0.05, 2.0], [10.0, 0.05, 2.0]]),
+        np.array([[0.0, 0.0, 1.0], [10.0, 0.0, 1.0]]),
+    ]
+    _, lines = _tin.prepare_sites(pts, bl, 0.0, 0.05)
+    assert [len(b) for b in lines] == [3, 2]
+
+
+def test_snap_within_merge_tolerance_of_a_vertex_merges():
+    pts = _sites([(9.9995, 0.01)])
+    bl = [np.array([[0.0, 0.0, 1.0], [10.0, 0.0, 1.0]])]
+    kept, lines = _tin.prepare_sites(pts, bl, 0.001, 0.05)
+    assert len(kept) == 0 and len(lines[0]) == 2
+    assert len(_tin.prepare_sites(pts, bl, 0.0, 0.05)[1][0]) == 3
+
+
+def test_snap_leaves_no_zero_area_triangle():
+    # (5.007, 4.993) is 0.0099 from the diagonal break line. Moved onto the line AFTER triangulating (the old JVM
+    # post-process), it left a zero-area triangle in both modes; snapped first, it is a break line vertex.
+    pts = _sites([(0, 0), (10, 10), (5.007, 4.993), (4.3, 5.7)])
+    bl = [np.array([[0.0, 0.0, 0.0], [10.0, 10.0, 20.0]])]
+    for mode in ("constrained", "conforming"):
+        tris = _tin.triangulate(pts, bl, 0.0, 0.05, mode)
+        assert tris, mode
+        for t in tris:
+            assert abs(_tin._orient2d(t[0], t[1], t[2])) > 0.0, mode
+        assert any(
+            abs(v[0] - 5.0) < 1e-9
+            and abs(v[1] - 5.0) < 1e-9
+            and abs(v[2] - 10.0) < 1e-9
+            for t in tris
+            for v in t
+        ), mode
+
+
+def test_a_2d_break_line_has_z_0_in_both_modes():
+    pts = _sites([(0, 0), (10, 0), (5, 1), (5, -1)], z=3.0)
+    bl = [np.array([[0.0, 0.0], [10.0, 0.0]])]
+    for mode in ("constrained", "conforming"):
+        zs = [v[2] for t in _tin.triangulate(pts, bl, 0.0, 0.0, mode) for v in t]
+        assert not np.isnan(zs).any() and min(zs) == 0.0, mode
+
+
+def test_split_point_finder_is_checked_in_both_modes():
+    pts = _sites([(0, 0), (1, 0), (0, 1)])
+    for mode in ("constrained", "conforming"):
+        assert _tin.triangulate(pts, [], 0.0, 0.0, mode, "midpoint")
+        with pytest.raises(ValueError, match="sideways"):
+            _tin.triangulate(pts, [], 0.0, 0.0, mode, "sideways")
 
 
 def test_interpolate_known_plane_and_outside_hull():

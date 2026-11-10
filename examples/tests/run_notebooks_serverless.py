@@ -231,6 +231,34 @@ def _strip_pip_cells(nb_bytes: bytes) -> bytes:
     return json.dumps(nb).encode()
 
 
+# --pip-wheel: the wheel the `%pip install ... @ file://<...>.whl` lines of an uploaded copy install instead of theirs
+PIP_WHEEL: Optional[str] = None
+_PIP_FILE_WHEEL = re.compile(r"@\s*file://(/Volumes/[^\"'\s]+\.whl)")
+
+
+def _repoint_pip_wheel(nb_bytes: bytes, wheel: str) -> bytes:
+    """Point every `%pip install ... @ file:///Volumes/....whl` line of the notebook at `wheel` (a `/Volumes` path), so
+    a probe installs the wheel of an isolated staging folder. Only `%pip` lines change; the committed notebook is not
+    touched."""
+    nb = json.loads(nb_bytes)
+    changed = 0
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", [])
+        lines = src.splitlines(keepends=True) if isinstance(src, str) else list(src)
+        out = []
+        for line in lines:
+            if line.lstrip().startswith("%pip") and _PIP_FILE_WHEEL.search(line):
+                line = _PIP_FILE_WHEEL.sub(f"@ file://{wheel}", line)
+                changed += 1
+            out.append(line)
+        cell["source"] = out
+    if changed:
+        print(f"    %pip wheel -> {wheel} ({changed} line(s))", flush=True)
+    return json.dumps(nb).encode()
+
+
 def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
     """Inject a code cell of Python assignments so validation runs force compute.
 
@@ -304,6 +332,8 @@ class JobCluster:
     jar: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (the heavy tier)
     wheel: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (--python-task, notebooks)
     extra_jars: tuple = ()  # more /Volumes JARs installed as libraries (--python-task, --extra-jar)
+    # a Databricks Container Service image URL (--docker-image): the cluster starts from it, with UC Volumes on
+    docker_image: Optional[str] = None
 
 
 def _cluster_spec(cluster: JobCluster):
@@ -323,13 +353,23 @@ def _cluster_spec(cluster: JobCluster):
         single_user_name=cluster.user_name if dedicated else None,
         # No worker means a single node cluster: without this profile the cluster has no executor at all and
         # the first Spark job waits for one forever.
-        spark_conf=(
-            {"spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*, 4]"}
-            if cluster.num_workers == 0
-            else None
-        ),
+        spark_conf=_spark_conf(cluster),
         custom_tags={"ResourceClass": "SingleNode"} if cluster.num_workers == 0 else None,
+        docker_image=compute.DockerImage(url=cluster.docker_image) if cluster.docker_image else None,
     )
+
+
+def _spark_conf(cluster: JobCluster):
+    """The cluster's Spark config: the single node profile for no worker, and UC Volumes for a DCS image (an image
+    cluster has no `/Volumes` without it, `installation/dcs.mdx`)."""
+    conf = {}
+    if cluster.num_workers == 0:
+        # No worker means a single node cluster: without this profile the cluster has no executor at all and
+        # the first Spark job waits for one forever.
+        conf.update({"spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*, 4]"})
+    if cluster.docker_image:
+        conf["spark.databricks.unityCatalog.volumes.enabled"] = "true"
+    return conf or None
 
 
 def _cluster_libraries(cluster: JobCluster) -> list:
@@ -371,6 +411,8 @@ def _import_notebook(
     nb_bytes = local_path.read_bytes()
     if strip_pip:
         nb_bytes = _strip_pip_cells(nb_bytes)
+    elif PIP_WHEEL:
+        nb_bytes = _repoint_pip_wheel(nb_bytes, PIP_WHEEL)
     if set_vars:
         nb_bytes = _inject_override_cell(nb_bytes, set_vars)
 
@@ -992,6 +1034,15 @@ def main() -> int:
         help="--new-cluster worker count (default: 1).",
     )
     parser.add_argument(
+        "--docker-image",
+        default=None,
+        help=(
+            "--new-cluster: start the cluster from this Databricks Container Service image (for example "
+            "mjohns797/geobrix:0.6.0-env6-x86; match the node type's architecture). UC Volumes are enabled on it. "
+            "The image carries the wheel and the JAR: give no --jar and no %%pip of the wheel."
+        ),
+    )
+    parser.add_argument(
         "--profile",
         metavar="PROFILE",
         default=os.environ.get("DATABRICKS_CONFIG_PROFILE", "oauth-fe"),
@@ -1033,6 +1084,15 @@ def main() -> int:
         help=(
             "Local .ipynb to import into ws-dir but NOT submit (e.g. config_nb.ipynb "
             "used via %%run). Repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--pip-wheel",
+        metavar="VOLPATH",
+        default=None,
+        help=(
+            "Classic modes (%%pip kept): point every `%%pip install ... @ file:///Volumes/....whl` line of the "
+            "uploaded copy at this /Volumes wheel, for example the env6 wheel of an isolated staging folder."
         ),
     )
     parser.add_argument(
@@ -1118,6 +1178,14 @@ def main() -> int:
 
     if args.jar_task and args.extra_jars:
         parser.error("--extra-jar goes with --python-task (--jar-task runs the one --jar)")
+    if args.pip_wheel and not args.pip_wheel.startswith("/Volumes/"):
+        parser.error("--pip-wheel takes a /Volumes path to a .whl")
+    global PIP_WHEEL
+    PIP_WHEEL = args.pip_wheel
+    if args.docker_image and (not args.new_cluster or args.jar):
+        parser.error(
+            "--docker-image needs --new-cluster and takes no --jar: the image carries the wheel and the one geobrix JAR"
+        )
 
     if args.jar_task:
         if not args.jar or args.notebooks or args.dirs or args.existing_cluster_id or args.new_cluster:
@@ -1161,6 +1229,7 @@ def main() -> int:
             jar=args.jar,
             wheel=args.wheel,
             extra_jars=tuple(args.extra_jars),
+            docker_image=args.docker_image,
         )
         params = [a.strip() for a in args.python_args.split(",") if a.strip()]
         ok = run_python_task(
@@ -1268,8 +1337,10 @@ def main() -> int:
             access_mode=args.access_mode,
             user_name=w.current_user.me().user_name,
             jar=args.jar,
-            # a notebook with no %pip cell has no other way to import databricks.labs.gbx on a job cluster
-            wheel=args.wheel,
+            # a notebook with no %pip cell has no other way to import databricks.labs.gbx on a job cluster; a DCS
+            # image carries the wheel and the JAR, and a second copy would be a second geobrix on the cluster
+            wheel=None if args.docker_image else args.wheel,
+            docker_image=args.docker_image,
         )
 
     # Resolve default ws-dir using the current user

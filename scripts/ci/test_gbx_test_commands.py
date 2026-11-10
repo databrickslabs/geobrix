@@ -2479,6 +2479,45 @@ def test_the_serverless_python_task_checks_the_wheel_against_the_cluster_runtime
     assert want in capsys.readouterr().err
 
 
+def test_pip_wheel_repoints_only_the_pip_file_lines(monkeypatch):
+    import json as _json
+
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    nb = {"cells": [
+        {"cell_type": "code", "source": ['%pip install "geobrix[zarr] @ file:///Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"\n']},
+        {"cell_type": "code", "source": ['W = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"\n']},
+        {"cell_type": "markdown", "source": ["@ file:///Volumes/c/s/v/x.whl"]},
+    ]}  # fmt: skip
+    out = _json.loads(runner._repoint_pip_wheel(_json.dumps(nb).encode(), "/Volumes/c/s/iso/g+env6.whl"))
+    assert out["cells"][0]["source"] == ['%pip install "geobrix[zarr] @ file:///Volumes/c/s/iso/g+env6.whl"\n']
+    assert out["cells"][1]["source"] == nb["cells"][1]["source"]
+    assert out["cells"][2]["source"] == nb["cells"][2]["source"]
+
+
+def test_a_dcs_image_cluster_starts_from_the_image_with_volumes_on(monkeypatch):
+    pytest.importorskip("databricks.sdk.service.compute")
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    spec = runner._cluster_spec(
+        runner.JobCluster(user_name="me@x.com", docker_image="mjohns797/geobrix:0.6.0-env6-x86")
+    )
+    assert spec.docker_image.url == "mjohns797/geobrix:0.6.0-env6-x86"
+    assert spec.spark_conf == {"spark.databricks.unityCatalog.volumes.enabled": "true"}
+    plain = runner._cluster_spec(runner.JobCluster(user_name="me@x.com"))
+    assert plain.docker_image is None and plain.spark_conf is None
+
+
+def test_a_dcs_image_run_refuses_a_jar_and_needs_a_new_cluster(monkeypatch, capsys):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    for argv in (
+        ["--notebook", "x.ipynb", "--docker-image", "img"],
+        ["--notebook", "x.ipynb", "--new-cluster", "--docker-image", "img", "--jar", "/Volumes/c/s/v/j.jar"],
+    ):
+        monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", *argv])
+        with pytest.raises(SystemExit):
+            runner.main()
+        assert "--docker-image needs --new-cluster" in capsys.readouterr().err
+
+
 def test_the_serverless_runner_refuses_an_extra_jar_on_a_jar_task(monkeypatch, capsys):
     runner = _launcher("run_notebooks_serverless", monkeypatch)
     monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--jar-task", "a.b.Job",

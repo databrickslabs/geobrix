@@ -282,6 +282,7 @@ def _props(
             )
         band = ds.GetRasterBand(1)
         gt = ds.GetGeoTransform()
+        own, declared = _mask_flags(gdal, ds)
         return argv_mod.RasterProps(
             ds.RasterXSize,
             ds.RasterYSize,
@@ -290,7 +291,8 @@ def _props(
             band.GetNoDataValue(),
             px_x=abs(gt[1]),
             px_y=abs(gt[5]),
-            mask=_carries_mask(gdal, ds),
+            mask=own or not declared,  # _carries_mask
+            fill_mask=own or _alpha_index(gdal, ds) is not None,
         )
     finally:
         ds = None
@@ -575,6 +577,24 @@ def _mask_flags(gdal, ds) -> tuple:
         b.GetColorInterpretation() == gdal.GCI_AlphaBand for b in bands
     )
     return own, declared
+
+
+def _alpha_index(gdal, ds) -> Optional[int]:
+    """The index of the open dataset `ds`'s alpha band when its last band is one and it has another band, else None: the
+    band that holds which pixels are transparent, not a band of values."""
+    n = ds.RasterCount
+    if n >= 2 and ds.GetRasterBand(n).GetColorInterpretation() == gdal.GCI_AlphaBand:
+        return n
+    return None
+
+
+def _alpha_of(gdal, name: str) -> Optional[int]:
+    """``_alpha_index`` of the engine's GeoTIFF `name`."""
+    ds = _open_geotiff(gdal, name)
+    try:
+        return _alpha_index(gdal, ds)
+    finally:
+        ds = None
 
 
 def _carries_mask(gdal, ds) -> bool:
@@ -1002,17 +1022,7 @@ def _fill_bands(
     """
     first = f"{prefix}/band_1.tif"
     gdal.Rename(out, first)
-    co = [t.split("=", 1)[1] for t in tokens if t.startswith("--creation-option=")]
-    gdal.ErrorReset()
-    sds = _open_geotiff(gdal, src)
-    try:
-        copy = gdal.Translate(
-            out, sds, options=gdal.TranslateOptions(format="GTiff", creationOptions=co)
-        )
-    finally:
-        sds = None
-    if copy is None:
-        raise DataError(gdal.GetLastErrorMsg() or "the tile could not be copied")
+    work, copy = _work_copy(gdal, src, prefix)
     try:
         for k in range(1, bands + 1):
             part = first if k == 1 else f"{prefix}/band_{k}.tif"
@@ -1033,6 +1043,175 @@ def _fill_bands(
         copy.FlushCache()
     finally:
         copy = None
+    _finish_copy(gdal, work, out, tokens)
+
+
+def _work_copy(gdal, src: str, prefix: str):
+    """``(name, open dataset)`` of a copy of the engine's GeoTIFF `src` under `prefix` that the per-band fill writes into,
+    one band at a time: uncompressed and band-interleaved (``compression.engine_work_options``), so a band written is
+    its own blocks, written once. ``_finish_copy`` gives it the call's creation options."""
+    from databricks.labs.gbx.pyrx.core.compression import engine_work_options
+
+    work = f"{prefix}/work.tif"
+    gdal.ErrorReset()
+    sds = _open_geotiff(gdal, src)
+    try:
+        copy = gdal.Translate(
+            work,
+            sds,
+            options=gdal.TranslateOptions(
+                format="GTiff",
+                creationOptions=engine_work_options(sds.RasterXSize, sds.RasterYSize),
+            ),
+        )
+    finally:
+        sds = None
+    if copy is None:
+        raise DataError(gdal.GetLastErrorMsg() or "the tile could not be copied")
+    return work, copy
+
+
+def _finish_copy(gdal, work: str, out: str, tokens) -> None:
+    """The work copy `work` written as the output `out` with the call's creation options, then removed."""
+    co = [t.split("=", 1)[1] for t in tokens if t.startswith("--creation-option=")]
+    gdal.ErrorReset()
+    done = gdal.Translate(
+        out, work, options=gdal.TranslateOptions(format="GTiff", creationOptions=co)
+    )
+    if done is None:
+        raise DataError(gdal.GetLastErrorMsg() or "the tile could not be written")
+    done = None
+    gdal.Unlink(work)
+
+
+def _band_bytes(gdal, band, w: int, h: int):
+    """The pixels of `band` as a flat numpy array of its own type."""
+    import numpy as np
+
+    from databricks.labs.gbx.pyrx.core.compression import _GDAL_DTYPES
+
+    dtype = _GDAL_DTYPES[gdal.GetDataTypeName(band.DataType)]
+    return np.frombuffer(band.ReadRaster(0, 0, w, h), dtype).copy()
+
+
+def _fill_under_alpha(
+    gdal, alg: str, tokens, src: str, out: str, prefix: str, shown, refused, alpha: int
+) -> None:
+    """The fill of a tile whose last band is an alpha band (``_alpha_index``): the alpha is the tile's mask, never a band
+    of values. Left to GDAL it is neither: over a declared NoData its transparent pixels are filled as data (they become
+    opaque, a value the tile never held), and with none the fill reads no mask from it, so a transparent pixel is not
+    filled.
+
+    Each data band `k` is filled with GDAL's ``--mask`` set to ``valid for the band AND opaque``, so a transparent pixel
+    is a hole to fill and only opaque, valid pixels are sources. The alpha band is copied as it is, except that a
+    transparent pixel the search reached in every data band becomes opaque (the alpha type's largest value, for a
+    floating-point alpha the tile's own largest): where a band was not reached the pixel stays transparent, so no
+    value is shown that the fill did not make. Which pixels the search reaches is found by GDAL, as in
+    ``_unmask_filled``: the same fill over the mask itself. A tile with its own mask band besides gets the reached pixels
+    added to it. The bands are written into a work copy (``_work_copy``) and then given the call's creation options.
+    """
+    import numpy as np
+
+    sds = _open_geotiff(gdal, src)
+    try:
+        w, h, n = sds.RasterXSize, sds.RasterYSize, sds.RasterCount
+        gt = sds.GetGeoTransform()
+        a = _band_bytes(gdal, sds.GetRasterBand(alpha), w, h)
+        own = sds.GetRasterBand(1).GetMaskFlags() == gdal.GMF_PER_DATASET
+    finally:
+        sds = None
+    opaque = a > 0  # 0, negative and NaN are transparent, as _alpha_into_mask reads them
+    reached = np.ones(w * h, bool)
+    mask_in, cover = f"{prefix}/fill_mask.tif", f"{prefix}/fill_cover.tif"
+    work, copy = _work_copy(gdal, src, prefix)
+    try:
+        own_valid = (
+            np.frombuffer(
+                copy.GetRasterBand(1).GetMaskBand().ReadRaster(0, 0, w, h), "u1"
+            )
+            != 0
+            if own
+            else None
+        )
+        for k in (b for b in range(1, n + 1) if b != alpha):
+            valid = np.frombuffer(
+                copy.GetRasterBand(k).GetMaskBand().ReadRaster(0, 0, w, h), "u1"
+            )
+            mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
+            mem.SetGeoTransform(gt)
+            mband = mem.GetRasterBand(1)
+            mband.SetNoDataValue(0)
+            mband.WriteRaster(
+                0,
+                0,
+                w,
+                h,
+                np.where((valid != 0) & opaque, np.uint8(1), np.uint8(0)).tobytes(),
+            )
+            del valid
+            gdal.GetDriverByName("GTiff").CreateCopy(mask_in, mem)
+            mem = mband = None
+            part = f"{prefix}/band_{k}.tif"
+            toks = [
+                (
+                    f"--band={k}"
+                    if t == "--band=1"
+                    else f"--output={part}" if t.startswith("--output=") else t
+                )
+                for t in tokens
+            ] + [f"--mask={mask_in}"]
+            _execute(gdal, alg, toks, shown, refused)
+            _copy_band(gdal, part, copy.GetRasterBand(k), w, h)
+            gdal.Unlink(part)
+            reached &= _reached(gdal, alg, tokens, mask_in, cover, shown, refused, w, h)
+            gdal.Unlink(mask_in)
+        if a.dtype.kind in "iu":
+            top = np.iinfo(a.dtype).max
+        else:
+            top = a[opaque].max() if opaque.any() else 1.0
+        made = reached & ~opaque
+        if made.any():
+            a[made] = top
+            copy.GetRasterBand(alpha).WriteRaster(0, 0, w, h, a.tobytes())
+        if own:
+            keep = np.where(own_valid | reached, np.uint8(255), np.uint8(0))
+            copy.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, keep.tobytes())
+        copy.FlushCache()
+    finally:
+        copy = None
+    _finish_copy(gdal, work, out, tokens)
+
+
+def _reached(gdal, alg: str, tokens, mask_in: str, cover: str, shown, refused, w, h):
+    """The pixels GDAL's fill reaches from the valid pixels of the Byte raster `mask_in` (1 valid, NoData 0): the same
+    fill (same ``--max-distance``, no smoothing) over that raster, read back as a flat bool array."""
+    import numpy as np
+
+    toks = [
+        (
+            f"--input={mask_in}"
+            if t.startswith("--input=")
+            else (
+                f"--output={cover}"
+                if t.startswith("--output=")
+                else (
+                    "--smoothing-iterations=0"
+                    if t.startswith("--smoothing-iterations=")
+                    else "--band=1" if t.startswith("--band=") else t
+                )
+            )
+        )
+        for t in tokens
+        if not t.startswith(("--creation-option=", "--input-format="))
+    ]
+    _execute(gdal, alg, toks, shown, refused)
+    cds = _open_geotiff(gdal, cover)
+    try:
+        got = np.frombuffer(cds.GetRasterBand(1).ReadRaster(0, 0, w, h), "u1") != 0
+    finally:
+        cds = None
+    gdal.Unlink(cover)
+    return got
 
 
 def _unmask_filled(
@@ -1092,7 +1271,7 @@ def _unmask_filled(
         filled = np.frombuffer(cds.GetRasterBand(1).ReadRaster(0, 0, w, h), "u1") != 0
     finally:
         cds = None
-    mask = np.where((valid != 0) | filled, 255, 0).astype("u1").tobytes()
+    mask = np.where((valid != 0) | filled, np.uint8(255), np.uint8(0)).tobytes()
     with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
         od = _open_geotiff(gdal, out, update=True)
         try:
@@ -1638,6 +1817,15 @@ def run(
                     ),
                 )
                 return Result(None, None, command, features=feats)
+            alpha = (
+                _alpha_of(gdal, names[0]) if block.alg == "raster fill-nodata" else None
+            )
+            if alpha is not None:
+                # the tile's alpha band is its mask: it is never filled as a band of values
+                _fill_under_alpha(
+                    gdal, block.alg, tokens, names[0], out, prefix, shown, refused, alpha
+                )
+                return Result(_read(gdal, out), None, command)
             with _streaming_cache(on_path):
                 _execute(gdal, block.alg, tokens, shown, refused, strict=on_path)
             if block.per_band and props[0].bands > 1:

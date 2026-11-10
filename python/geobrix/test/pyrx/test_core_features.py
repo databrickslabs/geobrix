@@ -47,3 +47,34 @@ def test_fillnodata_fills_hole():
         filled = o.read(1)
         assert filled[2, 2] != -9999.0  # the hole was interpolated
         assert filled[2, 2] == 1.0  # surrounded by 1.0
+
+
+def test_fillnodata_reads_the_alpha_band_as_the_mask_never_as_values():
+    """The UC level's fill on an RGBA tile with a declared NoData: the transparent pixels are the holes, the alpha is
+    never interpolated (a filled pixel becomes opaque at the type's top, any other keeps its alpha), and a pixel the
+    search does not reach stays transparent."""
+    from affine import Affine
+    from rasterio.io import MemoryFile
+
+    n = 9
+    z = np.zeros((4, n, n), "uint8")
+    z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype("uint8")
+    z[3] = (100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)).astype("uint8")
+    z[3, 3:6, 3:6] = 0
+    z[:3, 4, 4] = 0
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=n, height=n, count=4, dtype="uint8", crs="EPSG:3857",
+            transform=Affine(1, 0, 0, 0, -1, n), nodata=0, photometric="RGB", ALPHA="YES",
+        ) as ds:
+            ds.write(z)
+        with mf.open() as ds:
+            near = features.fill_nodata(ds, 1, 0)
+            full = features.fill_nodata(ds, 100, 0)
+    clear = z[3] == 0
+    with _serde.open_tile(full) as out:
+        a = out.read(4)
+        assert (a[clear] == 255).all() and np.array_equal(a[~clear], z[3][~clear])
+        assert out.read(1)[4, 4] != 0
+    with _serde.open_tile(near) as out:
+        assert out.read(4)[4, 4] == 0 and (out.read(4)[3:6, 3:6] == 255).sum() == 8

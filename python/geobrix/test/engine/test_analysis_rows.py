@@ -318,3 +318,99 @@ def test_a_masked_multi_band_tile_keeps_its_mask_through_the_per_band_fill():
     assert near.error is None
     short, _, _ = _mask_of(near.raster)
     assert (valid <= short).all() and short.sum() > valid.sum() and not short.all()
+
+
+# --- an RGBA tile: the alpha band is the mask, never a band of values ----------------------------------------------
+def _rgba(nodata=None, n=9):
+    """A Byte RGBA tile: a gradient, opaque at alpha 100 to 255, with a transparent 3x3 hole in the middle (its RGB
+    values valid, or NoData at the centre) and one transparent pixel in a corner."""
+    from affine import Affine
+    from rasterio.enums import ColorInterp
+
+    z = np.zeros((4, n, n), "uint8")
+    z[:3] = (50 + np.arange(n)[None, None, :] + 3 * np.arange(n)[None, :, None]).astype("uint8")
+    z[3] = (100 + 155 * np.arange(n * n).reshape(n, n) // (n * n - 1)).astype("uint8")
+    z[3, 3:6, 3:6] = 0
+    z[:3, 4, 4] = 0
+    z[3, 0, 0] = 0
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=n, height=n, count=4, dtype="uint8", crs="EPSG:3857",
+            transform=Affine(1, 0, 0, 0, -1, n), nodata=nodata, photometric="RGB", ALPHA="YES",
+        ) as ds:
+            ds.write(z)
+            assert ds.colorinterp[3] == ColorInterp.alpha
+        return mf.read(), z
+
+
+@pytest.mark.parametrize("nodata", [None, 0], ids=["no-nodata", "nodata-0"])
+def test_an_rgba_fill_fills_the_transparent_pixels_and_never_fills_the_alpha_as_data(nodata):
+    raw, z = _rgba(nodata)
+    res = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert res.error is None
+    out = _read(res.raster)[0]
+    clear = z[3] == 0
+    # every transparent pixel was reached: it is opaque now, at the alpha type's top, and every other alpha is the input's
+    assert (out[3][clear] == 255).all() and np.array_equal(out[3][~clear], z[3][~clear])
+    # its values come from the opaque pixels around it (the gradient's range), not from its own transparent value
+    for b in range(3):
+        lo, hi = z[b][~clear].min(), z[b][~clear].max()
+        assert lo <= out[b][clear].min() and out[b][clear].max() <= hi
+        assert np.array_equal(out[b][~clear], z[b][~clear])
+
+
+def test_a_transparent_pixel_the_search_does_not_reach_stays_transparent():
+    raw, z = _rgba()
+    res = run.run(FILL, [raw], {"max_search_dist": 1, "smoothing_iter": 0})
+    out = _read(res.raster)[0]
+    assert out[3, 4, 4] == 0  # two pixels from the nearest opaque one: no value is shown that the fill did not make
+    assert (out[3, 3:6, 3:6] == 255).sum() == 8
+
+
+def test_the_per_band_fill_writes_into_a_band_interleaved_uncompressed_copy(monkeypatch):
+    seen = []
+    real = run._copy_band
+
+    def spy(gdal, part, band, w, h):
+        seen.append(band.GetDataset().GetMetadata("IMAGE_STRUCTURE"))
+        return real(gdal, part, band, w, h)
+
+    monkeypatch.setattr(run, "_copy_band", spy)
+    z = np.stack([_gradient()] * 3)
+    z[:, 4, 4] = NODATA
+    res = run.run(FILL, [_tif(z)], {"max_search_dist": 100.0, "smoothing_iter": 0})
+    assert len(seen) == 3
+    for md in seen:
+        assert md.get("INTERLEAVE") == "BAND" and "COMPRESSION" not in md
+    # the output still has the call's own creation options
+    with MemoryFile(res.raster) as mf, mf.open() as ds:
+        assert ds.profile["compress"] == "zstd" and not (ds.read() == NODATA).any()
+
+
+def test_the_fill_estimate_counts_its_mask_step():
+    from databricks.labs.gbx.engine import argv
+
+    plain = argv.estimate_output(
+        FILL, ["--band=1"], [argv.RasterProps(100, 50, 3, "Float32")]
+    )
+    masked = argv.estimate_output(
+        FILL, ["--band=1"], [argv.RasterProps(100, 50, 3, "Float32", fill_mask=True)]
+    )
+    assert masked - plain == 100 * 50 * (
+        argv._FILL_MASK_BYTES + argv._FILL_MASK_ITEMS * 4
+    )
+
+
+def test_the_props_of_a_tile_say_when_a_fill_runs_a_mask_step():
+    gdal = run._gdal()
+    names = {"rgba": _rgba()[0], "plain": _tif(_gradient()[np.newaxis])}
+    got = {}
+    for key, data in names.items():
+        name = f"{run.PREFIX}/props_{key}.tif"
+        gdal.FileFromMemBuffer(name, data)
+        try:
+            got[key] = run._props(gdal, "t", name, False).fill_mask
+        finally:
+            gdal.Unlink(name)
+    assert got == {"rgba": True, "plain": False}
+

@@ -195,19 +195,45 @@ def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
 
     *ds* is an open rasterio DatasetReader. Returns GTiff bytes with NoData
     pixels filled by interpolation from their neighbours.
+
+    A last band that is an alpha band (with another band before it) is the tile's mask, never a band of values: each
+    other band is filled where it is not valid or is transparent, from its valid, opaque pixels, and the alpha band
+    keeps its values, except that a transparent pixel the search reached in every band becomes opaque (the alpha type's
+    largest value, for a floating-point alpha the tile's own largest). A pixel not reached in every band stays
+    transparent. The GDAL spec engine's fill does the same (``engine.run._fill_under_alpha``).
     """
+    from rasterio.enums import ColorInterp
+
     msd = 100.0 if max_search_dist is None else float(max_search_dist)
     smi = 0 if smoothing_iter is None else int(smoothing_iter)
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
+    alpha = (
+        ds.count if ds.count >= 2 and ds.colorinterp[-1] == ColorInterp.alpha else None
+    )
+    a = ds.read(alpha) if alpha else None
+    opaque = a > 0 if alpha else None  # 0, negative and NaN are transparent
+    reached = np.ones((ds.height, ds.width), bool) if alpha else None
     bands = []
     for i in range(1, ds.count + 1):
+        if i == alpha:
+            continue
         band = ds.read(i)
         msk = ds.read_masks(i)  # 0 where NoData, 255 where valid
+        if alpha:
+            msk = np.where((msk != 0) & opaque, np.uint8(255), np.uint8(0))
+            ones = (msk != 0).astype("uint8")
+            reached &= _fillnodata(ones, mask=ones, max_search_distance=msd) != 0
         bands.append(
             _fillnodata(
                 band, mask=msk, max_search_distance=msd, smoothing_iterations=smi
             )
         )
+    if alpha:
+        if a.dtype.kind in "iu":
+            top = np.iinfo(a.dtype).max
+        else:
+            top = a[opaque].max() if opaque.any() else 1.0
+        bands.append(np.where(reached & ~opaque, top, a).astype(a.dtype))
     data = np.stack(bands)
     return write_gtiff(profile, data, alpha_like=ds.colorinterp)

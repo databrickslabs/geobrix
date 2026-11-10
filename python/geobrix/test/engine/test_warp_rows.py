@@ -786,13 +786,14 @@ def test_the_read_cap_is_judged_on_the_decimated_size_and_on_the_whole_window(
         l3._inputs(M[RS], tile, 5000, None, [], {"factor": 2.0, "algorithm": "average"})
 
 
-def test_a_per_band_fill_adds_one_bands_result_and_read_buffer_to_its_estimate():
+def test_a_per_band_fill_adds_its_work_copy_one_bands_result_and_read_buffer_to_its_estimate():
     fill = M["gbx_rst_fillnodata"]
     values = {"max_search_dist": 100.0, "smoothing_iter": 0}
     three = argv.RasterProps(64, 48, 3, "Float32")
     tokens = argv.build(fill, values, [three])
     assert (
-        argv.estimate_output(fill, tokens, [three]) == 64 * 48 * 3 * 4 + 2 * 64 * 48 * 4
+        argv.estimate_output(fill, tokens, [three])
+        == 2 * 64 * 48 * 3 * 4 + 2 * 64 * 48 * 4
     )
     tokens = argv.build(fill, values, [PROPS])
     assert argv.estimate_output(fill, tokens, [PROPS]) == 64 * 48 * 4

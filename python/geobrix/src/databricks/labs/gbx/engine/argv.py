@@ -90,6 +90,12 @@ class RasterProps:
     # True when a reprojection of this input carries a mask band (``run._mask_to_carry``): the output estimate then holds
     # the mask's working memory. Not part of the template cache key.
     mask: bool = field(default=False, compare=False)
+    # True when a fill of this input runs a mask step (it has its own mask band, ``run._unmask_filled``, or an alpha
+    # band, ``run._fill_under_alpha``): the estimate holds that step's arrays. Like `mask`, it is read from the header the
+    # engine judges the call by, which for a tile in another driver is its own header before the translation to GeoTIFF
+    # (a per-band mask there becomes band 1's per-dataset mask, a PNG's alpha an alpha band): an approximation, as the
+    # header is all the budget reads. Not part of the template cache key.
+    fill_mask: bool = field(default=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1216,7 +1222,8 @@ def estimate_output(
     count), else the input's own size. The type is the argv's ``--output-data-type`` when it has one, else the row's
     output type; the bands are the algorithm's (``_OUT_BANDS``), else the input's. A reprojection that carries a mask
     (``RasterProps.mask``) also holds the mask's working arrays: a byte per input pixel in four copies and a byte per
-    output pixel in three. A JSON output holds nothing to count, and a streamed features output its line buffers.
+    output pixel in three. A fill holds its work copy, and with a mask step (``RasterProps.fill_mask``) that step's arrays
+    (``_FILL_MASK_BYTES``). A JSON output holds nothing to count, and a streamed features output its line buffers.
     """
     first = props[0]
     if fn.gdal.out_kind == "json":
@@ -1243,10 +1250,22 @@ def estimate_output(
         pixels = max(pixels, *(p.width * p.height for p in props))
     out = pixels * bands * item
     if fn.gdal.per_band and bands > 1:
-        out += 2 * pixels * item  # one band's result file and the bytes read from it
+        # the uncompressed work copy the bands are written into (``run._work_copy``), one band's result file and the
+        # bytes read from it
+        out += pixels * bands * item + 2 * pixels * item
     if fn.gdal.alg == "raster reproject" and first.mask:
         out += first.width * first.height * 4 + pixels * 3
+    if fn.gdal.alg == "raster fill-nodata" and first.fill_mask:
+        out += pixels * (_FILL_MASK_BYTES + _FILL_MASK_ITEMS * item)
     return out
+
+
+# The mask step of a fill (``run._unmask_filled``, ``run._fill_under_alpha``), per pixel: the validity read and its test,
+# the 0/1 mask raster in memory and as a GeoTIFF, the fill of it and its read and test, the reach and the opacity (eight
+# bytes); and the alpha band read, the copy written back and its bytes (three of the band's type). The alpha step is the
+# larger of the two, so both are counted at its size.
+_FILL_MASK_BYTES = 8
+_FILL_MASK_ITEMS = 3
 
 
 def _const_token(a, inputs: Sequence[RasterProps]) -> Optional[str]:

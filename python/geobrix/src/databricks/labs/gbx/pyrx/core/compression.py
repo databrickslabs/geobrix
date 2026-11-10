@@ -344,9 +344,28 @@ def engine_creation_options(
     if not striped and (
         alg != HILLSHADE_ALG or gdal_dtype.lower() not in ("byte", "uint8")
     ):
-        blk = max(64, min(512, int(width), int(height))) // 16 * 16
-        out += ["TILED=YES", f"BLOCKXSIZE={blk}", f"BLOCKYSIZE={blk}"]
+        out += _engine_tiling(width, height)
     return out + ["BIGTIFF=IF_SAFER"]
+
+
+def _engine_tiling(width: int, height: int) -> list:
+    """512-pixel blocks capped to the raster, at least 64, floored to a multiple of 16."""
+    blk = max(64, min(512, int(width), int(height))) // 16 * 16
+    return ["TILED=YES", f"BLOCKXSIZE={blk}", f"BLOCKYSIZE={blk}"]
+
+
+def engine_work_options(width: int, height: int) -> list:
+    """The creation options of a GDAL spec engine work copy that is written one band at a time (the per-band fill) and
+    then copied to the output with the call's own options: uncompressed (``creation_opts`` with ``none``) and
+    band-interleaved. A pixel-interleaved block holds every band, so each band written into a compressed one decodes
+    and encodes the whole block again (and on ``/vsimem`` leaves the old encoding behind): a band-interleaved,
+    uncompressed copy is written once, block by block."""
+    opts = creation_opts("uint8", compress="none")
+    return (
+        [f"COMPRESS={opts['compress'].upper()}", "INTERLEAVE=BAND"]
+        + _engine_tiling(width, height)
+        + ["BIGTIFF=IF_SAFER"]
+    )
 
 
 def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:

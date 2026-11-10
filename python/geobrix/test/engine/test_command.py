@@ -759,4 +759,4 @@ def test_the_window_is_placed_by_the_observer_and_never_beyond_the_grid():
         ["viewshed", "--position=300,300,10", "--max-distance=50"],
         argv.PipeState(64, 48, 0.0, 0.0, 0, 0, "EPSG:32633", 3, 4, True),
     )
-    assert (blind.width, blind.height, blind.bands, blind.fresh) == (64, 48, 1, False)
+    assert blind.nbytes == 64 * 48 * 3 * 4 and blind.fresh

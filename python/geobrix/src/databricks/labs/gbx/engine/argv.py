@@ -1133,10 +1133,10 @@ def _viewshed_window(step, st: PipeState) -> PipeState:
     """The state after a viewshed with a distance limit: one band, the window around the observer (the distance each way,
     in pixels, as ``_output_pixels`` sizes the row), placed by the observer's x and y in the state's CRS.
     """
-    if (
-        st.extent is None
-    ):  # no pixel size to measure the distance in: the whole grid bounds it
-        return dataclasses.replace(st, bands=1, fresh=False)
+    if st.extent is None:
+        # no pixel size to measure the distance in: the whole grid bounds it, and the state stays the input's own header
+        # (a later reprojection is sized from it; a state that is not the header has no pixel size to size one from)
+        return st
     reach = float(_token_value(step, "max-distance"))
     x, y = _numbers(_token_value(step, "position"))[:2]
     w = max(1, min(st.width, 2 * math.ceil(reach / st.px_x) + 1))

@@ -760,7 +760,7 @@ Both tiers apply one rule for which pixels are valid.
   - A tile with an alpha band gets alpha 0 there and declares no NoData.
   - A cutline smaller than one pixel keeps the pixel it touches. It kept only NoData.
   - Virtual tiles with a `clip_polygon`, `rst_clip_grouped` and the Unity Catalog `rst_clip` follow the same rule.
-  - A source pixel inside the cutline that equals the fallback of its type, such as 0 in a `uint8` tile, is NoData too, as in the [NoData fallback](#nodata-alpha-mask) rule.
+  - If a source pixel inside the cutline equals the fallback of its type, such as 0 in a `uint8` tile, it is NoData too. This follows the [NoData fallback](#nodata-alpha-mask) rule.
 - **The warp fill is NoData.** `rst_bng_tessellate` and the `rst_h3_rastertogrid*`, `rst_quadbin_rastertogrid*` and `rst_bng_rastertogrid*` reducers first warp a source that is not in the grid's CRS.
   - For a source with no NoData and no alpha band, the pixels outside the footprint were valid zeros. Edge-cell tiles carried them, and the reducers counted them as data.
   - They are now NoData with the fallback value. Source pixels equal to it are NoData too.

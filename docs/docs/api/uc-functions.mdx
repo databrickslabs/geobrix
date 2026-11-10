@@ -166,6 +166,12 @@ The raster functions take the arguments of their session functions and give the 
 
 <CodeFromTest code={ucExamples} language="python" functionName="tile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
+**Three functions answer differently from their session functions.** Their UC forms keep the earlier Python code.
+
+- `gbx_rst_summary` returns the earlier JSON, with `bands[].min` and `bands[].max`.
+- `gbx_rst_mapalgebra` evaluates the expression with NumExpr, which has no `?:`. Write `where(A > 0, A, 0)`.
+- `gbx_rst_contour` lines stop at the outermost pixel centres. The session lines run half a pixel further, to the tile's edge.
+
 **A merge or a combine checks its size before it reads a pixel.** It adds up the tiles in the array and the result. Over the limit, the `Fix:` names a session route:
 
 - `gbx_rst_merge` points to `rasterx.helpers.mint_vrt` or `merge_by_key(method="vrt")`, which keep the tiles as files.

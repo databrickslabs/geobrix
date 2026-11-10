@@ -58,7 +58,7 @@ Many RasterX functions accept CRS parameters. Use `srid` / `out_srid` (integer E
 
 ## Function Categories
 
-RasterX exposes 129 SQL functions (registered as `gbx_rst_*`; available in Python and Scala as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
+RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
 
 ![RasterX function categories — Constructors, Accessors, Aggregators, Generators, Operations, H3 Grid](../../../resources/images/diagrams/rasterx/rasterx-function-categories.png)
 
@@ -72,7 +72,7 @@ RasterX exposes 129 SQL functions (registered as `gbx_rst_*`; available in Pytho
 - **Operations**: Transform and analyze rasters (clip, transform, merge, asformat, ndvi, filter, convolve, map algebra, coordinate conversion, isEmpty, tryOpen, initNoData, updateType, combineavg, derivedband)
 - **Web-Mercator Tile Output**: Reproject to EPSG:3857 and emit slippy-map XYZ tiles (to_webmercator, tilexyz, xyzpyramid)
 - **Vector-raster bridge**: Burn polygons into rasters and trace contiguous regions back to polygons (rasterize, polygonize)
-- **Terrain Analysis**: DEM-derived surfaces from `gdal.DEMProcessing` (slope, aspect, hillshade, TRI, TPI, roughness, color relief)
+- **Terrain Analysis**: DEM-derived surfaces from GDAL's `raster` algorithms (slope, aspect, hillshade, TRI, TPI, roughness, color relief)
 - **Spectral Indices**: Multi-band satellite math (EVI, SAVI, NDWI, NBR, plus the generic `rst_index` dispatcher)
 
 ## Tile payload
@@ -1025,12 +1025,14 @@ On Unity Catalog a virtual tile is refused, and so is a tile over the size limit
 {/* END GENERATED gbx_rst_summary */}
 
 :::note Implementation
-Runs GDAL's `raster info` with statistics, through the GDAL spec engine.
+Runs GDAL's `raster info` with statistics in the worker, on every compute.
 :::
 
 Describe the tile as JSON, with GDAL's own report: the text of `gdalinfo -json` with statistics.
 The JSON holds the driver, size, coordinate system, geotransform and corner coordinates.
 Each band lists its type, NoData value, `minimum`, `maximum`, `mean` and `stdDev`.
+GDAL computes the statistics from the pixels, never from stored `STATISTICS_*` tags.
+The result is NULL for a NULL tile, an error tile, or a tile GDAL cannot read.
 
 :::warning Breaking change in 0.6
 The JSON is GDAL's, not the earlier GeoBrix shape. A query that reads its keys must change.
@@ -4627,7 +4629,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 {/* END GENERATED gbx_rst_mapalgebra */}
 
 :::note Implementation
-Runs GDAL's own `raster calc` with its muparser grammar, on every compute. Bands map to `A`, `B`, `C`, …; the output is single-band Float32 with NoData -9999.
+Runs GDAL's own `raster calc` with its muparser grammar, in the worker. Bands map to `A`, `B`, `C`, …; the output is single-band Float32 with NoData -9999. A pixel is NoData where any input pixel is NoData.
 :::
 
 :::note Python-only keywords
@@ -4638,9 +4640,9 @@ Map algebra expression (e.g. `A - B`).
 
 **How the inputs bind.** `tiles` is an `ARRAY<tile>`. By default, band 1 of each tile, **in array order**, binds to the variables `A`, `B`, `C`, … (`A` = first tile, `B` = second, …). The result is a single-band Float32 tile on the first input's georeference.
 
-**Spec format (same at every level).** The expression is accepted in **either** of two forms — identical across SQL, Scala, and both Python and SQL:
+**Expression format.** The expression takes either of two forms:
 
-- **JSON envelope** (recommended; the `gdal_calc` spec shape): a JSON object with a `calc` expression — `'{"calc": "A * 2"}'`.
+- **JSON envelope** (recommended): a JSON object with a `calc` expression, such as `'{"calc": "A * 2"}'`.
 - **Bare expression string**: the calc expression on its own — `"A * 2"`.
 
 
@@ -4650,12 +4652,14 @@ Map algebra expression (e.g. `A - B`).
 {"calc": "(A - B) / (A + B)", "A_index": 0, "B_index": 0, "A_band": 4, "B_band": 3}
 ```
 
-Both `A` and `B` read raster `0` (the one tile in the array), with `A` = band 4 and `B` = band 3 — the direct equivalent of `gdal_calc -A in.tif --A_band=4 -B in.tif --B_band=3 --calc="(A - B) / (A + B)"`. A variable with no `*_index`/`*_band` keeps the default (its ordinal raster, band 1). **This works at every level.**
+Both `A` and `B` read raster `0` (the one tile in the array), with `A` = band 4 and `B` = band 3 — the direct equivalent of `gdal_calc -A in.tif --A_band=4 -B in.tif --B_band=3 --calc="(A - B) / (A + B)"`. A variable with no `*_index`/`*_band` keeps the default (its ordinal raster, band 1). An index or band out of range raises.
 
-The envelope does not take `extra_options` (raw `gdal_calc` flags) or `dialect`. Either key raises an error that names it.
+The envelope does not take `extra_options` (raw `gdal_calc` flags) or `dialect`. Either key raises an error that names it. A key other than `calc` and the `*_index` and `*_band` keys raises too.
 
 :::note Expression grammar
-Every expression uses GDAL's muparser grammar, for example `(A - B) / (A + B)`, `A > 0 ? A : 0` and `max(A, B)`. NumPy spellings such as `numpy.where` are not accepted. See the GDAL [raster calculator reference](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
+In a session, every expression uses GDAL's muparser grammar, for example `(A - B) / (A + B)`, `A > 0 ? A : 0` and `max(A, B)`. NumPy spellings such as `numpy.where` are not accepted. An expression GDAL cannot evaluate raises. See the GDAL [raster calculator reference](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
+
+On Unity Catalog the function evaluates the expression with NumExpr instead, which does math only. It has no `?:`: write a condition as `where(A > 0, A, 0)`.
 :::
 
 <FunctionExamples
@@ -4718,7 +4722,7 @@ Merge tiles into mosaic.
 {/* END GENERATED gbx_rst_ndvi */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
@@ -4986,7 +4990,7 @@ Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that CRS comes back as it is. A code that names no CRS gives an error tile with the reason. A tile with no CRS also gives an error tile; set its CRS first with `rst_setcrs`. Use `rst_transformcrs` for a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
+Reproject to a target SRID: a positive EPSG or ESRI code. Pixels take the nearest source value. A tile already in that CRS comes back as it is. A code that names no CRS gives an error tile with the reason. A tile with no CRS also gives an error tile; set its CRS first with `rst_setcrs`. Use `rst_transformcrs` for a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
 
 <FunctionExamples
   name="rst_transform"
@@ -5013,10 +5017,10 @@ Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that
 {/* END GENERATED gbx_rst_transformcrs */}
 
 :::note Implementation
-Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio.
+Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 :::
 
-Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
+Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). Pixels take the nearest source value. See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
 
 Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so you can reproject to a non-EPSG target. An int-castable string (`'3857'`) is treated as an EPSG SRID. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
@@ -5418,7 +5422,7 @@ Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dim
 
 ## Terrain Analysis {#terrain}
 
-Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
+Digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. They run GDAL's own `raster` algorithm in the worker, with Horn's method where the algorithm has a choice. `rst_tri` runs its JVM form first on a dedicated cluster with the JAR. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
 
 ### rst_aspect
 
@@ -5439,7 +5443,7 @@ Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) deri
 {/* END GENERATED gbx_rst_aspect */}
 
 :::note Edges and NoData
-A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData.
 :::
 
 :::note Python-only keywords
@@ -5474,7 +5478,7 @@ With `zero_for_flat`, GDAL would drop the NoData value and write 0 at the border
 {/* END GENERATED gbx_rst_color_relief */}
 
 :::note Color table and NoData
-The color table is text, not a path. Read a table file first and pass its text. The text is checked line by line: a line that is not a color entry raises, naming the line. A NoData pixel takes the `nv` color. Without an `nv` line it is transparent in an RGBA result and black in an RGB one. Values outside the entries take the nearest entry's color. The result is an RGB or RGBA Byte tile, RGBA when any entry has an alpha column. The function has no JVM form.
+The function runs GDAL's own `raster color-map` algorithm in the worker. The color table is text, not a path. Read a table file first and pass its text. The text is checked line by line: a line that is not a color entry raises, naming the line. A NoData pixel takes the `nv` color. Without an `nv` line it is transparent in an RGBA result and black in an RGB one. Values outside the entries take the nearest entry's color. The result is an RGB or RGBA Byte tile, RGBA when any entry has an alpha column. The function has no JVM form.
 :::
 
 :::note Python-only keywords
@@ -5514,7 +5518,7 @@ Apply a `gdaldem` color table, given as text, to produce an RGB(A) visualization
 {/* END GENERATED gbx_rst_hillshade */}
 
 :::note Edges and NoData
-A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData.
 :::
 
 :::note Python-only keywords
@@ -5547,7 +5551,7 @@ Shaded relief as an 8-bit image with values from 1 to 255; 0 is NoData. Common v
 {/* END GENERATED gbx_rst_roughness */}
 
 :::note Edges and NoData
-A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData.
 :::
 
 :::note Python-only keywords
@@ -5616,7 +5620,7 @@ Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `ysc
 {/* END GENERATED gbx_rst_tpi */}
 
 :::note Edges and NoData
-A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData.
 :::
 
 :::note Python-only keywords
@@ -5649,7 +5653,7 @@ Topographic Position Index — pixel value minus the mean of its 8 neighbours. P
 {/* END GENERATED gbx_rst_tri */}
 
 :::note Edges and NoData
-A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData. Values can differ from GDAL's `gdaldem` in the last digits.
+A pixel whose 3×3 window holds NoData, and the one-pixel border, are NoData.
 :::
 
 :::note Python-only keywords
@@ -5693,7 +5697,7 @@ Multi-band satellite math. Band arguments are 1-based GDAL band indices; the out
 {/* END GENERATED gbx_rst_evi */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
@@ -5728,14 +5732,14 @@ Enhanced Vegetation Index. Formula: `G * (NIR - Red) / (NIR + C1*Red - C2*Blue +
 {/* END GENERATED gbx_rst_index */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
 The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Generic dispatcher that picks a built-in formula by name and wires bands via a `MAP<STRING, INT>` (e.g. `map('red', 1, 'nir', 2)`). Built-in names: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi`, `ndsi`.
+Generic dispatcher that picks a built-in formula by name and wires bands via a `MAP<STRING, INT>` (e.g. `map('red', 1, 'nir', 2)`). Built-in names: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi`, `ndsi`. A pixel where the `msavi` square root has no real value is NoData too.
 
 <FunctionExamples
   name="rst_index"
@@ -5828,7 +5832,7 @@ threshold.
 {/* END GENERATED gbx_rst_nbr */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
@@ -5863,7 +5867,7 @@ Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fir
 {/* END GENERATED gbx_rst_ndwi */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
@@ -5899,7 +5903,7 @@ Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (G
 {/* END GENERATED gbx_rst_savi */}
 
 :::note NoData
-A pixel where an input band is NoData, or where the denominator is 0, is NoData (-9999).
+A pixel is NoData (-9999) where an input band is NoData, a value is NaN or infinite, or the denominator is 0.
 :::
 
 :::note Python-only keywords
@@ -6014,7 +6018,7 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
 :::note Implementation
-Runs GDAL's `raster fill-nodata` for each band, through the GDAL spec engine.
+Runs GDAL's `raster fill-nodata` for each band, in the worker, on every compute.
 :::
 
 :::note Python-only keywords
@@ -6232,9 +6236,6 @@ Higher-level analytical transforms wrapping single GDAL primitives — COG layou
 | `command` | `STRING` |  | What follows `gdal raster` on the command line: one step or steps joined by `!`, such as `'slope --unit=percent'` or `'reproject --output-crs=EPSG:3857 ! slope'`. Every step and argument must be on the allowlist; a file, URL or option outside it raises. |
 {/* END GENERATED gbx_rst_gdal */}
 
-{/* BEGIN GENERATED gbx_rst_gdal: placeholder, run gbx:manifest:gen */}
-{/* END GENERATED gbx_rst_gdal */}
-
 :::note Implementation
 Runs GDAL's `raster pipeline` in the worker on every compute. GeoBrix adds the read and write steps itself.
 :::
@@ -6332,7 +6333,7 @@ A NoData pixel is never traced. That includes a pixel equal to -9999 in a tile t
 Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values. Or pass `array()` and set `interval` (above 0) for equal-step contours at `base + n*interval`.
 Levels may come in any order. Repeated and NULL elements are dropped, and `levels` wins over `interval` when both are given.
 Each entry is one contour line in the source raster's CRS. A line runs to the tile's edge, half a pixel past the outermost pixel centres.
-An empty array means no line crosses. NULL means a NULL, error or unreadable tile. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
+An empty array means no line crosses. NULL means a NULL, error or unreadable tile, or a call GDAL cannot run. A call over the compute's memory budget is NULL too. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
 
 <FunctionExamples
   name="rst_contour"
@@ -6368,7 +6369,7 @@ Powered by **SciPy** (`scipy.ndimage.distance_transform_edt`). Distance to the n
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Compute a Float32 raster where each pixel holds the exact Euclidean distance to the nearest source pixel. `targetValues` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means every pixel that is not 0 is a source. `distUnits` is `"GEO"` (CRS ground units, default; NULL is `"GEO"`) or `"PIXEL"`; any other word raises an error. `maxDistance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
+Compute a Float32 raster where each pixel holds the exact Euclidean distance to the nearest source pixel. `target_values` is a comma-separated list of source-pixel values (e.g. `"1,2,3"`); `null` means every pixel that is not 0 is a source. `dist_units` is `"GEO"` (CRS ground units, default; NULL is `"GEO"`) or `"PIXEL"`; any other word raises an error. `max_distance` caps the output; pixels beyond it get the NoData sentinel `-1.0`.
 
 <FunctionExamples
   name="rst_proximity"
@@ -6402,7 +6403,7 @@ Runs GDAL's `raster viewshed` in the worker, in its edge line-of-sight mode with
 :::
 
 :::info Changed in 0.6.0
-With a `maxDistance`, the result is the window around the observer, aligned to the DEM's pixel grid. In v0.5.2, DEMs above the small-DEM limit (about 366 × 366 pixels by default) stretched that window over the whole DEM.
+With a `max_distance`, the result is the window around the observer, aligned to the DEM's pixel grid. In v0.5.2, DEMs above the small-DEM limit (about 366 × 366 pixels by default) stretched that window over the whole DEM.
 :::
 
 :::note Python-only keywords

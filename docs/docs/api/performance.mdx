@@ -399,13 +399,12 @@ The compute under each UDF shape comes from established Python libraries.
 
 | Library | Role |
 |---|---|
-| **rasterio** | Tile open and decode, clip, warp, resample, COG conversion, band I/O |
+| **rasterio** | Tile open and decode, clip, COG conversion, band I/O |
 | **NumPy** | Array operations |
-| **NumPy** (Horn 3 by 3) | Terrain analysis: slope, aspect, hillshade, TRI, TPI, roughness |
 | **SciPy** | Focal filters (`rst_filter`, `rst_convolve`). Delaunay triangulation and interpolation for the TIN functions. |
 | **rio-tiler** | XYZ and web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
-| **GDAL** (`raster viewshed`) | Viewshed |
-| **shapely** | WKB geometry handling: clip, polygonize, rasterize, grid aggregation, legacy-struct decode |
+| **GDAL** (`raster` algorithms) | Terrain, color relief, band math, warp and resample, fill NoData, summary, contour, polygonize, viewshed, and `gbx_rst_gdal` |
+| **shapely** | WKB geometry handling: clip, rasterize, grid aggregation, legacy-struct decode |
 | **pyogrio** | Vector reader I/O in Arrow-native columnar batches |
 | **mapbox-vector-tile** | MVT protobuf encode and decode (`st_asmvt`, `st_asmvt_pyramid`) |
 

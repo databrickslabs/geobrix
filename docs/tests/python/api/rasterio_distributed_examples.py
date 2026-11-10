@@ -26,7 +26,7 @@ with rasterio.open("in.tif") as src:
 WARP_PYRX = """# GeoBrix: reproject a whole DataFrame of tiles, distributed
 from databricks.labs.gbx.rasterx import functions as rx
 df2 = df.withColumn("tile", rx.rst_transform("tile", 3857))
-# rst_transform runs rasterio.warp on each tile in an Arrow UDF across the cluster"""
+# rst_transform runs GDAL's raster reproject on each tile in an Arrow UDF across the cluster"""
 
 CLIP_RASTERIO = """# Single-node rasterio: clip one raster to a geometry
 import rasterio

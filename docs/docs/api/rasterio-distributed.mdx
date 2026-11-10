@@ -81,7 +81,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
   {rioDist}
 </CodeFromTest>
 
-**pyrx** runs the same `rasterio.warp` logic on each tile across the cluster:
+**pyrx** runs GDAL's `raster reproject` on each tile across the cluster:
 
 <CodeFromTest
   language="python"
@@ -123,7 +123,7 @@ The test verifies two things. The pyrx-reprojected tile reports the correct targ
   {rioDist}
 </CodeFromTest>
 
-Both operations mask the raster to the provided geometry. The third argument to `rst_clip` controls border pixel inclusion (`True` = include any pixel that touches the geometry boundary; `False` = include only pixels fully inside). This corresponds to `rasterio.mask`'s `all_touched` parameter. The border semantics of `rasterio.mask` and the GDAL cutline path used in the heavyweight tier can diverge on boundary pixels. Both are shown here as the same distributed clip operation, not as pixel-level equivalents.
+Both operations mask the raster to the provided geometry. The third argument to `rst_clip` controls border pixel inclusion (`True` = include any pixel that touches the geometry boundary; `False` = include only pixels fully inside). This corresponds to `rasterio.mask`'s `all_touched` parameter. Both are shown here as the same distributed clip operation, not as pixel-level equivalents.
 
 ---
 
@@ -170,14 +170,6 @@ A small number of capabilities run only on the heavyweight implementation:
 - **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes. Constrained mode, `mode='constrained'` (constrained Delaunay, the default), works in both tiers. Conforming mode, `mode='conforming'` (Steiner-point conforming Delaunay), requires a C-level refinement library not available in the lightweight stack. It raises in `pyrx` with an informative message.
 
 See [Surfaces and levels](./execution-tiers) for how GeoBrix picks an implementation.
-
-### Known behavior divergences
-
-Where the lightweight and heavyweight implementations use different underlying algorithms, their outputs may not be pixel-identical on edge cases:
-
-| Function | Heavyweight | Lightweight | Divergence |
-|---|---|---|---|
-| `rst_resample` | `gdalwarp` with a rounded-up size | GDAL `raster reproject` with a size rounded to even | A target size that ends in .5 pixels differs by one pixel |
 
 See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both implementations.
 

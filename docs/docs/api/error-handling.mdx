@@ -69,13 +69,25 @@ Both levels accept the same tile drivers. Bytes in a driver from the allowed set
 
 ### Tiles over the read cap
 
-A function that must decode a tile checks the decoded size first. The cap is 64 MiB on Serverless and Spark Connect, and 256 MiB on classic compute. A tile over the cap gives the same error tile at every level. The error text ends with a `Fix:` that says to retile first with `gbx_rst_retile`.
+A function that must decode a tile checks the decoded size first. The cap is 64 MiB on Serverless and 1536 MiB on classic and dedicated compute. A tile over the cap gives the same error tile at every level. The error text ends with a `Fix:` that says to retile first with `gbx_rst_retile`.
 
 A virtual tile is judged by the window it reads, from the file's header, before any pixel is read. A small window of a large file is read. In the lightweight tier, `gbx_rst_retile`, `gbx_rst_tooverlappingtiles` and `gbx_rst_maketiles` cut such a tile window by window, so they work at any size.
 
 A **file** read over the cap is different. `gbx_rst_fromfile`, and `rst_fromfile(materialize=True)`, fail the call with an error that says how to fix it. The `raster_gbx` reader does the same when you set `virtualTiles=false`. Set `sizeInMB` to split the file, or keep virtual tiles.
 
 An out-of-memory error fails the task. GeoBrix never turns it into an error tile.
+
+### Functions that run GDAL's own algorithm
+
+The terrain functions, `gbx_rst_color_relief`, the band-math functions, the warp and resample functions, `gbx_rst_fillnodata`, `gbx_rst_summary`, `gbx_rst_contour`, `gbx_rst_polygonize`, `gbx_rst_viewshed` and `gbx_rst_gdal` share these rules.
+
+- A tile over the read cap gives an error tile with a `Fix:` that says to retile first. GeoBrix judges it from the header, before it decodes a pixel.
+- The input and the estimated output must fit the compute's decoded budget together. The budget is 64 MiB on Serverless and 1536 MiB on classic compute. If they do not fit, the call gives an error tile with a `Fix:` that says to retile first or ask for a smaller output.
+- A tile that is already in the target CRS comes back from `gbx_rst_transform` unchanged, before the budget is judged.
+- `gbx_rst_viewshed` and `gbx_rst_gdal` read a virtual tile that is a whole file by its path, block by block. The read cap does not apply to that read, and the budget judges the output.
+- `gbx_rst_summary` and `gbx_rst_contour` give NULL where the others give an error tile. `gbx_rst_polygonize` gives no rows. A call that GDAL cannot run logs its reason once for each function and reason on the worker.
+- A virtual tile whose file is missing is retried about 10 times. It then raises with a `Fix:`, and Spark retries the task.
+- A wrong argument raises and names the value.
 
 ### Arrays of tiles, merges and combines
 

@@ -109,7 +109,7 @@ Helpers for discovering and loading imagery from **SpatioTemporal Asset Catalog 
 | **Product Gap** | Full gap-filling | Specialized grids (BNG, quadbin) | Vector-tile encoding, legacy migration | Net-new | Supporting layer |
 | **GDAL Required** | Yes | No | Yes (readers + MVT) | No | No |
 | **Output Format** | Tile (struct) + arrays | Cell IDs (Long / String) + WKB | BINARY (MVT bytes), WKB | BINARY (PMTile blob) or file | Matplotlib figure / GeoDataFrame |
-| **Spark Surface** | 129 SQL functions | 41 SQL functions | 21 SQL functions + DataSources | 1 UDAF + 1 DataSource | Python only (no SQL) |
+| **Spark Surface** | 166 SQL functions | 41 SQL functions | 21 SQL functions + DataSources | 1 UDAF + 1 DataSource | Python only (no SQL) |
 
 ## Choosing the Right Package
 
@@ -197,8 +197,8 @@ bx.bng_pointascell("pt", f.lit("1km"))   # string literal — still wrap in f.li
 
 ```scala
 // ✅ 0.3.0 — scalar overloads resolve without lit(...)
-rst_clip(col("tile"), col("geom"), cutlineAllTouched = true)
-rst_transform(col("tile"), 4326)
+rst_updatetype(col("tile"), "Float32")
+rst_rastertoworldcoordx(col("tile"), 10, 20)
 bng_pointascell(col("pt"), 1)
 bng_pointascell(col("pt"), "1km")
 ```

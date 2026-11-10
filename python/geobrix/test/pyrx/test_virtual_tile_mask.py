@@ -29,6 +29,7 @@ from shapely.geometry import box
 
 from databricks.labs.gbx.pyrx.core import edit
 from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.rasterx import functions as rx
 
@@ -328,9 +329,29 @@ def test_clip_variant_equals_the_eager_clip(tmp_path, nodata):
         got[0] == eager[0]
     ).all(), "clipped pixels differ from the eager clip of the bytes"
     assert (got[1] == eager[1]).all(), "clipped validity differs"
-    fill = 0 if nodata is None else nodata
+    # a source with no NoData is filled with its dtype's fallback, which the clip declares: never a valid zero
+    fill = fallback_nodata("uint16") if nodata is None else nodata
     assert (got[0] == MARKER).sum() == 0, "a masked pixel survived the clip"
+    assert (got[1][got[0] == fill] == 0).all(), "the fill reads as valid"
     assert (got[0] == fill).any(), "the clip left no fill where the mask was"
+
+
+def test_a_subpixel_cutline_keeps_its_pixel_in_a_virtual_tile_as_in_the_eager_clip(
+    tmp_path,
+):
+    """A cutline under one pixel holds no pixel centre: the clip keeps the pixel it touches, the same pixel in the eager
+    clip of the bytes and in the virtual tile that reads window by window."""
+    p = write_masked(tmp_path / "m.tif", nodata=None)
+    x0, y0 = ORIGIN
+    cut = box(
+        x0 + 12.1 * PX, y0 - 20.3 * PX, x0 + 12.3 * PX, y0 - 20.1 * PX
+    )  # inside the pixel (column 12, row 20), away from its centre
+    with rasterio.open(p) as src:
+        eager = decode(edit.clip_to_geom(src, cut))
+    got = read_tile(virtual(p, clip_polygon=shapely.to_wkb(cut), clip_crs="EPSG:4326"))
+    assert eager[0].shape[1:] == (1, 1), "the eager clip keeps one pixel"
+    assert got[0].shape == eager[0].shape and (got[0] == eager[0]).all()
+    assert (got[1] == eager[1]).all()
 
 
 # ---------------------------------------------------------------------------

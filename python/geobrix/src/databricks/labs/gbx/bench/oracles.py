@@ -3176,6 +3176,38 @@ def _ref_clip_columns(first: int, count: int):
     return ref
 
 
+def _ref_clip_pixel(col: int, row: int):
+    """rst_clip of a cutline smaller than a pixel: the one pixel (col, row) it stands in, with its value."""
+
+    def ref(args):
+        import numpy as np
+
+        with _ref_dataset(args) as ds:
+            band = ds.read(1, masked=True)[row : row + 1, col : col + 1]
+        return band.data.astype("float64"), np.ma.getmaskarray(band)
+
+    return ref
+
+
+def _ref_clip_triangle(args):
+    """rst_clip of the `clip_ramp_*` tile by the right triangle with corners (400020, 5759980), (400140, 5759980) and
+    (400140, 5759880): the columns 2 to 13 and rows 2 to 11 of the tile, where a pixel whose centre the triangle holds
+    keeps its value and every other pixel is NoData (the tile's own NoData, else 65535, the fallback of its UInt16).
+    The centres are judged by shapely, not by the rasterizer the clip uses.
+    """
+    import numpy as np
+    import shapely
+
+    tri = shapely.Polygon([(400020, 5759980), (400140, 5759980), (400140, 5759880)])
+    with _ref_dataset(args) as ds:
+        band = ds.read(1)[2:12, 2:14].astype("float64")
+        fill = ds.nodata if ds.nodata is not None else 65535.0
+    cols, rows = np.meshgrid(np.arange(2, 14), np.arange(2, 12))
+    x, y = 400000.0 + 10.0 * (cols + 0.5), 5760000.0 - 10.0 * (rows + 0.5)
+    inside = shapely.contains_xy(tri, x, y)
+    return np.where(inside, band, fill), ~inside
+
+
 def _ref_transform_gcp(args):
     """rst_transform to EPSG:3857 of a tile georeferenced by ground control points: rasterio.warp's own nearest-neighbour
     warp from the points and their projection, on the default output grid."""
@@ -3747,6 +3779,8 @@ _REFS = {
     "proximity_pixel": _ref_proximity("PIXEL"),
     "fillnodata": _ref_fillnodata,
     "clip_left_half": _ref_clip_columns(0, 32),
+    "clip_pixel_10_10": _ref_clip_pixel(10, 10),
+    "clip_triangle": _ref_clip_triangle,
     "slope": _ref_slope,
     "gdaldem_slope": _ref_gdaldem_slope,
     "chm": _ref_chm,

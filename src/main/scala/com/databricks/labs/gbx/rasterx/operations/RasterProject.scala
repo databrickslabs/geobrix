@@ -33,8 +33,8 @@ object RasterProject {
       * uses the compact `-t_srs NAME:CODE` form. For an authority-less target (e.g. a
       * bare WKT / PROJ4 CRS passed through `rst_transformcrs`), `GetAuthorityCode` is
       * null and the `NAME:CODE` string would be `null:null` — a broken target. In that
-      * case fall back to the target's WKT (mirrors the `RST_Clip` `ImportFromWkt`
-      * escape hatch). Because `GDALWarp.executeWarp` splits the command string on
+      * case fall back to the target's WKT (the same `ImportFromWkt`
+      * escape hatch the clip used). Because `GDALWarp.executeWarp` splits the command string on
       * spaces (and WKT is full of spaces), the WKT is written to a temp `.wkt` file and
       * passed by path: GDAL's `-t_srs` accepts a filename holding the SRS definition. */
     def project(ds: Dataset, options: Map[String, String], dstSR: SpatialReference): (Dataset, Map[String, String]) = {

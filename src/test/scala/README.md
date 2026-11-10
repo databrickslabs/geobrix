@@ -186,7 +186,6 @@ Test data is located in `src/test/resources/`:
 ### Expression Tests (Spark Level)
 
 **RST_TransformationsEvalTest** (15 tests):
-- RST_Clip with WKT and WKB
 - RST_Filter with multiple operations
 - RST_Transform to various CRS
 - Combined workflows

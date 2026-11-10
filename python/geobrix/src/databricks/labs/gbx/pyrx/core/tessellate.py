@@ -33,7 +33,7 @@ from databricks.labs.gbx.core.crs import (
 )
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
-from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata, has_alpha, valid_mask
+from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.gridagg import _bng_cells, _h3_cells
 
@@ -327,18 +327,10 @@ def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
 
 
 def _chip_nodata(work_ds):
-    """NoData every chip carries: the source's, else the dtype fallback, else none.
-
-    A source with an alpha band and no NoData gets none: the chip keeps the alpha band,
-    which marks the transparent pixels and the pixels outside the cell (written as 0, so
-    alpha 0), and a NoData declared over it would shadow the alpha band and turn those
-    pixels valid.
+    """NoData every chip carries: the source's, else the dtype fallback, else none (see ``edit.clip_fill``, which a
+    source with an alpha band and no NoData gets none from: the alpha band marks the pixels outside the cell).
     """
-    if work_ds.nodata is not None:
-        return work_ds.nodata
-    if has_alpha(work_ds):
-        return None
-    return fallback_nodata(work_ds.dtypes[0])
+    return edit.clip_fill(work_ds)
 
 
 def _empty_chip_builder(work_ds, grid: str, conf=None):

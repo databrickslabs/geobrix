@@ -4,6 +4,7 @@ GTiff bytes."""
 
 import numpy as np
 import shapely
+import shapely.geometry
 import shapely.wkb
 from rasterio.mask import mask as _rio_mask
 
@@ -55,6 +56,28 @@ def clip_shape(ds_crs, geom, geom_crs=None):
     return mask_shape
 
 
+def is_subpixel(shape, transform) -> bool:
+    """True when the cutline *shape* (in the raster's CRS, a shapely geometry or its GeoJSON-like dict) has an area under
+    one pixel's. Such a cutline holds no pixel centre, so a clip that keeps the pixels whose centre it holds would keep
+    only NoData: a clip keeps the pixels it touches instead (``all_touched``), the pixel it stands in.
+    """
+    geom = shapely.geometry.shape(shape) if isinstance(shape, dict) else shape
+    return bool(not geom.is_empty and geom.area < abs(transform.a) * abs(transform.e))
+
+
+def clip_fill(ds):
+    """The NoData a clip of *ds* declares, and fills the pixels it leaves out with (the pixels outside the cutline, and the
+    ones the source masks): the source's own NoData, else the dtype's fallback (``_nodata.fallback_nodata``). A source
+    with an alpha band and no NoData gets none: the alpha band marks those pixels (written as 0, so alpha 0), and a NoData
+    declared over it would shadow the alpha band and turn them valid.
+    """
+    if ds.nodata is not None:
+        return ds.nodata
+    if _nd.has_alpha(ds):
+        return None
+    return _nd.fallback_nodata(ds.dtypes[0])
+
+
 def clip_to_geom(
     ds, geom, all_touched: bool = False, geom_crs=None, nodata=None, crop: bool = True
 ):
@@ -72,21 +95,18 @@ def clip_to_geom(
     errors propagate.
 
     ``nodata``, when given, fills the pixels outside the geometry and is declared
-    on the output. Otherwise the fill is the source NoData, or 0 with no NoData
-    declared when the source has none.
+    on the output. Otherwise the fill is the source NoData, else the dtype's fallback NoData, declared on the output
+    (:func:`clip_fill`): the pixels the clip leaves out are never valid zeros. A cutline smaller than a pixel keeps the
+    pixel it touches (:func:`is_subpixel`).
 
     ``crop=False`` keeps the raster's own grid (the output is as large as the raster, the pixels outside the geometry
     filled): the clip of one window of a raster that is cropped as a whole (see :func:`clip_masked`).
     """
     if isinstance(geom, (bytes, bytearray)):
         geom = shapely.wkb.loads(bytes(geom))  # handles WKB and EWKB
-    return clip_masked(
-        ds,
-        clip_shape(ds.crs, geom, geom_crs),
-        all_touched=all_touched,
-        nodata=nodata,
-        crop=crop,
-    )
+    shape = clip_shape(ds.crs, geom, geom_crs)
+    all_touched = bool(all_touched) or is_subpixel(shape, ds.transform)
+    return clip_masked(ds, shape, all_touched=all_touched, nodata=nodata, crop=crop)
 
 
 def clip_masked(
@@ -102,6 +122,8 @@ def clip_masked(
     geotransform in place of the one the clip derives (a window of a clip that is cropped as a whole places it from
     the crop's transform, to the last bit).
     """
+    if nodata is None:
+        nodata = clip_fill(ds)
     try:
         out_image, out_transform = _rio_mask(
             ds, [mask_shape], crop=crop, all_touched=bool(all_touched), nodata=nodata

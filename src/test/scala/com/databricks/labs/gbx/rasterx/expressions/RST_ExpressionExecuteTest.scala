@@ -1,6 +1,5 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.{Dataset, gdal}
@@ -31,15 +30,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         convertedDs should not be null
         convertedDs.GetDriver().getShortName shouldBe "PNM"
         RasterDriver.releaseDataset(convertedDs)
-    }
-
-    test("RST_Clip should clip raster to specified bounds") {
-        val geom = RST_BoundingBox.execute(ds).buffer(-200000)
-        val (clippedDs, _) = RST_Clip.execute(ds, Map.empty, geom, cutlineAllTouched = true)
-        clippedDs should not be null
-        clippedDs.getRasterXSize should be <= ds.getRasterXSize
-        clippedDs.getRasterYSize should be <= ds.getRasterYSize
-        RasterDriver.releaseDataset(clippedDs)
     }
 
     test("RST_Convolve should apply convolution kernel to raster") {

@@ -1518,9 +1518,9 @@ def _clip_source(nodata):
 @pytest.mark.parametrize("nodata", [None, 7.0])
 def test_clip_masked_source_hexagon(spark_with_jar, tmp_path, nodata, start):
     """``rst_clip`` (lightweight level only) of a source with its own mask band by a hexagon (all
-    touched): the masked pixels are filled like the area outside the geometry (0 without a source
-    NoData, the NoData when there is one). The tile starts from ``start``: its bytes, or a virtual
-    tile over the file."""
+    touched): the masked pixels are filled like the area outside the geometry, with NoData: the source's when
+    it has one, else the fallback of its type (65535 for UInt16), which the output declares. The tile starts from
+    ``start``: its bytes, or a virtual tile over the file."""
     from pyspark.sql import functions as f
 
     spark = spark_with_jar
@@ -1531,7 +1531,8 @@ def test_clip_masked_source_hexagon(spark_with_jar, tmp_path, nodata, start):
         return f.call_function("gbx_rst_clip", t, f.lit(_CLIP_HEXAGON), f.lit(True))
 
     light = _decoded(_single_tile(spark, raster, "light", clip))
-    assert light["nodata"] == nodata
+    fill = 65535 if nodata is None else nodata
+    assert light["nodata"] == fill
     # the masked source pixels the clip covers hold the fill
     gt = light["transform"]
     _, h, w = light["shape"]
@@ -1544,6 +1545,5 @@ def test_clip_masked_source_hexagon(spark_with_jar, tmp_path, nodata, start):
     on_masked = np.zeros((h, w), dtype=bool)
     on_masked[inside] = hidden[sr[inside], sc[inside]]
     assert on_masked.any(), "the clip covers no masked source pixel"
-    fill = 0 if nodata is None else nodata
     held = light["data"][0][on_masked]
     assert (held == fill).all(), "masked source pixels kept their values"

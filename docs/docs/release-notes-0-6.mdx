@@ -740,7 +740,11 @@ Both tiers apply one rule for which pixels are valid.
   - `cog_gbx` mosaic windows.
   - Lightweight virtual tiles, which `rst_fromfile` returns by default.
 
-  Heavyweight `rst_clip` fills masked pixels like the area outside the geometry. It uses the source's NoData when it declares one, else 0.
+- **`rst_clip` fills with NoData.** The pixels outside the cutline, and the ones the source masks, are NoData. They take the tile's own NoData, else the fallback of its type, which the output declares.
+  - They were valid zeros when the source declared no NoData.
+  - A tile with an alpha band gets alpha 0 there and declares no NoData.
+  - A cutline smaller than one pixel keeps the pixel it touches. It kept only NoData.
+  - Virtual tiles with a `clip_polygon`, `rst_clip_grouped` and the Unity Catalog `rst_clip` follow the same rule.
 - **The warp fill is NoData.** `rst_bng_tessellate` and the `rst_h3_rastertogrid*`, `rst_quadbin_rastertogrid*` and `rst_bng_rastertogrid*` reducers first warp a source that is not in the grid's CRS.
   - For a source with no NoData and no alpha band, the pixels outside the footprint were valid zeros. Edge-cell tiles carried them, and the reducers counted them as data.
   - They are now NoData with the fallback value. Source pixels equal to it are NoData too.

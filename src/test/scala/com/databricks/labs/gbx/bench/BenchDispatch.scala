@@ -8,7 +8,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
-import com.databricks.labs.gbx.rasterx.expressions.RST_Clip
 import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
@@ -76,16 +75,6 @@ object BenchDispatch {
       "               raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n" +
       "    stack = np.array(in_ar, dtype='float64')\n" +
       "    out_ar[:] = stack.mean(axis=0)\n"
-  // Small clip polygon (1000-unit box at the origin). A global-cover polygon
-  // (±2e7) is NOT safe here: rst_clip falls back to the raster CRS when the
-  // cutline carries no SRID, and gdalwarp -crop_to_cutline against a ±2e7-metre
-  // cutline on a projected (metre) tile expands the output grid to ~1e8 px/side,
-  // a native GDAL allocation abort that kills the JVM. A small finite box keeps
-  // the timing-only call cheap and crash-free on every CRS (out-of-extent clips
-  // are fine for timing). Same WKT as the WKB the pyrx side builds via
-  // shapely.geometry.box(-500, -500, 500, 500).
-  private val clipGeomWkt =
-    "POLYGON ((-500 -500, 500 -500, 500 500, -500 500, -500 -500))"
 
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
@@ -113,7 +102,6 @@ object BenchDispatch {
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
-    "rst_clip" -> EDIT,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
     // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
@@ -460,15 +448,6 @@ object BenchDispatch {
     case "rst_proximity" =>
       fpDerived(RST_Proximity.execute(ds, Map.empty,
         Some(argS(a, "target_values", "1")), argS(a, "distunits", "GEO"), None))
-    // timing-only: clip needs an in-extent geom. A fixed box is out-of-extent on
-    // some CRS (e.g. UTM), so derive the cutline per-tile from the dataset's
-    // geotransform + size (bounds box shrunk 50% about the tile center, in the
-    // tile's own CRS). Output is not compared; just must run on every tile.
-    case "rst_clip" =>
-      val res = RST_Clip.execute(ds, Map.empty, JTS.fromWKT(shrunkBoundsBoxWkt(ds)),
-        argB(a, "cutline_all_touched", false))
-      RasterDriver.releaseDataset(res._1)
-      BenchFingerprint.empty
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -726,23 +705,6 @@ object BenchDispatch {
     finally if (!(out eq input)) RasterDriver.releaseDataset(out)
   }
 
-  // WKT of the tile's bounds box shrunk 50% about its center, in the tile's CRS.
-  // Guarantees an in-extent cutline for the timing-only rst_clip on every CRS.
-  private def shrunkBoundsBoxWkt(ds: Dataset): String = {
-    val gt = ds.GetGeoTransform()
-    val w = ds.GetRasterXSize().toDouble
-    val h = ds.GetRasterYSize().toDouble
-    // Two opposite corners (ignoring rotation terms, which are 0 for the corpus).
-    val x0 = gt(0); val y0 = gt(3)
-    val x1 = gt(0) + w * gt(1); val y1 = gt(3) + h * gt(5)
-    val (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-    val hw = math.abs(x1 - x0) / 4.0
-    val hh = math.abs(y1 - y0) / 4.0
-    val (minx, maxx) = (cx - hw, cx + hw)
-    val (miny, maxy) = (cy - hh, cy + hh)
-    s"POLYGON (($minx $miny, $maxx $miny, $maxx $maxy, $minx $maxy, $minx $miny))"
-  }
-
   def column(fn: String, tile: Column, a: Map[String, String]): Column = {
     import functions._
     fn match {
@@ -806,9 +768,6 @@ object BenchDispatch {
       case "rst_proximity" =>
         import org.apache.spark.sql.functions.lit
         rst_proximity(tile, lit(argS(a, "target_values", "1")), lit(argS(a, "distunits", "GEO")))
-      case "rst_clip" =>
-        import org.apache.spark.sql.functions.lit
-        org.apache.spark.sql.functions.call_function("gbx_rst_clip", tile, lit(clipGeomWkt), lit(argB(a, "cutline_all_touched", false)))
       // bucket C, group C1/C2. tryopen takes the tile; fromcontent reads the
       // tile's raster (binary content) column; buildoverviews takes the tile +
       // an ARRAY<INT> levels literal. subdatasets / getsubdataset are

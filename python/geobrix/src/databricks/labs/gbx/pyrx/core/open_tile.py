@@ -1312,11 +1312,13 @@ def _staged_view(vt: VirtualTile, src) -> Optional[_PieceView]:
     if vt.clip_polygon is not None:
         geom = _clip.clip_geom(vt.clip_polygon, vt.clip_crs)
         crop = shape = None
+        touch = False
         # one pixel of the stage the polygon clips: its CRS puts the polygon on the grid, and it is the reference of
         # the NoData pixel a polygon that misses the raster gives
         with MemoryFile(piece(Window(0, 0, 1, 1))) as mf, open_bytes(mf) as ref:
             if geom is not None:
                 shape = _edit.clip_shape(ref.crs, geom)
+                touch = _edit.is_subpixel(shape, transform)
                 try:
                     crop = rasterio.features.geometry_window(
                         _GridHeader(transform, out_w, out_h), [shape]
@@ -1335,7 +1337,14 @@ def _staged_view(vt: VirtualTile, src) -> Optional[_PieceView]:
         # the transform of the clipped raster, as `window_transform(crop)` gives it: a piece is placed from it
         crop_transform = transform * Affine.translation(crop.col_off, crop.row_off)
 
-        def clip_piece(win, inner=inner, crop=crop, shape=shape, origin=crop_transform):
+        def clip_piece(
+            win,
+            inner=inner,
+            crop=crop,
+            shape=shape,
+            origin=crop_transform,
+            touch=touch,
+        ):
             data = inner(
                 Window(
                     crop.col_off + win.col_off,
@@ -1351,6 +1360,7 @@ def _staged_view(vt: VirtualTile, src) -> Optional[_PieceView]:
                     return _edit.clip_masked(
                         ds,
                         shape,
+                        all_touched=touch,
                         crop=False,
                         transform=origin * Affine.translation(win.col_off, win.row_off),
                     )

@@ -69,6 +69,36 @@ def _left_half_ewkb(tmpdir):
     )
 
 
+# a right triangle on whole pixel edges of the `clip_ramp_*` tiles (16 x 12 pixels of 10 m from (400000, 5760000)), whose
+# envelope is the columns 2 to 13 and the rows 2 to 11
+TRIANGLE = "POLYGON((400020 5759980, 400140 5759980, 400140 5759880, 400020 5759980))"
+
+
+@builder("clip_ramp_u16")
+def _clip_ramp_u16(tmpdir):
+    """A UInt16 ramp with no NoData declared, EPSG:3857: its fallback NoData is 65535."""
+    import numpy as np
+
+    return _tile(
+        _gtiff(
+            np.arange(16 * 12, dtype="uint16").reshape(1, 12, 16),
+            "EPSG:3857",
+            nodata=None,
+            dtype="uint16",
+        )
+    )
+
+
+@builder("clip_ramp_nodata")
+def _clip_ramp_nodata(tmpdir):
+    """A Float32 ramp that declares NoData -9999 (on a corner pixel outside the clip), EPSG:3857."""
+    import numpy as np
+
+    z = np.arange(16 * 12, dtype="float32").reshape(1, 12, 16)
+    z[0, 0, 0] = -9999.0
+    return _tile(_gtiff(z, "EPSG:3857", nodata=-9999.0))
+
+
 @builder("warp_ramp")
 def _ramp(tmpdir):
     """An 8 x 6 ramp, 0..47, in EPSG:3857 with no NoData: every 2 x 2 block has an exact mean."""
@@ -384,6 +414,32 @@ _session_warp_rows = (
     Case(
         "clip_all_touched", CL, (T4326, IN_ONE_PIXEL, True), "tile_size", (1, 1), ONLY
     ),
+    # a cutline smaller than a pixel keeps the pixel it touches (column 10, row 10: the value 68), not a NoData pixel
+    Case(
+        "clip_tiny_keeps_a_pixel",
+        CL,
+        (T4326, IN_ONE_PIXEL, False),
+        "ref",
+        "clip_pixel_10_10",
+        ONLY,
+    ),
+    # the pixels a clip leaves out are NoData: the source's own, else the dtype's fallback (65535 for UInt16), never valid zeros
+    Case(
+        "clip_outside_is_the_fallback_nodata",
+        CL,
+        (Build("clip_ramp_u16"), TRIANGLE, False),
+        "ref",
+        "clip_triangle",
+        ONLY,
+    ),
+    Case(
+        "clip_outside_is_the_source_nodata",
+        CL,
+        (Build("clip_ramp_nodata"), TRIANGLE, False),
+        "ref",
+        "clip_triangle",
+        ONLY,
+    ),
     # a cutline that misses the tile entirely gives NULL
     Case("clip_no_overlap", CL, (T4326, FAR_AWAY, False), "null", None, ONLY),
     Case("clip_null_tile", CL, (None, LEFT_HALF, False), "null", None, ONLY),
@@ -427,7 +483,8 @@ SPEC_WARP = share(
     "resample_null_factor", "resample_error_in", "resample_error_tile_passes_bad_word",
     "resample_to_size", "resample_to_size_zero", "resample_to_size_null",
     "resample_to_res", "resample_to_res_zero", "resample_to_res_null",
-    "clip_half", "clip_half_pixels", "clip_all_touched", "clip_no_overlap", "clip_null_tile", "clip_null_geom",
+    "clip_half", "clip_half_pixels", "clip_all_touched", "clip_tiny_keeps_a_pixel", "clip_outside_is_the_fallback_nodata",
+    "clip_outside_is_the_source_nodata", "clip_no_overlap", "clip_null_tile", "clip_null_geom",
     "clip_null_flag", "clip_error_in",
 ) + edges(
     transform=(3857,), to_webmercator=(), resample=(0.5,), resample_to_size=(10, 20), resample_to_res=(0.02, 0.02),

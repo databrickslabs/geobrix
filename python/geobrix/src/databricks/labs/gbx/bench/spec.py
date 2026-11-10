@@ -1837,7 +1837,8 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_clip(
             t, F.lit(_CLIP_GEOM_WKB), F.lit(a["cutline_all_touched"])
         ),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_Clip.scala",),
+        sources=_EDIT_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),

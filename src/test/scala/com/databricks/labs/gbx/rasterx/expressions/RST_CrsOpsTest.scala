@@ -180,27 +180,6 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally out.delete()
     }
 
-    // --- Group A: source-CRS params (clip_crs / crs) both tiers ---
-
-    test("RST_Clip.execute with clip_crs override on a plain cutline resolves + clips") {
-        import com.databricks.labs.gbx.rasterx.expressions.RST_Clip
-        import com.databricks.labs.gbx.vectorx.jts.JTS
-        // A plain-WKB cutline (SRID 0) covering the MODIS fixture's footprint, with the
-        // source CRS supplied via clip_crs = the raster's own CRS string (ESRI:54008).
-        val crsStr = RST_Crs.execute(ds) // the fixture's canonical CRS
-        val env = ds.GetGeoTransform()
-        val w = ds.GetRasterXSize; val h = ds.GetRasterYSize
-        val minX = env(0); val maxY = env(3)
-        val maxX = minX + env(1) * w; val minY = maxY + env(5) * h
-        val wkt =
-            s"POLYGON(($minX $minY, $maxX $minY, $maxX $maxY, $minX $maxY, $minX $minY))"
-        val geom = JTS.fromWKT(wkt) // SRID 0 (plain)
-        val (out, _) = RST_Clip.execute(ds, Map.empty, geom, cutlineAllTouched = false,
-            clipCrs = Some(crsStr))
-        try out should not be null
-        finally out.delete()
-    }
-
     test("VectorRasterBridge.buildEmptyRaster stamps an ESRI srid as ESRI (resolveCrs)") {
         import com.databricks.labs.gbx.rasterx.operations.{RasterProject, SpatialRefOps}
         import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge

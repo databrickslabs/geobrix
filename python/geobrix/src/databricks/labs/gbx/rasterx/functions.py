@@ -1195,7 +1195,8 @@ def rst_clip(
         tile: The tile to clip.
         geom: The cutline: a polygon as WKB, EWKB, WKT or EWKT.
         cutline_all_touched: `true` keeps every pixel the cutline touches; `false` keeps
-            the pixels whose centre it holds.
+            the pixels whose centre it holds. A cutline smaller than a pixel keeps the pixel
+            it touches either way.
         clip_crs: The CRS of a cutline that carries no SRID: `EPSG:<code>`,
             `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or
             EWKT SRID wins. SQL default: ``NULL``.
@@ -1204,8 +1205,10 @@ def rst_clip(
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        The tile cropped to the polygon's envelope on the tile's grid, NoData outside
-        the polygon; NULL when the polygon misses the tile.
+        The tile cropped to the polygon's envelope on the tile's grid. The pixels
+        outside the polygon, and the ones the tile masks, are NoData: the tile's own,
+        else the type's fallback. A tile with an alpha band gets alpha 0 there. NULL
+        when the polygon misses the tile.
 
     SQL: ``gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])``
     """

@@ -4144,12 +4144,16 @@ Convert to another format. A driver that is unknown, or cannot write a raster, r
 |---|---|---|---|---|
 | `tile` | `TILE` | `TILE` |  | The tile to clip. |
 | `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The cutline: a polygon as WKB, EWKB, WKT or EWKT. |
-| `cutline_all_touched` | `BOOLEAN` | `BOOLEAN` |  | `true` keeps every pixel the cutline touches; `false` keeps the pixels whose centre it holds. |
+| `cutline_all_touched` | `BOOLEAN` | `BOOLEAN` |  | `true` keeps every pixel the cutline touches; `false` keeps the pixels whose centre it holds. A cutline smaller than a pixel keeps the pixel it touches either way. |
 | `clip_crs` | `STRING` | `STRING` | `NULL` | The CRS of a cutline that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or EWKT SRID wins. |
 {/* END GENERATED gbx_rst_clip */}
 
 :::note Cutline CRS
 A cutline with an EWKB or EWKT SRID is reprojected to the tile's CRS. A plain WKB or WKT cutline takes `clip_crs`, else the tile's CRS. The result is NULL when the cutline misses the tile.
+:::
+
+:::info Changed in 0.6.0
+The pixels a clip leaves out are NoData, never valid zeros. They take the tile's own NoData, else the fallback of its type, which the output declares. A tile with an alpha band gets alpha 0 there. A cutline smaller than one pixel keeps the pixel it touches.
 :::
 
 :::note Python-only keywords

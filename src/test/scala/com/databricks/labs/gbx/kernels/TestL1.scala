@@ -47,7 +47,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.generators.RST_ToOverlappingTiles",
         "com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox",
         "com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_Clip",
         "com.databricks.labs.gbx.rasterx.expressions.RST_Convolve",
         "com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand",
         "com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData",

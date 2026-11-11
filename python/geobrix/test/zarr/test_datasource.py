@@ -153,8 +153,9 @@ def test_batches_carry_the_declared_schema(spark, era5_v3_sharded, options):
     the read with DATA_SOURCE_RETURN_SCHEMA_MISMATCH; Spark 4.0 only compares the names.
     This is that comparison, run where the batches are made (a session parses the DDL).
     """
-    from pyspark.sql.pandas.types import to_arrow_schema
     from pyspark.sql.types import StructType
+
+    from databricks.labs.gbx.ds._arrow_utc import arrow_schema_utc
 
     options = {
         "path": str(era5_v3_sharded),
@@ -163,7 +164,8 @@ def test_batches_carry_the_declared_schema(spark, era5_v3_sharded, options):
     declared = ZarrGbxDataSource(options).schema()
     if isinstance(declared, str):
         declared = StructType.fromDDL(declared)
-    want = to_arrow_schema(declared)
+    # the reader types its timestamp UTC on every PySpark (4.1 and the Databricks builds want a session zone here)
+    want = arrow_schema_utc(declared)
     reader = ZarrGbxReader(options)
     batches = [b for p in reader.partitions() for b in reader.read(p)]
     assert batches
@@ -409,8 +411,15 @@ def test_the_tile_cap_is_the_one_the_registration_carried(tmp_path, monkeypatch)
 def test_no_pushfilters_method():
     """On Serverless env 6 a reader that merely defines pushFilters fails with
     DATA_SOURCE_PUSHDOWN_DISABLED (measured); pruning is option-based."""
-    assert not hasattr(ZarrGbxReader, "pushFilters")
-    assert not hasattr(ZarrGbxDataSource, "pushFilters")
+    from pyspark.sql.datasource import DataSource, DataSourceReader
+
+    # PySpark 4.1 (Databricks 19) gives the base classes a pushFilters of their own: what must hold is no override
+    assert getattr(ZarrGbxReader, "pushFilters", None) is getattr(
+        DataSourceReader, "pushFilters", None
+    )
+    assert getattr(ZarrGbxDataSource, "pushFilters", None) is getattr(
+        DataSource, "pushFilters", None
+    )
 
 
 def test_register_lists_zarr_gbx(spark, era5_v3_sharded):

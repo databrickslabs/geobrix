@@ -151,6 +151,20 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api)
 
 
+def _takes_gbx_conf(spark) -> bool:
+    """Whether the session lets a test set a GeoBrix conf: Serverless refuses any (CONFIG_NOT_AVAILABLE)."""
+    try:
+        prior = spark.conf.get(READ_CAP_KEY, None)
+        spark.conf.set(READ_CAP_KEY, prior or "0")
+        if prior is None:
+            spark.conf.unset(READ_CAP_KEY)
+        return True
+    except Exception as exc:  # noqa: BLE001
+        if "CONFIG_NOT_AVAILABLE" in str(exc):
+            return False
+        raise
+
+
 def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api):
     raw = variant == "raw"
     register(
@@ -185,8 +199,11 @@ def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, 
         spark, fn, [c for c in cases if c not in capped], str(tmp_path), column_of
     )
     # the decoded-size gate, with the session's read cap lowered for the row: the JVM reads the key per query, a
-    # light function carries it from its registration
+    # light function carries it from its registration. A session that takes no conf of ours (Serverless:
+    # CONFIG_NOT_AVAILABLE) has no such key to lower, so it runs the other rows only.
     for c in capped:
+        if not _takes_gbx_conf(spark):
+            break
         spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
         try:
             register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
@@ -336,13 +353,9 @@ def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(request, tm
     from databricks.labs.gbx.pyrx.core.budget import READ_CAP_KEY
 
     spark = _engine_session(request)
-    # the 64 x 64 Float32 DEM is 16 KiB decoded; Serverless allows no conf of ours (CONFIG_NOT_AVAILABLE)
-    try:
-        spark.conf.set(READ_CAP_KEY, "1024")
-    except Exception as exc:  # noqa: BLE001
-        if "CONFIG_NOT_AVAILABLE" not in str(exc):
-            raise
+    if not _takes_gbx_conf(spark):
         pytest.skip("this session takes no GeoBrix conf (Serverless): no read cap key")
+    spark.conf.set(READ_CAP_KEY, "1024")  # the 64 x 64 Float32 DEM is 16 KiB decoded
     try:
         register(
             spark,

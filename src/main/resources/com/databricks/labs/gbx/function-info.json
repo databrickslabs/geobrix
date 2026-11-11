@@ -90,7 +90,7 @@
       "since": "0.5.2"
     },
     "gbx_rst_binpoints_finalize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_binpoints_finalize(c0, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH b AS ( SELECT gbx_rst_binpoints_partial(x, y, 0D, 0D, 2D, 1D, 2, 1) AS px, z FROM (VALUES (0.5D, 0.5D, 1D), (0.6D, 0.4D, 5D), (1.5D, 0.5D, 7D)) AS t(x, y, z) ), c AS ( SELECT px.col AS col, px.row AS row, max(z) AS value FROM b WHERE px IS NOT NULL GROUP BY px.col, px.row ) SELECT gbx_rst_binpoints_finalize(collect_list(struct(col, row, value)), 0D, 0D, 2D, 1D, 2, 1, 4326) AS tile FROM c;",
       "usage_args": "cells, xmin, ymin, xmax, ymax, width_px, height_px, srid",
       "description": "Write the per-pixel values of a points group into one single-band tile.",
       "surfaces": [
@@ -101,7 +101,7 @@
       "since": "0.6.0"
     },
     "gbx_rst_binpoints_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_binpoints_partial(1.5D, 8.5D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10) AS out;",
+      "examples": "Examples:\n      > SELECT x, y, gbx_rst_binpoints_partial(x, y, 0D, 0D, 10D, 10D, 10, 10) AS px FROM (VALUES (1.5D, 8.5D), (0.5D, 0.5D), (0D, 10D), (10D, 5D) ) AS t(x, y);",
       "usage_args": "x, y, xmin, ymin, xmax, ymax, width_px, height_px",
       "description": "Give the canvas pixel a point falls in, as the key to group points by.",
       "surfaces": [
@@ -112,7 +112,7 @@
       "since": "0.6.0"
     },
     "gbx_rst_bng_rasterize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rasterize(c0, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_rst_bng_rasterize( collect_list(struct(cellid, value)), 27700, 1000.0, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, 'centroids', 0 ) AS content FROM (VALUES ('TQ3080', 1.0), ('TQ3080', 3.0), ('TQ3180', 2.0), ('TQ3081', 4.0) ) AS t(cellid, value);",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
       "description": "Rasterize an array of BNG cells into one tile (pixel-centroid burn).",
       "surfaces": [
@@ -134,7 +134,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rasterize_tvf": {
-      "examples": "Examples:\n      > SELECT raster AS out FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT 'a' AS key, c0 AS cellid, c1 AS value FROM gbx_example) PARTITION BY (key), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2);",
+      "examples": "Examples:\n      > SELECT key, raster FROM gbx_rst_bng_rasterize_tvf( TABLE(SELECT key, cellid, value FROM (VALUES ('a', 'TQ3080', 1.0), ('a', 'TQ3080', 3.0), ('a', 'TQ3180', 2.0), ('b', 'TQ3081', 4.0) ) AS t(key, cellid, value)) PARTITION BY (key), 530000.0, 180000.0, 533000.0, 182000.0, 3, 2 );",
       "usage_args": "rows, xmin, ymin, xmax, ymax, width, height",
       "description": "Rasterize each partition's BNG cells onto an explicit EPSG:27700 canvas, as a table function over `TABLE(...) PARTITION BY`.",
       "surfaces": [
@@ -144,7 +144,7 @@
       "since": "0.6.0"
     },
     "gbx_rst_bng_rastertogrid_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogrid_partial(c0, 3) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH r AS ( SELECT gbx_rst_rasterize( 'POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))', 1.0, 529000.0, 179000.0, 533000.0, 183000.0, 40, 40, 27700 ) AS tile ) SELECT band, cellid, count, sum / count AS avg FROM (SELECT inline(gbx_rst_bng_rastertogrid_partial(tile, 3)) FROM r);",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Give the mergeable state of every BNG cell the raster covers, so one pass serves every statistic.",
       "surfaces": [
@@ -442,7 +442,7 @@
       "since": "0.5.0"
     },
     "gbx_rst_custom_rasterize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_custom_rasterize(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 27700, CAST(NULL AS DOUBLE), 529000.0D, 179000.0D, 533000.0D, 182000.0D, 8, 6, 'centroids', 0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_rst_custom_rasterize( collect_list(struct(cellid, value)), gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 27700, 2000.0, 529000.0, 179000.0, 533000.0, 183000.0, 2, 2, 'centroids', 0 ) AS content FROM ( SELECT gbx_custom_pointascell(wkt, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1) AS cellid, value FROM (VALUES ('POINT(530000 180000)', 1.0), ('POINT(532000 180000)', 2.0), ('POINT(530000 182000)', 3.0) ) AS p(wkt, value) );",
       "usage_args": "cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
       "description": "Rasterize an array of custom cells into one tile (pixel-centroid burn).",
       "surfaces": [
@@ -464,7 +464,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogrid_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_custom_rastertogrid_partial(c0, c1, 1) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH r AS ( SELECT gbx_rst_rasterize( 'POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))', 1.0, 529000.0, 179000.0, 533000.0, 183000.0, 40, 40, 27700 ) AS tile ) SELECT band, cellid, count, sum / count AS avg FROM (SELECT inline(gbx_rst_custom_rastertogrid_partial(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) FROM r);",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Give the mergeable state of every custom-grid cell the raster covers, so one pass serves every statistic.",
       "surfaces": [
@@ -768,7 +768,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_h3_rasterize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -122.43D, 37.76D, -122.405D, 37.785D, 10, 10, 'centroids', 0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_rst_h3_rasterize( collect_list(struct(cellid, value)), 4326, 0.01, 0.005, 0.005, 0.025, 0.025, 2, 2, 'centroids', 0 ) AS content FROM (VALUES (619056821909585919L, 1.0), (619056822407921663L, 2.0), (619056559519170559L, 3.0) ) AS t(cellid, value);",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
       "description": "Rasterize an array of H3 cells into one tile (pixel-centroid burn).",
       "surfaces": [
@@ -790,7 +790,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_h3_rastertogrid_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogrid_partial(c0, 5) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH r AS ( SELECT gbx_rst_rasterize( 'POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))', 1.0, -0.20, 51.40, -0.10, 51.50, 40, 40, 4326 ) AS tile ) SELECT band, cellid, count, sum / count AS avg FROM (SELECT inline(gbx_rst_h3_rastertogrid_partial(tile, 6)) FROM r);",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Give the mergeable state of every H3 cell the raster covers, so one pass serves every statistic.",
       "surfaces": [
@@ -1066,7 +1066,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_merge_tvf": {
-      "examples": "Examples:\n      > SELECT raster AS out FROM gbx_rst_merge_tvf(TABLE(SELECT 'a' AS key, c0 AS tile FROM gbx_example) PARTITION BY (key));",
+      "examples": "Examples:\n      > WITH tiles AS ( SELECT 'a' AS key, gbx_rst_rasterize('POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))', 1.0, 0.0, 0.0, 2.0, 2.0, 2, 2, 4326) AS tile UNION ALL SELECT 'a', gbx_rst_rasterize('POLYGON((2 0, 4 0, 4 2, 2 2, 2 0))', 2.0, 2.0, 0.0, 4.0, 2.0, 2, 2, 4326) ) SELECT key, raster FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key));",
       "usage_args": "rows",
       "description": "Merge each partition's tiles into one mosaic, as a table function over `TABLE(...) PARTITION BY`.",
       "surfaces": [
@@ -1211,7 +1211,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rasterize": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -123.05D, 37.7186D, -122.34D, 38.2511D, 8, 6, 'centroids', 0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rasterize( collect_list(struct(cellid, value)), 4326, 0.2, -0.4, 51.3, 0.2, 51.5, 3, 1, 'centroids', 0 ) AS content FROM ( SELECT gbx_quadbin_pointascell(lon, lat, 12) AS cellid, value FROM (VALUES (-0.30, 51.40, 1.0), (-0.10, 51.40, 2.0), (0.10, 51.40, 3.0) ) AS p(lon, lat, value) );",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
       "description": "Rasterize an array of quadbin cells into one tile (pixel-centroid burn).",
       "surfaces": [
@@ -1233,7 +1233,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_quadbin_rastertogrid_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogrid_partial(c0, 11) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH r AS ( SELECT gbx_rst_rasterize( 'POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))', 1.0, -0.20, 51.40, -0.10, 51.50, 40, 40, 4326 ) AS tile ) SELECT band, cellid, count, sum / count AS avg FROM (SELECT inline(gbx_rst_quadbin_rastertogrid_partial(tile, 12)) FROM r);",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Give the mergeable state of every quadbin cell the raster covers, so one pass serves every statistic.",
       "surfaces": [
@@ -1594,7 +1594,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_stats_partial": {
-      "examples": "Examples:\n      > SELECT gbx_rst_stats_partial(c0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > WITH s AS (SELECT gbx_rst_stats_partial(tile) AS stats FROM multiband_rasters) SELECT band, count, sum / count AS avg, sqrt(m2 / count) AS stddev, min, max FROM (SELECT inline(stats) FROM s);",
       "usage_args": "tile",
       "description": "Give the mergeable state of each band of a tile, so a statistic over many tiles needs no pixel.",
       "surfaces": [

@@ -596,3 +596,28 @@ def test_the_batched_wkbs_are_the_per_row_ones():
                 p = set_srid(Point(x, y, z), 27700)
                 want.append(to_wkb(p, output_dimension=3, flavor=flavor))
         assert got == want and len(want) > 20
+
+
+def test_the_recovery_maps_read_lazily_are_the_eager_ones():
+    # every edge's triangles (lower index first) and every site's triangle set, in the same set order, as a map
+    # built triangle by triangle; a deleted edge is gone and a set one is back
+    rng = np.random.default_rng(2)
+    xy = rng.random((80, 2)) * 10
+    s = _tin._delaunay(xy)
+    edges, verts = {}, {}
+    for ti, t in enumerate(s.tolist()):
+        for k in range(3):
+            edges.setdefault(_tin._ek(t[k], t[(k + 1) % 3]), []).append(ti)
+            verts.setdefault(t[k], set()).add(ti)
+    lazy_e = _tin._EdgeTris(np.asarray(s, dtype=np.int64), len(xy))
+    lazy_v = _tin._VertTris(np.asarray(s, dtype=np.int64))
+    for e, ts in edges.items():
+        assert e in lazy_e and lazy_e[e] == ts
+    for v, ts in verts.items():
+        assert list(lazy_v[v]) == list(ts)
+    assert (0, 10**6) not in lazy_e and lazy_v.get(10**6, ()) == ()
+    e = next(iter(edges))
+    del lazy_e[e]
+    assert e not in lazy_e
+    lazy_e[e] = [7, 9]
+    assert e in lazy_e and lazy_e[e] == [7, 9]

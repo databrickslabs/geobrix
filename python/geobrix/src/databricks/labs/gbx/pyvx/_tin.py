@@ -403,7 +403,84 @@ def _recover_constraints(xy: np.ndarray, simplices: np.ndarray, segments):
     rec = _Recovery(xy, simplices)
     for ia, ib in segments:
         rec.enforce(ia, ib)
-    return np.array(rec.tris, dtype=np.int64).reshape(-1, 3)
+    return rec.tris
+
+
+class _EdgeTris:
+    """Edge ``(i, j)``, ``i < j`` -> the list of the triangles on it, the lower index first. An edge's list is read
+    from the initial triangles when first used, so only the edges the recovery touches cost Python objects; a flip
+    reads every edge whose triangles it changes before changing them."""
+
+    def __init__(self, simplices: np.ndarray, n: int):
+        a, b = simplices, np.roll(
+            simplices, -1, axis=1
+        )  # edge k of triangle t: t[k] -> t[k + 1]
+        lo, hi = np.minimum(a, b).ravel(), np.maximum(a, b).ravel()
+        self.n = n
+        key = lo * n + hi
+        order = np.argsort(
+            key, kind="stable"
+        )  # the triangles of an edge stay in index order
+        self.keys = key[order]
+        self.tris = (order // 3).astype(np.int64)
+        self.over = {}
+        self.dead = set()
+
+    def _base(self, e):
+        k = e[0] * self.n + e[1]
+        i, j = np.searchsorted(self.keys, [k, k + 1])
+        return self.tris[i:j].tolist() if j > i else None
+
+    def __contains__(self, e) -> bool:
+        if e in self.over:
+            return True
+        return e not in self.dead and self._base(e) is not None
+
+    def __getitem__(self, e):
+        v = self.over.get(e)
+        if v is None:
+            v = None if e in self.dead else self._base(e)
+            if v is None:
+                raise KeyError(e)
+            self.over[e] = v
+        return v
+
+    def __setitem__(self, e, v):
+        self.over[e] = v
+        self.dead.discard(e)
+
+    def __delitem__(self, e):
+        if e not in self:
+            raise KeyError(e)
+        self.over.pop(e, None)
+        self.dead.add(e)
+
+
+class _VertTris:
+    """Site -> the set of the triangles around it, made (in index order) from the initial triangles when first used;
+    a flip reads the four sets it changes before changing them."""
+
+    def __init__(self, simplices: np.ndarray):
+        v = simplices.ravel()
+        order = np.argsort(v, kind="stable")
+        self.keys = v[order]
+        self.tris = (order // 3).astype(np.int64)
+        self.over = {}
+
+    def get(self, v, default=None):
+        s = self.over.get(v)
+        if s is None:
+            i, j = np.searchsorted(self.keys, [v, v + 1])
+            if j == i:
+                return default
+            s = self.over[v] = set(self.tris[i:j].tolist())
+        return s
+
+    def __getitem__(self, v):
+        s = self.get(v)
+        if s is None:
+            raise KeyError(v)
+        return s
 
 
 class _Recovery:
@@ -411,17 +488,13 @@ class _Recovery:
 
     def __init__(self, xy, simplices):
         self.xy = xy
-        self.tris = [list(t) for t in simplices.tolist()]
-        self.edge_tris = {}
-        self.vert_tris = {}
-        for ti, t in enumerate(self.tris):
-            for k in range(3):
-                self.edge_tris.setdefault(_ek(t[k], t[(k + 1) % 3]), []).append(ti)
-                self.vert_tris.setdefault(t[k], set()).add(ti)
+        self.tris = np.array(simplices, dtype=np.int64).reshape(-1, 3)
+        self.edge_tris = _EdgeTris(self.tris, len(xy))
+        self.vert_tris = _VertTris(self.tris)
         self.fixed = set()
 
     def _third(self, ti, u, v):
-        return next(w for w in self.tris[ti] if w != u and w != v)
+        return next(w for w in self.tris[ti].tolist() if w != u and w != v)
 
     def enforce(self, ia, ib):
         """Make ``ia``-``ib`` an edge, or a chain of edges through the sites on it."""
@@ -445,7 +518,7 @@ class _Recovery:
         reach = dx * dx + dy * dy
         start = None
         for ti in self.vert_tris.get(ia, ()):
-            p, q = [w for w in self.tris[ti] if w != ia]
+            p, q = [w for w in self.tris[ti].tolist() if w != ia]
             for w in (p, q):
                 P = xy[w]
                 if _orient2d(A, B, P) == 0.0:

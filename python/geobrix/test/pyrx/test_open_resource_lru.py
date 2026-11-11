@@ -243,6 +243,12 @@ def test_connect_aware_lru_sizing_connect_spark(monkeypatch):
     fake_spark = FakeConnectSpark()
     fake_spark.__class__.__module__ = "pyspark.sql.connect.session"
 
+    # a Connect session on Serverless: the driver has no classic memory environment (a DBR node has one)
+    from databricks.labs.gbx.pyrx.core import budget
+
+    for k in budget.CLASSIC_MEMORY_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("IS_SERVERLESS", "true")
     stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
     assert stream_max == 64 * 1024**2, f"connect stream_max={stream_max}"
     assert lru_max == 512 * 1024**2, f"connect lru_max={lru_max}"
@@ -295,6 +301,12 @@ def test_connect_aware_lru_sizing_env_override_connect(monkeypatch):
     fake_spark = FakeConnectSpark()
     fake_spark.__class__.__module__ = "pyspark.sql.connect.session"
 
+    # a Connect session on Serverless: the driver has no classic memory environment (a DBR node has one)
+    from databricks.labs.gbx.pyrx.core import budget
+
+    for k in budget.CLASSIC_MEMORY_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("IS_SERVERLESS", "true")
     stream_max, lru_max, max_count = _connect_aware_lru_sizing(fake_spark)
     assert stream_max == 64 * 1024**2, "connect default when no env"
     assert lru_max == 1024 * 1024 * 1024, "env override should win"

@@ -85,6 +85,12 @@ def test_connect_detection_sees_the_session_behind_the_registrars_proxy(monkeypa
 
     monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
     monkeypatch.delenv("GBX_LRU_MAX_BYTES", raising=False)
+    # a Connect session on Serverless: the driver has no classic memory environment (a DBR node has one)
+    from databricks.labs.gbx.pyrx.core import budget
+
+    for k in budget.CLASSIC_MEMORY_ENV:
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("IS_SERVERLESS", "true")
 
     class ConnectSession:
         pass

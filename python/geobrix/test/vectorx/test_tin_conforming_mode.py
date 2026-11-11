@@ -9,7 +9,7 @@ unwraps to the WKB value). Needs the staged JAR (the geobrix-dev container).
 
 import logging
 from pathlib import Path
-from test._heavy import heavy_register
+from test._heavy import heavy_register, session_has_jar
 
 import pytest
 from pyspark.sql.functions import call_function, col, lit
@@ -56,9 +56,10 @@ def spark():
     from pyspark.sql import SparkSession
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
-    # spark.jars is a JVM-startup setting: a session already live without the JAR cannot take it
+    # spark.jars is a JVM-startup setting: a session already live without the JAR cannot take it. A cluster that installed the
+    # JAR as a library (a Databricks pool) lists none there; its JVM has the classes (session_has_jar)
     active = SparkSession.getActiveSession()
-    if active is not None and str(_JARS[-1]) not in active.conf.get("spark.jars", ""):
+    if active is not None and not session_has_jar(active, _JARS[-1]):
         pytest.skip(
             "a JAR-free Spark session is already live in this process; run this file alone"
         )

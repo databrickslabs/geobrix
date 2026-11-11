@@ -1,7 +1,7 @@
 """The helpers of ``test/_heavy.py`` that a test run depends on without calling them by name."""
 
 import sys
-from test._heavy import forget_generators, light_stack_available
+from test._heavy import forget_generators, light_stack_available, session_has_jar
 
 import pytest
 
@@ -69,3 +69,53 @@ def test_light_stack_available_follows_whether_the_light_packages_import(monkeyp
         with monkeypatch.context() as m:
             m.setitem(sys.modules, blocked, None)  # an import of it raises ImportError
             assert light_stack_available() is False, blocked
+
+
+class _Conf:
+    def __init__(self, jars):
+        self.jars = jars
+
+    def get(self, key, default=None):
+        return self.jars if key == "spark.jars" else default
+
+
+class _JavaPackage:
+    """py4j's stand-in for a name the JVM has no class for: any attribute is another package."""
+
+    def __getattr__(self, name):
+        return _JavaPackage()
+
+
+class _BuildInfo:
+    @staticmethod
+    def identity():
+        return "0.6.0|abc"
+
+
+def _jvm(with_jar):
+    root = _JavaPackage()
+    if not with_jar:
+        return root
+    kernels = type("K", (), {"BuildInfo": _BuildInfo})()
+    gbx = type("G", (), {"kernels": kernels})()
+    return type("J", (), {"com": type("C", (), {"databricks": type("D", (), {"labs": type("L", (), {"gbx": gbx})()})()})()})()
+
+
+class _Session:
+    def __init__(self, jars="", with_jar=False, connect=False):
+        self.conf = _Conf(jars)
+        self._with_jar, self._connect = with_jar, connect
+
+    @property
+    def _jvm(self):
+        if self._connect:
+            raise AttributeError("Spark Connect has no JVM")
+        return _jvm(self._with_jar)
+
+
+def test_session_has_jar_sees_spark_jars_and_a_jar_the_cluster_installed_as_a_library():
+    jar = "/repo/python/geobrix/lib/geobrix-0.6.0-jar-with-dependencies.jar"
+    assert session_has_jar(_Session(jars=jar), jar), "the local session started with spark.jars"
+    assert session_has_jar(_Session(with_jar=True), jar), "a pool cluster: the JAR is a cluster library, spark.jars names nothing"
+    assert not session_has_jar(_Session(), jar), "a JAR-free JVM: py4j resolves the class name to a package"
+    assert not session_has_jar(_Session(connect=True), jar), "a Connect session has no JVM to ask"

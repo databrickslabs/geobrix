@@ -54,6 +54,20 @@ def _sql_name(fqn):
     raise AssertionError(f"{fqn}: no companion with a SQL name in src/main/scala")
 
 
+def session_has_jar(spark, jar=None):
+    """Whether the session's JVM has the GeoBrix JAR: ``spark.jars`` names ``jar`` (a local session started with it), or the JVM
+    answers for a GeoBrix class (a JAR the cluster installed as a library, which ``spark.jars`` does not list: a Databricks pool
+    cluster). py4j resolves a class name the JVM lacks to a ``JavaPackage``, which cannot be called; a Connect session has no
+    JVM to ask. Both mean no JAR.
+    """
+    if jar and str(jar) in (spark.conf.get("spark.jars", "") or ""):
+        return True
+    try:
+        return bool(spark._jvm.com.databricks.labs.gbx.kernels.BuildInfo.identity())
+    except Exception:  # noqa: BLE001 - no JVM (Connect), no class (a JavaPackage), or access refused: no JAR
+        return False
+
+
 def _point_jvm_at_payload(spark):
     """Name the wheel payload's natives to the JVM, as the registrar does (``manager.jvm``, which this helper does not
     import: it loads rasterio, which the heavyweight env lacks). A node with no system GDAL JNI (a Databricks pool

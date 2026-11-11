@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
@@ -108,6 +109,16 @@ def _notebook_json(
         "outputs": [],
         "source": ["dbutils.library.restartPython()"],
     })
+    if wheel_volume_path:
+        # The wheel guard: the driver and the Python workers must import the wheel just installed (not a same-version
+        # geobrix already on the cluster); the run fails here otherwise.
+        cells.append({
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": _wheel_guard.guard_source(wheel=wheel_volume_path).splitlines(keepends=True),
+        })
     # setup path 1x
     cells.append({
         "cell_type": "code",

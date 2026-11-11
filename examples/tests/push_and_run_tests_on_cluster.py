@@ -79,6 +79,7 @@ import _shard_runner as sr  # sibling module: the runners' claim-and-run loop (i
 import _test_shards as ts  # sibling module: the shards, read from CI's files
 import _timings as tm  # sibling module: the timing history every run merges into
 import push_and_run_mutation_on_cluster as mut  # sibling module: staging, download and wheel helpers the guidance run uses
+import _wheel_guard as wg  # sibling module: force the staged wheel in, fail the run if another geobrix is imported
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = mut.REPO_ROOT
@@ -349,8 +350,18 @@ def header_md(plan: dict, pool: str) -> str:
 
 
 def install_source(plan: dict) -> str:
+    """The wheel is forced in first (--force-reinstall --no-deps, geobrix only): a same-version geobrix already on the
+    cluster makes a plain install of the staged wheel a no-op. The second line adds the extras and the pins."""
     reqs = " ".join(f'"{r}"' for r in plan["pins"] + plan["pip_extra"].split())
-    return f'%pip install --quiet "geobrix[{plan["extras"]}] @ file://{plan["wheel"]["volume"]}" {reqs}\n'
+    return (wg.force_line(plan["wheel"]["volume"], quiet=True) + "\n"
+            + f'%pip install --quiet "geobrix[{plan["extras"]}] @ file://{plan["wheel"]["volume"]}" {reqs}\n')
+
+
+def guard_source(plan: dict) -> str:
+    """The cell after the install: the driver and the Python workers must import the staged wheel (before the checkout's
+    package is laid over it), else the shard fails here with the fix."""
+    built = plan["wheel"]["built_from"]
+    return wg.guard_source(wheel=plan["wheel"]["volume"], git_sha=built if re.fullmatch(r"[0-9a-f]{7,40}", built or "") else None)
 
 
 def run_source(plan: dict) -> str:
@@ -626,6 +637,8 @@ def build_notebook(plan: dict, pool: str) -> dict:
     cells = [cell(header_md(plan, pool), "markdown")]
     if not plan["serverless"]:  # a Serverless job installs from the environment spec; %pip is not allowed there
         cells.append(cell(install_source(plan)))
+    if plan["wheel"]["volume"]:
+        cells.append(cell(guard_source(plan)))
     cells.append(cell(run_source(plan)))
     return {"cells": cells, "metadata": {"language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}
 

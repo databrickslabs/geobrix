@@ -185,9 +185,16 @@ def test_the_runner_notebook_starts_with_the_four_line_header_and_installs_the_p
         and "geobrix @ file:///Volumes/c/s/v/mutation-runs/r1/" in install
     )
     assert '"mercantile>=1.2,<2"' in install
-    assert "--wall-cap-min" in "".join(nb["cells"][2]["source"])
+    # the staged wheel is forced in first, then guarded (driver and workers) before the runner starts
+    assert install.startswith(
+        '%pip install --quiet --force-reinstall --no-deps "geobrix @ file:///Volumes/c/s/v/mutation-runs/r1/'
+    )
+    guard = "".join(nb["cells"][2]["source"])
+    compile(guard, "guard", "exec")
+    assert "def run_guard(" in guard and "spark=spark" in guard and "geobrix-0.6.0+env6" in guard
+    assert "--wall-cap-min" in "".join(nb["cells"][3]["source"])
     assert "os.cpu_count() or 4) - 2" in "".join(
-        nb["cells"][2]["source"]
+        nb["cells"][3]["source"]
     )  # the workers come from the node it runs on
 
 

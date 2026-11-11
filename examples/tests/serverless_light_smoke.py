@@ -22,10 +22,12 @@ import argparse
 import json
 import os
 import subprocess
+import re
 import sys
 import time
 from pathlib import Path
 
+import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
@@ -172,12 +174,18 @@ except Exception as e:
     r["pyrx_trace"] = traceback.format_exc()[-1500:]
 dbutils.notebook.exit(json.dumps(r))
 '''
+    # A spec that names a wheel file gets the wheel guard after the install: the imported geobrix must be that wheel.
+    m = re.search(r"@\s*file://(/\S+?\.whl)", spec)
+    guard = (
+        "\n# COMMAND ----------\n" + _wheel_guard.guard_source(wheel=m.group(1)) if m else ""
+    )
     return (
         "# Databricks notebook source\n"
         f"# MAGIC %pip install {spec}\n"
         "\n# COMMAND ----------\n"
         "dbutils.library.restartPython()\n"
-        "\n# COMMAND ----------\n"
+        + guard
+        + "\n# COMMAND ----------\n"
         + probe
     )
 

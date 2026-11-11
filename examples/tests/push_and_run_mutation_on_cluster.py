@@ -56,6 +56,7 @@ from pathlib import Path
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
 import _run_watchdog  # sibling module
+import _wheel_guard as wg  # sibling module: force the staged wheel in, fail the run if another geobrix is imported
 
 TESTS_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
@@ -237,7 +238,15 @@ def header_md(plan: dict) -> str:
 
 def install_source(plan: dict) -> str:
     extra = "".join(f' "{r}"' for r in plan.get("pip_extra", "").split())
-    return f"%pip install --quiet \"geobrix @ file://{plan['stage']}/{plan['wheel']['name']}\" {MUTMUT_PIN} {PYTEST_PIN}{extra}\n"
+    whl = f"{plan['stage']}/{plan['wheel']['name']}"
+    # forced first: a same-version geobrix already on the node makes a plain install of the staged wheel a no-op
+    return wg.force_line(whl, quiet=True) + "\n" + f"%pip install --quiet \"geobrix @ file://{whl}\" {MUTMUT_PIN} {PYTEST_PIN}{extra}\n"
+
+
+def guard_source(plan: dict) -> str:
+    """The cell after the install: the driver and the Python workers must import the staged wheel, else the run fails here."""
+    built = plan["wheel"].get("built_from") or ""
+    return wg.guard_source(wheel=f"{plan['stage']}/{plan['wheel']['name']}", git_sha=built if re.fullmatch(r"[0-9a-f]{7,40}", built) else None)
 
 
 def run_source(plan: dict, token: str, extra: dict) -> str:
@@ -309,6 +318,7 @@ def build_notebook(plan: dict, token: str) -> dict:
         "cells": [
             cell(header_md(plan), "markdown"),
             cell(install_source(plan)),
+            cell(guard_source(plan)),
             cell(run_source(plan, token, extra)),
             cell(collect_source()),
         ],

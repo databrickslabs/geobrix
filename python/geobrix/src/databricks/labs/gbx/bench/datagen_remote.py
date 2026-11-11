@@ -555,13 +555,17 @@ def _cell(source: str) -> dict:
     }
 
 
-def build_gen_notebook(cfg: dict) -> dict:
-    """The runner notebook (ipynb dict). The wheel comes from the Serverless environment spec."""
+def build_gen_notebook(cfg: dict, guard_cell: str = "") -> dict:
+    """The runner notebook (ipynb dict). The wheel comes from the Serverless environment spec.
+
+    ``guard_cell`` (the launcher's wheel guard source) runs right after the environment cell: the driver and the Python
+    workers must import the staged wheel, else the run fails there."""
     cfg_json = json.dumps(cfg, sort_keys=True)
     assert '"""' not in cfg_json
     return {
         "cells": [
             _cell(_CELL_ENV),
+            *([_cell(guard_cell)] if guard_cell else []),
             _cell(_CELL_MAIN.replace("{cfg_json}", cfg_json)),
             _cell(_CELL_EXIT),
         ],

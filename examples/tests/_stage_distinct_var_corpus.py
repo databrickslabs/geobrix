@@ -15,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _job_submit import runner_dir, submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
@@ -23,12 +24,15 @@ CORPUS = os.environ.get("GBX_BENCH_CORPUS", "/Volumes/geospatial_docs/geobrix/sa
 VARIABLES = os.environ.get("GBX_DISTINCT_VARS", "tas,pr,hurs,huss,sfcWind,rlds").split(",")
 
 
+WHEEL = "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
 def _nb() -> bytes:
     pip = (
         "%pip install --force-reinstall --no-deps "
-        "\"geobrix @ file:///Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl\"\n"
+        f"\"geobrix @ file://{WHEEL}\"\n"
         "%pip install "
-        "\"geobrix[stac] @ file:///Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl\"\n"
+        f"\"geobrix[stac] @ file://{WHEEL}\"\n"
         "dbutils.library.restartPython()"
     )
     src = f'''
@@ -137,7 +141,9 @@ dbutils.notebook.exit(json.dumps(res, default=str))
 '''
     pip_cell = {"cell_type": "code", "source": pip.splitlines(keepends=True), "metadata": {}, "outputs": [], "execution_count": None}
     cell = {"cell_type": "code", "source": src.strip("\n").splitlines(keepends=True), "metadata": {}, "outputs": [], "execution_count": None}
-    return json.dumps({"cells": [pip_cell, cell], "metadata": {"language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}).encode()
+    guard = _wheel_guard.guard_source(wheel=WHEEL)
+    guard_cell = {"cell_type": "code", "source": guard.splitlines(keepends=True), "metadata": {}, "outputs": [], "execution_count": None}
+    return json.dumps({"cells": [pip_cell, guard_cell, cell], "metadata": {"language_info": {"name": "python"}}, "nbformat": 4, "nbformat_minor": 5}).encode()
 
 
 def main() -> int:

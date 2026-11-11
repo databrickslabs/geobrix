@@ -393,10 +393,18 @@ def test_the_notebook_opens_with_the_four_line_header_and_its_code_compiles(shar
         assert key in head
     assert head.count("**") >= 8
     install = "".join(nb["cells"][1]["source"])
-    assert install.startswith("%pip install") and "geobrix[stac,vizx,zarr,databricks] @ file://" in install
-    compile("".join(nb["cells"][2]["source"]), "runner", "exec")  # no leftover format fields
-    assert "pytest.main" in "".join(nb["cells"][2]["source"])
-    assert len(launcher.build_notebook(dict(plan, serverless=True), "gbx-test-1n")["cells"]) == 2  # no %pip cell on Serverless
+    wheel = plan["wheel"]["volume"]
+    # the staged wheel is forced in first (a same-version geobrix on the cluster would make a plain install a no-op)
+    assert install.startswith(f'%pip install --quiet --force-reinstall --no-deps "geobrix @ file://{wheel}"\n%pip install --quiet')
+    assert "geobrix[stac,vizx,zarr,databricks] @ file://" in install
+    # then the guard, before the checkout's package is laid over the installed one: driver and workers must import the staged wheel
+    guard = "".join(nb["cells"][2]["source"])
+    compile(guard, "guard", "exec")
+    assert "def run_guard(" in guard and f"'wheel': '{wheel}'" in guard and "spark=spark" in guard
+    compile("".join(nb["cells"][3]["source"]), "runner", "exec")  # no leftover format fields
+    assert "pytest.main" in "".join(nb["cells"][3]["source"])
+    served = launcher.build_notebook(dict(plan, serverless=True), "gbx-test-1n")["cells"]
+    assert len(served) == 3 and "def run_guard(" in "".join(served[1]["source"])  # no %pip cell on Serverless; the guard stays
 
 
 # ---- the result files

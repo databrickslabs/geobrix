@@ -3695,6 +3695,9 @@ def build_bench_notebook(cfg: dict) -> dict:
         # wheel for the compute's runtime (+env5: DBR 17.3 / 18, env 5; +env6: DBR 19, env 6): its
         # own Requires-Dist holds the runtime's packages, so step 2 is a plain install of it.
         _cell(_install_cell_src),
+        # The wheel guard (the launcher builds its source): the driver and the Python workers import the staged
+        # wheel, not a same-version geobrix already on the compute; the run fails here otherwise.
+        *([_cell(cfg["guard_cell"], collapsed=True)] if cfg.get("guard_cell") else []),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),

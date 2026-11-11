@@ -35,6 +35,7 @@ from pathlib import Path
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _job_submit import submit_once  # sibling module
 import _preflight  # sibling module
+import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _preflight import serverless_dependencies
 
 import push_and_run_bench_on_cluster as bench  # sibling module: wheel lookup, output save, notebook removal
@@ -299,7 +300,7 @@ def main() -> int:
     t_all = time.monotonic()
 
     if not args.no_smoke:
-        upload(smoke_path, dr.build_gen_notebook(smoke_cfg))
+        upload(smoke_path, dr.build_gen_notebook(smoke_cfg, _wheel_guard.guard_source(wheel=wheel)))
         print("=" * 64)
         print("SMOKE: the workers import geobrix and make the host's bytes for one tile per SRID (no Volume I/O)")
         sid = submit(smoke_path, f"geobrix-gen-corpus-{run_id}-smoke", args.smoke_timeout_min * 60)
@@ -325,7 +326,7 @@ def main() -> int:
         if args.smoke_only:
             return 0
 
-    upload(nb_path, dr.build_gen_notebook(cfg))
+    upload(nb_path, dr.build_gen_notebook(cfg, _wheel_guard.guard_source(wheel=wheel)))
     rid = submit(nb_path, f"geobrix-gen-corpus-{run_id}", args.timeout_min * 60)
     _write_status(status, run_id, "SUBMITTED", 0, None, f"- job run id: {rid}\n")
     if args.no_wait:

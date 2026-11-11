@@ -18,6 +18,17 @@ from databricks.labs.gbx.core._retry import _retry_transient
 _KNOWN_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://?")
 
 
+def is_empty_plan(partition) -> bool:
+    """True for the placeholder Spark passes to ``read`` when ``partitions()`` planned nothing.
+
+    It is ``None`` on OSS Spark and a bare ``InputPartition`` (no fields) on the Databricks runtime.
+    A reader that gets it emits no rows.
+    """
+    from pyspark.sql.datasource import InputPartition
+
+    return partition is None or type(partition) is InputPartition
+
+
 def to_spark_uri(path: str) -> str:
     """Scheme-qualify a listed path to the form Hadoop's FileSystem produces on Databricks.
 

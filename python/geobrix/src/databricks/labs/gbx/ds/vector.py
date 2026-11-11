@@ -1568,6 +1568,10 @@ class VectorGbxReader(DataSourceReader):
           to ``vector_file_read``; never reaches read().
         """
         # managed/external are rejected in __init__; read() always takes the FUSE path.
+        from databricks.labs.gbx.ds import _listing
+
+        if _listing.is_empty_plan(partition):
+            return
 
         import pyarrow as pa
 

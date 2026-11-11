@@ -330,3 +330,26 @@ def test_a_flat_listing_reads_entry_types_with_the_listing_not_one_stat_per_file
     assert calls == [
         str(tmp_path)
     ], calls  # the folder itself, never one call per entry
+
+
+def test_empty_plan_placeholder_is_none_or_a_bare_input_partition():
+    """Spark passes read() a placeholder when partitions() planned nothing."""
+    from pyspark.sql.datasource import InputPartition
+
+    from databricks.labs.gbx.ds.file import _PathPartition
+
+    assert _listing.is_empty_plan(None)
+    assert _listing.is_empty_plan(InputPartition(None))
+    assert not _listing.is_empty_plan(_PathPartition("/a/b.tif"))
+
+
+def test_a_filter_regex_matching_nothing_plans_and_reads_nothing(tree):
+    """No file matches: no partition, and the placeholder read yields no rows (raster_gbx)."""
+    from pyspark.sql.datasource import InputPartition
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    reader = RasterGbxReader({"path": str(tree), "filterRegex": r".*\.nomatch$"})
+    assert list(reader.partitions()) == []
+    assert list(reader.read(InputPartition(None))) == []
+    assert list(reader.read(None)) == []

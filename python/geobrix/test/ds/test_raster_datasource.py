@@ -474,3 +474,14 @@ def test_raster_reader_filter_regex_still_composes(tmp_path):
     (tmp_path / "drop_2023.tif").write_bytes(b"x")
     r = RasterGbxReader({"path": str(tmp_path), "filterRegex": r".*_2024\.tif$"})
     assert r._list_source_files() == [str(tmp_path / "keep_2024.tif")]
+
+
+def test_filter_regex_matching_no_file_reads_zero_rows(spark, tmp_path):
+    _write_sample(str(tmp_path / "s0.tif"))
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("filterRegex", r".*\.nomatch$")
+        .load(str(tmp_path))
+    )
+    assert df.count() == 0

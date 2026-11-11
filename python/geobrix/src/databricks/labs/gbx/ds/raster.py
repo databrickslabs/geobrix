@@ -1444,7 +1444,7 @@ class RasterGbxReader(DataSourceReader):
         # Spark's Python DataSource V2 calls read once with a placeholder when the partition
         # list is empty (e.g. all clip polygons miss): None on OSS Spark, a bare InputPartition
         # (no file_path) on the Databricks runtime. Guard and emit nothing.
-        if partition is None or type(partition) is InputPartition:
+        if _listing.is_empty_plan(partition):
             return
 
         # ------------------------------------------------------------------

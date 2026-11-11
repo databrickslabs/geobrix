@@ -288,6 +288,8 @@ class ExifGbxReader(DataSourceReader):
         return [_ExifFilePartition(f) for f in files]
 
     def read(self, partition: "_ExifFilePartition") -> Iterator["pa.RecordBatch"]:
+        if _listing.is_empty_plan(partition):
+            return
         if self.mode == "metadata":
             yield from self._read_metadata(partition.file_path)
         elif self.mode == "qc":

@@ -482,7 +482,11 @@ class ZarrGbxReader(DataSourceReader):
         return [_UnitPartition(u, nonce, fingerprint) for u in units]
 
     def read(self, partition) -> Iterator:
-        if partition is None:  # Spark hands one to a read that planned no partition
+        from databricks.labs.gbx.ds import _listing
+
+        if _listing.is_empty_plan(
+            partition
+        ):  # Spark hands one to a read that planned no partition
             return
         from databricks.labs.gbx.zarr import _read
 

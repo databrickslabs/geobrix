@@ -221,6 +221,8 @@ class PMtilesRasterReader(DataSourceReader):
         return parts
 
     def read(self, partition: "_TilesPartition") -> Iterator[Tuple]:
+        if _listing.is_empty_plan(partition):
+            return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
@@ -262,6 +264,8 @@ class PMtilesArchiveReader(DataSourceReader):
         ]
 
     def read(self, partition: "_TilesPartition") -> Iterator[Tuple]:
+        if _listing.is_empty_plan(partition):
+            return
         # Range reads on a worker-local copy (staged once per worker process): a
         # partition reads the header, the directories its tiles fall in and its
         # own tiles -- not the whole archive.

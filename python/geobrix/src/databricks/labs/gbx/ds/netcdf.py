@@ -275,6 +275,9 @@ class NetcdfRasterReader(RasterGbxReader):
     def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
         from itertools import product as _product
 
+        if _listing.is_empty_plan(partition):
+            return
+
         # Parse dimIndex, fanout, and bandDim options.
         dim_index = _parse_dim_index(_option(self.options, "dimIndex"))
         fanout_dims = _parse_fanout(_option(self.options, "fanout"))

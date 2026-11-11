@@ -59,6 +59,9 @@ class NetcdfVectorReader(DataSourceReader):
     def read(self, partition: "_NcFilePartition") -> Iterator[Tuple]:
         import shapely
 
+        if _listing.is_empty_plan(partition):
+            return
+
         # With read_paths' on_error="skip" (a hook on the reader) a truncated
         # classic file is a bad record instead of rows of zeros.
         hook = _quarantine.hook_of(self)

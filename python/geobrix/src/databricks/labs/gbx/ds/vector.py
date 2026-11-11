@@ -564,8 +564,16 @@ def _geometry_type_of(wkb: bytes) -> str:
     return from_wkb(bytes(wkb)).geom_type
 
 
+def _wkb_has_z(wkb: bytes) -> bool:
+    """Whether a WKB (ISO or EWKB) header declares Z: the EWKB Z flag, or an ISO code in the 1000s (Z) or 3000s (ZM).
+    Read from the header, so an empty 3D geometry counts as 3D."""
+    code = int.from_bytes(bytes(wkb[1:5]), "little" if wkb[0] == 1 else "big")
+    return bool(code & 0x80000000) or (code & 0x0FFFFFFF) // 1000 in (1, 3)
+
+
 def _geometry_types_of(wkbs) -> Tuple[str, ...]:
-    """The distinct geometry-type names of the non-NULL WKB blobs ``wkbs``, sorted.
+    """The distinct geometry-type names of the non-NULL WKB blobs ``wkbs``, sorted, each with a
+    `` Z`` suffix when the geometry carries Z (OGR's names: ``Polygon``, ``Polygon Z``).
 
     The first five bytes of a WKB (byte order, type code) decide its type, so one blob per
     distinct header is decoded, not every geometry."""
@@ -573,7 +581,45 @@ def _geometry_types_of(wkbs) -> Tuple[str, ...]:
     for b in wkbs:
         if b is not None:
             first.setdefault(bytes(b[:5]), b)
-    return tuple(sorted({_geometry_type_of(b) for b in first.values()}))
+    return tuple(
+        sorted(
+            {
+                _geometry_type_of(b) + (" Z" if _wkb_has_z(b) else "")
+                for b in first.values()
+            }
+        )
+    )
+
+
+# Formats whose layer holds one dimension: a layer cannot mix 2D and 3D geometries there.
+_ONE_DIMENSION_DRIVERS = ("ESRI Shapefile", "FlatGeobuf", "OpenFileGDB")
+
+
+def _layer_geometry_type(types, first: str, driver: str) -> str:
+    """The layer type for geometries of the OGR type names ``types`` (see ``_geometry_types_of``).
+
+    One type is that type; any mix, single and multi forms of one type included, is ``Unknown``
+    (the geometries are written as they are, never promoted to Multi), except a FileGDB layer,
+    which keeps the type of the ``first`` geometry (GDAL refuses the others). Z is declared when a
+    geometry carries it; a format of one dimension refuses a mix of 2D and 3D, since either layer
+    type would drop or make up heights. Z is never added to ``Unknown`` (OGR has no name for it
+    here).
+    """
+    bases = {t[: -len(" Z")] if t.endswith(" Z") else t for t in types}
+    z = [t.endswith(" Z") for t in types]
+    if any(z) and not all(z) and driver in _ONE_DIMENSION_DRIVERS:
+        raise ValueError(
+            f"The geometries mix 2D and 3D, and a {driver} layer holds one dimension. "
+            "Fix: write one dimension (drop or add Z first), or set the geometryType option "
+            "(for example geometryType='Polygon Z') to choose the layer's type."
+        )
+    if len(bases) == 1:
+        base = bases.pop()
+    elif driver == "OpenFileGDB":
+        base = first
+    else:
+        base = "Unknown"
+    return base + " Z" if any(z) and base != "Unknown" else base
 
 
 _OGR_DOMAIN_META = b"GDAL:OGR:domain_name"
@@ -2275,16 +2321,11 @@ class VectorGbxWriter(DataSourceWriter):
             if geom_type is not None and crs is not None:
                 break
         geom_type = geom_type or "Unknown"
-        if (
-            self.geometry_type_override is None
-            and len(geom_types) > 1
-            and self.driver != "OpenFileGDB"
-        ):
-            # Geometries of several types: a layer of any geometry. Typed by the first geometry, the
-            # layer holds the others under a type they are not; GML's schema then declares that type
-            # and GDAL reads a polygon back as its ring, and FlatGeobuf refuses the write. A FileGDB
-            # layer must have one type: it keeps the first, and GDAL refuses the others.
-            geom_type = "Unknown"
+        if self.geometry_type_override is None and geom_types:
+            # Typed by every geometry, not the first: typed by the first, the layer holds the others
+            # under a type they are not; GML's schema then declares that type and GDAL reads a polygon
+            # back as its ring, and FlatGeobuf refuses the write (also a 3D geometry in a 2D layer).
+            geom_type = _layer_geometry_type(geom_types, geom_type, self.driver)
         if self.driver == "OpenFileGDB" and geom_type.lower() == "unknown":
             if self.geometry_type_override is not None:
                 # the option itself says Unknown (any other type would not be "Unknown")

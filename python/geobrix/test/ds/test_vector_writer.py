@@ -9,7 +9,7 @@ from pyspark.sql.types import (
     StructField,
     StructType,
 )
-from shapely import LineString, Point, Polygon
+from shapely import LineString, MultiPolygon, Point, Polygon
 from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
@@ -939,3 +939,84 @@ def test_a_layer_of_mixed_geometry_types_keeps_each_type(tmp_path, driver, name,
         g.normalize().wkt for g in _MIXED
     }
     assert pyogrio.read_info(w.path)["geometry_type"] == "Unknown"
+
+
+def _write_layer(tmp_path, driver, name, parts):
+    """Write each part (a list of shapely geometries) as one partition; return the written path."""
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+        ]
+    )
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit(
+        [
+            w.write(iter([(i, bytearray(to_wkb(g)), "4326") for i, g in enumerate(p)]))
+            for p in parts
+        ]
+    )
+    return w.path
+
+
+_POLY = Polygon([(10, 50), (11, 50), (11, 51), (10, 51), (10, 50)])
+_MPOLY = MultiPolygon([Polygon([(12, 50), (13, 50), (13, 51), (12, 50)])])
+
+
+@pytest.mark.parametrize(
+    "driver,name", [("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb"), ("GML", "o.gml")]
+)
+def test_polygons_and_multipolygons_are_a_layer_of_any_geometry_each_kept_as_written(
+    tmp_path, driver, name
+):
+    """Single and multi forms of one type are not promoted to Multi: the layer is of any geometry, and each geometry
+    comes back in the form it was written."""
+    import pyogrio
+
+    path = _write_layer(tmp_path, driver, name, [[_POLY], [_MPOLY]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Unknown"
+    got = pyogrio.read_dataframe(path)
+    assert {g.normalize().wkt for g in got.geometry} == {
+        _POLY.normalize().wkt,
+        _MPOLY.normalize().wkt,
+    }
+
+
+@pytest.mark.parametrize(
+    "driver,name",
+    [("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb"), ("ESRI Shapefile", "o.shp")],
+)
+def test_a_layer_whose_geometries_all_carry_z_is_declared_3d(tmp_path, driver, name):
+    """The layer type keeps Z: a 2D type made the format drop or ignore the heights."""
+    import pyogrio
+
+    a = Polygon([(10, 50, 1.0), (11, 50, 2.0), (11, 51, 3.0), (10, 50, 1.0)])
+    b = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    path = _write_layer(tmp_path, driver, name, [[a], [b]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Polygon Z"
+    got = pyogrio.read_dataframe(path)
+    assert all(g.has_z for g in got.geometry)
+    assert sorted(z for g in got.geometry for *_, z in g.exterior.coords) == sorted(
+        z for g in (a, b) for *_, z in g.exterior.coords
+    )
+
+
+def test_a_geopackage_mixing_2d_and_3d_keeps_each_geometrys_dimension(tmp_path):
+    """Z is never made up: a GeoPackage stores each geometry as it is, so the 2D one comes back 2D and the 3D one
+    keeps its heights under a 3D layer."""
+    import pyogrio
+
+    flat = Polygon([(10, 50), (11, 50), (11, 51), (10, 50)])
+    high = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    path = _write_layer(tmp_path, "GPKG", "o.gpkg", [[flat], [high]])
+    assert pyogrio.read_info(path)["geometry_type"] == "Polygon Z"
+    got = {g.normalize().wkt: g.has_z for g in pyogrio.read_dataframe(path).geometry}
+    assert got == {flat.normalize().wkt: False, high.normalize().wkt: True}
+
+
+def test_a_one_dimension_format_refuses_a_mix_of_2d_and_3d_geometries(tmp_path):
+    flat = Polygon([(10, 50), (11, 50), (11, 51), (10, 50)])
+    high = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
+    with pytest.raises(ValueError, match="mix 2D and 3D.*Fix: write one dimension"):
+        _write_layer(tmp_path, "ESRI Shapefile", "o.shp", [[flat], [high]])

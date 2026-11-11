@@ -18,10 +18,23 @@ def test_sql_cellid_non_tessellated():
     assert "SELECT" in tile_structure.SQL_CELLID_NON_TESSELLATED
 
 
-def test_sql_cellid_tessellated():
-    """Test SQL cellid tessellated constant."""
-    assert isinstance(tile_structure.SQL_CELLID_TESSELLATED, str)
-    assert "explode" in tile_structure.SQL_CELLID_TESSELLATED
+def _statements(sql):
+    """The statements of a SQL example, with its ``--`` comment lines dropped."""
+    lines = [ln for ln in sql.splitlines() if not ln.lstrip().startswith("--")]
+    return [s.strip() for s in "\n".join(lines).split(";") if s.strip()]
+
+
+def test_sql_cellid_tessellated_runs(spark):
+    """The tessellated example calls the table function with LATERAL (a table function has no place in explode)."""
+    sql = tile_structure.SQL_CELLID_TESSELLATED
+    assert "LATERAL gbx_rst_h3_tessellate" in sql and "explode" not in sql
+    if not Path(tile_structure.SAMPLE_NYC_RASTER).exists():
+        pytest.skip("NYC sample raster not available")
+    *setup, query = _statements(sql)
+    for stmt in setup:
+        spark.sql(stmt)
+    ids = [r["cellid"] for r in spark.sql(query).collect()]
+    assert ids and all(isinstance(i, int) and i > 0 for i in ids)
 
 
 def test_access_path_and_binary(spark):

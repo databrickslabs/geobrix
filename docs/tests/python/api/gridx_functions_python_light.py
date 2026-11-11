@@ -1930,9 +1930,9 @@ bng_cellfill_python_example_output = """
 def quadbin_cellfill_python_example(spark):
     """Grouped aggregate: fill a NULL quadbin cell from ring-1 neighbours (light pygx tier).
 
-    Inline data: London z=10 center cell ``5234261469560717311`` (NULL) plus
-    two ring-1 neighbours each with value 5.0.  After fill the center equals
-    the mean of its neighbours (5.0).
+    Inline data: London z=10 center cell ``5234158540624494591`` (NULL) plus
+    two of its ring-1 neighbours each with value 5.0.  After fill the center
+    equals the mean of its neighbours (5.0).
 
     The **light** tier returns **BINARY**.
     The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
@@ -1944,9 +1944,9 @@ def quadbin_cellfill_python_example(spark):
     # Hardcoded London z10 cell and two neighbours; tier-agnostic.
     df = spark.createDataFrame(
         [
-            (1, 5234261469560717311, None),
-            (1, 5234261469560848383, 5.0),
-            (1, 5234261469560586239, 5.0),
+            (1, 5234158540624494591, None),
+            (1, 5234158544919461887, 5.0),
+            (1, 5234158536329527295, 5.0),
         ],
         ["region", "cellid", "value"],
     )
@@ -1968,7 +1968,7 @@ quadbin_cellfill_python_example_output = """
 +------+--------+
 |1     |[binary]|
 +------+--------+
-... (BINARY — decoded: London z10 center cell filled to 5.0; ring-1 neighbours unchanged)
+... (BINARY — decoded: 3 cells; the London z10 center cell is filled to 5.0, the 2 neighbours stay 5.0)
 """
 
 

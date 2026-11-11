@@ -2723,7 +2723,7 @@
       "since": "0.4.0"
     },
     "gbx_quadbin_cellfill": {
-      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( SELECT 1 AS region, gbx_quadbin_pointascell(-0.1, 51.5, 10) AS cellid, CAST(NULL AS DOUBLE) AS value UNION ALL SELECT 1 AS region, cell AS cellid, 5.0 AS value FROM ( SELECT explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1)) AS cell ) ) t GROUP BY region;",
+      "examples": "Examples:\n      > WITH r AS ( SELECT gbx_quadbin_pointascell(-0.1, 51.5, 10) AS centre, gbx_quadbin_kloop(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1) AS around ) SELECT region, gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( SELECT 1 AS region, centre AS cellid, CAST(NULL AS DOUBLE) AS value FROM r UNION ALL SELECT 1 AS region, explode(around) AS cellid, 5.0 AS value FROM r ) t GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
       "description": "Fill the NULL cells of a group of quadbin cells from their valid neighbours.",
       "surfaces": [
@@ -2744,7 +2744,7 @@
       "since": "0.4.0"
     },
     "gbx_quadbin_cellunion_agg": {
-      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage FROM ( SELECT 'R1' AS region, explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1)) AS cell ) t GROUP BY region;",
+      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage FROM ( SELECT 'R1' AS region, explode(ring) AS cell FROM ( SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS ring ) ) t GROUP BY region;",
       "usage_args": "cellid",
       "description": "Union a group's quadbin cells into one geometry.",
       "surfaces": [

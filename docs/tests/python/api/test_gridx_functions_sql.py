@@ -198,6 +198,35 @@ def test_cellfill_array_sql_examples(array_forms_registered, name, center, cells
     assert list(filled) == sorted(filled), "cells come back in ascending id order"
 
 
+def test_quadbin_cellfill_sql_example(array_forms_registered):
+    """The example builds the ring in a CTE (Spark refuses ``explode(gbx_...)``) and the NULL centre takes 5.0."""
+    from databricks.labs.gbx.pygx import _cellfill, _quadbin
+
+    sql = gridx_functions_sql.quadbin_cellfill_sql_example()
+    assert "explode(gbx_" not in sql
+    rows = _run(array_forms_registered, sql)
+    assert len(rows) == 1 and rows[0]["region"] == 1
+    cells = dict(_cellfill.decode(bytes(rows[0]["filled"])))
+    centre = _quadbin.point_as_cell(-0.1, 51.5, 10)
+    assert centre == 5234158540624494591
+    assert set(cells) == set(_quadbin.k_ring(centre, 1)), "the centre and its 8 ring-1 neighbours"
+    assert cells[centre] == 5.0, f"the NULL centre was not filled: {cells}"
+    assert set(cells.values()) == {5.0}
+
+
+def test_quadbin_cellunion_agg_sql_example(array_forms_registered):
+    """The 9-cell ring, exploded from a subquery, dissolves into one geometry that covers the centre cell."""
+    from shapely.geometry import Point
+    from shapely.wkb import loads
+
+    sql = gridx_functions_sql.quadbin_cellunion_agg_sql_example()
+    assert "explode(gbx_" not in sql
+    rows = _run(array_forms_registered, sql)
+    assert len(rows) == 1 and rows[0]["region"] == "R1"
+    geom = loads(bytes(rows[0]["coverage"]))
+    assert geom.is_valid and geom.contains(Point(-122.4194, 37.7749))
+
+
 def test_bng_chip_array_sql_examples(array_forms_registered):
     """The two chips of TQ3080 union to the whole cell and intersect in the shared strip."""
     from shapely import box

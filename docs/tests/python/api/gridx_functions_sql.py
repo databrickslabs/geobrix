@@ -738,17 +738,22 @@ def quadbin_cellunion_agg_sql_example():
     """Aggregate quadbin cells per group into a single MultiPolygon EWKB.
 
     Inline subquery generates 9 cells (k=1 kring around the SF z10 cell) under
-    a single region key, then dissolves them.  Uses the canonical SF z10 fixture
+    a single region key, then dissolves them.  The ring is built in a subquery
+    and exploded as a column: Spark refuses a SQL function directly under ``explode``.  Uses the canonical SF z10 fixture
     cell (lon=-122.4194, lat=37.7749, zoom=10 → 5233961839712272383) — same
     input as the Python and Scala tabs.  The first ``gbx_quadbin_`` token is
     ``gbx_quadbin_cellunion_agg`` so DESCRIBE FUNCTION extracts this example.
     Both light and heavy tiers return BINARY EWKB (SRID 4326).
     """
     return """
+-- Spark refuses a SQL function directly under explode, so the ring is built in a
+-- subquery and the column is exploded.
 SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage
 FROM (
-  SELECT 'R1' AS region,
-         explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1)) AS cell
+  SELECT 'R1' AS region, explode(ring) AS cell
+  FROM (
+    SELECT gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS ring
+  )
 ) t
 GROUP BY region;
 """
@@ -1179,25 +1184,29 @@ def quadbin_cellfill_sql_example():
     """Fill NULL Quadbin cells from valid ring-1 neighbours using mean interpolation.
 
     The first sub-select contributes the London z=10 center cell with value NULL;
-    the UNION adds its ring-1 neighbours (via ``gbx_quadbin_kring``) with value 5.0.
+    the UNION adds its 8 ring-1 neighbours (``gbx_quadbin_kloop``) with value 5.0.
     With k=1 and method='mean' the NULL center is filled with 5.0.
+    The ring is built in a CTE and exploded as a column: Spark refuses a SQL
+    function directly under ``explode`` (``UNSUPPORTED_SQL_UDF_USAGE``).
 
     ``gbx_quadbin_cellfill`` is a grouped aggregator: the call must appear inside a
     GROUP BY query.  Cell IDs are BIGINT.  Returns BINARY (light) or
     ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
     """
     return """
+-- The London z=10 cell has no value; its 8 ring-1 neighbours (kloop) carry 5.0.
+-- Spark refuses a SQL function directly under explode, so the ring is built in a
+-- CTE first and the column is exploded.
+WITH r AS (
+  SELECT gbx_quadbin_pointascell(-0.1, 51.5, 10) AS centre,
+         gbx_quadbin_kloop(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1) AS around
+)
 SELECT region,
        gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled
 FROM (
-  SELECT 1 AS region,
-         gbx_quadbin_pointascell(-0.1, 51.5, 10) AS cellid,
-         CAST(NULL AS DOUBLE) AS value
+  SELECT 1 AS region, centre AS cellid, CAST(NULL AS DOUBLE) AS value FROM r
   UNION ALL
-  SELECT 1 AS region, cell AS cellid, 5.0 AS value
-  FROM (
-    SELECT explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1)) AS cell
-  )
+  SELECT 1 AS region, explode(around) AS cellid, 5.0 AS value FROM r
 ) t
 GROUP BY region;
 """
@@ -1209,7 +1218,7 @@ quadbin_cellfill_sql_example_output = """
 +------+--------+
 |1     |[binary]|
 +------+--------+
-... (BINARY — decoded: London z10 center cell filled to 5.0; ring-1 neighbours unchanged)
+... (BINARY — decoded: 9 cells; the London z10 center cell is filled to 5.0, the 8 ring-1 neighbours stay 5.0)
 """
 
 

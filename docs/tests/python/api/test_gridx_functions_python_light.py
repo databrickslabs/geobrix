@@ -71,6 +71,19 @@ def _tessellateexplode(r):
     )
 
 
+def _fill_payload(n, center):
+    """The BINARY a `*_cellfill` aggregate returns, decoded: `n` cells, all 5.0, so the NULL `center` is filled."""
+
+    def check(r):
+        from databricks.labs.gbx.pygx import _cellfill  # noqa: PLC0415
+
+        if not _bytes(r):
+            return False
+        cells = dict(_cellfill.decode(bytes(r)))
+        return len(cells) == n and cells.get(center) == 5.0 and set(cells.values()) == {5.0}
+
+    return check
+
 
 def _filled(n, center=None):
     """A fill result: `n` (cellid, value) structs in ascending id order, all 5.0 (so the NULL cell is filled)."""
@@ -142,7 +155,7 @@ CHECKS = {
     "quadbin_tessellate": _cells(4, has=5211790668774506495, key="cell"),
     "quadbin_cellunion": _bytes,
     "quadbin_cellunion_agg": _bytes,
-    "quadbin_cellfill": _bytes,
+    "quadbin_cellfill": _fill_payload(3, center=5234158540624494591),
     "quadbin_geomkring": _some(ints=True),
     "quadbin_geomkloop": _some(),
     "quadbin_geomkringexplode": _some(),

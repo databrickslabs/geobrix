@@ -36,11 +36,8 @@ FROM nyc_raster;
 
 SQL_CELLID_TESSELLATED = f"""-- Tessellated: cellid contains H3 cell ID
 CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}');
-SELECT tile.cellid
-FROM (
-  SELECT explode(gbx_rst_h3_tessellate(tile, 7)) as tile
-  FROM nyc_raster
-);
+SELECT t.cellid
+FROM nyc_raster, LATERAL gbx_rst_h3_tessellate(tile, 7) t;
 -- Returns: 604189641255419903, 604189641255420159, ..."""
 
 

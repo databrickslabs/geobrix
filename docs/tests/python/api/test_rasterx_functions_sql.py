@@ -5,6 +5,7 @@ Ensures all SQL examples in documentation are executable and produce valid resul
 """
 
 import pytest
+from pathlib import Path
 
 # Sample data base path (must match conftest.SAMPLE_DATA_BASE for doc test env)
 from path_config import SAMPLE_DATA_BASE
@@ -1172,6 +1173,28 @@ def test_rst_stats_partial_sql_example(spark, multiband_rasters_view):
     expected = spark.sql("SELECT gbx_rst_avg(tile) AS a FROM multiband_rasters").first()["a"]
     assert [r["avg"] for r in rows] == pytest.approx(expected)
     assert all(r["min"] <= r["avg"] <= r["max"] and r["stddev"] > 0 for r in rows)
+
+
+def test_prose_array_snippets_run(spark):
+    """The SQL blocks in raster-functions.mdx that explode or inline an array run against a `rasters` view.
+
+    Spark refuses a SQL function directly under ``explode``/``inline``, so a block that does so fails here.
+    """
+    import re
+
+    page = Path(__file__).resolve().parents[3] / "docs" / "api" / "raster-functions.mdx"
+    blocks = re.findall(r"```sql\n(.*?)```", page.read_text(), re.S)
+    snippets = [b for b in blocks if re.search(r"\b(explode|inline)\(", b) and "rasters" in b]
+    assert len(snippets) >= 2, "the stats_partial and rastertogrid_partial snippets"
+    spark.sql(
+        "SELECT gbx_rst_rasterize('POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))', "
+        "1.0, -0.20, 51.40, -0.10, 51.50, 40, 40, 4326) AS tile"
+    ).createOrReplaceTempView("rasters")
+    try:
+        for sql in snippets:
+            assert spark.sql(sql.strip().rstrip(";")).count() > 0, sql
+    finally:
+        spark.catalog.dropTempView("rasters")
 
 
 _BOX_4326 = "POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))"

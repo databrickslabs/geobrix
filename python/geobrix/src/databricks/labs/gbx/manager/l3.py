@@ -223,7 +223,9 @@ def register_engine_c0(spark, fn, name: str, file_ref: bool = False) -> None:
         name,
         engine_l3.c0(
             fn.sql_name, grid, read_cap=report_detected_cap(spark), file_ref=file_ref
-        ),
+        ).for_session(
+            spark
+        ),  # its transport: the session's choice
     )
 
 

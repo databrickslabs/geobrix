@@ -1,7 +1,8 @@
 """The engine's Spark UDFs: level L3 of a manifest row with a `gdal` block.
 
-- c0 (``c0(sql_name)``): an Arrow-optimized row-wise UDF over the whole tile (or array of tiles) and the other
-  arguments, returning a tile. It takes virtual tiles (materialized through ``open_tile``) and materialized ones.
+- c0 (``c0(sql_name)``): a row-wise UDF over the whole tile (or array of tiles) and the other arguments, returning a
+  tile. Its rows cross as Arrow batches on Spark 4.1+ and as pickles on Spark 4.0 (``databricks.labs.gbx._transport``).
+  It takes virtual tiles (materialized through ``open_tile``) and materialized ones.
   With ``file_ref=True`` it takes a FILE reference as its second argument (one per tile for an array input).
 - forced_c0 (``forced_c0(sql_name)``): the Python API's force-output form of c0: the same engine run, its tile
   shaped by the force-output keywords (``virtualize_dir``, ``virtualize_prefix``, ``materialize``).
@@ -510,7 +511,6 @@ def c0(
     defaults = [sql_default(p.default) for p in fn.params[1:]]
     raster_out = fn.gdal.out_kind == "raster"
 
-    @F.udf(return_type(fn), useArrow=True)
     def _c0(first, *args):
         _setup(grid_dirs)
         refs = None
@@ -535,7 +535,7 @@ def c0(
             res = run.run(fn, rasters, values, _section(section_ref), src_sizes=sizes)
             return _tile(res, cellid) if raster_out else _value(fn, res)
 
-    return _c0
+    return _session_udf(fn, _c0, return_type(fn))
 
 
 def udtf(
@@ -640,7 +640,6 @@ def forced_c0(
     names = [p.name for p in fn.params[1:]]
     defaults = [sql_default(p.default) for p in fn.params[1:]]
 
-    @F.udf(V2_TILE_SCHEMA, useArrow=True)
     def _forced(first, *rest):
         _setup(grid_dirs)
         args, (vdir, vprefix, mat) = rest[:-3], rest[-3:]
@@ -662,7 +661,23 @@ def forced_c0(
                 return prx._shaped_result_row(res.raster, cellid, vdir, vprefix, mat)
             return _tile(res, cellid)
 
-    return _forced
+    return _session_udf(fn, _forced, V2_TILE_SCHEMA)
+
+
+def _session_udf(fn, body, returns):
+    """*body* as a row UDF whose transport the session chooses (``_transport.SessionTileUdf``): Arrow batches on
+    Spark 4.1+, pickles on Spark 4.0, which hands an Arrow UDF a BIGINT cell id as a float when a NULL rides in the
+    batch. The first argument is the tile, or for a ``rasters`` input the array of tiles.
+    """
+    from databricks.labs.gbx._transport import SessionTileUdf
+
+    many = fn.gdal.inputs[0][1] != "raster"
+    return SessionTileUdf(
+        body,
+        returns,
+        tiles=() if many else (0,),
+        tile_arrays=(0,) if many else (),
+    )
 
 
 def _cellid_of(fn, first) -> int:

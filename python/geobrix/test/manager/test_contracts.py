@@ -1972,6 +1972,53 @@ def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_
     `tile.` inside a longer name (`raster_tile.` stays `raster_tile.`)."""
     from types import SimpleNamespace as NS
 
+def test_docs_tab_gate_requires_an_example_block_for_each_section(
+    tmp_path, monkeypatch
+):
+    """A function whose section is on its page shows an example: SQL and Python tabs from its oracle row."""
+    gates = _gates()
+    fn = MAN.functions["gbx_rst_slope"]
+    docs = tmp_path / "docs"
+    (docs / "api").mkdir(parents=True)
+    page = docs / f"{fn.doc.page}.mdx"
+    monkeypatch.setattr(gates, "DOCS", docs)
+    monkeypatch.setattr(gates, "REPO", tmp_path)
+    section = (
+        f"### slope\n\n{{/* BEGIN GENERATED {fn.sql_name}: edit manifest/functions.json */}}\n"
+        f"{{/* END GENERATED {fn.sql_name} */}}\n\nProse.\n"
+    )
+
+    def missing():
+        return [f for f in gates.docs_findings([fn]) if "has no <FunctionExamples" in f]
+
+    # a section with no example block is named, with the row to take the example from
+    page.write_text(section)
+    (found,) = missing()
+    assert fn.sql_name in found and fn.example in found
+    # a page that shows no section of the function has nothing to hold
+    page.write_text("No section here.\n")
+    assert missing() == []
+    # a block ends the finding
+    src = tmp_path / "src.py"
+    src.write_text(
+        "def rst_slope_python_example(spark):\n    return 1\n"
+        'rst_slope_python_example_output = "1"\n'
+    )
+    page.write_text(
+        section
+        + '\n<FunctionExamples\n  name="rst_slope"\n'
+        + '  python={b}  pythonSource="%s"\n/>\n' % src
+    )
+    assert missing() == []
+
+
+def test_every_section_on_a_function_page_has_an_example_block():
+    """The pages as they stand: no function section ends at its signature and prose."""
+    gates = _gates()
+    found = [f for f in gates.docs_findings(FNS) if "has no <FunctionExamples" in f]
+    assert found == []
+
+
     from databricks.labs.gbx.manager import sqlwrap
 
     fn = NS(

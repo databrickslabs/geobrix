@@ -514,9 +514,10 @@ def _defined_names(path: Path) -> set:
 
 
 def docs_findings(fns: Iterable) -> List[str]:
-    """G4: a function's hand-written tabs match the availability matrix: a tab only for a surface it has, one
-    Python tab (no lightweight/heavyweight split), no Scala tab (Scala is the performance tier: the function's
-    Scala tag links to the jar-functions page), and each tab's example and output exist in its source.
+    """G4: a function with a section on its page has an example block, and its hand-written tabs match the
+    availability matrix: a tab only for a surface it has, one Python tab (no lightweight/heavyweight split), no Scala
+    tab (Scala is the performance tier: the function's Scala tag links to the jar-functions page), and each tab's
+    example and output exist in its source.
     """
     out = []
     pages: dict = {}
@@ -532,7 +533,14 @@ def docs_findings(fns: Iterable) -> List[str]:
             re.S,
         )
         if not m:
-            continue  # the generated example stands in for a function with no hand-written tabs
+            # A function with a section on its page has an example block: the page shows no generated example, so
+            # without a block the section ends at the signature and the prose.
+            if f"BEGIN GENERATED {fn.sql_name}:" in text:
+                out.append(
+                    f"{fn.sql_name}: its section in {_rel(page)} has no <FunctionExamples name=\"{fn.python.name}\"> "
+                    f"block (add the SQL and Python example from its oracle row {fn.example!r})"
+                )
+            continue
         props = set(re.findall(r"(\w+)=\{", m.group(1)))
         files = dict(re.findall(r'(\w+)Source="([^"]+)"', m.group(1)))
         if "pythonHeavy" in props:

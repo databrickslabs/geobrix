@@ -855,3 +855,159 @@ rst_custom_rastertogridstddev_python_example_output = """
 +----+--------------------+--------+
 (population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
 """
+
+
+# ============================================================================
+# Partial states per grid cell — rst_<grid>_rastertogrid_partial
+#
+# One scalar call per tile returns ARRAY<STRUCT<band, cellid, count, sum, m2,
+# min, max>>; `inline` turns it into rows. The average of a cell is
+# `sum / count`. The fixture is a 40 x 40 tile of value 1.0 made with
+# `rst_rasterize`: a lon/lat box of London for H3 and quadbin, a 4 km square of
+# the British National Grid for BNG and the custom grid.
+# ============================================================================
+
+_LONDON_BOX_WKT = "POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))"
+
+
+def _partial_states(spark, tile_df, partial):
+    """One row per band and cell with count and average, from a `*_rastertogrid_partial` column."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    states = tile_df.select(partial.alias("states")).select(f.inline("states"))
+    return states.select(
+        "band", "cellid", "count", (f.col("sum") / f.col("count")).alias("avg")
+    ).collect()
+
+
+def _london_wgs84_tile(spark):
+    from databricks.labs import gbx
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    gbx.register(spark)
+
+    return spark.range(1).select(
+        rx_api.rst_rasterize(
+            f.lit(_LONDON_BOX_WKT),
+            f.lit(1.0),
+            f.lit(-0.20),
+            f.lit(51.40),
+            f.lit(-0.10),
+            f.lit(51.50),
+            f.lit(40),
+            f.lit(40),
+            f.lit(4326),
+        ).alias("tile")
+    )
+
+
+def _london_bng_tile(spark):
+    from databricks.labs import gbx
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    gbx.register(spark)
+
+    return spark.range(1).select(
+        rx_api.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(533000.0),
+            f.lit(183000.0),
+            f.lit(40),
+            f.lit(40),
+            f.lit(27700),
+        ).alias("tile")
+    )
+
+
+def rst_h3_rastertogrid_partial_python_example(spark):
+    """Give the state of every H3 cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_wgs84_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_h3_rastertogrid_partial("tile", 6)
+    )
+
+
+rst_h3_rastertogrid_partial_python_example_output = """
++----+------------------+-----+---+
+|band|cellid            |count|avg|
++----+------------------+-----+---+
+|1   |603927292439166975|61.0 |1.0|
+|1   |603927296197263359|607.0|1.0|
+|1   |603927296331481087|326.0|1.0|
+|... |                  |     |   |
++----+------------------+-----+---+
+(one row per band and H3 cell, 8 in all)
+"""
+
+
+def rst_quadbin_rastertogrid_partial_python_example(spark):
+    """Give the state of every quadbin cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_wgs84_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_quadbin_rastertogrid_partial("tile", 12)
+    )
+
+
+rst_quadbin_rastertogrid_partial_python_example_output = """
++----+-------------------+-----+---+
+|band|cellid             |count|avg|
++----+-------------------+-----+---+
+|1   |5243165738268622847|180.0|1.0|
+|1   |5243165738805493759|220.0|1.0|
+|1   |5243165739073929215|540.0|1.0|
+|1   |5243165739610800127|660.0|1.0|
++----+-------------------+-----+---+
+(one row per band and quadbin cell)
+"""
+
+
+def rst_bng_rastertogrid_partial_python_example(spark):
+    """Give the state of every British National Grid cell a tile covers, in one pass (light pyrx tier)."""
+    df = _london_bng_tile(spark)
+    return _partial_states(
+        spark, df, rx_api.rst_bng_rastertogrid_partial("tile", 3)
+    )
+
+
+rst_bng_rastertogrid_partial_python_example_output = """
++----+------+-----+---+
+|band|cellid|count|avg|
++----+------+-----+---+
+|1   |TQ2979|100.0|1.0|
+|1   |TQ2980|100.0|1.0|
+|1   |TQ2981|100.0|1.0|
+|... |      |     |   |
++----+------+-----+---+
+(one row per band and 1 km BNG cell, 16 in all; cellid is a STRING)
+"""
+
+
+def rst_custom_rastertogrid_partial_python_example(spark):
+    """Give the state of every custom-grid cell a tile covers, in one pass (light pyrx tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _london_bng_tile(spark)
+    grid = f.call_function(
+        "gbx_custom_grid",
+        f.lit(529000), f.lit(533000), f.lit(179000), f.lit(183000),
+        f.lit(2), f.lit(4000), f.lit(4000), f.lit(27700),
+    )
+    return _partial_states(
+        spark, df, rx_api.rst_custom_rastertogrid_partial("tile", grid, 1)
+    )
+
+
+rst_custom_rastertogrid_partial_python_example_output = """
++----+-----------------+-----+---+
+|band|cellid           |count|avg|
++----+-----------------+-----+---+
+|1   |72057594037927936|400.0|1.0|
+|1   |72057594037927937|400.0|1.0|
+|1   |72057594037927938|400.0|1.0|
+|1   |72057594037927939|400.0|1.0|
++----+-----------------+-----+---+
+(one row per band and 2 km custom-grid cell)
+"""

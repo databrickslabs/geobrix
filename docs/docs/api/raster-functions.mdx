@@ -992,6 +992,13 @@ The average of the per-tile averages is not the average of the union, because th
 Tiles must not overlap. A pixel in two tiles counts twice.
 On Unity Catalog a virtual tile is refused, and so is a tile over the size limit.
 
+<FunctionExamples
+  name="rst_stats_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_accessors_python_light.py"
+/>
+
 ### rst_summary
 
 {/* BEGIN GENERATED gbx_rst_summary: edit manifest/functions.json, then run gbx:manifest:gen */}
@@ -1252,6 +1259,13 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 
 Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups of many cells: `SELECT * FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT key, cellid, value FROM cells) PARTITION BY (key), xmin, ymin, xmax, ymax, width, height)`. It reads each key's cells a row at a time and keeps only the largest value per cell. It needs less memory than the grouped aggregate and burns the same pixels. The canvas is explicit, and a key with no cell gives no row. It does not run on Serverless, whose table-function engine fails `PARTITION BY` once a task holds more than one row; use [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) there.
 
+<FunctionExamples
+  name="rst_bng_rasterize_tvf"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
 ---
 
 
@@ -1283,6 +1297,13 @@ Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups o
 {/* END GENERATED gbx_rst_bng_rasterize */}
 
 Rasterize an array of BNG cells into one tile, the scalar twin of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg). Collect the group's cells first, for example `gbx_rst_bng_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It also runs on Unity Catalog, where an array or canvas over 64 MiB is refused with a `Fix:` that names the aggregate.
+
+<FunctionExamples
+  name="rst_bng_rasterize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_combineavg_agg
 
@@ -1593,6 +1614,13 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 
 Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It also runs on Unity Catalog, where an array or canvas over 64 MiB is refused with a `Fix:` that names the aggregate.
 
+<FunctionExamples
+  name="rst_h3_rasterize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
 ### rst_merge_agg
 
 {/* BEGIN GENERATED gbx_rst_merge_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
@@ -1663,6 +1691,13 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 {/* END GENERATED gbx_rst_merge_tvf */}
 
 Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))`. It merges each key's tiles into the same pixels as the aggregate. It reads them a row at a time, not as one batch of the whole group. A key with no readable tile gives no row. It does not run on Serverless, whose table-function engine fails `PARTITION BY` once a task holds more than one row; use [`rst_merge_agg`](#rst_merge_agg) there. A key whose mosaic is too large to build raises with a Fix that names the [VRT-mosaic](./vrt-mosaic) route (`mint_vrt`).
+
+<FunctionExamples
+  name="rst_merge_tvf"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_quadbin_rasterize_agg
 
@@ -1752,6 +1787,13 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 
 Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg). Collect the group's cells first, for example `gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It also runs on Unity Catalog, where an array or canvas over 64 MiB is refused with a `Fix:` that names the aggregate.
 
+<FunctionExamples
+  name="rst_quadbin_rasterize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
 ### rst_custom_rasterize_agg
 
 {/* BEGIN GENERATED gbx_rst_custom_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
@@ -1829,6 +1871,13 @@ Streaming aggregator that burns custom-grid cell values into one raster tile per
 {/* END GENERATED gbx_rst_custom_rasterize */}
 
 Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_custom_rasterize_agg`](#rst_custom_rasterize_agg). Collect the group's cells first, for example `gbx_rst_custom_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It also runs on Unity Catalog, where an array or canvas over 64 MiB is refused with a `Fix:` that names the aggregate.
+
+<FunctionExamples
+  name="rst_custom_rasterize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ### rst_rasterize_agg
 
@@ -2276,6 +2325,13 @@ The statement writes the tile that `rst_binpoints_agg` writes for the same point
 The statement drops that point. The aggregate counts a NaN point in `count`, and gives NoData for `mean` and `median` when a pixel holds a NaN.
 Use `count(*)` for `count`, and cast the result to `DOUBLE`.
 
+<FunctionExamples
+  name="rst_binpoints_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
 ---
 
 ### rst_binpoints_finalize
@@ -2307,6 +2363,13 @@ The input has one struct per occupied pixel, so its size follows the canvas and 
 A pixel in no struct is NoData (-9999), and so is a pixel whose value is NULL or NaN.
 A `col` or `row` outside the canvas raises, because the keys came from another canvas.
 On Unity Catalog, a canvas that is too large for one function call is refused. The error names `rst_binpoints_agg`, which runs in a notebook or job session.
+
+<FunctionExamples
+  name="rst_binpoints_finalize"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
 
 ---
 
@@ -2858,6 +2921,13 @@ Combine `m2` with the update on the Unity Catalog functions page, so the varianc
 Tiles must not overlap. A pixel in two tiles counts twice.
 On Unity Catalog a virtual tile is refused, and so is a result over the size limit.
 
+<FunctionExamples
+  name="rst_h3_rastertogrid_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
 ---
 
 ### rst_h3_rastertogridavg
@@ -3150,6 +3220,13 @@ The median does not split. It keeps its own table function.
 
 Merge the state across tiles of one table as `rst_h3_rastertogrid_partial` does. Tiles must not overlap.
 On Unity Catalog a virtual tile is refused, and so is a result over the size limit.
+
+<FunctionExamples
+  name="rst_quadbin_rastertogrid_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ---
 
@@ -3450,6 +3527,13 @@ The median does not split. It keeps its own table function.
 Merge the state across tiles of one table as `rst_h3_rastertogrid_partial` does. Tiles must not overlap.
 On Unity Catalog a virtual tile is refused, and so is a result over the size limit.
 
+<FunctionExamples
+  name="rst_bng_rastertogrid_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
+
 ---
 
 ### rst_bng_rastertogridavg
@@ -3749,6 +3833,13 @@ The median does not split. It keeps its own table function.
 
 Merge the state across tiles of one table as `rst_h3_rastertogrid_partial` does. Tiles must not overlap.
 On Unity Catalog a virtual tile is refused, and so is a result over the size limit.
+
+<FunctionExamples
+  name="rst_custom_rastertogrid_partial"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
+/>
 
 ---
 

@@ -181,3 +181,42 @@ def test_h3_cell_bbox_python_light_example(spark):
         # STRUCT<xmin, ymin, xmax, ymax> — ordered, finite.
         assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
     assert hasattr(light_examples, "h3_cell_bbox_python_example_output")
+
+
+# ---------------------------------------------------------------------------
+# rst_<grid>_rastertogrid_partial: the partial state of every cell a tile covers
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "grid, cells",
+    [("h3", 8), ("quadbin", 4), ("bng", 16), ("custom", 4)],
+)
+def test_rastertogrid_partial_python_examples(spark, grid, cells):
+    """Each cell of the constant tile averages 1.0, and its count is the one the count table function gives."""
+    assert light_examples is not None
+    rows = getattr(light_examples, f"rst_{grid}_rastertogrid_partial_python_example")(
+        spark
+    )
+    assert len(rows) == cells
+    assert all(r["avg"] == 1.0 and r["count"] > 0 for r in rows)
+    assert len({r["cellid"] for r in rows}) == cells
+    tile_df = (
+        light_examples._london_wgs84_tile(spark)
+        if grid in ("h3", "quadbin")
+        else light_examples._london_bng_tile(spark)
+    )
+    tile_df.createOrReplaceTempView("partial_tile")
+    args = {
+        "h3": "6",
+        "quadbin": "12",
+        "bng": "3",
+        "custom": f"{light_examples._CUSTOM_GRID_SQL}, 1",
+    }[grid]
+    expected = {
+        r["cellID"]: r["measure"]
+        for r in spark.sql(
+            f"SELECT t.* FROM partial_tile, LATERAL gbx_rst_{grid}_rastertogridcount(tile, {args}) t"
+        ).collect()
+    }
+    assert {r["cellid"]: r["count"] for r in rows} == expected

@@ -33,6 +33,10 @@ def _float(value):
 CHECKS = {
     # multiband
     "rst_avg": _bands(),
+    "rst_stats_partial": lambda r: [x["band"] for x in r] == [1, 2, 3]
+    and all(x["count"] == 64.0 for x in r)
+    and [x["avg"] for x in r] == [83.59375, 153.125, 114.3125]
+    and [x["max"] for x in r] == [119.0, 197.0, 148.0],
     "rst_bandmetadata": lambda r: isinstance(r, dict) and "name" in r,
     "rst_histogram": lambda r: isinstance(r, dict)
     and len(r) == 3

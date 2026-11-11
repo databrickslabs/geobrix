@@ -3732,3 +3732,368 @@ rst_custom_rasterize_agg_sql_example_output = """
 |...      |[B@... (BINARY)|
 +---------+---------------+
 """
+
+
+# ============================================================================
+# Partial states, array forms and key-partitioned table functions
+# ============================================================================
+
+
+def rst_stats_partial_sql_example():
+    """Give the mergeable state of each band of a tile, in one pass over the pixels."""
+    return """
+-- One row per band: count, sum, m2 (the sum of squared deviations), min and max.
+-- The average is sum / count; the standard deviation is sqrt(m2 / count).
+WITH s AS (SELECT gbx_rst_stats_partial(tile) AS stats FROM multiband_rasters)
+SELECT band, count, sum / count AS avg, sqrt(m2 / count) AS stddev, min, max
+FROM (SELECT inline(stats) FROM s);
+"""
+
+
+rst_stats_partial_sql_example_output = """
++----+-----+--------+------------------+-----+-----+
+|band|count|avg     |stddev            |min  |max  |
++----+-----+--------+------------------+-----+-----+
+|1   |64.0 |83.59375|18.77641368679067 |50.0 |119.0|
+|2   |64.0 |153.125 |28.971160228751625|102.0|197.0|
+|3   |64.0 |114.3125|19.828069592121164|82.0 |148.0|
++----+-----+--------+------------------+-----+-----+
+(one row per band; count, sum and m2 merge across tiles)
+"""
+
+
+def rst_h3_rastertogrid_partial_sql_example():
+    """Give the state of every H3 cell a tile covers, in one pass over the pixels."""
+    return """
+-- A 40 x 40 tile of value 1.0 over a lon/lat box of London. One row per band and H3 cell
+-- with count, sum, m2, min and max; the average of a cell is sum / count.
+WITH r AS (
+  SELECT gbx_rst_rasterize(
+    'POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))',
+    1.0, -0.20, 51.40, -0.10, 51.50, 40, 40, 4326
+  ) AS tile
+)
+SELECT band, cellid, count, sum / count AS avg
+FROM (SELECT inline(gbx_rst_h3_rastertogrid_partial(tile, 6)) FROM r);
+"""
+
+
+rst_h3_rastertogrid_partial_sql_example_output = """
++----+------------------+-----+---+
+|band|cellid            |count|avg|
++----+------------------+-----+---+
+|1   |603927292439166975|61.0 |1.0|
+|1   |603927296197263359|607.0|1.0|
+|1   |603927296331481087|326.0|1.0|
+|... |                  |     |   |
++----+------------------+-----+---+
+(one row per band and H3 cell, 8 in all)
+"""
+
+
+def rst_quadbin_rastertogrid_partial_sql_example():
+    """Give the state of every quadbin cell a tile covers, in one pass over the pixels."""
+    return """
+-- A 40 x 40 tile of value 1.0 over a lon/lat box of London. One row per band and quadbin
+-- cell with count, sum, m2, min and max; the average of a cell is sum / count.
+WITH r AS (
+  SELECT gbx_rst_rasterize(
+    'POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))',
+    1.0, -0.20, 51.40, -0.10, 51.50, 40, 40, 4326
+  ) AS tile
+)
+SELECT band, cellid, count, sum / count AS avg
+FROM (SELECT inline(gbx_rst_quadbin_rastertogrid_partial(tile, 12)) FROM r);
+"""
+
+
+rst_quadbin_rastertogrid_partial_sql_example_output = """
++----+-------------------+-----+---+
+|band|cellid             |count|avg|
++----+-------------------+-----+---+
+|1   |5243165738268622847|180.0|1.0|
+|1   |5243165738805493759|220.0|1.0|
+|1   |5243165739073929215|540.0|1.0|
+|1   |5243165739610800127|660.0|1.0|
++----+-------------------+-----+---+
+(one row per band and quadbin cell)
+"""
+
+
+def rst_bng_rastertogrid_partial_sql_example():
+    """Give the state of every British National Grid cell a tile covers, in one pass over the pixels."""
+    return """
+-- A 40 x 40 tile of value 1.0 over a 4 km square of London (EPSG:27700). One row per band and
+-- 1 km cell with count, sum, m2, min and max; the average of a cell is sum / count.
+WITH r AS (
+  SELECT gbx_rst_rasterize(
+    'POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))',
+    1.0, 529000.0, 179000.0, 533000.0, 183000.0, 40, 40, 27700
+  ) AS tile
+)
+SELECT band, cellid, count, sum / count AS avg
+FROM (SELECT inline(gbx_rst_bng_rastertogrid_partial(tile, 3)) FROM r);
+"""
+
+
+rst_bng_rastertogrid_partial_sql_example_output = """
++----+------+-----+---+
+|band|cellid|count|avg|
++----+------+-----+---+
+|1   |TQ2979|100.0|1.0|
+|1   |TQ2980|100.0|1.0|
+|1   |TQ2981|100.0|1.0|
+|... |      |     |   |
++----+------+-----+---+
+(one row per band and 1 km BNG cell, 16 in all; cellid is a STRING)
+"""
+
+
+def rst_custom_rastertogrid_partial_sql_example():
+    """Give the state of every custom-grid cell a tile covers, in one pass over the pixels."""
+    return f"""
+-- A 40 x 40 tile of value 1.0 over a 4 km square of London (EPSG:27700), binned to the
+-- 2 km cells (resolution 1) of the grid. The average of a cell is sum / count.
+WITH r AS (
+  SELECT gbx_rst_rasterize(
+    'POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))',
+    1.0, 529000.0, 179000.0, 533000.0, 183000.0, 40, 40, 27700
+  ) AS tile
+)
+SELECT band, cellid, count, sum / count AS avg
+FROM (SELECT inline(gbx_rst_custom_rastertogrid_partial(tile, {_CUSTOM_GRID_LITERAL}, 1)) FROM r);
+"""
+
+
+rst_custom_rastertogrid_partial_sql_example_output = """
++----+-----------------+-----+---+
+|band|cellid           |count|avg|
++----+-----------------+-----+---+
+|1   |72057594037927936|400.0|1.0|
+|1   |72057594037927937|400.0|1.0|
+|1   |72057594037927938|400.0|1.0|
+|1   |72057594037927939|400.0|1.0|
++----+-----------------+-----+---+
+(one row per band and 2 km custom-grid cell)
+"""
+
+
+def rst_bng_rasterize_sql_example():
+    """Rasterize an array of British National Grid cells into one tile."""
+    return """
+-- collect_list(struct(cellid, value)) gathers the cells into one array. Two values for
+-- TQ3080 burn the larger (3.0). The canvas is 3 x 2 pixels of 1 km; out_srid is not read.
+SELECT gbx_rst_bng_rasterize(
+         collect_list(struct(cellid, value)),
+         27700, 1000.0, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, 'centroids', 0
+       ) AS content
+FROM (VALUES
+  ('TQ3080', 1.0), ('TQ3080', 3.0), ('TQ3180', 2.0), ('TQ3081', 4.0)
+) AS t(cellid, value);
+"""
+
+
+rst_bng_rasterize_sql_example_output = """
++---------------+
+|content        |
++---------------+
+|[B@... (BINARY)|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:27700. Pixels, north row first:
+   [4.0, -9999, -9999]
+   [3.0,  2.0,  -9999])
+"""
+
+
+def rst_h3_rasterize_sql_example():
+    """Rasterize an array of H3 cells into one tile."""
+    return """
+-- collect_list(struct(cellid, value)) gathers the cells into one array. The canvas is
+-- 2 x 2 pixels of 0.01 degrees; each cell burns its value at the pixel of its centroid.
+SELECT gbx_rst_h3_rasterize(
+         collect_list(struct(cellid, value)),
+         4326, 0.01, 0.005, 0.005, 0.025, 0.025, 2, 2, 'centroids', 0
+       ) AS content
+FROM (VALUES
+  (619056821909585919L, 1.0), (619056822407921663L, 2.0), (619056559519170559L, 3.0)
+) AS t(cellid, value);
+"""
+
+
+rst_h3_rasterize_sql_example_output = """
++---------------+
+|content        |
++---------------+
+|[B@... (BINARY)|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:4326. Pixels, north row first:
+   [2.0,   -9999]
+   [1.0,    3.0 ])
+"""
+
+
+def rst_quadbin_rasterize_sql_example():
+    """Rasterize an array of quadbin cells into one tile."""
+    return """
+-- Three zoom-12 cells over London. collect_list(struct(cellid, value)) gathers them into
+-- one array. The canvas is 3 x 1 pixels of 0.2 degrees; each cell burns its value at the
+-- pixel of its centroid.
+SELECT gbx_rst_quadbin_rasterize(
+         collect_list(struct(cellid, value)),
+         4326, 0.2, -0.4, 51.3, 0.2, 51.5, 3, 1, 'centroids', 0
+       ) AS content
+FROM (
+  SELECT gbx_quadbin_pointascell(lon, lat, 12) AS cellid, value
+  FROM (VALUES
+    (-0.30, 51.40, 1.0), (-0.10, 51.40, 2.0), (0.10, 51.40, 3.0)
+  ) AS p(lon, lat, value)
+);
+"""
+
+
+rst_quadbin_rasterize_sql_example_output = """
++---------------+
+|content        |
++---------------+
+|[B@... (BINARY)|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:4326. Pixels: [1.0, 2.0, 3.0])
+"""
+
+
+def rst_custom_rasterize_sql_example():
+    """Rasterize an array of custom-grid cells into one tile."""
+    return f"""
+-- Three 2 km cells (resolution 1) of the grid. collect_list(struct(cellid, value)) gathers
+-- them into one array. The canvas is 2 x 2 pixels of 2 km; each cell burns its value at
+-- the pixel of its centroid.
+SELECT gbx_rst_custom_rasterize(
+         collect_list(struct(cellid, value)),
+         {_CUSTOM_GRID_LITERAL},
+         27700, 2000.0, 529000.0, 179000.0, 533000.0, 183000.0, 2, 2, 'centroids', 0
+       ) AS content
+FROM (
+  SELECT gbx_custom_pointascell(wkt, {_CUSTOM_GRID_LITERAL}, 1) AS cellid, value
+  FROM (VALUES
+    ('POINT(530000 180000)', 1.0), ('POINT(532000 180000)', 2.0), ('POINT(530000 182000)', 3.0)
+  ) AS p(wkt, value)
+);
+"""
+
+
+rst_custom_rasterize_sql_example_output = """
++---------------+
+|content        |
++---------------+
+|[B@... (BINARY)|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:27700. Pixels, north row first:
+   [3.0,   -9999]
+   [1.0,    2.0 ])
+"""
+
+
+def rst_binpoints_partial_sql_example():
+    """Give the canvas pixel each point falls in, as a (col, row) key to group by."""
+    return """
+-- A 10 x 10 canvas of 1 x 1 pixels. The column counts from the west and the row from the north.
+-- A point on the east or south edge is in no pixel, so its key is NULL.
+SELECT x, y, gbx_rst_binpoints_partial(x, y, 0D, 0D, 10D, 10D, 10, 10) AS px
+FROM (VALUES
+  (1.5D, 8.5D), (0.5D, 0.5D), (0D, 10D), (10D, 5D)
+) AS t(x, y);
+"""
+
+
+rst_binpoints_partial_sql_example_output = """
++----+----+------+
+|x   |y   |px    |
++----+----+------+
+|1.5 |8.5 |{1, 1}|
+|0.5 |0.5 |{0, 9}|
+|0.0 |10.0|{0, 0}|
+|10.0|5.0 |NULL  |
++----+----+------+
+(px is STRUCT<col, row>)
+"""
+
+
+def rst_binpoints_finalize_sql_example():
+    """Write the reduced pixels of a points group into one single-band tile."""
+    return """
+-- Bin the points with rst_binpoints_partial, reduce each pixel with an ordinary GROUP BY
+-- (here the maximum), then write the occupied pixels as one tile.
+WITH b AS (
+  SELECT gbx_rst_binpoints_partial(x, y, 0D, 0D, 2D, 1D, 2, 1) AS px, z
+  FROM (VALUES (0.5D, 0.5D, 1D), (0.6D, 0.4D, 5D), (1.5D, 0.5D, 7D)) AS t(x, y, z)
+),
+c AS (
+  SELECT px.col AS col, px.row AS row, max(z) AS value
+  FROM b WHERE px IS NOT NULL
+  GROUP BY px.col, px.row
+)
+SELECT gbx_rst_binpoints_finalize(collect_list(struct(col, row, value)), 0D, 0D, 2D, 1D, 2, 1, 4326) AS tile
+FROM c;
+"""
+
+
+rst_binpoints_finalize_sql_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(a 2 x 1 Float32 tile in EPSG:4326: [5.0, 7.0])
+"""
+
+
+def rst_bng_rasterize_tvf_sql_example():
+    """Rasterize each key's BNG cells onto an explicit canvas, as a table function over TABLE(...) PARTITION BY."""
+    return """
+-- One tile per key: the canvas is 3 x 2 pixels of 1 km. A repeated cell burns its largest value.
+SELECT key, raster
+FROM gbx_rst_bng_rasterize_tvf(
+  TABLE(SELECT key, cellid, value FROM (VALUES
+    ('a', 'TQ3080', 1.0), ('a', 'TQ3080', 3.0), ('a', 'TQ3180', 2.0),
+    ('b', 'TQ3081', 4.0)
+  ) AS t(key, cellid, value)) PARTITION BY (key),
+  530000.0, 180000.0, 533000.0, 182000.0, 3, 2
+);
+"""
+
+
+rst_bng_rasterize_tvf_sql_example_output = """
++---+---------------+
+|key|raster         |
++---+---------------+
+|a  |[B@... (BINARY)|
+|b  |[B@... (BINARY)|
++---+---------------+
+(one GeoTIFF per key, Float64, NoData -9999, EPSG:27700)
+"""
+
+
+def rst_merge_tvf_sql_example():
+    """Merge each key's tiles into one mosaic, as a table function over TABLE(...) PARTITION BY."""
+    return """
+-- Two 2 x 2 tiles side by side under one key merge into one 4 x 2 mosaic.
+WITH tiles AS (
+  SELECT 'a' AS key,
+         gbx_rst_rasterize('POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))', 1.0, 0.0, 0.0, 2.0, 2.0, 2, 2, 4326) AS tile
+  UNION ALL
+  SELECT 'a',
+         gbx_rst_rasterize('POLYGON((2 0, 4 0, 4 2, 2 2, 2 0))', 2.0, 2.0, 0.0, 4.0, 2.0, 2, 2, 4326)
+)
+SELECT key, raster
+FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key));
+"""
+
+
+rst_merge_tvf_sql_example_output = """
++---+---------------+
+|key|raster         |
++---+---------------+
+|a  |[B@... (BINARY)|
++---+---------------+
+(one GeoTIFF mosaic per key: a 4 x 2 raster, [1, 1, 2, 2] in each row)
+"""

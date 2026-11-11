@@ -906,3 +906,44 @@ rst_width_python_example_output = """
 |236  |
 +-----+
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_stats_partial — the mergeable state of each band
+# Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands of 64 pixels)
+# ---------------------------------------------------------------------------
+
+
+def rst_stats_partial_python_example(spark):
+    """Give the mergeable state of each band of a tile, in one pass, using the light pyrx tier.
+
+    Reads the `multiband_rasters` Setup view (rgb_nir_small.tif, 3 bands). One row per
+    band holds `count`, `sum`, `m2`, `min` and `max`; the average is `sum / count` and the
+    standard deviation is `sqrt(m2 / count)`.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.table("multiband_rasters")
+    states = df.select(rx.rst_stats_partial("tile").alias("stats")).select(
+        f.inline("stats")
+    )
+    return states.select(
+        "band",
+        "count",
+        (f.col("sum") / f.col("count")).alias("avg"),
+        f.sqrt(f.col("m2") / f.col("count")).alias("stddev"),
+        "min",
+        "max",
+    ).collect()
+
+
+rst_stats_partial_python_example_output = """
++----+-----+--------+------------------+-----+-----+
+|band|count|avg     |stddev            |min  |max  |
++----+-----+--------+------------------+-----+-----+
+|1   |64.0 |83.59375|18.77641368679067 |50.0 |119.0|
+|2   |64.0 |153.125 |28.971160228751625|102.0|197.0|
+|3   |64.0 |114.3125|19.828069592121164|82.0 |148.0|
++----+-----+--------+------------------+-----+-----+
+"""

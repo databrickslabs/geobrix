@@ -1139,3 +1139,164 @@ def test_table_function_examples_resolve(
         df = spark.sql(stmt)
         if name in _EXECUTE:
             assert len(df.take(1)) == 1, stmt
+
+
+# ============================================================================
+# Partial states, array forms and key-partitioned table functions
+# ============================================================================
+
+_NODATA = -9999.0
+
+
+def _geotiff(content):
+    """(crs, pixels) of GeoTIFF bytes, read with rasterio; the pixels are the first band as a list of rows."""
+    import rasterio
+
+    raw = content["raster"] if hasattr(content, "asDict") else content
+    with rasterio.MemoryFile(bytes(raw)) as mem, mem.open() as ds:
+        assert ds.nodata == _NODATA
+        return ds.crs.to_string(), ds.read(1).tolist()
+
+
+def _rows(spark, sql):
+    """The rows of a one-statement example."""
+    ((_, stmt),) = rasterx_functions_sql._sql_statements(sql)
+    return spark.sql(stmt).collect()
+
+
+def test_rst_stats_partial_sql_example(spark, multiband_rasters_view):
+    """One row per band; the average is the one rst_avg gives, the count the pixels of the band."""
+    rows = _rows(spark, rasterx_functions_sql.rst_stats_partial_sql_example())
+    assert [r["band"] for r in rows] == [1, 2, 3]
+    assert all(r["count"] == 64.0 for r in rows)
+    expected = spark.sql("SELECT gbx_rst_avg(tile) AS a FROM multiband_rasters").first()["a"]
+    assert [r["avg"] for r in rows] == pytest.approx(expected)
+    assert all(r["min"] <= r["avg"] <= r["max"] and r["stddev"] > 0 for r in rows)
+
+
+_BOX_4326 = "POLYGON((-0.20 51.40, -0.10 51.40, -0.10 51.50, -0.20 51.50, -0.20 51.40))"
+_BOX_27700 = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+
+
+@pytest.mark.parametrize(
+    "grid, box, extent, srid, cells, args",
+    [
+        ("h3", _BOX_4326, "-0.20, 51.40, -0.10, 51.50", 4326, 8, "6"),
+        ("quadbin", _BOX_4326, "-0.20, 51.40, -0.10, 51.50", 4326, 4, "12"),
+        ("bng", _BOX_27700, "529000.0, 179000.0, 533000.0, 183000.0", 27700, 16, "3"),
+        (
+            "custom",
+            _BOX_27700,
+            "529000.0, 179000.0, 533000.0, 183000.0",
+            27700,
+            4,
+            f"{rasterx_functions_sql._CUSTOM_GRID_LITERAL}, 1",
+        ),
+    ],
+)
+def test_rastertogrid_partial_sql_examples(spark, grid, box, extent, srid, cells, args):
+    """Each cell's count is the one the count table function gives for the same tile, and the average is 1.0."""
+    sql = getattr(rasterx_functions_sql, f"rst_{grid}_rastertogrid_partial_sql_example")()
+    rows = _rows(spark, sql)
+    assert len(rows) == cells
+    assert all(r["avg"] == 1.0 and r["count"] > 0 for r in rows)
+    expected = {
+        r["cellID"]: r["measure"]
+        for r in spark.sql(
+            f"SELECT t.* FROM (SELECT gbx_rst_rasterize('{box}', 1.0, {extent}, 40, 40, {srid}) AS tile) r, "
+            f"LATERAL gbx_rst_{grid}_rastertogridcount(tile, {args}) t"
+        ).collect()
+    }
+    assert {r["cellid"]: r["count"] for r in rows} == expected
+
+
+def _agg_pixels(spark, sql):
+    return _geotiff(_rows(spark, sql)[0][0])
+
+
+def test_rst_bng_rasterize_sql_example(spark):
+    """The array form burns the larger value of a repeated cell and equals the aggregate's tile."""
+    crs, pixels = _geotiff(_rows(spark, rasterx_functions_sql.rst_bng_rasterize_sql_example())[0][0])
+    assert crs == "EPSG:27700"
+    assert pixels == [[4.0, _NODATA, _NODATA], [3.0, 2.0, _NODATA]]
+    agg = """
+        SELECT gbx_rst_bng_rasterize_agg(cellid, value, 27700, 1000.0, 530000.0, 180000.0, 533000.0, 182000.0,
+                                         3, 2, 'centroids', 0)
+        FROM (VALUES ('TQ3080', 1.0), ('TQ3080', 3.0), ('TQ3180', 2.0), ('TQ3081', 4.0)) AS t(cellid, value)
+    """
+    assert _agg_pixels(spark, agg + ";") == (crs, pixels)
+
+
+def test_rst_h3_rasterize_sql_example(spark):
+    crs, pixels = _geotiff(_rows(spark, rasterx_functions_sql.rst_h3_rasterize_sql_example())[0][0])
+    assert crs == "EPSG:4326"
+    assert pixels == [[2.0, _NODATA], [1.0, 3.0]]
+    agg = """
+        SELECT gbx_rst_h3_rasterize_agg(cellid, value, 4326, 0.01, 0.005, 0.005, 0.025, 0.025, 2, 2, 'centroids', 0)
+        FROM (VALUES (619056821909585919L, 1.0), (619056822407921663L, 2.0), (619056559519170559L, 3.0))
+             AS t(cellid, value)
+    """
+    assert _agg_pixels(spark, agg + ";") == (crs, pixels)
+
+
+def test_rst_quadbin_rasterize_sql_example(spark):
+    crs, pixels = _geotiff(_rows(spark, rasterx_functions_sql.rst_quadbin_rasterize_sql_example())[0][0])
+    assert crs == "EPSG:4326"
+    assert pixels == [[1.0, 2.0, 3.0]]
+    agg = """
+        SELECT gbx_rst_quadbin_rasterize_agg(cellid, value, 4326, 0.2, -0.4, 51.3, 0.2, 51.5, 3, 1, 'centroids', 0)
+        FROM (SELECT gbx_quadbin_pointascell(lon, lat, 12) AS cellid, value
+              FROM (VALUES (-0.30, 51.40, 1.0), (-0.10, 51.40, 2.0), (0.10, 51.40, 3.0)) AS p(lon, lat, value))
+    """
+    assert _agg_pixels(spark, agg + ";") == (crs, pixels)
+
+
+def test_rst_custom_rasterize_sql_example(spark):
+    crs, pixels = _geotiff(_rows(spark, rasterx_functions_sql.rst_custom_rasterize_sql_example())[0][0])
+    assert crs == "EPSG:27700"
+    assert pixels == [[3.0, _NODATA], [1.0, 2.0]]
+    grid = rasterx_functions_sql._CUSTOM_GRID_LITERAL
+    agg = f"""
+        SELECT gbx_rst_custom_rasterize_agg(cellid, value, {grid}, 27700, 2000.0, 529000.0, 179000.0, 533000.0,
+                                            183000.0, 2, 2, 'centroids', 0)
+        FROM (SELECT gbx_custom_pointascell(wkt, {grid}, 1) AS cellid, value
+              FROM (VALUES ('POINT(530000 180000)', 1.0), ('POINT(532000 180000)', 2.0),
+                           ('POINT(530000 182000)', 3.0)) AS p(wkt, value))
+    """
+    assert _agg_pixels(spark, agg + ";") == (crs, pixels)
+
+
+def test_rst_binpoints_partial_sql_example(spark):
+    """The key counts the column from the west and the row from the north; the east edge has none."""
+    rows = _rows(spark, rasterx_functions_sql.rst_binpoints_partial_sql_example())
+    got = {(r["x"], r["y"]): (None if r["px"] is None else (r["px"]["col"], r["px"]["row"])) for r in rows}
+    assert got == {(1.5, 8.5): (1, 1), (0.5, 0.5): (0, 9), (0.0, 10.0): (0, 0), (10.0, 5.0): None}
+
+
+def test_rst_binpoints_finalize_sql_example(spark):
+    """The tile is the one rst_binpoints_agg writes for the same points (maximum per pixel)."""
+    crs, pixels = _geotiff(_rows(spark, rasterx_functions_sql.rst_binpoints_finalize_sql_example())[0][0])
+    assert crs == "EPSG:4326"
+    assert pixels == [[5.0, 7.0]]
+    agg = """
+        SELECT gbx_rst_binpoints_agg(x, y, z, 0D, 0D, 2D, 1D, 2, 1, 4326, 'max')
+        FROM (VALUES (0.5D, 0.5D, 1D), (0.6D, 0.4D, 5D), (1.5D, 0.5D, 7D)) AS t(x, y, z)
+    """
+    assert _agg_pixels(spark, agg + ";") == (crs, pixels)
+
+
+def test_rst_bng_rasterize_tvf_sql_example(spark):
+    """One tile per key, each the tile the array form burns for that key's cells."""
+    rows = _rows(spark, rasterx_functions_sql.rst_bng_rasterize_tvf_sql_example())
+    by_key = {r["key"]: _geotiff(r["raster"]) for r in rows}
+    assert by_key == {
+        "a": ("EPSG:27700", [[_NODATA] * 3, [3.0, 2.0, _NODATA]]),
+        "b": ("EPSG:27700", [[4.0, _NODATA, _NODATA], [_NODATA] * 3]),
+    }
+
+
+def test_rst_merge_tvf_sql_example(spark):
+    """The two 2 x 2 tiles of one key merge into a 4 x 2 mosaic."""
+    rows = _rows(spark, rasterx_functions_sql.rst_merge_tvf_sql_example())
+    assert [r["key"] for r in rows] == ["a"]
+    assert _geotiff(rows[0]["raster"]) == ("EPSG:4326", [[1.0, 1.0, 2.0, 2.0], [1.0, 1.0, 2.0, 2.0]])

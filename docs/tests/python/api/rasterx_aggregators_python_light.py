@@ -760,3 +760,317 @@ rst_custom_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 (one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
 """
+
+
+# ---------------------------------------------------------------------------
+# Array forms and key-partitioned table functions
+#
+# rst_<grid>_rasterize        -- the scalar twin of rst_<grid>_rasterize_agg: one array of
+#                                (cellid, value) structs in, one GeoTIFF (BINARY) out
+# rst_binpoints_partial /     -- bin points in SQL, reduce each pixel with an ordinary
+# rst_binpoints_finalize         groupBy, write the pixels as one tile
+# rst_bng_rasterize_tvf /     -- one result per key of a DataFrame, as a table function
+# rst_merge_tvf                  over TABLE(...) PARTITION BY (key)
+# ---------------------------------------------------------------------------
+
+_CUSTOM_GRID_ARGS = (529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)
+
+
+def rst_bng_rasterize_python_example(spark):
+    """Rasterize an array of BNG cells into one tile (light pyrx tier).
+
+    Four cells with a repeated one: TQ3080 holds 1.0 and 3.0, so it burns the larger.
+    `collect_list(struct(cellid, value))` gathers the cells into one array. The canvas is
+    3 x 2 pixels of 1 km; `out_srid` is not read (the output is always EPSG:27700).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [("TQ3080", 1.0), ("TQ3080", 3.0), ("TQ3180", 2.0), ("TQ3081", 4.0)],
+        "cellid STRING, value DOUBLE",
+    )
+    result = df.agg(
+        rx.rst_bng_rasterize(
+            f.collect_list(f.struct("cellid", "value")),
+            27700, 1000.0, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, "centroids", 0,
+        ).alias("content")
+    ).first()
+    return result["content"]
+
+
+rst_bng_rasterize_python_example_output = """
++---------------+
+|content        |
++---------------+
+|<GeoTIFF bytes>|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:27700. Pixels, north row first:
+   [4.0, -9999, -9999]
+   [3.0,  2.0,  -9999])
+"""
+
+
+def rst_h3_rasterize_python_example(spark):
+    """Rasterize an array of H3 cells into one tile (light pyrx tier).
+
+    Three resolution-9 cells near (0.01, 0.01) with values 1.0, 2.0 and 3.0. The canvas is
+    2 x 2 pixels of 0.01 degrees; each cell burns its value at the pixel of its centroid.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            (619056821909585919, 1.0),
+            (619056822407921663, 2.0),
+            (619056559519170559, 3.0),
+        ],
+        "cellid BIGINT, value DOUBLE",
+    )
+    result = df.agg(
+        rx.rst_h3_rasterize(
+            f.collect_list(f.struct("cellid", "value")),
+            4326, 0.01, 0.005, 0.005, 0.025, 0.025, 2, 2, "centroids", 0,
+        ).alias("content")
+    ).first()
+    return result["content"]
+
+
+rst_h3_rasterize_python_example_output = """
++---------------+
+|content        |
++---------------+
+|<GeoTIFF bytes>|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:4326. Pixels, north row first:
+   [2.0,   -9999]
+   [1.0,    3.0 ])
+"""
+
+
+def rst_quadbin_rasterize_python_example(spark):
+    """Rasterize an array of quadbin cells into one tile (light pyrx tier).
+
+    Three zoom-12 cells over London with values 1.0, 2.0 and 3.0. The canvas is 3 x 1
+    pixels of 0.2 degrees; each cell burns its value at the pixel of its centroid.
+    """
+    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    gbx_register(spark, only=["gbx_quadbin_pointascell"])
+    points = spark.createDataFrame(
+        [(-0.30, 51.40, 1.0), (-0.10, 51.40, 2.0), (0.10, 51.40, 3.0)],
+        "lon DOUBLE, lat DOUBLE, value DOUBLE",
+    )
+    cells = points.select(
+        qx.quadbin_pointascell("lon", "lat", 12).alias("cellid"), "value"
+    )
+    result = cells.agg(
+        rx.rst_quadbin_rasterize(
+            f.collect_list(f.struct("cellid", "value")),
+            4326, 0.2, -0.4, 51.3, 0.2, 51.5, 3, 1, "centroids", 0,
+        ).alias("content")
+    ).first()
+    return result["content"]
+
+
+rst_quadbin_rasterize_python_example_output = """
++---------------+
+|content        |
++---------------+
+|<GeoTIFF bytes>|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:4326. Pixels: [1.0, 2.0, 3.0])
+"""
+
+
+def rst_custom_rasterize_python_example(spark):
+    """Rasterize an array of custom-grid cells into one tile (light pyrx tier).
+
+    Three 2 km cells (resolution 1) of a 4 km grid over London, with values 1.0, 2.0 and
+    3.0. The canvas is 2 x 2 pixels of 2 km; each cell burns its value at its centroid.
+    """
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+    from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    gbx_register(spark, only=["gbx_custom_grid", "gbx_custom_pointascell"])
+    grid = cx.custom_grid(*_CUSTOM_GRID_ARGS)
+    points = spark.createDataFrame(
+        [
+            ("POINT(530000 180000)", 1.0),
+            ("POINT(532000 180000)", 2.0),
+            ("POINT(530000 182000)", 3.0),
+        ],
+        "wkt STRING, value DOUBLE",
+    )
+    cells = points.select(
+        cx.custom_pointascell("wkt", grid, 1).alias("cellid"), "value"
+    )
+    result = cells.agg(
+        rx.rst_custom_rasterize(
+            f.collect_list(f.struct("cellid", "value")),
+            grid,
+            27700, 2000.0, 529000.0, 179000.0, 533000.0, 183000.0, 2, 2, "centroids", 0,
+        ).alias("content")
+    ).first()
+    return result["content"]
+
+
+rst_custom_rasterize_python_example_output = """
++---------------+
+|content        |
++---------------+
+|<GeoTIFF bytes>|
++---------------+
+(GeoTIFF bytes, Float64, NoData -9999, EPSG:27700. Pixels, north row first:
+   [3.0,   -9999]
+   [1.0,    2.0 ])
+"""
+
+
+def rst_binpoints_partial_python_example(spark):
+    """Give the canvas pixel each point falls in, as a (col, row) key (light pyrx tier).
+
+    A 10 x 10 canvas of 1 x 1 pixels. The column counts from the west and the row from the
+    north. A point on the east or south edge is in no pixel, so its key is NULL.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [(1.5, 8.5), (0.5, 0.5), (0.0, 10.0), (10.0, 5.0)], "x DOUBLE, y DOUBLE"
+    )
+    return df.select(
+        "x",
+        "y",
+        rx.rst_binpoints_partial("x", "y", 0.0, 0.0, 10.0, 10.0, 10, 10).alias("px"),
+    ).collect()
+
+
+rst_binpoints_partial_python_example_output = """
++----+----+------+
+|x   |y   |px    |
++----+----+------+
+|1.5 |8.5 |{1, 1}|
+|0.5 |0.5 |{0, 9}|
+|0.0 |10.0|{0, 0}|
+|10.0|5.0 |NULL  |
++----+----+------+
+(px is STRUCT<col, row>)
+"""
+
+
+def rst_binpoints_finalize_python_example(spark):
+    """Write the reduced pixels of a points group into one single-band tile (light pyrx tier).
+
+    Bin the points with `rst_binpoints_partial`, reduce each pixel with an ordinary
+    `groupBy` (here the maximum), then write the occupied pixels as one tile.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    points = spark.createDataFrame(
+        [(0.5, 0.5, 1.0), (0.6, 0.4, 5.0), (1.5, 0.5, 7.0)], "x DOUBLE, y DOUBLE, z DOUBLE"
+    )
+    binned = points.select(
+        rx.rst_binpoints_partial("x", "y", 0.0, 0.0, 2.0, 1.0, 2, 1).alias("px"), "z"
+    ).where(f.col("px").isNotNull())
+    pixels = binned.groupBy("px.col", "px.row").agg(f.max("z").alias("value"))
+    result = pixels.agg(
+        rx.rst_binpoints_finalize(
+            f.collect_list(f.struct("col", "row", "value")),
+            0.0, 0.0, 2.0, 1.0, 2, 1, 4326,
+        ).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_binpoints_finalize_python_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(a 2 x 1 Float32 tile in EPSG:4326: [5.0, 7.0])
+"""
+
+
+def rst_bng_rasterize_tvf_python_example(spark):
+    """Rasterize each key's BNG cells onto an explicit canvas, one tile per key (light pyrx tier).
+
+    The DataFrame holds the columns `key`, `cellid` and `value`; it is partitioned by `key`.
+    The canvas is 3 x 2 pixels of 1 km. A repeated cell burns its largest value.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            ("a", "TQ3080", 1.0),
+            ("a", "TQ3080", 3.0),
+            ("a", "TQ3180", 2.0),
+            ("b", "TQ3081", 4.0),
+        ],
+        "key STRING, cellid STRING, value DOUBLE",
+    )
+    return rx.rst_bng_rasterize_tvf(
+        df, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2
+    ).collect()
+
+
+rst_bng_rasterize_tvf_python_example_output = """
++---+---------------+
+|key|raster         |
++---+---------------+
+|a  |<GeoTIFF bytes>|
+|b  |<GeoTIFF bytes>|
++---+---------------+
+(one GeoTIFF per key, Float64, NoData -9999, EPSG:27700)
+"""
+
+
+def rst_merge_tvf_python_example(spark):
+    """Merge each key's tiles into one mosaic (light pyrx tier).
+
+    The DataFrame holds the columns `key` and `tile`; it is partitioned by `key`. Two 2 x 2
+    tiles side by side under one key merge into one 4 x 2 mosaic.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+
+    def tile(wkt, value, xmin, xmax):
+        return rx.rst_rasterize(
+            f.lit(wkt), f.lit(value), f.lit(xmin), f.lit(0.0), f.lit(xmax), f.lit(2.0),
+            f.lit(2), f.lit(2), f.lit(4326),
+        )
+
+    one = spark.range(1)
+    tiles = one.select(
+        f.lit("a").alias("key"),
+        tile("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))", 1.0, 0.0, 2.0).alias("tile"),
+    ).union(
+        one.select(
+            f.lit("a").alias("key"),
+            tile("POLYGON((2 0, 4 0, 4 2, 2 2, 2 0))", 2.0, 2.0, 4.0).alias("tile"),
+        )
+    )
+    return rx.rst_merge_tvf(tiles).collect()
+
+
+rst_merge_tvf_python_example_output = """
++---+---------------+
+|key|raster         |
++---+---------------+
+|a  |<GeoTIFF bytes>|
++---+---------------+
+(one GeoTIFF mosaic per key: a 4 x 2 raster, [1, 1, 2, 2] in each row)
+"""

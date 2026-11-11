@@ -38,7 +38,7 @@ Both models run `--warmup` untimed passes, then `--measured` timed passes. The r
 **Computes.** Compare times within one compute. The suite runs on:
 
 - **Dedicated** and **standard** clusters, where a fixed set of workers gives repeatable seconds.
-- **Serverless**, where workers scale with the job. Read a Serverless result as per-task behavior: a ratio to a floor or to a peer form, the shape across scales, and any per-task failure. Do not compare it with seconds from a fixed cluster.
+- **Serverless**, where workers scale with the job. Read a Serverless run for single-task time, per-task memory and per-task failures (out of memory) only. Do not compare forms, scales or computes from its job times, and do not compare it with seconds from a fixed cluster.
 - A **SQL warehouse**, for Unity Catalog functions.
 
 **Corpus.** The suite generates a seeded corpus of GeoTIFF tiles, with a manifest. `--tile-px`, `--bands`, `--dtypes`, `--srids` and `--nodata-frac` shape it. The row pool is generated once and reused by every level, so the levels compare fairly. Generate it on Databricks with `gbx:bench:gen-data --on-databricks`.
@@ -194,7 +194,7 @@ On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower.
 
 The same rule keeps the JVM form of every raster accessor that returns one value, by its return type. `gbx_rst_width` and `gbx_rst_boundingbox` are the measured ones. A function in that group runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was.
 
-On Serverless the table reports shape, not speed. These functions grow in step with the row count (3.7 to 3.9 per 4x rows): the BNG tessellates, `gbx_st_transformcrs`, `gbx_st_makevalid` and `gbx_st_triangulate`. At 16x they take 37 to 622 times their scan floor. Accessors, statistics, `gbx_rst_fromcontent`, `gbx_rst_cog_convert` and `gbx_rst_proximity` grow less than the row count, because Serverless adds workers. The grouped merge of tiles with bytes fails at every size tried, and the by-reference form runs.
+On Serverless, the grouped merge of tiles with bytes failed at every size tried, and the by-reference form ran. Read this as a per-task failure, not as a timing.
 
 ### Raster read
 
@@ -378,43 +378,43 @@ The format sets the limit, not GeoBrix. 14M box polygons sits near the Shapefile
 
 ### Geometry-aware expansion at scale (`geomkring`, `geomkloop`) {#geomk-at-scale}
 
-The geometry-aware functions grow grid rings outward from a geometry's covering set. This benchmark measures how the cost grows with the number of geometries *N* and the ring distance *k*. The inputs are synthetic building footprints. They come in five shapes (rectangle, L, U, courtyard with a hole, irregular) and three sizes (about 15, 50 and 200 m). They are scattered over a city-scale extent, so each building lands on its own cells.
+The geometry-aware functions grow grid rings outward from a geometry's covering set. This section shows how the output grows with the number of geometries *N* and the ring distance *k*. The inputs are synthetic building footprints. They come in five shapes (rectangle, L, U, courtyard with a hole, irregular) and three sizes (about 15, 50 and 200 m). They are scattered over a city-scale extent, so each building lands on its own cells.
 
-> **Environment:** Databricks Serverless, environment 6 · `geomkring` and `geomkloop`, `boundary-out` · best of 3 warm runs of a full distributed aggregate (`sum(size(cells))`). Target cell size about 65 m: H3 resolution 10, quadbin 19, custom 65 m root cell, BNG resolution 4 (100 m, the nearest BNG step). H3 and quadbin use WGS84. Custom and BNG use EPSG:27700. Serverless wall-clock varies with autoscaling, so read the order and the size, not the last digit.
+> **Inputs:** `geomkring` and `geomkloop`, `boundary-out`. Target cell size about 65 m: H3 resolution 10, quadbin 19, custom 65 m root cell, BNG resolution 4 (100 m, the nearest BNG step). H3 and quadbin use WGS84. Custom and BNG use EPSG:27700. The figures are cell counts, which do not depend on the compute. No seconds are reported, because a Serverless job time depends on the workers it got.
 
-**Headline.** 10,000 footprints, H3 resolution 10, `geomkring` with `boundary-out` and `k=10` took about 7.9 s. It produced 3,573,051 cells, about 1,260 buildings/s.
+**Headline.** 10,000 footprints, H3 resolution 10, `geomkring` with `boundary-out` and `k=10` produce 3,573,051 cells.
 
-Across grids (10,000 buildings, `k=10`, `geomkring`):
+Cells across grids (10,000 buildings, `k=10`, `geomkring`):
 
-| Grid | Resolution (about 65 m cell) | Wall (s) | Cells | Buildings/s | Cells/s |
-|---|---|---|---|---|---|
-| H3 | Resolution 10 | 7.9 | 3,573,051 | 1,264 | 452k |
-| Custom | 65 m root (EPSG:27700) | 14.6 | 3,651,174 | 685 | 250k |
-| Quadbin | Resolution 19 | 41.5 | 4,951,123 | 241 | 119k |
-| BNG | Resolution 4 (100 m) | 52.3 | 4,762,643 | 191 | 91k |
+| Grid | Resolution (about 65 m cell) | Cells |
+|---|---|---|
+| H3 | Resolution 10 | 3,573,051 |
+| Custom | 65 m root (EPSG:27700) | 3,651,174 |
+| Quadbin | Resolution 19 | 4,951,123 |
+| BNG | Resolution 4 (100 m) | 4,762,643 |
 
-H3 is fastest. Its polyfill uses the C-backed `polygon_to_cells_experimental`, and its neighbor step is integer index math. Custom is a pure-Python lattice walk. Quadbin and BNG carry more work per cell. Cell sizes and CRS differ per grid, so compare the order, not each cell.
+H3 polyfill uses the C-backed `polygon_to_cells_experimental`, and its neighbor step is integer index math. Custom is a pure-Python lattice walk. Cell sizes and CRS differ per grid, so the cell counts differ.
 
 Ring distance *k* (H3, 10,000 buildings):
 
-| k | `geomkring` (s) | Ring cells | `geomkloop` (s) | Loop cells |
-|---|---|---|---|---|
-| 1 | 3.03 | 113,181 | 3.02 | 84,430 |
-| 5 | 4.25 | 1,050,901 | 4.48 | 324,430 |
-| 10 | 7.9 | 3,573,051 | 7.88 | 624,430 |
+| k | Ring cells | Loop cells |
+|---|---|---|
+| 1 | 113,181 | 84,430 |
+| 5 | 1,050,901 | 324,430 |
+| 10 | 3,573,051 | 624,430 |
 
-The filled ring grows with about *k* squared. The hollow loop grows with about *k*. At *k*=10 the loop emits about 6x fewer cells. Wall-clock follows the frontier work, plus a per-building polyfill cost that dominates at small *k*.
+The filled ring grows with about *k* squared. The hollow loop grows with about *k*. At *k*=10 the loop emits about 6x fewer cells.
 
 Number of geometries *N* (H3 resolution 10, `boundary-out`, *k*=10):
 
-| Buildings (N) | Wall (s) | Cells | Buildings/s |
-|---|---|---|---|
-| 100 | 0.94 | 35,774 | 106 |
-| 1,000 | 2.63 | 357,031 | 380 |
-| 10,000 | 7.9 | 3,573,051 | 1,264 |
-| 100,000 | 71.5 | 35,733,305 | 1,400 |
+| Buildings (N) | Cells |
+|---|---|
+| 100 | 35,774 |
+| 1,000 | 357,031 |
+| 10,000 | 3,573,051 |
+| 100,000 | 35,733,305 |
 
-Throughput scales about linearly. 100,000 footprints expand to 35.7M cells in about 72 s. Buildings/s rises with *N* as the fixed job overhead amortizes, and plateaus near 1,400.
+The cell count grows linearly with *N*. 100,000 footprints expand to 35.7M cells.
 
 On courtyard footprints (buildings with an interior hole), `hole-in` with *k*=5 over 1,000 buildings emits 1,796 cells. They expand inward from each hole's edge.
 

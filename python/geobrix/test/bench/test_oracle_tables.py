@@ -1015,3 +1015,130 @@ def test_the_triangle_oracle_judges_ring_order_and_lets_a_degenerate_ring_throug
     assert "want" in judge(
         flat, [(0.0, 0.0), (3.0, 0.0), (1.0, 0.0)]
     )  # other vertices: still red
+
+
+class _SqlSpy:
+    """The session, recording each SQL text it runs (to see the batch's one UNION ALL)."""
+
+    def __init__(self, spark):
+        self._spark, self.texts = spark, []
+
+    def sql(self, text, *a, **k):
+        self.texts.append(text)
+        return self._spark.sql(text, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._spark, name)
+
+
+def _batched_vs_alone(monkeypatch, runner, spark, cases, **kw):
+    """``runner`` batched and alone on ``cases``: ({batch: [(cid, green)]}, the cids the batch ran alone, the batch
+    queries' SQL texts)."""
+    from databricks.labs.gbx.bench import oracles
+
+    real, alone = getattr(oracles, runner), []
+
+    def spy(s, cs, *a, **k):
+        if not k.get("batch"):
+            alone.extend(c.cid for c in cs)
+        return real(s, cs, *a, **k)
+
+    monkeypatch.setattr(oracles, runner, spy)
+    sql = _SqlSpy(spark)
+    got = {}
+    for batch in (True, False):
+        alone.clear()
+        got[batch] = [
+            (c.cid, m is None) for c, m in real(sql, cases, batch=batch, **kw)
+        ]
+        if batch:
+            ran_alone = list(alone)
+    return got, ran_alone, [t for t in sql.texts if "_gbx_oracle_b" in t]
+
+
+def test_a_batched_generator_run_gives_each_case_its_alone_verdict_and_reruns_only_red_ones(
+    spark, tmp_path, monkeypatch
+):
+    """Two generators in one UNION ALL (an answer column per function), through SQL and the DataFrame-first API: the
+    verdicts match the alone run, and only the case red in the batch (plus the refusals, which never batch) runs alone.
+    """
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    names = ("gbx_bng_kringexplode", "gbx_bng_kloopexplode")
+    register(spark, only=list(names), _levels={n: ("L3", "-") for n in names})
+    cases = [
+        c
+        for c in oracles.TABLES["GRID_GENERATOR"]
+        if c.fn in names and "session" in c.surfaces
+    ]
+    rows = next(c for c in cases if c.kind == "cell_rows")
+    wrong = dataclasses.replace(rows, cid="krings_wrong", expect=[1])
+    cases.append(wrong)
+    refusals = {c.cid for c in cases if c.kind in oracles._ALONE_KINDS}
+    man = manifest.load()
+    for table_of in (None, lambda f: manifest.resolve_ref(man.functions[f].python.ref)):
+        got, alone, batch_sql = _batched_vs_alone(
+            monkeypatch,
+            "run_rows",
+            spark,
+            cases,
+            tmpdir=str(tmp_path),
+            table_of=table_of,
+        )
+        assert got[True] == got[False]
+        assert dict(got[True])["krings_wrong"] is False
+        assert sum(ok for _, ok in got[True]) == len(cases) - 1
+        assert set(alone) == refusals | {"krings_wrong"}, alone
+        if table_of is None:
+            # one query for both functions: a branch each, each with its own answer column
+            assert len(batch_sql) == 1 and batch_sql[0].count(" UNION ALL ") == 1
+            assert "struct(t.*) AS o0, NULL AS o1" in batch_sql[0]
+            assert "NULL AS o0, struct(t.*) AS o1" in batch_sql[0]
+
+
+def test_a_batched_aggregate_run_groups_by_case_and_reruns_only_red_ones(
+    spark, tmp_path, monkeypatch
+):
+    """Aggregate cases grouped by case in one query (GROUP BY _gbx_case), through SQL and the Column API: the
+    verdicts match the alone run, and only the case red in the batch runs alone."""
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    names = ("gbx_st_coverageisvalid", "gbx_st_coverageinvalidedges")
+    register(spark, only=list(names), _levels={n: ("L3", "c0") for n in names})
+    cases = [
+        c
+        for c in oracles.TABLES["VECTOR_AGGREGATE"]
+        if c.fn in names and "session" in c.surfaces
+    ]
+    exact = next(c for c in cases if c.fn == names[0] and c.kind == "exact")
+    wrong = dataclasses.replace(exact, cid="coverage_wrong", expect=not exact.expect)
+    cases.append(wrong)
+    man = manifest.load()
+    for column_of in (
+        None,
+        lambda f: manifest.resolve_ref(man.functions[f].python.ref),
+    ):
+        got, alone, batch_sql = _batched_vs_alone(
+            monkeypatch,
+            "run_groups",
+            spark,
+            cases,
+            tmpdir=str(tmp_path),
+            column_of=column_of,
+        )
+        assert got[True] == got[False]
+        assert dict(got[True])["coverage_wrong"] is False
+        assert sum(ok for _, ok in got[True]) == len(cases) - 1, got[True]
+        assert alone == ["coverage_wrong"]
+        if column_of is None:
+            assert len(batch_sql) == 1 and " UNION ALL " in batch_sql[0]
+            assert (
+                batch_sql[0].count("GROUP BY _gbx_case")
+                == batch_sql[0].count(" UNION ALL ") + 1
+            )

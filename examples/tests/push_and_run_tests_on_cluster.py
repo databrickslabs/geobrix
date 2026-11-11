@@ -606,21 +606,32 @@ def _unpack(repo):
         os.remove(co + "/res.tar.gz")
     # some tests ask git for the checkout's root, HEAD or its files (git ls-files, ls-tree): the tarball has no history, so make it
     # a one-commit repository that holds every file, as the commit under test does
-    os.system("cd %%s && git init -q && git add -A -f && git -c user.name=gbx -c user.email=gbx@example.com commit -q -m run >/dev/null 2>&1" %% repo)
+    for cmd in (["init", "-q"], ["add", "-A", "-f"], ["-c", "user.name=gbx", "-c", "user.email=gbx@example.com", "commit", "-q", "-m", "run"]):
+        _git(repo, *cmd)
 
 
-def _reset(repo):  # what the runner's last chunk wrote into the tree goes; the JAR in lib/ stays
-    return os.system("cd %%s && git clean -fdxq -e python/geobrix/lib/ && git checkout -q -- ." %% repo) == 0
+def _git(repo, *args):  # safe.directory: a later chunk may run as another user than the one that made the tree
+    import subprocess
+
+    return subprocess.run(["git", "-c", "safe.directory=*", "-C", repo, *args], capture_output=True, text=True)
+
+
+def _reset(repo):  # what the runner's last chunk wrote into the tree goes; the JAR in lib/ stays. True, or what failed
+    for cmd in (["clean", "-fdxq", "-e", "python/geobrix/lib/"], ["checkout", "-q", "--", "."]):
+        r = _git(repo, *cmd)
+        if r.returncode != 0:
+            return "git %%s: rc %%s %%s" %% (cmd[0], r.returncode, (r.stderr or r.stdout).strip()[-160:])
+    return True
 
 
 t_co = time.time()
-CHECKOUT, repo = node_checkout(base, RUNNER or SLUG, {"tarball": PLAN["tarball"], "resources": (PLAN.get("resources") or {}).get("tree", "")},
-                               _unpack, _reset)
+CHECKOUT, repo, CHECKOUT_WHY = node_checkout(base, RUNNER or SLUG, {"tarball": PLAN["tarball"], "resources": (PLAN.get("resources") or {}).get("tree", "")},
+                                             _unpack, _reset)
 CHECKOUT_S = round(time.time() - t_co, 1)
-print("checkout:", CHECKOUT, "for runner", RUNNER or "-", "in", CHECKOUT_S, "s:", repo, flush=True)
+print("checkout:", CHECKOUT, "for runner", RUNNER or "-", "in", CHECKOUT_S, "s:", repo, ("(" + CHECKOUT_WHY + ")") if CHECKOUT_WHY else "", flush=True)
 try:  # said at once, beside child.json: a chunk that fails later (the wheel guard, before pytest) still says how it got its tree
     with open(STAGE + "/out/" + SLUG + "/checkout.json", "w") as _f:
-        json.dump({"checkout": CHECKOUT, "checkout_s": CHECKOUT_S, "runner": RUNNER, "repo": repo}, _f)
+        json.dump({"checkout": CHECKOUT, "checkout_s": CHECKOUT_S, "runner": RUNNER, "repo": repo, "not_reused": CHECKOUT_WHY, "uid": os.getuid()}, _f)
 except OSError:
     pass
 pkg = repo + "/python/geobrix"

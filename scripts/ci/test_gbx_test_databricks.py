@@ -875,7 +875,7 @@ def test_the_tarball_carries_every_committed_file_the_tests_read():
 
 def test_the_node_checkout_is_a_repository_that_holds_every_file(shards):
     src = _cell_source(shards)
-    assert "git add -A -f" in src and "--allow-empty" not in src, "git ls-files / ls-tree HEAD see the files, as in the commit under test"
+    assert '["add", "-A", "-f"]' in src and "--allow-empty" not in src, "git ls-files / ls-tree HEAD see the files, as in the commit under test"
 
 
 def test_a_runner_unpacks_the_checkout_once_and_its_later_chunks_reuse_it(tmp_path):
@@ -895,14 +895,32 @@ def test_a_runner_unpacks_the_checkout_once_and_its_later_chunks_reuse_it(tmp_pa
     assert [g[0] for g in got] == ["unpacked", "reused", "reused"] and len(unpacked) == 1, "one unpack per runner"
     assert len({g[1] for g in got}) == 1 and len(resets) == 2, "each later chunk resets the same tree"
     assert sr.node_checkout(str(tmp_path), "r1", want, unpack, reset)[0] == "unpacked", "another runner has a tree of its own"
-    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, reset)[0] == "unpacked", "another launch unpacks again"
-    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, lambda repo: False)[0] == "unpacked", \
-        "a tree that cannot be reset is unpacked afresh"
+    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, reset)[::2] == ("unpacked", "another launch's tree")
+    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, lambda repo: "git clean: rc 128")[::2] == \
+        ("unpacked", "reset failed: git clean: rc 128"), "a tree that cannot be reset is unpacked afresh, and says why"
+
+
+def test_the_shard_cells_git_reset_brings_a_used_tree_back_to_its_commit(shards, tmp_path):
+    src = _cell_source(shards)
+    head = src[src.index("def _unpack(repo):"): src.index("t_co = time.time()")]
+    ns = {"os": os, "shutil": __import__("shutil"), "tarfile": __import__("tarfile"), "PLAN": {}}
+    exec(compile(textwrap.dedent(head), "reset", "exec"), ns)  # noqa: S102
+    repo = tmp_path / "repo"
+    (repo / "python/geobrix/lib").mkdir(parents=True)
+    (repo / "a.py").write_text("a")
+    for cmd in (["init", "-q"], ["add", "-A", "-f"], ["-c", "user.name=t", "-c", "user.email=t@x", "commit", "-q", "-m", "c"]):
+        assert ns["_git"](str(repo), *cmd).returncode == 0
+    (repo / "a.py").write_text("changed by a chunk")
+    (repo / "spark-warehouse").mkdir()
+    (repo / "python/geobrix/lib/g.jar").write_text("jar")
+    assert ns["_reset"](str(repo)) is True
+    assert (repo / "a.py").read_text() == "a" and not (repo / "spark-warehouse").exists() and (repo / "python/geobrix/lib/g.jar").exists()
+    assert "rc" in str(ns["_reset"](str(tmp_path / "absent"))), "a failed reset says what failed"
 
 
 def test_the_shard_cell_takes_its_checkout_from_the_runner_and_says_which(shards):
     src = _cell_source(shards)
-    assert "def node_checkout(" in src and "node_checkout(base," in src and "git clean -fdxq" in src
+    assert "def node_checkout(" in src and "node_checkout(base," in src and '"clean", "-fdxq"' in src
     assert 'checkout=CHECKOUT' in src, "the result says whether the chunk unpacked or reused the checkout"
     assert src.index('"/checkout.json"') < src.index("run_guard("), "said before the wheel guard, which may fail the chunk"
     ns = {}

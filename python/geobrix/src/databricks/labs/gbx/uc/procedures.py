@@ -580,10 +580,22 @@ DECLARE v_lvl INT DEFAULT 1;
 # op -> (the partial tile columns, the combine function of level 1 per column, of the levels above per column, the final
 # expression over the partials or None when p1 is the result). The members of avg and stddev are cast to Float64 first
 # (a sum in the member type wraps: eight uint8 tiles of 200). The partials of stddev are the count A, the sum B and the
-# sum of squares C: the population standard deviation is sqrt(C / A - (B / A) ^ 2), the combinestddev of the session.
-# The expressions are gbx_rst_mapalgebra's, so they use GDAL's muparser grammar (`^` is the power).
+# centred sum of squares C (sum of (x - mean)^2): the population standard deviation is sqrt(C / A), the combinestddev
+# of the session. The expressions are gbx_rst_mapalgebra's, so they use GDAL's muparser grammar (`^` is the power).
+#
+# Why not the plain sum of squares: gbx_rst_mapalgebra computes in double but writes Float32, so a square of a value
+# near 100 is rounded by about 5e-4, and sqrt(C / A - (B / A) ^ 2) turns that into 0.02 where the deviation is 0 (a pixel
+# with one valid member). Every stored partial of stddev is of the size of the spread, not of the square of the value:
+#   level 1:      C = A * sd ^ 2, sd the bucket's gbx_rst_combinestddev of its Float64 members (exact);
+#   levels above: A and B are summed; C = sum of the C's + sum of A_i * (B_i / A_i - B / A) ^ 2 (the spread of the
+#                 bucket means), each term over Float64 counts and sums.
 _COMBINE_OPS = ("avg", "sum", "count", "min", "max", "stddev")
-_EXPR = {"avg": "B / A", "stddev": "sqrt(abs(C / A - (B / A) ^ 2))"}
+_EXPR = {"avg": "B / A", "stddev": "sqrt(C / A)"}
+_SD_M2 = (
+    "A * B ^ 2"  # the centred sum of squares of a bucket: its count times its variance
+)
+_SD_BETWEEN = "A * (B / A - D / C) ^ 2"  # a bucket's (count A, sum B) about the merged (count C, sum D)
+_SD_ADD = "A + B"
 
 
 def _combine_level1(q: str, op: str) -> str:  # members per call: COMBINE_FAN_IN
@@ -594,7 +606,7 @@ def _combine_level1(q: str, op: str) -> str:  # members per call: COMBINE_FAN_IN
         fn = "combinecount" if op == "count" else f"combine{op}"
         sel = f"SELECT tile_key, 1, bucket, {q}.gbx_rst_{fn}(collect_list(tile)) AS p1\nFROM (\n{ranked}\n) GROUP BY tile_key, bucket"
     else:
-        # u is the member as Float64, made once per member; for stddev sq is its square (Float32 from the map algebra)
+        # u is the member as Float64, made once per member; for stddev the bucket's deviation sd is exact (Float64)
         cast = f"{q}.gbx_rst_updatetype(tile, 'Float64') AS u"
         inner = f"SELECT tile_key, bucket, {cast}\nFROM (\n{ranked}\n)"
         if op == "avg":
@@ -604,17 +616,47 @@ def _combine_level1(q: str, op: str) -> str:  # members per call: COMBINE_FAN_IN
                 f"FROM (\n{inner}\n) GROUP BY tile_key, bucket"
             )
         else:
-            sq = f"{q}.gbx_rst_mapalgebra(array(u), 'A * A') AS sq"
+            m2 = f"{q}.gbx_rst_mapalgebra(array(p1, sd), {ddl.quote_str(_SD_M2)}) AS p3"
             sel = (
-                f"SELECT tile_key, 1, bucket, {q}.gbx_rst_combinecount(collect_list(u)) AS p1,\n"
-                f"  {q}.gbx_rst_combinesum(collect_list(u)) AS p2, {q}.gbx_rst_combinesum(collect_list(sq)) AS p3\n"
-                f"FROM (SELECT tile_key, bucket, u, {sq}\nFROM (\n{inner}\n)) GROUP BY tile_key, bucket"
+                f"SELECT tile_key, 1, bucket, p1, p2, {m2}\n"
+                f"FROM (SELECT tile_key, bucket, {q}.gbx_rst_combinecount(collect_list(u)) AS p1,\n"
+                f"  {q}.gbx_rst_combinesum(collect_list(u)) AS p2, {q}.gbx_rst_combinestddev(collect_list(u)) AS sd\n"
+                f"FROM (\n{inner}\n) GROUP BY tile_key, bucket)"
             )
     return f"INSERT INTO IDENTIFIER(v_scratch) ({cols})\n{sel};"
 
 
+def _stddev_next(q: str) -> str:
+    """A level above the first for stddev: the counts and sums of the buckets are summed (m), each bucket's mean is
+    taken about the merged mean (t), and the centred sums of squares add up with that spread (see _COMBINE_OPS).
+    """
+    ranked = _ranked(
+        "p1, p2, p3", "IDENTIFIER(v_scratch)", "bucket", COMBINE_FAN_IN
+    ).replace(
+        "  FROM IDENTIFIER(v_scratch)\n",
+        "  FROM IDENTIFIER(v_scratch) WHERE lvl = v_lvl\n",
+    )
+    between = f"{q}.gbx_rst_mapalgebra(array(r.p1, r.p2, m.c, m.s), {ddl.quote_str(_SD_BETWEEN)})"
+    add = f"{q}.gbx_rst_mapalgebra(array(w, b), {ddl.quote_str(_SD_ADD)})"
+    return (
+        "INSERT INTO IDENTIFIER(v_scratch) (tile_key, lvl, bucket, p1, p2, p3)\n"
+        f"SELECT tile_key, v_lvl + 1, bucket, c, s, {add}\nFROM (\n"
+        f"SELECT tile_key, bucket, any_value(c) AS c, any_value(s) AS s, {q}.gbx_rst_combinesum(collect_list(p3)) AS w,\n"
+        f"  {q}.gbx_rst_combinesum(collect_list(tb)) AS b\nFROM (\n"
+        f"SELECT r.tile_key, r.bucket, r.p3, m.c, m.s, {between} AS tb\n"
+        f"FROM (\n{ranked}\n) AS r\nJOIN (\n"
+        f"SELECT tile_key, bucket, {q}.gbx_rst_combinesum(collect_list(p1)) AS c, {q}.gbx_rst_combinesum(collect_list(p2)) AS s\n"
+        f"FROM (\n{ranked}\n) GROUP BY tile_key, bucket\n"
+        ") AS m ON r.tile_key <=> m.tile_key AND r.bucket = m.bucket\n"
+        ") GROUP BY tile_key, bucket\n"
+        ");"
+    )
+
+
 def _combine_next(q: str, op: str) -> str:
-    parts = {"avg": 2, "stddev": 3}.get(op, 1)
+    if op == "stddev":
+        return _stddev_next(q)
+    parts = {"avg": 2}.get(op, 1)
     cols = "tile_key, lvl, bucket, " + ", ".join(f"p{i}" for i in range(1, parts + 1))
     fn = {
         "sum": "combinesum",
@@ -654,7 +696,7 @@ def _chain(statements: Dict[str, str]) -> str:
 def combine_by_key(catalog: str, schema: str) -> str:
     _need(
         "gbx_rst_combinesum", "gbx_rst_combinecount", "gbx_rst_combinemin", "gbx_rst_combinemax",
-        "gbx_rst_updatetype", "gbx_rst_mapalgebra",
+        "gbx_rst_combinestddev", "gbx_rst_updatetype", "gbx_rst_mapalgebra",
     )  # fmt: skip
     q = _q(catalog, schema)
     fix = (
@@ -922,6 +964,7 @@ CALLS: Dict[str, Tuple[str, ...]] = {
         "gbx_rst_combinecount",
         "gbx_rst_combinemin",
         "gbx_rst_combinemax",
+        "gbx_rst_combinestddev",
         "gbx_rst_updatetype",
         "gbx_rst_mapalgebra",
     ),

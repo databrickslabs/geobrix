@@ -1,14 +1,17 @@
 """``gbx_combine_by_key``: the ops, the combine function of each level, the final division, and the algebra of the partial
-tiles (count, sum, sum of squares) run on the real Python cores against the single combine of all members.
+tiles (count, sum, and for stddev the centred sum of squares) run on the real Python cores against the single combine of
+all members.
 
-Fail-on-revert check: the partial tiles. A wrong denominator, a missing cast to Float64 or a sum of squares taken
-without the count makes ``test_the_partial_tiles_combine_to_what_the_session_combine_returns`` fail.
+Fail-on-revert check: the partial tiles. A wrong denominator, a missing cast to Float64 or a spread of the bucket means
+left out makes ``test_the_partial_tiles_combine_to_what_the_session_combine_returns`` fail.
 """
 
 import re
 
 import numpy as np
 import pytest
+
+from databricks.labs.gbx.uc import procedures
 
 from .test_uc_procedures_tree import _bucket_formula
 from .test_uc_procedures_tree import _text as _tree_text
@@ -77,14 +80,28 @@ def test_each_op_uses_its_combine_function_at_every_level():
     # a count is a count at the first level and a sum of counts above it
     assert f"{q}gbx_rst_combinecount(collect_list(tile)) AS p1" in first["count"]
     assert f"{q}gbx_rst_combinesum(collect_list(p1)) AS p1" in upper["count"]
-    # avg and stddev carry floating-point partials (count, sum[, sum of squares]); the members are cast first
-    for op, parts in (("avg", 2), ("stddev", 3)):
+    # avg and stddev carry floating-point partials (count, sum[, centred sum of squares]); the members are cast first
+    for op in ("avg", "stddev"):
         assert "gbx_rst_updatetype(tile, 'Float64')" in first[op]
-        for p in range(1, parts + 1):
-            assert f"collect_list(p{p})) AS p{p}" in upper[op]
-        assert f"p{parts + 1}" not in upper[op]
-    assert "gbx_rst_mapalgebra(array(u), 'A * A')" in first["stddev"]
+    for p in (1, 2):
+        assert f"collect_list(p{p})) AS p{p}" in upper["avg"]
+    assert "p3" not in upper["avg"]
     assert "combinecount(collect_list(u))" in first["avg"]
+    # stddev: no square is stored (gbx_rst_mapalgebra writes Float32); the bucket's exact deviation makes its centred
+    # sum of squares, and a level above adds the spread of the bucket means about the merged mean
+    assert "'A * A'" not in first["stddev"]
+    assert f"{q}gbx_rst_combinestddev(collect_list(u)) AS sd" in first["stddev"]
+    assert (
+        f"gbx_rst_mapalgebra(array(p1, sd), '{procedures._SD_M2}') AS p3"
+        in first["stddev"]
+    )
+    assert (
+        f"gbx_rst_mapalgebra(array(r.p1, r.p2, m.c, m.s), '{procedures._SD_BETWEEN}') AS tb"
+        in upper["stddev"]
+    )
+    assert f"gbx_rst_mapalgebra(array(w, b), '{procedures._SD_ADD}')" in upper["stddev"]
+    for p in ("p1", "p2", "p3", "tb"):
+        assert f"collect_list({p}))" in upper["stddev"]
 
 
 def _final_expr(op):
@@ -96,7 +113,7 @@ def _final_expr(op):
 
 def test_the_final_step_divides_the_partials_and_leaves_the_others_as_they_are():
     assert _final_expr("avg") == "B / A"
-    assert _final_expr("stddev") == "sqrt(abs(C / A - (B / A) ^ 2))"
+    assert _final_expr("stddev") == "sqrt(C / A)"
     for op in ("sum", "count", "min", "max"):
         assert _final_expr(op) is None
 
@@ -183,14 +200,20 @@ def _tree(op, tiles):
             u = [r[0] for r in g]
             parts = [agg.combine_count_tiles(u), agg.combine_sum_tiles(u)]
             if op == "stddev":
-                sq = [_mapalgebra([x], "A * A") for x in u]
-                parts.append(agg.combine_sum_tiles(sq))
+                sd = agg.combine_stddev_tiles(u)
+                parts.append(_mapalgebra([parts[0], sd], procedures._SD_M2))
             return tuple(parts)
 
         def up(g):
-            return tuple(
+            sums = tuple(
                 agg.combine_sum_tiles([r[p] for r in g]) for p in range(len(g[0]))
             )
+            if op != "stddev":
+                return sums
+            c, s = sums[0], sums[1]
+            tb = [_mapalgebra([r[0], r[1], c, s], procedures._SD_BETWEEN) for r in g]
+            spread = agg.combine_sum_tiles(tb)
+            return c, s, _mapalgebra([sums[2], spread], procedures._SD_ADD)
 
     first, depth = True, 0
     while len(rows) > 1:
@@ -253,3 +276,30 @@ def test_an_avg_without_the_float_cast_would_not_match_the_session_on_wide_sums(
     assert np.allclose(
         _pixels(agg.combineavg_tiles(tiles)), 200.0
     )  # the session mean is not
+
+
+@pytest.mark.parametrize("n", [4, 9, 23])
+def test_a_stddev_of_real_values_matches_the_session_where_few_members_have_data(n):
+    """Values near 100 with many holes: a pixel with one valid member has a standard deviation of 0. Found on Unity
+    Catalog: with a sum of squares from Float32 squares (gbx_rst_mapalgebra writes Float32), such a pixel came out as
+    0.021, and the others drifted by 1e-4. The tree carries the count, the sum and the centred sum of squares instead.
+    """
+    from databricks.labs.gbx.engine import run
+
+    if run.unavailable_reason():
+        pytest.skip(
+            f"the levels call gbx_rst_mapalgebra, the GDAL spec engine: {run.unavailable_reason()}"
+        )
+    rng = np.random.default_rng(n)
+    tiles = []
+    for _ in range(n):
+        arr = rng.normal(100.0, 15.0, size=(8, 8))
+        arr[rng.random((8, 8)) < 0.5] = -9999.0
+        tiles.append(arr)
+    tiles[0][1, 1] = 123.456789  # one member alone has data here
+    for t in tiles[1:]:
+        t[1, 1] = -9999.0
+    got, want = _pixels(_tree("stddev", tiles)), _pixels(_flat("stddev", tiles))
+    assert np.array_equal(np.isnan(got), np.isnan(want))
+    assert got[1, 1] == 0.0
+    np.testing.assert_allclose(got, want, rtol=1e-6, atol=1e-5, equal_nan=True)

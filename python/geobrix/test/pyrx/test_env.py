@@ -152,9 +152,15 @@ def test_no_module_caps_the_block_cache_through_a_rasterio_env():
     import pathlib
 
     src = pathlib.Path(_env.__file__).parents[1]  # .../databricks/labs/gbx
+    # the wheel's copy of rasterio and osgeo sits under _vendor on a node: not GeoBrix's code
+    mine = [
+        path
+        for path in sorted(src.rglob("*.py"))
+        if "_vendor" not in path.relative_to(src).parts
+    ]
     offenders = [
         path.relative_to(src).as_posix()
-        for path in sorted(src.rglob("*.py"))
+        for path in mine
         if path.name != "_env.py"
         and "GDAL_CACHEMAX" in path.read_text(encoding="utf-8")
     ]

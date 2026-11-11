@@ -609,6 +609,9 @@ def test_a_profile_copied_from_a_source_is_cleaned_before_it_is_written():
     offenders, used = [], set()
     for path in sorted(src.rglob("*.py")):
         rel = path.relative_to(src).as_posix()
+        # the wheel's copy of rasterio and osgeo sits under _vendor on a node: not GeoBrix's code
+        if rel.startswith("_vendor/"):
+            continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for lineno, func in _copies_of_a_dataset_profile(tree):
             name = func.name if func is not None else "<module>"

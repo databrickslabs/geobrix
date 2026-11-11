@@ -29,7 +29,10 @@ def plan():
     # engine (the masked fill input): the plan is built where the engine runs (the dev container, CI, a cluster)
     if run.unavailable_reason():
         pytest.skip(run.unavailable_reason())
-    p = t28.Params(cluster_id=CLUSTER)
+    # a fixed per-commit folder: the plan's checks need no readable HEAD (a worktree's container has none)
+    p = t28.Params(
+        cluster_id=CLUSTER, volume_dir=t28.default_volume_dir(sha12="0123456789ab")
+    )
     files, runs = t28.build(p)
     return p, files, runs
 
@@ -453,6 +456,22 @@ def test_the_uc_folder_is_one_per_commit(monkeypatch):
         t28.default_volume_dir("/Volumes/c/s/v/", "aaaaaaaaaaaa")
         == "/Volumes/c/s/v/t28/aaaaaaaaaaaa"
     )
+
+
+def test_without_a_readable_head_params_leave_the_folder_unset_and_main_refuses(
+    monkeypatch, capsys
+):
+    def no_head(cwd=None):
+        raise ValueError(
+            "cannot read the checkout's HEAD (not a git checkout); pass --volume-dir"
+        )
+
+    monkeypatch.setattr(t28, "head_sha12", no_head)
+    assert (
+        t28.Params().volume_dir == ""
+    )  # a caller that builds statements only needs no folder
+    assert t28.main(["--dry-run", "--ws-root", "/Users/x/GeoBrix"]) == 2
+    assert "--volume-dir" in capsys.readouterr().err
 
 
 def test_head_sha12_is_the_checkouts_head_and_refuses_outside_git(tmp_path):

@@ -103,8 +103,13 @@ class Params:
     )
 
     def __post_init__(self) -> None:
+        # Where HEAD cannot be read (no checkout, a worktree whose git dir is a host path) the folder stays unset:
+        # a caller that builds only statements needs none, and main() refuses to write files without one.
         if not self.volume_dir:
-            self.volume_dir = default_volume_dir(self.volroot)
+            try:
+                self.volume_dir = default_volume_dir(self.volroot)
+            except ValueError:
+                pass
 
     def schema_of(self, key: str) -> str:
         return f"{self.schema}_{key}"
@@ -1008,6 +1013,25 @@ def _ws_root_of(a: argparse.Namespace) -> str:
     return resolve_ws_root(a.profile)
 
 
+def _params_of(a: argparse.Namespace) -> "Params":
+    """The pass's parameters from the command line; the UC folder defaults to the HEAD commit's (ValueError when
+    HEAD cannot be read and no --volume-dir names one)."""
+    p = Params(
+        a.catalog,
+        a.schema,
+        a.volume_dir,
+        a.jar,
+        a.volroot,
+        a.out_dir,
+        a.profile,
+        a.ws_root,
+        a.cluster_id,
+    )
+    if not p.volume_dir:  # Params left it unset: HEAD could not be read; say so
+        p.volume_dir = default_volume_dir(p.volroot)
+    return p
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="gbx-bench-uc-probes", description=__doc__.split("\n\n")[0]
@@ -1056,17 +1080,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     try:
-        p = Params(
-            a.catalog,
-            a.schema,
-            a.volume_dir,
-            a.jar,
-            a.volroot,
-            a.out_dir,
-            a.profile,
-            a.ws_root,
-            a.cluster_id,
-        )
+        p = _params_of(a)
         for kind, value in (("catalog", p.catalog), ("schema", p.schema)):
             from databricks.labs.gbx.uc.ddl import (
                 check_jar_path,

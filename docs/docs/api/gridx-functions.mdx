@@ -632,6 +632,13 @@ Powered by the **pure-Python quadbin interpolation port**.
 
 Fill missing quadbin cell values from one array of `(cellid, value)` structs. It is the array form of `gbx_quadbin_cellfill`: the same fill, one call per group. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
 
+<FunctionExamples
+  name="quadbin_cellfill_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
+
 ---
 
 ### Geometry-Aware Expansion (Quadbin)
@@ -1511,6 +1518,13 @@ GROUP BY group_key
 
 Intersect the chips of one BNG cell from one array of `(cellid, core, chip)` structs. It is the array form of `gbx_bng_cellintersection_agg`, including its rule that a core chip stands for the whole cell. On Unity Catalog it is a SQL function that calls the product `st_intersection`, so it needs no Python; chips of more than one cell give NULL.
 
+<FunctionExamples
+  name="bng_cellintersection_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
+
 ---
 
 ### bng_cellunion_agg
@@ -1579,6 +1593,13 @@ GROUP BY group_key
 
 Union the chips of one BNG cell from one array of `(cellid, core, chip)` structs, for example `collect_list(struct(cellid, core, chip))`. It is the array form of `gbx_bng_cellunion_agg`. A core chip has no geometry and stands for the whole cell, so the answer is then the cell polygon. On Unity Catalog it is a SQL function that calls the product `st_union`, so it needs no Python; chips of more than one cell give NULL.
 
+<FunctionExamples
+  name="bng_cellunion_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
+
 ---
 
 ### bng_cellfill
@@ -1643,6 +1664,13 @@ Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity wi
 {/* END GENERATED gbx_bng_cellfill_array */}
 
 Fill missing BNG cell values from one array of `(cellid, value)` structs with BNG cell ids such as `'TQ3080'`. It is the array form of `gbx_bng_cellfill`: the same fill, one call per group. A string that is not a cell is skipped. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
+
+<FunctionExamples
+  name="bng_cellfill_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 
@@ -2388,6 +2416,13 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
 
 Fill missing custom-grid cell values from one array of `(cellid, value)` structs and the grid from `gbx_custom_grid`. It is the array form of `gbx_custom_cellfill`: the same fill, one call per group. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
 
+<FunctionExamples
+  name="custom_cellfill_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
+
 ---
 
 ## H3 Cell Fill
@@ -2448,6 +2483,13 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
 {/* END GENERATED gbx_h3_cellfill_array */}
 
 Fill missing H3 cell values from one array of `(cellid, value)` structs, for example `collect_list(struct(cellid, value))`. It is the array form of `gbx_h3_cellfill`: the same fill, the same rules, one call per group. On Unity Catalog it is a SQL function that calls the product `h3_kringdistances`, so it needs no Python. A repeated cell id keeps its largest value, and a cell id that is NULL is skipped.
+
+<FunctionExamples
+  name="h3_cellfill_array"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
 
 ---
 

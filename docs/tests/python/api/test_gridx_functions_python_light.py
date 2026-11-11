@@ -71,6 +71,34 @@ def _tessellateexplode(r):
     )
 
 
+
+def _filled(n, center=None):
+    """A fill result: `n` (cellid, value) structs in ascending id order, all 5.0 (so the NULL cell is filled)."""
+
+    def check(r):
+        ids = [c["cellid"] for c in r] if isinstance(r, list) else []
+        return (
+            len(ids) == n
+            and ids == sorted(ids)
+            and (center is None or center in ids)
+            and all(c["value"] == 5.0 for c in r)
+        )
+
+    return check
+
+
+def _wkb_equals(x0, x1):
+    """WKB of the box x0..x1 over the 1 km cell's northing 180000..181000."""
+
+    def check(r):
+        from shapely import box
+        from shapely.wkb import loads
+
+        return _bytes(r) and loads(bytes(r)).equals(box(x0, 180000, x1, 181000))
+
+    return check
+
+
 # example name (without `_python_example`) -> what its result must satisfy
 CHECKS = {
     # BNG codec and accessors
@@ -142,6 +170,13 @@ CHECKS = {
     "h3_geomkringexplode": _some(),
     "h3_geomkloopexplode": _some(),
     "h3_cellfill": _bytes,
+    # array forms of the cell aggregates
+    "bng_cellfill_array": _filled(5, center="TQ300800"),
+    "quadbin_cellfill_array": _filled(3, center=5234158540624494591),
+    "h3_cellfill_array": _filled(3, center=612934495919669247),
+    "custom_cellfill_array": _filled(3),
+    "bng_cellunion_array": _wkb_equals(530000, 531000),
+    "bng_cellintersection_array": _wkb_equals(530400, 530600),
 }
 
 

@@ -2175,3 +2175,261 @@ custom_distance_python_example_output = """
 +----+
 ... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)
 """
+
+
+# ---------------------------------------------------------------------------
+# Array forms of the cell aggregates — bng/quadbin/custom/h3 cellfill_array,
+# bng_cellintersection_array, bng_cellunion_array
+#
+# ``collect_list(struct(...))`` gathers each group's cells or chips into one
+# array; the answer is the aggregate's answer over the same cells or chips.
+# The fill returns ARRAY<STRUCT<cellid, value>> in ascending id order.
+# ---------------------------------------------------------------------------
+
+
+def _register_grids(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
+
+
+def bng_cellfill_array_python_example(spark):
+    """Fill a NULL BNG cell from an array of (cellid, value) structs (light pygx tier).
+
+    The cells of ``bng_cellfill``: London 100 m cell ``TQ300800`` (NULL) surrounded
+    by four ring-1 neighbours each with value 5.0.  ``collect_list`` gathers each
+    region's cells into one array; with ``k=1`` and ``method='mean'`` the NULL
+    cell takes the mean of its neighbours (5.0).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _register_grids(spark)
+    df = spark.createDataFrame(
+        [
+            (1, "TQ300800", None),
+            (1, "TQ299800", 5.0),
+            (1, "TQ301800", 5.0),
+            (1, "TQ300799", 5.0),
+            (1, "TQ300801", 5.0),
+        ],
+        "region INT, cellid STRING, value DOUBLE",
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            bx.bng_cellfill_array(
+                f.collect_list(f.struct("cellid", "value")), 1, "mean", 2.0
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+bng_cellfill_array_python_example_output = """
++------+-------------------------------------------------------------------------------------+
+|region|filled                                                                               |
++------+-------------------------------------------------------------------------------------+
+|1     |[{TQ299800, 5.0}, {TQ300799, 5.0}, {TQ300800, 5.0}, {TQ300801, 5.0}, {TQ301800, 5.0}]|
++------+-------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL cell TQ300800 is filled to 5.0)
+"""
+
+
+def quadbin_cellfill_array_python_example(spark):
+    """Fill a NULL quadbin cell from an array of (cellid, value) structs (light pygx tier).
+
+    The London z=10 cell ``5234158540624494591`` is NULL and two ring-1 neighbours
+    carry 5.0.  With ``k=1`` and ``method='mean'`` the NULL cell takes 5.0.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _register_grids(spark)
+    df = spark.createDataFrame(
+        [
+            (1, 5234158540624494591, None),
+            (1, 5234158544919461887, 5.0),
+            (1, 5234158536329527295, 5.0),
+        ],
+        "region INT, cellid BIGINT, value DOUBLE",
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            qx.quadbin_cellfill_array(
+                f.collect_list(f.struct("cellid", "value")), 1, "mean", 2.0
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+quadbin_cellfill_array_python_example_output = """
++------+------------------------------------------------------------------------------------+
+|region|filled                                                                              |
++------+------------------------------------------------------------------------------------+
+|1     |[{5234158536329527295, 5.0}, {5234158540624494591, 5.0}, {5234158544919461887, 5.0}]|
++------+------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the London z10 center cell is filled to 5.0)
+"""
+
+
+def h3_cellfill_array_python_example(spark):
+    """Fill a NULL H3 cell from an array of (cellid, value) structs (light pygx tier).
+
+    London res-8 center cell ``612934495919669247`` is NULL and two ring-1 neighbours
+    carry 5.0.  With ``k=1`` and ``method='mean'`` the NULL cell takes 5.0.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _register_grids(spark)
+    df = spark.createDataFrame(
+        [
+            (1, 612934495919669247, None),
+            (1, 612934495863046143, 5.0),
+            (1, 612934495900794879, 5.0),
+        ],
+        "region INT, cellid BIGINT, value DOUBLE",
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            hx.h3_cellfill_array(
+                f.collect_list(f.struct("cellid", "value")), 1, "mean", 2.0
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+h3_cellfill_array_python_example_output = """
++------+---------------------------------------------------------------------------------+
+|region|filled                                                                           |
++------+---------------------------------------------------------------------------------+
+|1     |[{612934495863046143, 5.0}, {612934495900794879, 5.0}, {612934495919669247, 5.0}]|
++------+---------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+def custom_cellfill_array_python_example(spark):
+    """Fill a NULL custom-grid cell from an array of (cellid, value) structs (light pygx tier).
+
+    Reads the ``custom_grids`` setup view for the grid and derives a center cell at
+    POINT(530000 180000) and two ring-1 neighbours with ``custom_pointascell`` at
+    resolution 0.  The center is NULL and the neighbours carry 5.0; with ``k=1`` and
+    ``method='mean'`` the center takes 5.0.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _register_grids(spark)
+    df_grid = _get_custom_grid_df(spark)
+    ids = df_grid.select(
+        cx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)).alias("center"),
+        cx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)).alias("nbr1"),
+        cx.custom_pointascell(f.lit("POINT(531000 181000)"), f.col("grid"), f.lit(0)).alias("nbr2"),
+    ).first()
+    df = spark.createDataFrame(
+        [
+            (1, ids["center"], None),
+            (1, ids["nbr1"], 5.0),
+            (1, ids["nbr2"], 5.0),
+        ],
+        "region INT, cellid BIGINT, value DOUBLE",
+    ).crossJoin(df_grid.select("grid"))
+    result = (
+        df.groupBy("region", "grid")
+        .agg(
+            cx.custom_cellfill_array(
+                f.collect_list(f.struct("cellid", "value")), f.col("grid"), 1, "mean", 2.0
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+custom_cellfill_array_python_example_output = """
++------+---------------------------------------------+
+|region|filled                                       |
++------+---------------------------------------------+
+|1     |[{180530, 5.0}, {180531, 5.0}, {181531, 5.0}]|
++------+---------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+_BNG_WEST_STRIP = "POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))"
+_BNG_EAST_STRIP = "POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))"
+
+
+def _tq3080_chips(spark):
+    """Two chips of cell TQ3080: the cell's share of each of two overlapping strips."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _register_grids(spark)
+    strips = spark.createDataFrame(
+        [("west", _BNG_WEST_STRIP), ("east", _BNG_EAST_STRIP)], ["part", "geom"]
+    )
+    return strips.select(
+        f.explode(bx.bng_tessellate(f.col("geom"), f.lit(3))).alias("chip")
+    ).filter(f.col("chip.cellid") == "TQ3080")
+
+
+def bng_cellintersection_array_python_example(spark):
+    """Intersect the chips of one BNG cell, gathered into an array (light pygx tier).
+
+    Two strips each cover part of cell TQ3080 (x 530000-530600 and x 530400-531000).
+    ``bng_tessellate`` clips each to a chip of TQ3080 and ``collect_list`` gathers
+    the chips into one array.  ``bng_cellintersection_array`` returns the WKB of
+    their intersection, the strip x 530400-530600.  Chips of more than one cell
+    give NULL.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    chips = _tq3080_chips(spark)
+    result = chips.agg(
+        bx.bng_cellintersection_array(f.collect_list("chip")).alias("common_chip")
+    ).first()
+    return result["common_chip"]
+
+
+bng_cellintersection_array_python_example_output = """
++-----------+
+|common_chip|
++-----------+
+|[binary]   |
++-----------+
+... (BINARY — WKB of the strip x 530400-530600 of cell TQ3080, in EPSG:27700)
+"""
+
+
+def bng_cellunion_array_python_example(spark):
+    """Union the chips of one BNG cell, gathered into an array (light pygx tier).
+
+    Two strips each cover part of cell TQ3080 (x 530000-530600 and x 530400-531000).
+    ``bng_tessellate`` clips each to a chip of TQ3080 and ``collect_list`` gathers
+    the chips into one array.  ``bng_cellunion_array`` returns the WKB of their
+    union, the whole cell.  Chips of more than one cell give NULL.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    chips = _tq3080_chips(spark)
+    result = chips.agg(
+        bx.bng_cellunion_array(f.collect_list("chip")).alias("union_chip")
+    ).first()
+    return result["union_chip"]
+
+
+bng_cellunion_array_python_example_output = """
++----------+
+|union_chip|
++----------+
+|[binary]  |
++----------+
+... (BINARY — WKB of the union, the whole cell TQ3080 (x 530000-531000), in EPSG:27700)
+"""

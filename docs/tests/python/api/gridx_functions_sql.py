@@ -1449,3 +1449,206 @@ bng_geomkloopexplode_sql_example_output = """
 +-----------+
 ... (one row per STRING BNG cell ID in the k=1 hollow outer ring)
 """
+
+
+# ============================================================================
+# Array forms of the cell aggregates — one array per group instead of a GROUP BY
+# aggregate.  ``collect_list(struct(...))`` builds the array; the answer is the
+# aggregate's answer over the same cells or chips.
+# ============================================================================
+
+
+def bng_cellfill_array_sql_example():
+    """Fill NULL BNG cells from an array of (cellid, value) structs.
+
+    The same cells as ``gbx_bng_cellfill``: London 100 m cell TQ300800 (NULL, to
+    be filled) surrounded by four ring-1 neighbours each with value 5.0.
+    ``collect_list(struct(cellid, value))`` gathers each group's cells into one
+    array.  With k=1 and method='mean' the NULL cell takes the mean of its
+    neighbours (5.0).  Returns ``array<struct<cellid:string,value:double>>`` in
+    ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_bng_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 'TQ300800', CAST(NULL AS DOUBLE)),
+    (1, 'TQ299800', 5.0),
+    (1, 'TQ301800', 5.0),
+    (1, 'TQ300799', 5.0),
+    (1, 'TQ300801', 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+bng_cellfill_array_sql_example_output = """
++------+-------------------------------------------------------------------------------------+
+|region|filled                                                                               |
++------+-------------------------------------------------------------------------------------+
+|1     |[{TQ299800, 5.0}, {TQ300799, 5.0}, {TQ300800, 5.0}, {TQ300801, 5.0}, {TQ301800, 5.0}]|
++------+-------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL cell TQ300800 is filled to 5.0)
+"""
+
+
+def quadbin_cellfill_array_sql_example():
+    """Fill NULL Quadbin cells from an array of (cellid, value) structs.
+
+    The London z=10 cell 5234158540624494591 is NULL and two ring-1 neighbours
+    carry 5.0.  ``collect_list(struct(cellid, value))`` gathers the cells into one
+    array, and with k=1 and method='mean' the NULL cell takes 5.0.  Returns
+    ``array<struct<cellid:bigint,value:double>>`` in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_quadbin_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 5234158540624494591L, CAST(NULL AS DOUBLE)),
+    (1, 5234158544919461887L, 5.0),
+    (1, 5234158536329527295L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+quadbin_cellfill_array_sql_example_output = """
++------+------------------------------------------------------------------------------------+
+|region|filled                                                                              |
++------+------------------------------------------------------------------------------------+
+|1     |[{5234158536329527295, 5.0}, {5234158540624494591, 5.0}, {5234158544919461887, 5.0}]|
++------+------------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the London z10 center cell is filled to 5.0)
+"""
+
+
+def custom_cellfill_array_sql_example():
+    """Fill NULL custom-grid cells from an array of (cellid, value) structs.
+
+    Center cell 216172782113787048 is NULL and two ring-1 neighbours carry 5.0.
+    The grid struct comes from ``gbx_custom_grid``.  With k=1 and method='mean'
+    the NULL cell takes 5.0.  Returns ``array<struct<cellid:bigint,value:double>>``
+    in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_custom_cellfill_array(
+         collect_list(struct(cellid, value)),
+         gbx_custom_grid(0, 1000000, 0, 1000000, 2, 100000, 100000, 27700),
+         1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 216172782113787048L, CAST(NULL AS DOUBLE)),
+    (1, 216172782113786967L, 5.0),
+    (1, 216172782113787127L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+custom_cellfill_array_sql_example_output = """
++------+---------------------------------------------------------------------------------+
+|region|filled                                                                           |
++------+---------------------------------------------------------------------------------+
+|1     |[{216172782113786967, 5.0}, {216172782113787048, 5.0}, {216172782113787127, 5.0}]|
++------+---------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+def h3_cellfill_array_sql_example():
+    """Fill NULL H3 cells from an array of (cellid, value) structs.
+
+    London res-8 center cell 612934495919669247 is NULL and two ring-1 neighbours
+    carry 5.0.  With k=1 and method='mean' the NULL cell takes 5.0.  Returns
+    ``array<struct<cellid:bigint,value:double>>`` in ascending cell id order.
+    """
+    return """
+SELECT region,
+       gbx_h3_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 612934495919669247L, CAST(NULL AS DOUBLE)),
+    (1, 612934495863046143L, 5.0),
+    (1, 612934495900794879L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+h3_cellfill_array_sql_example_output = """
++------+---------------------------------------------------------------------------------+
+|region|filled                                                                           |
++------+---------------------------------------------------------------------------------+
+|1     |[{612934495863046143, 5.0}, {612934495900794879, 5.0}, {612934495919669247, 5.0}]|
++------+---------------------------------------------------------------------------------+
+... (array of (cellid, value) structs in ascending id order; the NULL center cell is filled to 5.0)
+"""
+
+
+def bng_cellintersection_array_sql_example():
+    """Intersect the chips of one BNG cell, gathered into an array.
+
+    Two polygons each cover part of cell TQ3080: x 530000-530600 and x 530400-531000.
+    ``gbx_bng_tessellate`` clips each to a chip of TQ3080, and ``collect_list`` gathers
+    the chips into one array.  ``gbx_bng_cellintersection_array`` returns their
+    intersection as WKB: the strip x 530400-530600.  Chips of more than one cell give NULL.
+    """
+    return """
+SELECT gbx_bng_cellintersection_array(collect_list(t.chip)) AS common_chip
+FROM (
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3
+  )) AS chip
+  UNION ALL
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3
+  )) AS chip
+) t
+WHERE t.chip.cellid = 'TQ3080';
+"""
+
+
+bng_cellintersection_array_sql_example_output = """
++-----------+
+|common_chip|
++-----------+
+|[binary]   |
++-----------+
+... (BINARY — WKB of the strip x 530400-530600 of cell TQ3080, in EPSG:27700)
+"""
+
+
+def bng_cellunion_array_sql_example():
+    """Union the chips of one BNG cell, gathered into an array.
+
+    Two polygons each cover part of cell TQ3080: x 530000-530600 and x 530400-531000.
+    ``gbx_bng_tessellate`` clips each to a chip of TQ3080, and ``collect_list`` gathers
+    the chips into one array.  ``gbx_bng_cellunion_array`` returns their union as WKB:
+    the whole cell.  Chips of more than one cell give NULL.
+    """
+    return """
+SELECT gbx_bng_cellunion_array(collect_list(t.chip)) AS union_chip
+FROM (
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3
+  )) AS chip
+  UNION ALL
+  SELECT explode(gbx_bng_tessellate(
+    'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3
+  )) AS chip
+) t
+WHERE t.chip.cellid = 'TQ3080';
+"""
+
+
+bng_cellunion_array_sql_example_output = """
++----------+
+|union_chip|
++----------+
+|[binary]  |
++----------+
+... (BINARY — WKB of the union, the whole cell TQ3080 (x 530000-531000), in EPSG:27700)
+"""

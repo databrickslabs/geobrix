@@ -150,3 +150,63 @@ def test_all_sql_examples_are_valid_sql():
 
 # Note: test_bng_cellintersection_agg_sql_example, test_bng_cellunion_agg_sql_example moved to
 # View-based SQL examples: require DBR for view creation; skip on open-source.
+
+
+# ============================================================================
+# Array forms of the cell aggregates — run each SQL example and hold its result
+# ============================================================================
+
+
+@pytest.fixture(scope="module")
+def array_forms_registered(spark):
+    """Register the four grid families so the ``*_array`` SQL functions resolve."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_")
+    )
+    yield spark
+
+
+def _run(spark, sql):
+    return spark.sql(sql.strip().rstrip(";")).collect()
+
+
+def _filled(row):
+    """The filled array of one group as ``{cellid: value}``."""
+    return {c["cellid"]: c["value"] for c in row["filled"]}
+
+
+@pytest.mark.parametrize(
+    "name, center, cells",
+    [
+        ("bng", "TQ300800", 5),
+        ("quadbin", 5234158540624494591, 3),
+        ("custom", 216172782113787048, 3),
+        ("h3", 612934495919669247, 3),
+    ],
+)
+def test_cellfill_array_sql_examples(array_forms_registered, name, center, cells):
+    """Each ``*_cellfill_array`` example fills the NULL center cell to the 5.0 of its neighbours."""
+    sql = getattr(gridx_functions_sql, f"{name}_cellfill_array_sql_example")()
+    rows = _run(array_forms_registered, sql)
+    assert len(rows) == 1 and rows[0]["region"] == 1
+    filled = _filled(rows[0])
+    assert len(filled) == cells
+    assert filled[center] == 5.0, f"{name}: the NULL cell was not filled: {filled}"
+    assert all(v == 5.0 for v in filled.values())
+    assert list(filled) == sorted(filled), "cells come back in ascending id order"
+
+
+def test_bng_chip_array_sql_examples(array_forms_registered):
+    """The two chips of TQ3080 union to the whole cell and intersect in the shared strip."""
+    from shapely import box
+    from shapely.wkb import loads
+
+    spark = array_forms_registered
+    union = _run(spark, gridx_functions_sql.bng_cellunion_array_sql_example())
+    assert len(union) == 1
+    assert loads(bytes(union[0]["union_chip"])).equals(box(530000, 180000, 531000, 181000))
+    common = _run(spark, gridx_functions_sql.bng_cellintersection_array_sql_example())
+    assert len(common) == 1
+    assert loads(bytes(common[0]["common_chip"])).equals(box(530400, 180000, 530600, 181000))

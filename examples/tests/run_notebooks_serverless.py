@@ -40,6 +40,7 @@ import tomllib
 from dataclasses import dataclass
 from typing import Optional
 
+import _wheel_guard  # sibling module: force the staged wheel in, then fail the run if another geobrix is imported
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _snapshot import snapshot_files  # sibling module (script dir is on sys.path)
 
@@ -231,6 +232,79 @@ def _strip_pip_cells(nb_bytes: bytes) -> bytes:
     return json.dumps(nb).encode()
 
 
+# --- the wheel guard: the run tests the staged wheel, never an older one of the same version -----------------------
+# A same-version wheel that is already on a cluster (a cluster library, an earlier install) makes a plain
+# `%pip install <staged wheel>` a no-op. On a classic cluster the uploaded copy of every notebook therefore forces
+# geobrix in first (`--force-reinstall --no-deps`, the dependencies unchanged), and every mode gets a guard cell after
+# the install that fails the run when the driver or a Python worker imports another build (see _wheel_guard.py).
+# Only the uploaded copy changes; the committed notebook, and the install cells users copy, stay as they are.
+WHEEL_GUARD: dict = {"on": False, "wheel": None, "report_only_without_pip": False}
+
+
+def _cell_source(cell) -> list:
+    src = cell.get("source", [])
+    return src.splitlines(keepends=True) if isinstance(src, str) else list(src)
+
+
+def _force_geobrix_pip(nb_bytes: bytes) -> bytes:
+    """Put a forced geobrix install before every `%pip install ... geobrix @ file://...whl` line of the notebook."""
+    nb = json.loads(nb_bytes)
+    total = 0
+    for cell in nb.get("cells", []):
+        if cell.get("cell_type") != "code":
+            continue
+        lines, n = _wheel_guard.force_pip_lines(_cell_source(cell))
+        if n:
+            cell["source"] = lines
+            total += n
+    if total:
+        print(f"    forced the geobrix install ({total} %pip line(s): --force-reinstall --no-deps first)", flush=True)
+    return json.dumps(nb).encode()
+
+
+def _notebook_wheel(nb_bytes: bytes) -> Optional[str]:
+    """The wheel the notebook's own `%pip` lines install, or None."""
+    for cell in json.loads(nb_bytes).get("cells", []):
+        if cell.get("cell_type") == "code":
+            wheel = _wheel_guard.pip_wheel_of(_cell_source(cell))
+            if wheel:
+                return wheel
+    return None
+
+
+_INSTALL_CELL = re.compile(r"^\s*(%pip|%restart_python)|restartPython\(", re.M)
+
+
+def _inject_guard_cell(nb_bytes: bytes, wheel: Optional[str]) -> bytes:
+    """Add the guard cell after the last install/restart cell of the notebook (else before its first code cell).
+    With no `wheel` the cell only reports what the driver and the workers import."""
+    nb = json.loads(nb_bytes)
+    cells = nb.get("cells", [])
+    code = [i for i, c in enumerate(cells) if c.get("cell_type") == "code"]
+    installs = [i for i in code if _INSTALL_CELL.search("".join(_cell_source(cells[i])))]
+    at = installs[-1] + 1 if installs else (code[0] if code else 0)
+    cells.insert(at, {
+        "cell_type": "code", "execution_count": 0, "metadata": {}, "outputs": [],
+        "source": _wheel_guard.guard_source(wheel=wheel).splitlines(keepends=True),
+    })
+    nb["cells"] = cells
+    print(f"    wheel guard cell at {at}: " + (f"driver and workers must import {wheel}" if wheel else "reports the imported geobrix"), flush=True)
+    return json.dumps(nb).encode()
+
+
+def _warn_cluster_wheel_libraries(w, cluster_id: str, wheel: str) -> None:
+    """Say when the cluster carries a geobrix wheel library: it is what a stale run would have imported."""
+    try:
+        libs = [fs.library.whl for fs in w.libraries.cluster_status(cluster_id)
+                if getattr(fs, "library", None) and getattr(fs.library, "whl", None) and "geobrix" in fs.library.whl]
+    except Exception as exc:  # noqa: BLE001 - advisory only
+        print(f"    (could not list the libraries of {cluster_id}: {type(exc).__name__})", flush=True)
+        return
+    for lib in libs:
+        print(f"    NOTE: cluster {cluster_id} carries the geobrix library {lib}; the notebook forces {wheel} over it "
+              "and the wheel guard fails the run if a worker still imports the library", flush=True)
+
+
 # --pip-wheel: the wheel the `%pip install ... @ file://<...>.whl` lines of an uploaded copy install instead of theirs
 PIP_WHEEL: Optional[str] = None
 _PIP_FILE_WHEEL = re.compile(r"@\s*file://(/Volumes/[^\"'\s]+\.whl)")
@@ -420,8 +494,9 @@ def _import_notebook(
     ws_dir: str,
     strip_pip: bool,
     set_vars: list[str] | None = None,
+    guard: bool = True,
 ) -> str:
-    """Import a local .ipynb to the workspace; return the workspace path."""
+    """Import a local .ipynb to the workspace; return the workspace path (`guard=False` for a %run dependency)."""
     from databricks.sdk.service.workspace import ImportFormat
 
     nb_bytes = local_path.read_bytes()
@@ -429,6 +504,15 @@ def _import_notebook(
         nb_bytes = _strip_pip_cells(nb_bytes)
     elif PIP_WHEEL:
         nb_bytes = _repoint_pip_wheel(nb_bytes, PIP_WHEEL)
+    guard_wheel = None
+    if guard and WHEEL_GUARD["on"]:
+        if not strip_pip:  # a classic cluster keeps the %pip cells: put the staged wheel in over any same-version geobrix
+            nb_bytes = _force_geobrix_pip(nb_bytes)
+        guard_wheel = (None if strip_pip else _notebook_wheel(nb_bytes)) or WHEEL_GUARD["wheel"]
+        # an existing cluster, a notebook with no %pip of geobrix and no --wheel given: the cluster's own geobrix library is
+        # what the run uses on purpose (the DEFAULT wheel is not a promise), so the guard only reports what is imported
+        report_only = WHEEL_GUARD["report_only_without_pip"] and not strip_pip and not _notebook_wheel(nb_bytes)
+        nb_bytes = _inject_guard_cell(nb_bytes, None if report_only else guard_wheel)
     if set_vars:
         nb_bytes = _inject_override_cell(nb_bytes, set_vars)
 
@@ -957,6 +1041,15 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--no-wheel-guard",
+        action="store_true",
+        help=(
+            "Do not add the wheel guard cell (and, on a classic cluster, do not force the geobrix install first). "
+            "Default: every notebook gets both, so a same-version geobrix already on the compute cannot stand in for the "
+            "staged wheel; the guard fails the run when the driver or a Python worker imports another build."
+        ),
+    )
+    parser.add_argument(
         "--no-wheel",
         action="store_true",
         help=(
@@ -1184,6 +1277,7 @@ def main() -> int:
 
     if args.no_wheel and args.wheel:
         parser.error("--no-wheel and --wheel are exclusive: --no-wheel installs no geobrix wheel")
+    explicit_wheel = args.wheel  # None when the default is used below
     if not args.no_wheel and args.wheel is None:
         # the %pip wheel is also the cluster library: two different wheels give the workers another geobrix
         args.wheel = args.pip_wheel or DEFAULT_WHEEL
@@ -1200,6 +1294,12 @@ def main() -> int:
         parser.error("--pip-wheel takes a /Volumes path to a .whl")
     global PIP_WHEEL
     PIP_WHEEL = args.pip_wheel
+    # the guard compares with the wheel the run installs; a DCS image or --no-wheel names none, so there is nothing to compare
+    WHEEL_GUARD.update(
+        on=bool(args.wheel) and not args.no_wheel_guard and not args.docker_image,
+        wheel=args.wheel,
+        report_only_without_pip=bool(args.existing_cluster_id or args.pool) and not (explicit_wheel or args.pip_wheel),
+    )
     if args.docker_image and (not args.new_cluster or args.jar):
         parser.error(
             "--docker-image needs --new-cluster and takes no --jar: the image carries the wheel and the one geobrix JAR"
@@ -1376,6 +1476,9 @@ def main() -> int:
         print(f"Deps     : {len(deps)} entries (no geobrix wheel: --no-wheel)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
+    print(f"Wheel guard: {'on, ' + WHEEL_GUARD['wheel'] if WHEEL_GUARD['on'] else 'off'}", flush=True)
+    if WHEEL_GUARD["on"] and args.existing_cluster_id:
+        _warn_cluster_wheel_libraries(w, args.existing_cluster_id, WHEEL_GUARD["wheel"])
     if args.hardware_accelerator:
         print(f"Accelerator: {args.hardware_accelerator}", flush=True)
     if args.existing_cluster_id:
@@ -1399,7 +1502,7 @@ def main() -> int:
             print(f"ERROR: dep-notebook not found: {dep_path}", file=sys.stderr)
             return 2
         print(f"=== DEP-IMPORT: {dep_path.name} ===", flush=True)
-        _import_notebook(w, dep_path, ws_dir, strip_pip=args.strip_pip)
+        _import_notebook(w, dep_path, ws_dir, strip_pip=args.strip_pip, guard=False)
 
     for nb_path in notebooks:
         ok = run_one(

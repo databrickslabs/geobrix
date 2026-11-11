@@ -29,7 +29,8 @@ Options:
   --profile <name>       Databricks profile (required; default DATABRICKS_CONFIG_PROFILE)
   --purpose "<why>"      REQUIRED on a launch (heads each runner notebook, rides on the run name)
   --shards <spec>        affected (default, the pre-push pass) | all-light | all-heavy | shard names or groups ("pyrx", "zarr 2/4"), comma separated
-  --base <rev>           `affected`: the files changed between this and --sha pick the shards (default origin/streamline/0.6.0)
+  --base <rev>           `affected`: the files changed between this and --sha pick the tests (default origin/streamline/0.6.0)
+  --allow-broad          let `affected` run a selection over a quarter of the light bank (it refuses one without this)
   --sha <rev>            the commit to test (default HEAD)
   --wheel <path>         the env6 wheel (default dist/env6/); it carries dependencies and native payload, not the code under test
   --jar-path <path>      the JAR of the heavy shards, or its folder (default python/geobrix/lib/; copied out and sha-checked)
@@ -73,6 +74,7 @@ except ImportError:  # pragma: no cover - the launcher venv may lack it
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
+import _affected as af  # sibling module: the test files and oracle tables a change reaches (the import graph)
 import _shard_runner as sr  # sibling module: the runners' claim-and-run loop (its source rides in the runner notebook)
 import _test_shards as ts  # sibling module: the shards, read from CI's files
 import _timings as tm  # sibling module: the timing history every run merges into
@@ -92,7 +94,8 @@ SUBSET = (".", *(f":(exclude){d}" for d in EXCLUDED))  # a git pathspec
 RESOURCES = "src/test/resources"  # the test rasters, NetCDF and MODIS scenes the tests open: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3
-TIMINGS = "test-logs/databricks-tests/timings-history.json"  # every run's samples (examples/tests/_timings.py)
+TIMINGS = "test-logs/databricks-tests/timings-history.json"
+GRAPH_CACHE = "test-logs/databricks-tests/.import-graph"  # the import graph of a commit, built once (examples/tests/_affected.py)  # every run's samples (examples/tests/_timings.py)
 OLD_TIMINGS = "test-logs/databricks-tests/timings.json"  # the last run's seconds only: read when there is no history yet
 POLL_S = 15
 STATUS_EVERY_S = 150
@@ -129,6 +132,7 @@ def parse(argv):
     p.add_argument("--run-id", default="")
     p.add_argument("--keep-stage", action="store_true")
     p.add_argument("--explain-only", action="store_true")
+    p.add_argument("--allow-broad", action="store_true", help="let `affected` select over a quarter of the light bank")
     return p.parse_args(argv)
 
 
@@ -174,7 +178,8 @@ def pool_of(shard: ts.Shard, a) -> str:
     return a.pool_jar if shard.pool == ts.POOL_JAR else a.pool_light
 
 
-def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: Optional[dict], volroot: str, root: Path, resources: Optional[dict] = None) -> dict:
+def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: Optional[dict], volroot: str, root: Path, resources: Optional[dict] = None,
+              fsolo: Optional[Dict[str, float]] = None) -> dict:
     run_id = a.run_id
     slugs = [sh.slug for sh in shards]
     dup = sorted({x for x in slugs if slugs.count(x) > 1})
@@ -207,7 +212,10 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "shards": {
             s.slug: {
                 "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": ts.shard_env(s), "expected_min": round(s.expected_min, 1),
-                "est_src": s.est_src or "ci", "heavy": bool(s.heavy), "unit_max_min": round(s.unit_max_min, 1),
+                "est_src": s.est_src or "ci", "heavy": bool(s.heavy), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
+                "solo_min": round(s.solo_min or s.expected_min, 1),
+                "contention": round(s.expected_min / s.solo_min, 2) if s.solo_min else 1.0,
+                "unit_solo_s": unit_solo(s, root, fsolo or {}),
                 "stall_min": ts.stall_min_for(s.unit_max_min, a.stall_min, a.shard_cap_min),
                 "files": [] if s.oracle_tables else (ts.files_of(s, root) or []),
                 "tables": [t for t in s.oracle_tables.split(",") if t],
@@ -219,6 +227,12 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
 
 
 SRC_MARK = {"history": "h", "partial": "p", "lower bound": "lb", "ci": "ci"}
+
+
+def unit_solo(s: ts.Shard, root: Path, fsolo: Dict[str, float]) -> Dict[str, float]:
+    """The solo-expected seconds of the chunk's timed units (files, or ``table:<T>``): what a run compares their actual times with."""
+    keys = tm.chunk_keys({"tables": [t for t in s.oracle_tables.split(",") if t], "files": [] if s.oracle_tables else (ts.files_of(s, root) or [])})
+    return {k: round(fsolo[k], 1) for k in keys if k in fsolo}
 
 
 def queue_table(volroot: str, run_id: str, kind: str) -> str:
@@ -287,11 +301,14 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
                      f"{spec['expected_min']:g} min after the start (the longest shard is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
         lines.append(f"    queue (longest first; each runner takes the next when it is free): "
                      + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')}"
-                                 + (", heavy" if plan["shards"][s].get("heavy") else "") + ")" for s in spec["queue"]))
-        lines.append("    (estimates: h = history, p = history for some of its files, lb = a lower bound from a stopped chunk, ci = CI's minutes)")
+                                 + (", heavy" if plan["shards"][s].get("heavy") else "")
+                                 + (f", x{plan['shards'][s]['contention']:g}" if plan["shards"][s].get("contention", 1.0) >= 1.2 else "") + ")" for s in spec["queue"]))
+        lines.append("    (estimates: h = history, p = history for some of its files, lb = a lower bound from a stopped chunk, ci = CI's minutes; "
+                     "xN = the estimate carries its units' contention factor, N times the solo time)")
         if spec.get("heavy"):
-            lines.append(f"    heavy: {len(spec['heavy'])} chunk(s) ({', '.join(plan['shards'][s]['name'] for s in spec['heavy'])}) hold the GDAL engine's tables or a "
-                         f"unit recorded at {ts.HEAVY_UNIT_MIN:g} min or more; at most one runs on a cluster at a time, the other slots of the node take light chunks meanwhile")
+            lines.append(f"    heavy: {len(spec['heavy'])} chunk(s) ({', '.join(plan['shards'][s]['name'] for s in spec['heavy'])}) hold the GDAL engine's tables, a "
+                         f"unit recorded at {ts.HEAVY_UNIT_MIN:g} min or more, or a contention-heavy unit ({tm.CONTENTION_HEAVY:g}x or more beside other chunks); "
+                         "at most one runs on a cluster at a time, the other slots of the node take light chunks meanwhile")
         longer = [s for s in spec["queue"] if plan["shards"][s].get("stall_min", c["stall_min"]) > c["stall_min"]]
         if longer:
             lines.append(f"    stall cap: {c['stall_min']:g} min, and {ts.STALL_SHARE:g} of the longest file or table of a chunk when that is more: "
@@ -661,7 +678,7 @@ def is_failure(row: dict) -> bool:
     collects nothing; CI's whole shard would pass, so that part does too. A whole shard that collects nothing still fails."""
     if row["verdict"] == "ok":
         return False
-    return not (row["verdict"] == "EMPTY" and row["name"].endswith("]"))
+    return not (row["verdict"] == "EMPTY" and (row["name"].endswith("]") or row.get("subset")))
 
 
 def pool_metrics(records: List[dict]) -> dict:
@@ -713,17 +730,24 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
     for pool, info in pool_info.items():
         out.append(f"- {pool}: cluster(s) {info.get('cluster_id', '-')} ({info.get('node_type', '-')}), job run {info.get('job_run', '-')}; {speedup_line(info)}")
         out += ["  - " + x.strip() for x in schedule_lines(info)]
+        if info.get("peaks"):
+            out.append("  - peak concurrency: " + ", ".join(f"cluster {c}: {n} chunk(s) at once" for c, n in sorted(info["peaks"].items())))
     if isolation_line(rows):
         out.append(f"- {isolation_line(rows)}")
     if plan["jar"]:
         out.append(f"- JAR `{plan['jar']['name']}` sha1 {plan['jar'].get('sha1', '')[:12]} sha256 {plan['jar']['sha256'][:16]}")
-    out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | predicted s | actual s | error % | estimate |",
-            "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | predicted s | actual s | error % | estimate | contention | beside |",
+            "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rows:
         out.append(f"| {r['name']} | {r['pool']} | {r['verdict']} | {r['passed']} | {r['failed']} | {r['errors']} | {r['skipped']} | {r['wall_s']} | "
-                   f"{predicted_s(r)} | {r.get('actual_s') if r.get('actual_s') is not None else '-'} | {error_pct(r)} | {r.get('est_src', 'ci')} |")
+                   f"{predicted_s(r)} | {r.get('actual_s') if r.get('actual_s') is not None else '-'} | {error_pct(r)} | {r.get('est_src', 'ci')} | "
+                   f"{contention_cell(r)} | {r.get('nb', '-')} |")
     tot = {k: sum(r[k] for r in rows if isinstance(r[k], int)) for k in ("passed", "failed", "errors", "skipped")}
-    out.append(f"| **total** | | | {tot['passed']} | {tot['failed']} | {tot['errors']} | {tot['skipped']} | | | | {prediction_line(rows)} | |")
+    out.append(f"| **total** | | | {tot['passed']} | {tot['failed']} | {tot['errors']} | {tot['skipped']} | | | | {prediction_line(rows)} | | | |")
+    out.append("")
+    out.append(f"contention: the chunk's actual time over its solo-expected time (the estimate without contention factors); beside: the chunks "
+               f"that overlapped it on its cluster. A unit at {tm.CONTENTION_HEAVY:g}x or more over its last runs with neighbours is contention-heavy "
+               "and joins the heavy gate.")
     for r in rows:
         if r["failures"]:
             out += ["", f"## {r['name']}: failures", ""]
@@ -738,6 +762,11 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
         for r in skips:
             out.append(f"- {r['name']}: " + "; ".join(f"{n} x {m or '(no reason)'}" for m, n in r["skip_reasons"].most_common(4)))
     return "\n".join(out) + "\n"
+
+
+def contention_cell(row: dict) -> str:
+    x = row.get("x")
+    return "-" if x is None else f"{x:g}x" + (" (heavy)" if x >= tm.CONTENTION_HEAVY else "")
 
 
 def predicted_s(row: dict) -> int:
@@ -759,12 +788,13 @@ def prediction_line(rows: List[dict]) -> str:
 
 def table_text(rows: List[dict]) -> str:
     head = (f"{'shard':<22} {'verdict':<10} {'passed':>7} {'failed':>6} {'errors':>6} {'skipped':>7} {'wall s':>7} "
-            f"{'pred s':>7} {'act s':>7} {'err %':>6} {'est':>4}")
+            f"{'pred s':>7} {'act s':>7} {'err %':>6} {'est':>4} {'contn':>6} {'nb':>3}")
     lines = [head, "-" * len(head)]
     for r in rows:
         act = r.get("actual_s")
         lines.append(f"{r['name']:<22} {r['verdict']:<10} {r['passed']:>7} {r['failed']:>6} {r['errors']:>6} {r['skipped']:>7} {r['wall_s']:>7} "
-                     f"{predicted_s(r):>7} {act if act is not None else '-':>7} {error_pct(r):>6} {SRC_MARK.get(r.get('est_src'), 'ci'):>4}")
+                     f"{predicted_s(r):>7} {act if act is not None else '-':>7} {error_pct(r):>6} {SRC_MARK.get(r.get('est_src'), 'ci'):>4} "
+                     f"{contention_cell(r).split(' ')[0]:>6} {r.get('nb', '-'):>3}")
     if prediction_line(rows):
         lines.append(f"predicted vs actual per chunk: {prediction_line(rows)} (actual: the chunk's notebook run, install included)")
     return "\n".join(lines)
@@ -875,14 +905,23 @@ def main(argv=None) -> int:
     sha = git("rev-parse", "--verify", f"{a.sha}^{{commit}}").strip()
     all_shards = ts.load(REPO_ROOT)
     changed = None
+    aff_shards, aff_lines = None, []
     if "affected" in a.shards:
         try:
             changed = ts.changed_files(REPO_ROOT, a.base, sha)
         except subprocess.CalledProcessError as exc:
             print(f"ERROR: cannot diff {a.base}...{sha[:10]} ({(exc.stderr or '').strip()[:120] or 'git failed'}); fetch the base or pass --base <rev>", file=sys.stderr)
             return EXIT_USAGE
+        if changed:
+            aff_shards, aff_lines, broad = affected_selection(a, sha, all_shards)
+            print("\n".join(aff_lines))
+            if broad and not a.allow_broad:
+                print(f"\nERROR: {broad}. Pass --allow-broad to run it anyway, or name the shards or test files to run.", file=sys.stderr)
+                return EXIT_USAGE
+            if broad:
+                print(f"\nWARNING: {broad}; running it (--allow-broad).", file=sys.stderr)
     try:
-        shards = ts.select(all_shards, a.shards, changed, REPO_ROOT)
+        shards = ts.select(all_shards, a.shards, changed, REPO_ROOT, aff_shards)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_USAGE
@@ -891,20 +930,28 @@ def main(argv=None) -> int:
         a.clusters = planned_clusters(a)
     hist = history_for(REPO_ROOT / a.timings)
     plan_slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
-    fsec = tm.seconds(hist, plan_slots)  # per file / per oracle table, at this run's slots
+    fsec = tm.seconds(hist, plan_slots)  # per file / per oracle table, at this run's slots, times its contention factor
+    fsolo = tm.seconds(hist, plan_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
+    hot = tm.contended(hist)  # contention-heavy units: they join the heavy gate
     lower = tm.lower_bounds(hist, plan_slots)
     if a.split == "auto" and shards:
         n_slots = (a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)) * max(1, a.clusters)
         target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots)
-        shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower)
+        shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower, hot)
         split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)")
     elif shards:
-        shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec)
+        shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec, hot)
                   for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
+    shards = [ts.Shard(**{**s.__dict__, "solo_min": round(min(s.expected_min, ts.estimate(s, REPO_ROOT, fsolo)), 2)}) for s in shards]
     if shards:
         split_notes.append(estimate_note(shards, hist, a.timings))
+        factors = tm.contention(hist)
+        if hot:
+            split_notes.append(f"contention: {len(hot)} unit(s) of the history run {tm.CONTENTION_HEAVY:g}x or more over their solo time beside "
+                               f"other chunks, and join the heavy gate; their estimates carry the factor ("
+                               + ", ".join(f"{k} {factors[k]:g}x" for k in sorted(hot, key=lambda k: -factors[k])[:6]) + (" ..." if len(hot) > 6 else "") + ")")
     if not shards:
-        print(f"No shard holds a test touched by the {len(changed or [])} file(s) changed between {a.base} and {sha[:10]}: nothing to run.")
+        print(f"No test file or oracle table is reached by the {len(changed or [])} file(s) changed between {a.base} and {sha[:10]}: nothing to run.")
         return 0
     if a.serverless and any(s.pool == ts.POOL_JAR for s in shards):
         print("ERROR: --serverless runs light shards only (the heavy shards need the JAR on a cluster)", file=sys.stderr)
@@ -936,13 +983,32 @@ def main(argv=None) -> int:
             jar = stage_jar(jar_src, REPO_ROOT, copy=not a.explain_only)
             jar["volume"] = f"{volroot}/{jar['dir']}/{jar['name']}"
     resources = resources_entry(sha, volroot)
-    plan = make_plan(a, sha, shards, wheel, jar, volroot, REPO_ROOT, resources)
+    plan = make_plan(a, sha, shards, wheel, jar, volroot, REPO_ROOT, resources, fsolo)
     local_only = [s for s in all_shards if s.local_only]
     print(explain(plan, local_only, notes))
     if a.explain_only:
         print("\nexplain-only: nothing staged or started.")
         return 0
     return launch(a, plan, shards)
+
+
+def affected_selection(a, sha: str, all_shards: List[ts.Shard]):
+    """The ``affected`` shards (the selected files and oracle tables, by the CI shard that runs them), the lines that explain
+    them (per file and table, the changed file and the import chain), and why the selection is too broad ("" when it is not)."""
+    sel, _ = af.affected(REPO_ROOT, a.base, sha, all_shards, cache_dir=REPO_ROOT / GRAPH_CACHE)
+    out, lost = af.to_shards(sel, all_shards, REPO_ROOT)
+    units, picked = af.light_units(all_shards, REPO_ROOT), af.light_selected(sel, all_shards, REPO_ROOT)
+    lines = af.explain_lines(sel, units, picked)
+    if lost:
+        lines.append(f"  not run: {len(lost)} selected file(s) or table(s) no CI shard runs: " + ", ".join(lost[:8]) + (" ..." if len(lost) > 8 else ""))
+    lines.append(f"  affected shards: " + (", ".join(f"{s.name} ({len(s.oracle_tables.split(',')) if s.oracle_tables else len(s.paths)} "
+                                                      f"{'table' if s.oracle_tables else 'file'}(s))" for s in out) or "none"))
+    broad = ""
+    if picked > af.BROAD_SHARE * units:
+        why = ", ".join(sel.everything[:3]) if sel.everything else "the changed files reach that many tests"
+        broad = (f"!!! affected selects {picked} of the light bank's {units} units ({100.0 * picked / max(1, units):.0f}%, over "
+                 f"{af.BROAD_SHARE:.0%}): {why}")
+    return out, lines, broad
 
 
 def planned_clusters(a) -> int:
@@ -1138,18 +1204,30 @@ def actual_s(row: dict, busy: Dict[str, float]):
 
 def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, records: Optional[Dict[str, List[dict]]] = None) -> dict:
     """Merge this run's samples into the history, whatever the run's outcome: the seconds per file (per oracle table for the
-    family file) of every chunk from its junit, and lower bounds for what a stopped chunk did not finish (``_timings``)."""
+    family file) of every chunk from its junit, and lower bounds for what a stopped chunk did not finish (``_timings``); and per
+    unit its actual over its solo-expected time with the chunks beside it (the contention records). Each row gains its chunk's
+    measured contention (``x``: actual over solo-expected), its neighbours (``nb``) and the peak concurrency on its cluster;
+    the result carries the peak per cluster of each pool (``peaks``)."""
     busy = chunk_busy(records or {})
     fn_table = tm.table_of_function(REPO_ROOT)
-    samples = []
+    per, peaks = tm.neighbours(records or {}, {pool: spec.get("clusters", 1) for pool, spec in plan["pools"].items()})
+    samples, cont = [], []
     for r in rows:
         chunk = plan["shards"].get(r["slug"], {})
         slots = plan["pools"].get(chunk.get("pool"), {}).get("slots", 1)
-        samples += tm.run_samples(chunk, r["verdict"], actual_s(r, busy), local_out / r["slug"] / "junit.xml", REPO_ROOT, slots, fn_table)
+        junit = local_out / r["slug"] / "junit.xml"
+        act = actual_s(r, busy)
+        samples += tm.run_samples(chunk, r["verdict"], act, junit, REPO_ROOT, slots, fn_table)
+        near = per.get(r["slug"], {})
+        solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
+        r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
+        if r["verdict"] in ("ok", "FAILED", "INCOMPLETE"):
+            cont += tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
+                                          incomplete=r["verdict"] == "INCOMPLETE")
     got = tm.merge(path, samples, {"run": plan["run_id"], "sha": plan["sha"][:10],
-                                   "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)})
-    print(f"Timings: {got['keys']} sample(s) and {got['lower_bounds']} lower bound(s) from this run merged into {path}")
-    return got
+                                   "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)}, cont)
+    print(f"Timings: {got['keys']} sample(s), {got['lower_bounds']} lower bound(s) and {got['contention']} contention record(s) from this run merged into {path}")
+    return dict(got, peaks=peaks)
 
 
 def life_and_result(run) -> tuple:
@@ -1239,7 +1317,9 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     info["serial_s"] = sum(walls)
                     info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
                     info.update(pool_metrics(records.get(pool, [])))
-                record_timings(REPO_ROOT / a.timings, plan, rows, local_out, records)
+                got = record_timings(REPO_ROOT / a.timings, plan, rows, local_out, records)
+                for pool, info in pool_info.items():
+                    info["peaks"] = got["peaks"].get(pool, {})
                 recorded = True
                 text = summary_md(plan, rows, pool_info)
                 (local_out / "summary.md").write_text(text)
@@ -1248,6 +1328,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     print(f"{pool}: {speedup_line(info)}")
                     for ln in schedule_lines(info):
                         print(ln)
+                    if info.get("peaks"):
+                        print("  peak concurrency: " + ", ".join(f"cluster {c}: {n}" for c, n in sorted(info["peaks"].items())))
                 if isolation_line(rows):
                     print(isolation_line(rows))
                 for r in rows:
@@ -1481,6 +1563,7 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
             "errors": (junit or {}).get("errors", (res or {}).get("errors", 0)),
             "skipped": (junit or {}).get("skipped", (res or {}).get("skipped", 0)),
             "wall_s": (res or {}).get("wall_s", "-"), "reason": reason, "claims": len(mine), "est_src": s.get("est_src", "ci"),
+            "subset": bool(s.get("subset")),
             "actual_s": int(mine[-1]["end"] - mine[-1]["start"]) if mine and mine[-1].get("end") is not None else None,
             "isolation": (res or {}).get("isolation"),
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),

@@ -154,49 +154,6 @@ def _first_test(dirname):
     return sorted((PKG / "test" / dirname).glob("test_*.py"))[0].name
 
 
-def _affected(shards, *files):
-    return [s.name for s in ts.affected([s for s in shards if not s.local_only], files, REPO_ROOT)]
-
-
-def test_affected_picks_the_part_that_holds_a_test_file(shards):
-    f = _first_test("pyrx")
-    rel = f"test/pyrx/{f}"
-    want = f"pyrx {zlib.crc32(rel.encode()) % 2 + 1}/2"
-    assert _affected(shards, f"python/geobrix/{rel}") == [want]
-
-
-def test_affected_follows_a_family_file_to_its_three_shards_and_a_dir_to_its_shard(shards):
-    assert _affected(shards, "python/geobrix/test/manager/test_family_cross_tier.py") == ["manager family 1/3", "manager family 2/3", "manager family 3/3"]
-    assert _affected(shards, f"python/geobrix/test/ds/{_first_test('ds')}") == ["ds"]
-    assert _affected(shards, f"python/geobrix/test/bench/{_first_test('bench')}")[0].startswith("bench")
-
-
-def test_affected_follows_source_to_the_tests_of_its_package(shards):
-    assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/ds/reader.py") == ["ds"]
-    assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/rasterx/functions.py") == ["heavy rasterx"]
-
-
-def test_a_change_to_shared_code_selects_the_heavy_shards_too(shards):
-    every = [s.name for s in shards if s.kind in ("light", "heavy")]
-    assert any(n.startswith("heavy") for n in every) and any(n.startswith("pyrx") for n in every)
-    for f in (
-        "python/geobrix/src/databricks/labs/gbx/core/crs.py",  # a shared package
-        "python/geobrix/src/databricks/labs/gbx/_api.py",  # a top-level module
-        "python/geobrix/test/conftest.py",
-        "python/geobrix/test/_provided_spark.py",  # a helper at the top of test/
-        "python/geobrix/pyproject.toml",
-    ):
-        assert _affected(shards, f) == every, f
-    ci = _affected(shards, ".github/workflows/build_main.yml")
-    assert ci == [s.name for s in shards if s.kind in ("light", "heavy", "scripts")]
-
-
-def test_a_helper_of_a_test_dir_selects_every_shard_that_runs_part_of_it(shards):
-    got = _affected(shards, "python/geobrix/test/pyrx/_helpers.py")
-    assert got == ["pyrx 1/2", "pyrx 2/2"], "both halves import it, whichever half its own path hashes to"
-    assert _affected(shards, "python/geobrix/test/zarr/conftest.py") == ["zarr 1/4", "zarr 2/4", "zarr 3/4", "zarr 4/4"]
-
-
 def test_test_files_named_in_shards_make_one_shard_of_just_those_files(shards):
     got = ts.select(shards, "python/geobrix/test/pyrx/test_env.py,test/pyrx/test_compression.py,ds", [], REPO_ROOT)
     files = next(s for s in got if s.name == "files")
@@ -206,6 +163,165 @@ def test_test_files_named_in_shards_make_one_shard_of_just_those_files(shards):
     assert ts.files_of(files, REPO_ROOT) == files.paths
     with pytest.raises(ValueError, match="no test file"):
         ts.select(shards, "test/pyrx/test_nope.py", [], REPO_ROOT)
+
+
+af = launcher.af  # the module the launcher calls (a second copy would not see a monkeypatch)
+TIN = "python/geobrix/src/databricks/labs/gbx/pyvx/_tin.py"
+RS = "rust/gbxrs/src/tin.rs"
+
+
+@pytest.fixture(scope="module")
+def graph(tmp_path_factory):
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.strip()
+    return af.Graph(af.build_graph(REPO_ROOT, sha, tmp_path_factory.mktemp("graph"))), sha
+
+
+def _sel(graph, shards, changed, old=None, rust=None):
+    """The selection for ``changed`` at HEAD: ``old`` maps a path to its text before the change (default: absent before)."""
+    G, sha = graph
+    head = lambda f: af.blobs(REPO_ROOT, sha, [f])[f]  # noqa: E731
+    return af.select(G, list(changed), shards, old_text=(old or {}).get if isinstance(old, dict) else (old or (lambda f: None)),
+                     new_text=head, rust=rust)
+
+
+def _with_body_change(graph, path, sym):
+    """HEAD's text of ``path`` with one statement more at the top of function ``sym``: a change to that symbol only."""
+    text = af.blobs(REPO_ROOT, graph[1], [path])[path]
+    i = text.index(f"\ndef {sym}(") + 1
+    j = text.index(":\n", text.index(")", i)) + 2
+    return {path: text[:j] + "    _ = 0\n" + text[j:]}
+
+
+_TIN_WORDS = ("tin", "triangul", "conforming", "jmath", "interpolate", "elevation")
+
+
+def _tin_related(f, why=()):
+    """A pyvx or TIN test: by its path, or by its reason (it names a TIN function's row, or it imports the UC TIN forms)."""
+    return f.startswith("test/pyvx/") or any(w in (f + " ".join(why)).lower() for w in _TIN_WORDS) or "uc.forms" in " ".join(why)
+
+
+def test_a_test_file_selects_itself_and_its_ci_shard_runs_just_it(graph, shards):
+    f = f"test/pyrx/{_first_test('pyrx')}"
+    sel = _sel(graph, shards, [f"python/geobrix/{f}"], old={})
+    assert f in sel.files and sel.files[f][0].endswith("changed")
+    out, lost = af.to_shards(sel, shards, REPO_ROOT)
+    pyrx = next(s for s in out if s.name == "pyrx affected")
+    assert f in pyrx.paths and pyrx.part == "" and pyrx.subset and pyrx.marker == "not integration" and not lost
+    assert ts.files_of(pyrx, REPO_ROOT) == sorted(pyrx.paths), "the shard is cut from the selected files, not the whole CI shard"
+
+
+def test_a_change_to_one_pyvx_module_selects_only_the_pyvx_and_tin_tests(graph, shards):
+    sel = _sel(graph, shards, [TIN], old=_with_body_change(graph, TIN, "_delaunay"))
+    assert "test/pyvx/test_tin_core.py" in sel.files and "test/pyvx/test_conforming.py" in sel.files
+    assert sel.files and all(_tin_related(f, w) for f, w in sel.files.items()), sorted(sel.files)
+    assert not [f for f in sel.files if f.startswith(("test/zarr/", "test/pyrx/", "test/ds/", "test/bench/test_levels"))]
+    assert set(sel.tables) == {"VECTOR_GENERATOR"}, "the family rows of the TIN functions, no other table"
+    why = sel.files["test/pyvx/test_tin_mode_arg.py"][0]
+    assert "_tin.py (_delaunay)" in why and "pyvx.functions -> pyvx._tin" in why, why
+    units, picked = af.light_units(shards, REPO_ROOT), af.light_selected(sel, shards, REPO_ROOT)
+    assert picked < 0.05 * units, (picked, units)
+
+
+def test_a_changed_symbol_nobody_uses_selects_nothing(graph, shards):
+    text = af.blobs(REPO_ROOT, graph[1], [TIN])[TIN]
+    old = {TIN: text + "\n\ndef _gone():\n    return 0\n"}  # the commit removed a function no module calls
+    sel = _sel(graph, shards, [TIN], old=old)
+    assert not sel.files and not sel.tables
+
+
+def test_a_rust_kernel_change_selects_the_tests_of_its_callers(graph, shards):
+    G, sha = graph
+    crate = {p: (af.blobs(REPO_ROOT, sha, [p])[p], {-1}) for p in af.tracked(REPO_ROOT, sha, "rust/gbxrs/src") if p.endswith(".rs")}
+    text = crate[RS][0]
+    kd = [i for i in af.rust_items(text) if i["name"] == "KdTree"][-1]
+    crate[RS] = (text, {kd["start"] + 3})  # a line inside KdTree's impl
+    exports, _ = af.rust_changed_exports(crate)
+    assert exports == {"TinKdTree"}, "only the class that wraps the KdTree"
+    sel = _sel(graph, shards, [RS], rust=lambda fs: crate)
+    assert "test/pyvx/test_conforming.py" in sel.files and "test/pyvx/test_tin_core.py" in sel.files
+    assert "exports TinKdTree; called in " in sel.files["test/pyvx/test_tin_core.py"][0]
+    assert all(_tin_related(f, w) for f, w in sel.files.items()), sorted(sel.files)
+    assert not [f for f in sel.files if "bng" in f or f.startswith("test/pygx/")], "the BNG kernel did not change"
+
+
+def test_a_rust_change_follows_calls_inside_the_crate_to_the_export():
+    lib = "#[pyfunction]\nfn tin_delaunay() {\n    tin::delaunay(1)\n}\n#[pyfunction]\nfn other() {\n    1\n}\n#[pymodule]\nfn m(m: &M) {\n    m.add_function(wrap_pyfunction!(tin_delaunay, m)?)?;\n    m.add_function(wrap_pyfunction!(other, m)?)?;\n}\n"
+    tin = "pub fn delaunay(x: i32) -> i32 {\n    helper(x)\n}\n\nfn helper(x: i32) -> i32 {\n    x\n}\n\n#[cfg(test)]\nmod tests {\n    fn t() {}\n}\n"
+    got, _ = af.rust_changed_exports({"lib.rs": (lib, {-1}), "tin.rs": (tin, {6})})
+    assert got == {"tin_delaunay"}, "helper -> delaunay -> tin_delaunay, not other"
+    got, notes = af.rust_changed_exports({"lib.rs": (lib, {-1}), "tin.rs": (tin, {11})})
+    assert got == set() and notes, "a change inside the crate's tests reaches no export"
+
+
+def test_an_oracle_table_module_maps_to_its_family_parts_only(graph, shards):
+    f = "python/geobrix/src/databricks/labs/gbx/bench/oracle_tables/vector_scalar.py"
+    sel = _sel(graph, shards, [f])
+    assert "VECTOR_SCALAR" in sel.tables and "RASTER_STAT" not in sel.tables
+    out, _ = af.to_shards(sel, shards, REPO_ROOT)
+    fam = [s for s in out if s.oracle_tables]
+    assert fam and all(s.name.startswith("manager family") and s.unsplittable and s.subset for s in fam)
+    assert "VECTOR_SCALAR" in ",".join(s.oracle_tables for s in fam) and "RASTER_STAT" not in ",".join(s.oracle_tables for s in fam)
+    assert ts.shard_env(fam[0])["GBX_ORACLE_TABLES"] == fam[0].oracle_tables
+
+
+def test_a_manifest_row_change_maps_to_its_family_and_the_tests_that_name_it(graph, shards):
+    G, sha = graph
+    text = af.blobs(REPO_ROOT, sha, [af.MANIFEST_JSON])[af.MANIFEST_JSON]
+    doc = json.loads(text)
+    row = next(r for r in doc["functions"] if r["sql_name"] == "gbx_st_triangulate")
+    row["since"] = "0.0.1"  # the commit changed one field of the row
+    sel = _sel(graph, shards, [af.MANIFEST_JSON], old={af.MANIFEST_JSON: json.dumps(doc)})
+    assert set(sel.tables) == {"VECTOR_GENERATOR"} and "row gbx_st_triangulate" in sel.tables["VECTOR_GENERATOR"][0]
+    assert sel.files and all("gbx_st_triangulate" in w[0] for w in sel.files.values())
+
+
+def test_the_family_file_selects_every_table_and_a_conftest_its_folder(graph, shards):
+    sel = _sel(graph, shards, ["python/geobrix/test/manager/test_family_cross_tier.py"])
+    assert set(sel.tables) == set(af.family_tables(shards)) and af.FAMILY_FILE not in sel.files
+    sel = _sel(graph, shards, ["python/geobrix/test/zarr/conftest.py"])
+    assert sel.files and all(f.startswith("test/zarr/") for f in sel.files)
+
+
+def test_a_script_maps_to_the_scripts_ci_tests_that_name_it(graph, shards):
+    sel = _sel(graph, shards, ["examples/tests/_affected.py"])
+    assert "scripts/ci/test_gbx_test_databricks.py" in sel.files
+    assert not [f for f in sel.files if not f.startswith("scripts/ci/")]
+    out, _ = af.to_shards(sel, shards, REPO_ROOT)
+    assert [s.kind for s in out] == ["scripts"] and out[0].paths == sorted(sel.files)
+
+
+def test_a_broad_change_trips_the_guard_and_needs_allow_broad(graph, shards, monkeypatch, capsys):
+    for f in ("python/geobrix/test/conftest.py", ".github/workflows/build_main.yml"):
+        sel = _sel(graph, shards, [f])
+        assert af.light_selected(sel, shards, REPO_ROOT) > af.BROAD_SHARE * af.light_units(shards, REPO_ROOT), f
+    sel = _sel(graph, shards, ["python/geobrix/test/conftest.py"])
+    monkeypatch.setattr(ts, "changed_files", lambda *a, **k: ["python/geobrix/test/conftest.py"])
+    monkeypatch.setattr(af, "affected", lambda *a, **k: (sel, graph[0]))
+    assert launcher.main(["--explain-only"]) == launcher.EXIT_USAGE
+    err = capsys.readouterr().err
+    assert "!!! affected selects" in err and "--allow-broad" in err
+    assert launcher.main(["--explain-only", "--allow-broad"]) == 0
+    assert "WARNING" in capsys.readouterr().err
+
+
+def test_explain_only_names_each_selected_file_with_its_reason(graph, shards, monkeypatch, capsys, tmp_path):
+    sel = _sel(graph, shards, [TIN], old=_with_body_change(graph, TIN, "_delaunay"))
+    monkeypatch.setattr(ts, "changed_files", lambda *a, **k: [TIN])
+    monkeypatch.setattr(af, "affected", lambda *a, **k: (sel, graph[0]))
+    assert launcher.main(["--explain-only", "--timings", str(tmp_path / "h.json")]) == 0
+    out = capsys.readouterr().out
+    assert "test/pyvx/test_tin_core.py: python/geobrix/src/databricks/labs/gbx/pyvx/_tin.py (_delaunay): test.pyvx.test_tin_core -> pyvx._tin" in out
+    assert "table VECTOR_GENERATOR: row gbx_st_" in out and "manager family 2/3 affected" in out
+    queues = [ln for ln in out.splitlines() if ln.strip().startswith("queue (")]
+    assert queues and not [q for q in queues if "zarr" in q or "pyrx" in q], queues
+
+
+def test_changed_symbols_are_the_top_level_code_that_differs():
+    old = "import os\n\ndef a():\n    return 1\n\ndef b():\n    return 2\n"
+    assert af.changed_symbols(old, old.replace("return 2", "return 3")) == {"b"}
+    assert af.changed_symbols(old, old + "\ndef c():\n    pass\n") == {"c"}
+    assert af.changed_symbols(old, old + "\nprint(1)\n") is None, "module-level code is not a symbol"
+    assert af.changed_symbols(old, old + "\n# a comment\n") == set()
 
 
 def test_affected_with_no_change_runs_nothing(shards):
@@ -453,7 +569,7 @@ def test_every_run_merges_its_samples_and_none_overwrites_another(tmp_path):
     h = tm.load(path)
     assert [x["s"] for x in h["keys"][f]["samples"]] == [10.0, 30.0, 20.0] and [r["run"] for r in h["runs"]] == ["r1", "r2", "r3"]
     est = tm.estimates(h, 1)[f]
-    assert est == {"s": 20.0, "n": 3, "lb": False}, "the median of the last runs, with the count"
+    assert est == {"s": 20.0, "n": 3, "lb": False, "solo": 20.0, "x": 1.0}, "the median of the last runs, with the count"
     assert tm.estimates(h, 8)[f]["s"] == round(20.0 * ts.slowdown(8), 2), "normalized to a chunk alone, then to the plan's slots"
     tm.merge(path, [{"key": f, "s": 20.0 * ts.slowdown(8), "slots": 8}], {"run": "r4"})
     assert tm.load(path)["keys"][f]["samples"][-1]["s"] == 20.0
@@ -1388,3 +1504,119 @@ def test_the_runner_notebook_seeds_the_queue_then_runs_every_shard_once(shards, 
     assert sorted(s for _, s in ran) == sorted(plan["shards"]) and sum(o["shards"] for o in out) == len(plan["shards"])
     rec = json.loads((stage / "runners" / "gbx-test-1n" / "r0.json").read_text())
     assert rec["done"] and rec["pool"] == "gbx-test-1n" and rec["shards"], "the record reached the Volume folder"
+
+
+# ---- contention: what a unit takes beside other chunks, against what it takes alone
+def _shard_rec(slug, start, end, **kw):
+    return {"slug": slug, "start": start, "end": end, "rc": 0, "reason": "", **kw}
+
+
+def test_neighbours_are_the_chunks_that_overlapped_on_the_same_cluster():
+    records = {"p": [
+        {"runner": "r0", "shards": [_shard_rec("a", 0, 100)]},  # cluster 0
+        {"runner": "r1", "shards": [_shard_rec("b", 0, 100)]},  # cluster 1: alone
+        {"runner": "r2", "shards": [_shard_rec("c", 10, 50), _shard_rec("d", 60, 120)]},  # cluster 0
+        {"runner": "r4", "shards": [_shard_rec("e", 110, 300)]},  # cluster 0: 10 s beside d (a hand-off), 0 beside a
+    ]}
+    per, peaks = tm.neighbours(records, {"p": 2})
+    assert per["a"]["nb"] == 2 and per["a"]["with"] == ["c", "d"] and per["a"]["peak"] == 2
+    assert per["b"]["nb"] == 0 and per["b"]["peak"] == 1 and per["b"]["cluster"] == 1
+    assert per["e"]["nb"] == 0, "an overlap under OVERLAP_MIN_S is a hand-off, not a neighbour"
+    assert peaks == {"p": {0: 2, 1: 1}}
+
+
+def test_the_contention_factor_is_the_median_ratio_beside_neighbours_and_marks_heavy_units(tmp_path):
+    path = tmp_path / "h.json"
+    for i, x in enumerate((5.0, 4.0, 6.0)):
+        tm.merge(path, [], {"run": f"r{i}"}, [{"key": "test/zarr/test_x.py", "x": x, "nb": 3, "peak": 4},
+                                              {"key": "test/ds/test_y.py", "x": 1.2, "nb": 2, "peak": 4},
+                                              {"key": "test/ds/test_z.py", "x": 3.0, "nb": 0, "peak": 1}])
+    tm.merge(path, [], {"run": "r0"}, [{"key": "test/zarr/test_x.py", "x": 99.0, "nb": 3}])  # the same run again adds nothing
+    h = tm.load(path)
+    assert tm.contention(h) == {"test/zarr/test_x.py": 5.0, "test/ds/test_y.py": 1.2}, "a run alone (nb 0) is no contention"
+    assert tm.contended(h) == {"test/zarr/test_x.py"}
+
+
+def test_a_sample_taken_beside_neighbours_is_deflated_so_the_factor_counts_once(tmp_path):
+    path = tmp_path / "h.json"
+    k = "test/zarr/test_x.py"
+    tm.merge(path, [{"key": k, "s": 600.0, "slots": 1}], {"run": "r1"}, [{"key": k, "x": 5.0, "nb": 3}])
+    e = tm.estimate_of(tm.load(path)["keys"][k], 1)
+    assert e["solo"] == 120.0 and e["x"] == 5.0 and e["s"] == 600.0, "solo 600/5; planned at solo x factor"
+    assert tm.seconds(tm.load(path), 1, adjust=False) == {k: 120.0}
+
+
+def test_contention_records_compare_each_unit_with_its_solo_expected_time():
+    chunk = {"unit_solo_s": {"a.py": 100.0, "b.py": 100.0, "c.py": 10.0}, "solo_min": 4.0}
+    got = tm.contention_records(chunk, 900.0, {"a.py": 500.0, "b.py": 110.0, "c.py": 50.0}, nb=3, peak=4)
+    assert {r["key"]: round(r["x"], 2) for r in got} == {"a.py": 5.0, "b.py": 1.1}, "c.py ran under CONTENTION_MIN_S: too short to judge"
+    assert tm.contention_records(dict(chunk, est_src="lower bound"), 900.0, {"a.py": 500.0}, 3, 4) == []
+    plain = {"solo_min": 2.0}  # an older plan: the chunk's ratio goes to the units that took most of it
+    assert {r["key"] for r in tm.contention_records(plain, 600.0, {"a.py": 400.0, "b.py": 30.0}, 2, 3)} == {"a.py"}
+    assert tm.contention_records(plain, 600.0, {"a.py": 400.0}, 2, 3, incomplete=True)[0]["x"] == 5.0, "a capped chunk: x is a lower bound"
+    assert tm.contention_records({"solo_min": 9.0}, 600.0, {"a.py": 400.0}, 2, 3, incomplete=True) == [], "below the heavy mark it says nothing"
+
+
+def test_contention_heavy_units_join_the_heavy_gate_and_the_plan_carries_their_factor(shards):
+    ds = next(s for s in shards if s.name == "ds")
+    files = ts.files_of(ds, REPO_ROOT)
+    secs = {f: 60.0 for f in files}
+    secs[files[0]] = 300.0  # 5 min: not long enough to be heavy by its time alone
+    out = ts.auto_split([ds], REPO_ROOT, secs, 8.0, contended={files[0]})
+    hot = [c for c in out if c.heavy]
+    assert len(hot) == 1 and hot[0].paths == [files[0]], "the contended file is heavy and packed apart from the light ones"
+    picked = [ts.Shard(**{**c.__dict__, "solo_min": round(c.est_min / (5.0 if c.heavy else 1.0), 2)}) for c in out]
+    plan = _plan(_args(), picked)
+    v = plan["shards"][hot[0].slug]
+    assert v["heavy"] and v["contention"] == 5.0 and plan["pools"]["gbx-test-1n"]["heavy"] == [hot[0].slug]
+    text = launcher.explain(plan, [], [])
+    assert ", heavy, x5)" in text and "contention-heavy unit" in text
+
+
+def test_a_run_records_contention_and_the_summary_prints_it_with_the_peak(tmp_path, shards):
+    files = _ds_files(2)
+    picked = [ts.Shard(name="ds [1/2]", kind="light", paths=[files[0]], est_min=3.0, solo_min=3.0, est_src="history"),
+              ts.Shard(name="ds [2/2]", kind="light", paths=[files[1]], est_min=3.0, solo_min=3.0, est_src="history")]
+    plan = _plan(_args(), picked)
+    out = tmp_path / "out"
+    _junit(out / "ds-1-2" / "junit.xml", [(_mod(files[0]), "a", 500)])
+    _junit(out / "ds-2-2" / "junit.xml", [(_mod(files[1]), "b", 150)])
+    for slug in ("ds-1-2", "ds-2-2"):
+        plan["shards"][slug]["unit_solo_s"] = {plan["shards"][slug]["files"][0]: 100.0}
+    records = {"gbx-test-1n": [{"runner": "r0", "shards": [_shard_rec("ds-1-2", 0, 540)]},
+                               {"runner": "r1", "shards": [_shard_rec("ds-2-2", 0, 180)]}]}
+    rows = [{"name": n, "slug": s, "pool": "gbx-test-1n", "verdict": "ok", "expected_min": 3.0, "passed": 1, "failed": 0, "errors": 0,
+             "skipped": 0, "wall_s": 100, "reason": "", "claims": 1, "est_src": "history", "actual_s": a, "failures": [],
+             "skip_reasons": {}} for n, s, a in (("ds [1/2]", "ds-1-2", 540), ("ds [2/2]", "ds-2-2", 180))]
+    got = launcher.record_timings(tmp_path / "h.json", plan, rows, out, records)
+    assert got["contention"] == 2 and got["peaks"] == {"gbx-test-1n": {0: 2}}
+    assert rows[0]["x"] == 3.0 and rows[0]["nb"] == 1 and rows[1]["x"] == 1.0
+    h = tm.load(tmp_path / "h.json")
+    assert tm.contention(h) == {files[0]: 5.0, files[1]: 1.5} and tm.contended(h) == {files[0]}
+    md = launcher.summary_md(plan, rows, {"gbx-test-1n": {"cluster_id": "c1", "peaks": got["peaks"]["gbx-test-1n"]}})
+    assert "| contention | beside |" in md and "| 3x (heavy) | 1 |" in md and "peak concurrency: cluster 0: 2 chunk(s) at once" in md
+    assert "3x" in launcher.table_text(rows)
+
+
+def test_the_contention_backfill_reads_runner_records_and_queue_expectations(tmp_path):
+    files = _ds_files(2)
+    run = tmp_path / "runs" / "tst-x"
+    _junit(run / "zz-1" / "junit.xml", [(_mod(files[0]), "a", 1200)])
+    _junit(run / "zz-2" / "junit.xml", [(_mod(files[1]), "b", 200)])
+    for slug in ("zz-1", "zz-2"):
+        (run / slug / "result.json").write_text(json.dumps({"rc": 0, "reason": ""}))
+    (run / "_runners" / "p").mkdir(parents=True)
+    (run / "_runners" / "p" / "r0.json").write_text(json.dumps({"runner": "r0", "shards": [_shard_rec("zz-1", 0, 1260)]}))
+    (run / "_runners" / "p" / "r1.json").write_text(json.dumps({"runner": "r1", "shards": [_shard_rec("zz-2", 0, 240)]}))
+    path = tmp_path / "h.json"
+    got = tm.backfill_contention(path, tmp_path / "runs", REPO_ROOT, expected={"tst-x": {"zz-1": 4.0, "zz-2": 4.0}})
+    assert got == {"runs": 1, "records": 2}
+    assert tm.backfill_contention(path, tmp_path / "runs", REPO_ROOT, expected={"tst-x": {"zz-1": 4.0, "zz-2": 4.0}})["records"] == 0
+    assert tm.contended(tm.load(path)) == {files[0]}, "1260 s against 4 min beside a neighbour: 5.25x"
+
+
+def test_a_split_chunk_estimated_by_its_share_of_ci_minutes_gives_no_contention_record():
+    split = {"solo_min": 3.0, "est_src": "ci", "name": "zarr 2/4 [1/5]"}
+    assert tm.contention_records(split, 900.0, {"a.py": 800.0}, 3, 4) == [], "a share of CI's minutes is a guess, not a solo time"
+    whole = dict(split, name="zarr 4/4")
+    assert tm.contention_records(whole, 900.0, {"a.py": 800.0}, 3, 4)[0]["x"] == 5.0, "CI's minutes for a whole shard are a solo time"

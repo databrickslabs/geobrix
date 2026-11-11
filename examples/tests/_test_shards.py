@@ -65,6 +65,8 @@ class Shard:
     est_src: str = ""  # where est_min came from: history | partial (some keys timed) | lower bound | ci (CI's minutes)
     heavy: bool = False  # holds a table of HEAVY_TABLES or a unit recorded at HEAVY_UNIT_MIN+: one at a time per cluster
     unit_max_min: float = 0.0  # the longest file or table of the chunk by its recorded time (0: not known)
+    subset: bool = False  # the selected files or tables of a CI shard (``affected``): collecting nothing is no failure
+    solo_min: float = 0.0  # est_min without the contention factors of its units (what it takes beside light neighbours)
 
     @property
     def group(self) -> str:
@@ -189,10 +191,12 @@ def load(root: Path) -> List[Shard]:
 # ---------------------------------------------------------------------------------------------- selecting
 
 
-def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = None, root: Optional[Path] = None) -> List[Shard]:
+def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = None, root: Optional[Path] = None,
+           affected_shards: Optional[List[Shard]] = None) -> List[Shard]:
     """The shards ``--shards`` names: ``all-light``, ``all-heavy``, ``affected``, or names (a name, or a group such as
     ``pyrx`` for both of its halves), comma separated; a test file (``test/pyrx/test_env.py``) adds one shard ``files`` of the files
-    named. Unknown names raise ValueError (with the known ones)."""
+    named. ``affected`` adds ``affected_shards``: the files and oracle tables the change reaches (``_affected.to_shards``); with no
+    change (``changed`` empty) it adds nothing. Unknown names raise ValueError (with the known ones)."""
     runnable = [s for s in shards if not s.local_only]
     out: List[Shard] = []
 
@@ -213,9 +217,9 @@ def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = No
         elif tok == "all-heavy":
             add(s for s in runnable if s.kind == "heavy")
         elif tok == "affected":
-            if changed is None or root is None:
-                raise ValueError("affected needs the changed files")
-            add(affected(runnable, changed, root))
+            if affected_shards is None and changed:
+                raise ValueError("affected needs the selection of the changed files (_affected.to_shards)")
+            add(affected_shards or [])
         else:
             hit = [s for s in shards if tok in (s.name, s.group, s.slug)]
             if not hit:
@@ -248,69 +252,9 @@ def _covers(shard: Shard, rel: str, shard_fn) -> bool:
     return True
 
 
-# Source dirs that every light test can reach: a change there selects every light shard.
-_SHARED_SRC = ("core", "_compat", "_native", "_rs", "manifest", "manager", "engine", "uc")
-_HEAVY_SRC = ("rasterx", "gridx", "vectorx")
-
-
 def _is_test_file(rel: str) -> bool:
     name = rel.rsplit("/", 1)[-1]
     return (name.startswith("test_") or name.endswith("_test.py")) and name.endswith(".py")
-
-
-def affected(shards: List[Shard], changed: Iterable[str], root: Path) -> List[Shard]:
-    """The shards that hold a test touched by ``changed`` (paths from the repo root).
-
-    * a test file selects the shards that run it (a split dir: the part that holds it);
-    * a helper or conftest of a test dir selects every shard of that dir, and one at the top of ``test/`` selects every shard;
-    * a source file under ``src/databricks/labs/gbx/<pkg>/`` selects the shards of ``test/<pkg>``; shared code (a shared package
-      such as ``core`` or ``manager``, or a top-level module) selects every shard, light and heavy; ``rasterx``/``gridx``/
-      ``vectorx`` select the heavy shard of the same name;
-    * the package pyproject or a requirements file selects every shard;
-    * the CI workflow and actions select every shard and the ``scripts/ci`` shard; a file under ``scripts/ci``,
-      ``scripts/commands`` or ``examples/tests`` selects the ``scripts/ci`` shard.
-    """
-    fn = shard_of(root)
-    pick: List[Shard] = []
-
-    def add(items):
-        for s in items:
-            if s not in pick:
-                pick.append(s)
-
-    code = [s for s in shards if s.kind in ("light", "heavy")]
-    scripts = [s for s in shards if s.kind == "scripts"]
-
-    def of_dir(d: str):
-        return [s for s in code if any(p == d or p.startswith(d + "/") or d.startswith(p.rstrip("/") + "/") for p in s.paths)]
-
-    for f in changed:
-        if f.startswith(PKG + "/test/"):
-            rel = f[len(PKG) + 1:]
-            if _is_test_file(rel):
-                add(s for s in code if _covers(s, rel, fn))
-            elif rel.count("/") == 1:  # a conftest or helper at the top of test/: everything imports it
-                add(code)
-            else:  # a helper or conftest of one dir: every shard that runs part of that dir
-                add(of_dir(rel.rsplit("/", 1)[0]))
-        elif f.startswith(SRC + "/"):
-            rest = f[len(SRC) + 1:]
-            top = rest.split("/", 1)[0]
-            if "/" not in rest or top in _SHARED_SRC:
-                add(code)
-            elif top in _HEAVY_SRC:
-                add(s for s in shards if s.kind == "heavy" and s.name == f"heavy {top}")
-            else:
-                add(of_dir(f"test/{top}"))
-        elif f == f"{PKG}/pyproject.toml" or f.startswith(PKG + "/requirements"):
-            add(code)
-        elif f in (WORKFLOW, LIGHT_ACTION, HEAVY_ACTION) or f.startswith(".github/actions/"):
-            add(code)
-            add(scripts)
-        elif f.startswith(("scripts/ci/", "scripts/commands/", "examples/tests/")):
-            add(scripts)
-    order = {s.name: i for i, s in enumerate(shards)}
-    return sorted(pick, key=lambda s: order[s.name])
 
 
 # ---------------------------------------------------------------------------------------------- lanes
@@ -424,9 +368,10 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     return estimate_src(shard, root, file_seconds)[0]
 
 
-def is_heavy_key(key: str, minutes: float) -> bool:
-    """Whether a unit (``table:<T>`` or a test file) is heavy: a table of the manifest, or a unit recorded at HEAVY_UNIT_MIN or more."""
-    return (key.startswith("table:") and key.split(":", 1)[1] in HEAVY_TABLES) or minutes >= HEAVY_UNIT_MIN
+def is_heavy_key(key: str, minutes: float, contended: Iterable[str] = ()) -> bool:
+    """Whether a unit (``table:<T>`` or a test file) is heavy: a table of the manifest, a unit recorded at HEAVY_UNIT_MIN or more,
+    or a unit ``contended`` names (its contention factor in the history is CONTENTION_HEAVY or more: ``_timings.contended``)."""
+    return (key.startswith("table:") and key.split(":", 1)[1] in HEAVY_TABLES) or minutes >= HEAVY_UNIT_MIN or key in set(contended)
 
 
 def stall_min_for(unit_max_min: float, base: float, shard_cap: float) -> float:
@@ -434,14 +379,15 @@ def stall_min_for(unit_max_min: float, base: float, shard_cap: float) -> float:
     return round(min(max(base, STALL_SHARE * unit_max_min), max(base, shard_cap)), 1)
 
 
-def annotate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> Shard:
+def annotate(shard: Shard, root: Path, file_seconds: Dict[str, float], contended: Iterable[str] = ()) -> Shard:
     """``shard`` with its ``heavy`` flag and ``unit_max_min`` from the recorded times (a shard that has no units to look at is
     heavy when its tables are, and has no longest unit)."""
     it = _items(shard, root, file_seconds)
     if it is None:
         return shard
     mins, _, _ = it
-    heavy = any(is_heavy_key(k, m) for k, m in mins.items())
+    contended = set(contended)
+    heavy = any(is_heavy_key(k, m, contended) for k, m in mins.items())
     return Shard(**{**shard.__dict__, "heavy": heavy, "unit_max_min": round(max(mins.values(), default=0.0), 2)})
 
 
@@ -465,14 +411,16 @@ def pack(mins: Dict[str, float], target: float) -> List[List[str]]:
     return out
 
 
-def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float], lower: Optional[set] = None) -> List[Shard]:
+def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float], lower: Optional[set] = None,
+        contended: Iterable[str] = ()) -> List[Shard]:
     """Cut ``shard`` into chunks of about ``target`` minutes by its files, or by its oracle tables (the family file), from the
     recorded times (``pack``). A shard with nothing to cut by comes back whole."""
     it = _items(shard, root, file_seconds)
     if it is None:
         return [shard]
     mins, _, rest = it
-    hot = {k for k, m in mins.items() if is_heavy_key(k, m)}
+    contended = set(contended)
+    hot = {k for k, m in mins.items() if is_heavy_key(k, m, contended)}
     # the heavy units are packed apart from the others: a chunk is heavy as a whole, so a light table beside one would wait for the gate
     groups = pack({k: m for k, m in mins.items() if k in hot}, target) + pack({k: m for k, m in mins.items() if k not in hot}, target)
     if len(groups) <= 1:
@@ -482,7 +430,7 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     for i, g in enumerate(groups, 1):
         timed = sum(1 for k in g if k in file_seconds)
         src = "lower bound" if lower and any(k in lower for k in g) else ("history" if timed == len(g) else "partial" if timed else "ci")
-        common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src,
+        common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src, subset=shard.subset,
                       heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g), 2))
         if shard.oracle_tables:
             out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
@@ -544,18 +492,19 @@ def split_shard(shard: Shard, k: int, root: Path, file_seconds: Dict[str, float]
     return out
 
 
-def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], target_min: float, lower: Optional[set] = None) -> List[Shard]:
+def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], target_min: float, lower: Optional[set] = None,
+               contended: Iterable[str] = ()) -> List[Shard]:
     """Cut every shard longer than ``target_min`` (by the recorded times, else CI's minutes) into chunks of about that length
     (``cut``: a file or table longer than the target gets a chunk of its own). A task pays about FIXED_MIN before its first
     test, so ``target_min`` should stay several times that. Every chunk carries its estimate and where it came from."""
     out: List[Shard] = []
     for s in shards:
         est, src = estimate_src(s, root, file_seconds, lower)
-        whole = annotate(Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src}), root, file_seconds)
+        whole = annotate(Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src}), root, file_seconds, contended)
         if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min * 1.25:
             out.append(whole)
             continue
-        out += cut(s, target_min, root, file_seconds, lower)
+        out += cut(s, target_min, root, file_seconds, lower, contended)
     return out
 
 

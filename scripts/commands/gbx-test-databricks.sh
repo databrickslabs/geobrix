@@ -14,8 +14,9 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--profile <name>${NC}       Databricks profile (required on a launch; never picked for you)"
     echo -e "  ${GREEN}--purpose \"<why>\"${NC}      Required on a launch; heads each runner notebook and rides on the run name"
-    echo -e "  ${GREEN}--shards <spec>${NC}        affected (default, the pre-push pass), all-light, all-heavy, or names/groups (\"pyrx\", \"zarr 2/4\"), comma separated"
-    echo -e "  ${GREEN}--base <rev>${NC}           For affected: files changed between this and --sha pick the shards (default origin/streamline/0.6.0)"
+    echo -e "  ${GREEN}--shards <spec>${NC}        affected (default: the files and tables a change reaches), all-light, all-heavy, or names/groups (\"pyrx\", \"zarr 2/4\"), comma separated"
+    echo -e "  ${GREEN}--base <rev>${NC}           For affected: files changed between this and --sha pick the tests, through the import graph (default origin/streamline/0.6.0)"
+    echo -e "  ${GREEN}--allow-broad${NC}          Let affected run a selection over 25% of the light bank (refused without it)"
     echo -e "  ${GREEN}--sha <rev>${NC}            Commit to test (default HEAD); uncommitted edits are not in the run"
     echo -e "  ${GREEN}--wheel <path>${NC}         env6 wheel for dependencies and native payload (default dist/env6/)"
     echo -e "  ${GREEN}--jar-path <path>${NC}      JAR of the heavy shards, or its folder (default python/geobrix/lib/)"
@@ -63,7 +64,7 @@ while [[ $# -gt 0 ]]; do
             PASS_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --serverless|--fresh-cluster|--keep-stage|--explain-only)
+        --serverless|--fresh-cluster|--keep-stage|--explain-only|--allow-broad)
             PASS_ARGS+=("$1")
             shift
             ;;

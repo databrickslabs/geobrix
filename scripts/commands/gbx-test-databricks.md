@@ -13,10 +13,11 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--shards <spec>` - what to run. Default: `affected`, the pre-push pass.
   - `all-light`: every light shard of CI, plus `scripts/ci`.
   - `all-heavy`: one shard per heavy test dir (needs the JAR pool).
-  - `affected`: the shards that hold a test touched by the files changed between `--base` and `--sha`.
+  - `affected`: the test files and family oracle tables the files changed between `--base` and `--sha` reach through the import graph (see "Affected"). It runs those files and tables only, never whole CI shards.
   - Names or groups, comma separated: `pyrx` (both halves), `"zarr 2/4"`, `scripts/ci`.
   - Test files, comma separated (`test/pyrx/test_env.py`, from `python/geobrix` or from the repo root): one shard `files` that runs just those files, with the marker CI uses. For a quick re-run of the files a change touched.
 - `--base <rev>` - for `affected`. Default: `origin/streamline/0.6.0`.
+- `--allow-broad` - let `affected` run a selection over 25% of the light bank. Without it, such a selection is refused with the reason.
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel. Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.
 - `--jar-path <path>` - the JAR of the heavy shards, or the folder that holds it. Default: `python/geobrix/lib/`.
@@ -79,7 +80,23 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - The summary also checks isolation: one Python process per shard, and no temp view or conf left by an earlier shard.
 - Each runner adds about 6 s per shard: the claim and the start of the shard's notebook run (2026-11-10: 107 s over 18 shards on 4 slots).
 - The order of the queue follows the estimates. A long shard estimated short starts last and makes the tail; the next run's timings correct it.
-- `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
+- `affected` runs only the test files and tables a change reaches, which is usually a few chunks and a few minutes. For the TIN Rust kernel change (`7274d554d~1..66d5ead5b`: `rust/gbxrs/src/*`, `_rs/__init__.py`, `pyvx/_tin.py`, `pyvx/_conforming.py`, the pyvx tests) it selects 22 files and 1 table, 7 chunks; the earlier per-directory rule selected 48 chunks, nearly the whole light bank.
+
+## Affected
+
+- The graph covers every module of `python/geobrix/src` and `python/geobrix/test` at `--sha`. It holds each module's imports (also those inside functions), its top-level symbols, and the names each symbol uses. A test also depends on the `conftest.py` of its folder and of each folder above it. The graph is read with `ast` from the commit's blobs and cached per commit in `test-logs/databricks-tests/.import-graph/`.
+- A changed test file selects itself. A changed `conftest.py` selects the tests of its folder. A changed helper of the test tree selects the tests that import it.
+- A changed source module selects the test files that import it, directly or through other modules.
+  - Some modules are reached by more than 10% of the test files: a package `__init__`, a loader such as `_rs`, or `pyvx/functions.py`. Such a module is followed by symbol. Only the importers that use the changed symbols go on, or that use the names the module took from a changed module.
+  - When the change in such a module is module-level code, not a symbol, only the tests that import it directly are selected.
+- A change under `rust/gbxrs/src/` maps to the functions and classes the extension exports whose code changed, or whose code calls changed code (`TinKdTree`, `tin_delaunay`). It then maps to the Python modules that call those exports (the `_rs` call sites), followed as above. A change only inside the crate's `#[cfg(test)]` code reaches no Python test.
+- An oracle table module (`bench/oracle_tables/*`) maps to its tables. They run as `GBX_ORACLE_TABLES` parts of the family harness, not the whole family shard.
+- A changed manifest row maps to its oracle table and to the tests that name the row. A function whose light code (its row's `module:symbol` references) the change reaches maps the same way.
+- `scripts/**` and `examples/tests/**` map to the `scripts/ci` tests that name the file, or that name a file that names it.
+- The CI workflow and actions, the package's `pyproject.toml`, its requirements and `envs/` select the whole bank.
+- The selected files run as one chunk set per CI shard group (`pyrx affected`, `manager family 2/3 affected`), with that shard's marker, pool and options; `--split auto` cuts them as usual. A part that collects nothing (only integration tests) does not fail the run.
+- `--explain-only` prints, per selected file and table, the changed file and the import chain (`test.pyvx.test_tin_mode_arg -> pyvx.functions -> pyvx._tin`).
+- A selection over 25% of the light bank's units (files, and the family file as its tables) is refused unless `--allow-broad` is given. The message is loud and names why the selection is so broad.
 
 ## Heavy chunks and the watchdog
 
@@ -88,6 +105,16 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - The runners of one cluster share a lock on the node's local disk. A runner takes it before it claims, and keeps it only for a heavy chunk, so at most one heavy chunk runs per cluster. The other slots take light chunks meanwhile; when only heavy chunks are left, a runner waits for the one that runs. The expected wall in the plan counts those waits, and the runner task's timeout allows for them.
 - The stall cap (`--stall-min`, no test finished) of a chunk is at least half of the recorded time of its longest file or table, never past `--shard-cap-min`. `--explain-only` lists the chunks whose cap is above the flat one.
 - When the shard's watchdog stops a shard (the shard cap or the stall cap), the shard's reason, the runner's record and `summary.md` say `killed by watchdog: <why>`. The watchdog ends a stuck process with SIGKILL (exit 137), which Databricks reports as "Execution ran out of memory" or "kernel unresponsive": that message is the platform's label for any killed process, and is not an out-of-memory.
+
+## Contention
+
+- On 2026-11-10 (`tst-20261110-210406-c575`, 2 clusters x 4 slots) some estimates collapsed: `zarr 4/4` was expected at 9 min and took about 46; `zarr 3/4` 9 vs 30; `manager family 3/3` (GDAL engine tables) 9 vs 45, at the cap.
+- Each run records, per unit (a test file or `table:<T>`), its actual time over its solo-expected time. The solo-expected time is the plan's estimate without contention factors. The record also holds the chunks that ran beside it on its cluster.
+- A unit's contention factor is the median of those ratios over its last 5 runs with neighbours. A factor of 2 or more marks it contention-heavy. It then joins the heavy gate: at most one per cluster at a time, and the other slots take light chunks meanwhile.
+- The planner plans a unit at its solo time times its factor, for the queue order and the expected wall. A sample taken beside neighbours is divided by its run's ratio before it joins the solo estimate, so the factor is not counted twice.
+- A ratio counts only when the unit ran 60 s or more. A part of a split CI shard estimated by its share of CI's minutes gives no ratio, because that share is a guess. A chunk stopped at a cap gives its ratio only when it is 2 or more, since it is then a lower bound.
+- `--explain-only` marks a chunk whose estimate carries a factor (`x4.76`) and lists the contention-heavy units. The summary gives each chunk's measured contention, how many chunks ran beside it, and each cluster's peak concurrency.
+- The factors were backfilled once from today's runs under `test-logs/databricks-tests/tst-*` with `python examples/tests/_timings.py <history> <runs dir> contention`. That run flagged 10 units: `test/zarr/test_write.py` (5.1x), `test_maint.py` (3.4x), `test_register.py` and `test_sync.py` (2.6x), and the tables `SPEC_GDAL` (5.1x), `SPEC_ANALYSIS`, `SPEC_WARP` (2.2x), `MVP_S`, `GRID_GENERATOR` and `RASTER_TO_GRID` (2.1x).
 
 ## Timing history
 

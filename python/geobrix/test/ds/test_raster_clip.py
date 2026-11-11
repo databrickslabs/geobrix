@@ -279,3 +279,13 @@ def test_virtual_clip_carries_instructions_and_round_trips(spark, tmp_path):
         got = ds.read(1)
         gnod = ds.nodata
     assert np.any(got == gnod) and np.any(got != gnod)  # triangle masked
+
+
+def test_the_empty_partition_placeholder_reads_nothing():
+    """With no partition to plan (every box misses), Spark calls read once with a placeholder: None on OSS Spark, a bare
+    InputPartition on the Databricks runtime."""
+    from pyspark.sql.datasource import InputPartition
+
+    reader = RasterGbxDataSource(options={"path": "/nowhere"}).reader(None)
+    assert list(reader.read(None)) == []
+    assert list(reader.read(InputPartition(None))) == []

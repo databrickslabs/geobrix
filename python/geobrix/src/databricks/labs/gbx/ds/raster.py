@@ -1441,9 +1441,10 @@ class RasterGbxReader(DataSourceReader):
 
         _env.configure_gdal_env()
 
-        # Spark's Python DataSource V2 can call read(None) when the partition
-        # list is empty (e.g. all clip polygons miss). Guard and emit nothing.
-        if partition is None:
+        # Spark's Python DataSource V2 calls read once with a placeholder when the partition
+        # list is empty (e.g. all clip polygons miss): None on OSS Spark, a bare InputPartition
+        # (no file_path) on the Databricks runtime. Guard and emit nothing.
+        if partition is None or type(partition) is InputPartition:
             return
 
         # ------------------------------------------------------------------

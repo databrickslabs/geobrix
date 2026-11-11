@@ -367,6 +367,10 @@ def test_env_reaches_every_shard_after_its_own(shards):
     plan = _plan(a, ts.select(shards, "pyrx"))
     assert plan["shards"]["pyrx-1-2"]["env"] == {"GBX_SHARD": "x", "GBX_CAP_ARROW_TILE_TRANSPORT": "0"}
     assert "--env takes KEY=VAL, not 'no-equals'" in launcher.problems(_args("--env", "no-equals"))
+    a = _args("--spark-conf", "spark.sql.x.enabled=false")
+    plan = _plan(a, ts.select(shards, "pyrx"))
+    assert plan["shards"]["pyrx-1-2"]["spark_conf"] == {"spark.sql.x.enabled": "false"}
+    assert "spark.conf.set(_k, _v)" in launcher.run_source(plan)
 
 
 def test_oracle_tables_and_ignores_reach_the_pytest_args(shards):

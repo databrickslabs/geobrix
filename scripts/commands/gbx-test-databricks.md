@@ -36,6 +36,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--pool-wait-min <n>` - wait up to n minutes for a free pool cluster. Default: 30.
 - `--pip-extra "<reqs>"` - more pip requirements the tests import.
 - `--env KEY=VAL` - an environment variable every shard sets before its tests (repeatable). For example, `GBX_CAP_ARROW_TILE_TRANSPORT=0` runs the light tile functions with pickled rows.
+- `--spark-conf KEY=VAL` - a Spark conf every shard's session sets before its tests (repeatable). For example, `spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled=false` carries the tile rows as Arrow batches on DBR 19.
 - `--run-id <id>` - default `tst-<date>-<time>-<4 hex>`.
 - `--keep-stage` - keep the Volume folder, the notebooks and the queue table.
 - `--explain-only` - print the plan and stop. No network, nothing staged.

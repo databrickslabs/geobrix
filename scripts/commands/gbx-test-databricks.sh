@@ -36,6 +36,7 @@ show_help() {
     echo -e "  ${GREEN}--pool-wait-min <n>${NC}    Wait up to n minutes for a free pool cluster (default 30)"
     echo -e "  ${GREEN}--pip-extra \"<reqs>\"${NC}  More pip requirements the tests import"
     echo -e "  ${GREEN}--env KEY=VAL${NC}          An environment variable every shard sets (repeatable; e.g. GBX_CAP_ARROW_TILE_TRANSPORT=0)"
+    echo -e "  ${GREEN}--spark-conf KEY=VAL${NC}   A Spark conf every shard's session sets before its tests (repeatable)"
     echo -e "  ${GREEN}--run-id <id>${NC}          Default tst-<date>-<time>-<4 hex>"
     echo -e "  ${GREEN}--keep-stage${NC}           Keep the Volume folder, the notebooks and the queue table"
     echo -e "  ${GREEN}--explain-only${NC}         Print the plan and stop; no network"
@@ -60,7 +61,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--run-id)
+        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--spark-conf|--run-id)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASS_ARGS+=("$1" "$2")
             shift 2

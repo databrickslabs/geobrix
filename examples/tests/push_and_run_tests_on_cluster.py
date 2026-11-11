@@ -582,6 +582,12 @@ class Counter:
             first_failure(report.nodeid, report)
             beat()
 
+    def pytest_internalerror(self, excrepr, excinfo):  # a conftest hook that raised: pytest stops (rc 3) with no test report
+        state["errors"] += 1
+        if not state["first_failure"]:
+            state["first_failure"] = {"id": "(pytest internal error)", "msg": " ".join(("%%s: %%s" %% (excinfo.typename, excinfo.value)).split())[:300]}
+        beat()
+
     def pytest_runtest_logreport(self, report):
         if report.failed:
             first_failure(report.nodeid, report)

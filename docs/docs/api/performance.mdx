@@ -45,8 +45,8 @@ The light level runs every function on every compute. It is the default for most
 | Band math, spectral indices and canopy height | GDAL `raster calc` in the worker | The JVM form ran `gdal_calc.py` in a subprocess for each row. The lightweight form is the default on every compute, and the JVM form is no longer shipped. |
 | `gbx_rst_transform`, `gbx_rst_resample`, `gbx_rst_resample_to_res` | GDAL `raster reproject` in the worker | The JVM form ran at 0.71x (transform), 1.18x and 0.84x (resample) and 1.10x and 1.01x (resample_to_res) the speed. It is no longer shipped. |
 | `gbx_rst_to_webmercator`, `gbx_rst_resample_to_size` | GDAL `raster reproject` in the worker | The JVM form ran at 0.98x the speed at 4x rows. It is no longer shipped. |
-| Terrain (aspect, hillshade, TPI, roughness, color relief) | GDAL algorithm in the worker | The JVM form was 1.05x to 1.17x faster at 16x rows, under the 1.2x bar. It is no longer shipped. |
-| `gbx_rst_tri` | JVM form on JAR compute, GDAL algorithm elsewhere | The JVM form was 1.24x faster at 16x rows, so it is the default where the JAR runs. |
+| Terrain (aspect, hillshade, TRI, TPI, roughness, color relief) | GDAL algorithm in the worker | The JVM form was 1.05x to 1.17x faster at 16x rows, under the 1.2x bar. It is no longer shipped. |
+| `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` | Python | The JVM form ran at 0.43x and 0.46x (band), 0.39x and 0.28x (setsrid), 0.38x and 0.37x (setcrs), and 0.53x and 0.45x (getsubdataset) the speed at 4x and 16x rows. It is no longer shipped. |
 | `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the lightweight forms returned none. It is no longer shipped |
 | `gbx_rst_fillnodata` | GDAL fill in the worker | The JVM form ran at 0.32x and 0.18x the speed at 4x and 16x rows. It is no longer shipped. |
 | `gbx_rst_proximity` | Exact Euclidean distance in Python | The JVM form ran at 1.0x and 1.16x the speed at 4x and 16x rows. It is no longer shipped. |
@@ -108,7 +108,7 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 
 The JVM `gbx_rst_tilexyz` was 2.5x and 2.8x faster at 1x and 4x tiles. That measurement used a lightweight form that passed tiles to Python as pickled rows. `gbx_rst_tilexyz` runs the lightweight form first until it is measured against the Arrow form.
 
-The same pass found nine JVM forms under the line, so the JAR no longer holds them. See the [release notes](../release-notes-0-6).
+The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. See the [release notes](../release-notes-0-6).
 
 The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the light form:
 

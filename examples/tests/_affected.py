@@ -48,9 +48,10 @@ FAMILY_FILE = "test/manager/test_family_cross_tier.py"
 RUST_CRATE = "rust/gbxrs"
 SCRIPT_DIRS = ("scripts/", "examples/tests/")
 SCRIPTS_TESTS = "scripts/ci/"
-# Changes that reach every test: the CI files, the package's build and requirements.
+# Changes that reach every test: the CI files, the package's build and requirements, and the native payload's build inputs
+# (``scripts/native``: the env wheels carry what it builds, and every light test loads that payload).
 EVERYTHING = (ts.WORKFLOW, ts.LIGHT_ACTION, ts.HEAVY_ACTION, f"{ts.PKG}/pyproject.toml")
-EVERYTHING_PREFIX = (".github/actions/", f"{ts.PKG}/requirements", f"{ts.PKG}/envs/")
+EVERYTHING_PREFIX = (".github/actions/", f"{ts.PKG}/requirements", f"{ts.PKG}/envs/", "scripts/native/")
 # A module whose importers reach more than this share of the test files is followed by symbol, not as a whole.
 HUB_SHARE = 0.10
 # ``affected`` refuses (without --allow-broad) a selection over this share of the light bank's units (files and oracle tables).

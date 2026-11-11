@@ -15,6 +15,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - `all-heavy`: one shard per heavy test dir (needs the JAR pool).
   - `affected`: the shards that hold a test touched by the files changed between `--base` and `--sha`.
   - Names or groups, comma separated: `pyrx` (both halves), `"zarr 2/4"`, `scripts/ci`.
+  - Test files, comma separated (`test/pyrx/test_env.py`, from `python/geobrix` or from the repo root): one shard `files` that runs just those files, with the marker CI uses. For a quick re-run of the files a change touched.
 - `--base <rev>` - for `affected`. Default: `origin/streamline/0.6.0`.
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel. Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.

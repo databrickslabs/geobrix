@@ -191,7 +191,8 @@ def load(root: Path) -> List[Shard]:
 
 def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = None, root: Optional[Path] = None) -> List[Shard]:
     """The shards ``--shards`` names: ``all-light``, ``all-heavy``, ``affected``, or names (a name, or a group such as
-    ``pyrx`` for both of its halves), comma separated. Unknown names raise ValueError (with the known ones)."""
+    ``pyrx`` for both of its halves), comma separated; a test file (``test/pyrx/test_env.py``) adds one shard ``files`` of the files
+    named. Unknown names raise ValueError (with the known ones)."""
     runnable = [s for s in shards if not s.local_only]
     out: List[Shard] = []
 
@@ -200,8 +201,14 @@ def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = No
             if s not in out:
                 out.append(s)
 
+    files: List[str] = []
     for tok in [t.strip() for t in spec.split(",") if t.strip()]:
-        if tok == "all-light":
+        if tok.endswith(".py") and root is not None:
+            rel = tok[len(PKG) + 1:] if tok.startswith(PKG + "/") else tok
+            if not (Path(root) / PKG / rel).is_file():
+                raise ValueError(f"no test file {tok!r} under {PKG}/ (a file is named from the repo root or from {PKG})")
+            files.append(rel)
+        elif tok == "all-light":
             add(s for s in runnable if s.kind in ("light", "scripts"))
         elif tok == "all-heavy":
             add(s for s in runnable if s.kind == "heavy")
@@ -217,6 +224,8 @@ def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = No
             if local:
                 raise ValueError(f"shard {local[0].name!r} does not run on a cluster: {local[0].local_only}")
             add(hit)
+    if files:  # test files named one by one: one shard of just those files (a light shard, so every file runs where CI runs it)
+        add([Shard(name="files", kind="light", paths=sorted(set(files)))])
     return out
 
 

@@ -197,6 +197,17 @@ def test_a_helper_of_a_test_dir_selects_every_shard_that_runs_part_of_it(shards)
     assert _affected(shards, "python/geobrix/test/zarr/conftest.py") == ["zarr 1/4", "zarr 2/4", "zarr 3/4", "zarr 4/4"]
 
 
+def test_test_files_named_in_shards_make_one_shard_of_just_those_files(shards):
+    got = ts.select(shards, "python/geobrix/test/pyrx/test_env.py,test/pyrx/test_compression.py,ds", [], REPO_ROOT)
+    files = next(s for s in got if s.name == "files")
+    assert files.paths == ["test/pyrx/test_compression.py", "test/pyrx/test_env.py"] and files.kind == "light" and files.pool == ts.POOL_LIGHT
+    assert [s.name for s in got if s.name != "files"] == [s.name for s in shards if s.group == "ds"], "named shards keep working beside them"
+    assert ts.pytest_args(files) == ["test/pyrx/test_compression.py", "test/pyrx/test_env.py", "-m", "not integration"]
+    assert ts.files_of(files, REPO_ROOT) == files.paths
+    with pytest.raises(ValueError, match="no test file"):
+        ts.select(shards, "test/pyrx/test_nope.py", [], REPO_ROOT)
+
+
 def test_affected_with_no_change_runs_nothing(shards):
     assert ts.select(shards, "affected", [], REPO_ROOT) == []
 

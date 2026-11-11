@@ -182,6 +182,22 @@ def test_the_reader_formats_qualify_their_path_too(tmp_path):
     }
 
 
+def test_the_stream_reader_qualifies_only_the_path_of_parquet(tmp_path):
+    """`DataStreamReader.parquet(path, mergeSchema, pathGlobFilter, ...)` takes options after its path: only the path is one."""
+    seen = {}
+
+    class StreamReader:
+        def parquet(self, path, mergeSchema=None, pathGlobFilter=None):
+            seen["parquet"] = (path, mergeSchema, pathGlobFilter)
+            return "df"
+
+    d = tmp_path / "d"
+    d.mkdir()
+    ps._patch_stream_load(StreamReader)
+    StreamReader().parquet(str(d), None, str(d))
+    assert seen == {"parquet": ("file:" + str(d), None, str(d))}
+
+
 def test_a_write_to_a_bare_local_path_lands_on_the_local_disk(tmp_path):
     """The path need not exist yet: the folder it goes in decides. Platform paths, URIs and the root are left alone."""
     out = tmp_path / "new" / "out"  # neither "new" nor "out" exists: tmp_path does

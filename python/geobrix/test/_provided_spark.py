@@ -153,6 +153,11 @@ def _patch_load(reader_cls) -> None:
     _patch_paths(reader_cls, _READ_METHODS, local_uri, every=("parquet",))
 
 
+def _patch_stream_load(reader_cls) -> None:
+    """``DataStreamReader.parquet(path, mergeSchema, pathGlobFilter, ...)`` takes options after its one path."""
+    _patch_paths(reader_cls, _READ_METHODS, local_uri)
+
+
 def _patch_save(writer_cls) -> None:
     _patch_paths(writer_cls, _WRITE_METHODS, local_write_uri)
 
@@ -180,7 +185,7 @@ def install(env=None) -> bool:
 
         _patch_load(readwriter.DataFrameReader)
         _patch_save(readwriter.DataFrameWriter)
-        _patch_load(streaming.DataStreamReader)
+        _patch_stream_load(streaming.DataStreamReader)
         _patch_start(streaming.DataStreamWriter)
     except ImportError:
         pass
@@ -193,7 +198,7 @@ def install(env=None) -> bool:
         _patch_stop(connect.SparkSession)
         _patch_load(connect_rw.DataFrameReader)
         _patch_save(connect_rw.DataFrameWriter)
-        _patch_load(connect_stream.DataStreamReader)
+        _patch_stream_load(connect_stream.DataStreamReader)
         _patch_start(connect_stream.DataStreamWriter)
     except Exception:  # noqa: BLE001 - the client deps are optional
         pass

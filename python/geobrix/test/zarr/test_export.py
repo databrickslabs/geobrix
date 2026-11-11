@@ -20,6 +20,22 @@ import pytest
 zarr = pytest.importorskip("zarr")
 xr = pytest.importorskip("xarray")
 
+# The documented floor for reading a reference file (zarr-functions.mdx, "reference"): an
+# older fsspec, such as the 2023.5.0 Databricks runtimes preinstall, cannot fetch a local
+# target and raises ReferenceNotReachable. GeoBrix does not pin fsspec.
+_FSSPEC_FOR_REFERENCES = "2024.12.0"
+
+
+def _fsspec_reads_references() -> bool:
+    try:
+        import fsspec
+    except ImportError:
+        return False
+    from packaging.version import Version
+
+    return Version(fsspec.__version__) >= Version(_FSSPEC_FOR_REFERENCES)
+
+
 from test.zarr import _helpers as H  # noqa: E402
 
 from databricks.labs.gbx.zarr import _export, _maint  # noqa: E402
@@ -362,7 +378,9 @@ def test_a_copy_target_must_be_where_every_node_sees_it(
 @pytest.mark.parametrize("kind", KINDS)
 def test_reference_opens_in_xarray_via_fsspec(spark_delta, drop, tmp_path, kind):
     pytest.importorskip(
-        "fsspec", reason="fsspec is the consumer's dependency; GeoBrix does not need it"
+        "fsspec",
+        minversion=_FSSPEC_FOR_REFERENCES,
+        reason="fsspec is the consumer's dependency; GeoBrix does not need it",
     )
     table, _ = _scenario(spark_delta, drop, tmp_path, kind)
     if kind == "managed":
@@ -503,11 +521,13 @@ def test_export_pins_version(spark_delta, drop, tmp_path, monkeypatch):
         assert zarr.open_group(str(copy), mode="r")["t2m"].shape == (hours, 10, 12)
     ref = tmp_path / "v1.json"
     gbx_zarr_export(spark_delta, table, str(ref), method="reference", version_as_of=v1)
-    options = {"storage_options": {"fo": str(ref)}, "zarr_format": 3}
-    with xr.open_zarr(
-        "reference://", consolidated=False, chunks=None, **options
-    ) as ds1:
-        np.testing.assert_array_equal(ds1.t2m.values, first)
+    # a reader's fsspec below the documented floor cannot open it (see the module's note)
+    if _fsspec_reads_references():
+        options = {"storage_options": {"fo": str(ref)}, "zarr_format": 3}
+        with xr.open_zarr(
+            "reference://", consolidated=False, chunks=None, **options
+        ) as ds1:
+            np.testing.assert_array_equal(ds1.t2m.values, first)
 
     # a version vacuum has dropped is refused before any byte is written; a tagged one stays
     when = datetime.now(timezone.utc) + timedelta(days=30)

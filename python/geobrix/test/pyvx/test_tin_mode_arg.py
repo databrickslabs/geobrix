@@ -29,7 +29,8 @@ def test_an_empty_mode_is_refused_as_the_jvm_and_uc_levels_refuse_it():
 
 
 def test_the_session_udtf_takes_mode_left_out_null_or_by_name(spark):
-    spark.udtf.register("gbx_t_tri", F._TriangulateUDTF)
+    # a session tile UDTF: the form this session runs is the one to register
+    spark.udtf.register("gbx_t_tri", F._TriangulateUDTF.for_session(spark))
     count = lambda sql: spark.sql(sql).count()  # noqa: E731
     assert count(f"SELECT * FROM gbx_t_tri({ARGS})") == 4
     assert count(f"SELECT * FROM gbx_t_tri({ARGS}, CAST(NULL AS STRING))") == 0
@@ -45,7 +46,7 @@ def test_the_session_udtf_takes_mode_left_out_null_or_by_name(spark):
 )
 def test_the_elevation_udtfs_take_mode_left_out_null_or_by_name(spark, udtf, grid):
     name = "gbx_t_" + udtf.lower().strip("_")
-    spark.udtf.register(name, getattr(F, udtf))
+    spark.udtf.register(name, getattr(F, udtf).for_session(spark))
     count = lambda sql: spark.sql(sql).count()  # noqa: E731
     assert count(f"SELECT * FROM {name}({ARGS}, {grid})") == 4
     assert count(f"SELECT * FROM {name}({ARGS}, {grid}, CAST(NULL AS STRING))") == 0

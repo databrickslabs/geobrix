@@ -245,7 +245,8 @@ class _RustKdTree:
         self.extra: List[Coord] = []
 
     def insert_many(self, coords: np.ndarray) -> None:
-        assert not self.extra, "the batch inserts come first"
+        if self.extra:  # node ids are insertion ranks: the batch rows must come first
+            raise RuntimeError("_RustKdTree: insert_many after a single insert")
         a = np.ascontiguousarray(np.asarray(coords, dtype=float).reshape(-1, 3))
         made = np.frombuffer(
             self.tree.insert_many(a[:, 0].tobytes(), a[:, 1].tobytes()), dtype=np.uint8
@@ -594,6 +595,8 @@ def jts_delaunay(verts, env, tol: float) -> np.ndarray:
     """The triangles (vertex index triples) JTS's incremental triangulation makes inserting ``verts`` (rows of
     (x, y, ...)) in order: the Rust kernel's, or the ``_quadedge`` port's where this process has no Rust build. Raises
     :class:`ConformingError` where JTS's point location fails."""
+    if len(verts) == 0:
+        return np.zeros((0, 3), dtype=np.int64)
     va = np.asarray(verts, dtype=float).reshape(len(verts), -1)
     rs = _rust()
     if rs is not None:

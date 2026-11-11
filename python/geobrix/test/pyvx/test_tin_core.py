@@ -573,7 +573,9 @@ def test_interpolate_zs_is_interpolate_z_point_for_point():
             assert (want is None and math.isnan(g)) or g == want, (x, y)
 
 
-def test_the_batched_wkbs_are_the_per_row_ones():
+@pytest.mark.parametrize("chunk", [65536, 7])
+def test_the_batched_wkbs_are_the_per_row_ones(monkeypatch, chunk):
+    monkeypatch.setattr(_tin, "_CHUNK", chunk)  # 7: every batch boundary is crossed
     from shapely import set_srid, to_wkb
     from shapely.geometry import Point, Polygon
 

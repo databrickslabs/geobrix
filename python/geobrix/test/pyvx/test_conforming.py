@@ -386,3 +386,36 @@ def test_a_locate_failure_while_splitting_raises_before_the_99th_pass(monkeypatc
     monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
     with pytest.raises(_conforming.ConformingError, match="locating a point"):
         _tin.triangulate(pts, bl, 0.0, 0.0, "conforming")
+
+
+def test_a_site_at_minus_0_is_not_the_break_line_vertex_at_0(monkeypatch):
+    # java.util.HashMap keys -0.0 and 0.0 apart (Double.equals): the site (-0.0, 0) is no break line vertex, so it is
+    # a site, inserted first; the KdTree then takes the line's (0, 0) as the same point (Z 5, not the line's 1)
+    pts = np.array([[-0.0, 0.0, 5.0], [10.0, 3.0, 0.0], [0.0, 6.0, 0.0]])
+    bl = [np.array([[0.0, 0.0, 1.0], [10.0, 0.0, 1.0]])]
+    for python in (False, True):
+        with monkeypatch.context() as m:
+            if python:
+                _python_only(m)
+            verts, _ = _conforming.conforming_vertices(pts, bl, 0.0)
+        zs = [v[2] for v in verts.tolist() if v[:2] == [0.0, 0.0]]
+        assert zs == [5.0], python
+
+
+def test_no_vertices_give_no_triangles(monkeypatch):
+    env = (0.0, 0.0, 1.0, 1.0)
+    assert _conforming.jts_delaunay(np.zeros((0, 3)), env, 0.0).shape == (0, 3)
+    _python_only(monkeypatch)
+    assert _conforming.jts_delaunay([], env, 0.0).shape == (0, 3)
+
+
+def test_the_rust_kernels_refuse_malformed_buffers(rust_kernels):
+    mod = rust_kernels.load()
+    with pytest.raises(ValueError, match="float64"):
+        mod.tin_delaunay(b"\x00" * 7, b"\x00" * 8, (0.0, 0.0, 1.0, 1.0), 0.0)
+    with pytest.raises(ValueError, match="equal-length"):
+        mod.TinKdTree(0.0).insert_many(b"\x00" * 8, b"")
+    tree = _conforming._RustKdTree(0.0, rust_kernels)
+    tree.insert((0.0, 0.0, 0.0))
+    with pytest.raises(RuntimeError, match="after a single insert"):
+        tree.insert_many(np.zeros((1, 3)))

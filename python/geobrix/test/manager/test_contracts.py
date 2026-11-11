@@ -450,10 +450,11 @@ def test_tilexyz_dispatch_keeps_tile_bytes_on_the_jvm_rows_out_of_python(spark):
         f"CREATE OR REPLACE TEMPORARY FUNCTION gbx__l1_probe(tile {TILE_SQL}, z INT, x INT, y INT, f STRING, "
         "s INT, r STRING, c STRING) RETURNS BINARY RETURN IF(tile IS NULL, NULL, CAST('jvm' AS BINARY))"
     )
-    spark.sql(
-        jvm.dispatch_ddl(
-            MAN.functions["gbx_rst_tilexyz"], "gbx__l1_probe", "gbx__l3_probe"
-        )
+    fn = MAN.functions["gbx_rst_tilexyz"]
+    # Through the install path: an earlier registration in this session may hold the name with a light UDF,
+    # which CREATE OR REPLACE refuses; _create_wrapper drops it and creates again.
+    jvm._create_wrapper(
+        spark, fn, jvm.dispatch_ddl(fn, "gbx__l1_probe", "gbx__l3_probe")
     )
     try:
         got = _run_tilexyz_probe(spark, TILE_SQL)

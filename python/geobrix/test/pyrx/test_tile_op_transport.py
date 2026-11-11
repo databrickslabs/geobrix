@@ -440,6 +440,62 @@ def test_a_batch_returns_a_tile_struct_from_dicts_and_rows(tiles):
     assert got[1] is None and got[2]["cellid"] == 3
 
 
+def test_a_large_batch_runs_a_row_slice_at_a_time(monkeypatch):
+    """The platform bounds a batch at its own size (10000 rows; about 32 MiB seen on DBR 19 and Serverless, promised
+    nowhere): a batch past ARROW_SLICE_BYTES becomes Python values a slice at a time, the answer in the same order.
+    """
+    import pyarrow as pa
+    from pyspark.sql.types import LongType
+
+    monkeypatch.setattr(_transport, "ARROW_SLICE_BYTES", 10_000)
+    seen = []
+    real = _transport._column_values
+
+    def counted(col):
+        seen.append(len(col))
+        return real(col)
+
+    monkeypatch.setattr(_transport, "_column_values", counted)
+    tiles = pa.array([bytes([i % 256]) * 1000 for i in range(95)], pa.binary())
+    ids = pa.array(list(range(95)), pa.int64())
+    out = _transport._arrow_batch(lambda b, i: len(b) + b[0] + i, LongType())(
+        tiles, ids
+    )
+    assert out.to_pylist() == [1000 + (i % 256) + i for i in range(95)]
+    # each slice holds at most ~10 kB of arguments: 9 rows of the 1008-byte rows, never the whole batch
+    assert max(seen) <= 10 and sum(seen) == 2 * 95 and len(seen) >= 2 * 9
+
+
+def test_a_small_batch_is_one_slice():
+    import pyarrow as pa
+
+    col = pa.array([b"x" * 10] * 5, pa.binary())
+    assert _transport._slices([col]) == [(0, 5)]
+    assert _transport._slices([pa.array([], pa.binary())]) == [(0, 0)]
+
+
+def test_the_slice_size_is_the_serverless_decoded_budget():
+    from databricks.labs.gbx.pyrx.core import budget
+
+    assert _transport.ARROW_SLICE_BYTES == budget._BUDGETS["serverless"]
+
+
+@needs_arrow_udf
+def test_a_value_that_does_not_fit_the_declared_type_raises_not_wraps():
+    """The output is built as pyspark's own Arrow UDF builds it, then cast safely: an INT output past 2**31 raises."""
+    import pyarrow as pa
+    from pyspark.sql.types import IntegerType
+
+    ok = _transport._arrow_batch(lambda i: None if i is None else i * 2, IntegerType())(
+        pa.array([1, None], pa.int64())
+    )
+    assert ok.type == pa.int32() and ok.to_pylist() == [2, None]
+    with pytest.raises((pa.ArrowInvalid, OverflowError)):
+        _transport._arrow_batch(lambda i: i * 2**40, IntegerType())(
+            pa.array([1], pa.int64())
+        )
+
+
 # ---------------------------------------------------------------------------
 # (d) the guard of the arrow_row form (Spark 4.0's Arrow)
 # ---------------------------------------------------------------------------

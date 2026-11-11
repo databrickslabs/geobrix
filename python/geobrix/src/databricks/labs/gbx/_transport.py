@@ -181,23 +181,53 @@ def _output_converter(return_type):
         try:
             return pa.array(vals, type=atype)
         except pa.lib.ArrowInvalid:
-            return pa.array(vals).cast(target_type=atype, safe=False)
+            # a safe cast: a value that does not fit the declared type raises, never truncates
+            return pa.array(vals).cast(target_type=atype, safe=True)
 
     return out
 
 
+# The most bytes of a batch's arguments turned into Python values at once (the Serverless decoded budget of
+# ``pyrx.core.budget``; a test keeps the two equal). The platform bounds a batch at its own size: up to
+# ``spark.sql.execution.arrow.maxRecordsPerBatch`` rows (10000), and 32 MiB per batch was seen on classic DBR 19, which
+# no document promises. A batch is turned into Python values and run a slice of about this many bytes at a time, so a
+# larger batch never holds a second copy of all its tiles in Python. Each row's GDAL datasets close inside its call.
+ARROW_SLICE_BYTES = 64 * 1024 * 1024
+
+
+def _slices(cols):
+    """``(offset, length)`` of the row slices of a batch of *cols*: about ``ARROW_SLICE_BYTES`` of arguments each, by
+    the batch's mean row size; one slice for a batch under it."""
+    n = len(cols[0]) if cols else 0
+    total = sum(c.nbytes for c in cols)
+    if n == 0 or total <= ARROW_SLICE_BYTES:
+        return [(0, n)]
+    step = max(1, int(ARROW_SLICE_BYTES * n // total))
+    return [(off, min(step, n - off)) for off in range(0, n, step)]
+
+
 def _arrow_batch(func, return_type):
     """*func* (a row function) as the body of a SCALAR ``arrow_udf``: the batch's columns as Python values, one call per
-    row, the results as one Arrow array. No pandas: the legacy pandas conversion conf does not apply to it.
+    row, the results as one Arrow array. No pandas: the legacy pandas conversion conf does not apply to it. A large
+    batch runs in row slices (``_slices``): only one slice's arguments and results are Python values at a time.
     """
     state = {}
 
     def batch(*cols):
+        import pyarrow as pa
+
         out = state.get("out")
         if out is None:
             out = state["out"] = _output_converter(return_type)
-        args = [_column_values(c) for c in cols]
-        return out([func(*row) for row in zip(*args)])
+        parts = []
+        for off, k in _slices(cols):
+            args = [
+                _column_values(c if (off, k) == (0, len(c)) else c.slice(off, k))
+                for c in cols
+            ]
+            parts.append(out([func(*row) for row in zip(*args)]))
+            del args
+        return parts[0] if len(parts) == 1 else pa.concat_arrays(parts)
 
     # the name and doc only: no annotations, which pyspark would read as the UDF's type hints
     for attr in ("__module__", "__name__", "__qualname__", "__doc__"):

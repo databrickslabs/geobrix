@@ -178,13 +178,14 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
     """gbx.uc.install from env 6, the probe batch form, then the MVP_S and MVP_G oracle tables through 3-level names."""
     from databricks.labs.gbx import __version__ as ver
     from databricks.labs.gbx import manifest, register, uc
-    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench import oracles, uc_build_probe
     from databricks.labs.gbx.uc import ddl
 
     os.makedirs(tmpdir, exist_ok=True)
     t = time.time()
     stmts = uc.install(catalog, schema, volume_dir, spark=spark)
     out = {"install_s": time.time() - t, "statements": len(stmts)}
+    uc_build_probe.assert_installed_build(spark, catalog, schema, volume_dir)
     man = manifest.load()
     wheel = uc._single_wheel(volume_dir)
     out["wheel"] = wheel
@@ -286,7 +287,7 @@ def run_uc_slice(
     ``scala`` counts the functions created on the JAR.
     """
     from databricks.labs.gbx import manifest, register, uc
-    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench import oracles, uc_build_probe
     from databricks.labs.gbx.bench.uc_perf import _Run
 
     man = manifest.load()
@@ -304,6 +305,11 @@ def run_uc_slice(
     if err:
         run_.stop()
         raise RuntimeError(f"gbx.uc.install failed: {err}")
+    try:
+        uc_build_probe.assert_installed_build(spark, catalog, schema, volume_dir)
+    except Exception:
+        run_.stop()
+        raise
     out = {
         "install_s": time.time() - t,
         "statements": len(stmts),

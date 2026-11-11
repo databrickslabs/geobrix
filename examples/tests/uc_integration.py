@@ -201,6 +201,9 @@ spark.sql("CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
 res = uc.install({catalog!r}, {schema!r}, {folder!r}, procedures=True)
 n = len(res) if hasattr(res, "__len__") else -1
 print("[UC IT] install DONE %.1fs, %s statements" % (time.time() - t0, n), flush=True)
+# One UC function call reports the build it imports; the install fails here when it is not the staged wheel's.
+from databricks.labs.gbx.bench import uc_build_probe
+uc_build_probe.assert_installed_build(spark, {catalog!r}, {schema!r}, {folder!r}, say=lambda m: print(m, flush=True))
 cnt = spark.sql(
     "SELECT count(*) FROM `{catalog}`.information_schema.routines WHERE routine_schema = '{schema}'"
 ).collect()[0][0]

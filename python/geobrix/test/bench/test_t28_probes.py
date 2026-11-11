@@ -4,7 +4,7 @@ Nothing here touches Databricks.
 """
 
 from databricks.labs.gbx import manifest
-from databricks.labs.gbx.bench import oracles, probes
+from databricks.labs.gbx.bench import oracles, probes, uc_build_probe
 
 # The MVP oracle tables run from their own probe (run_uc_s6), not from the UC slice.
 OWN_FILES = {"MVP_S", "MVP_H", "MVP_G", "MVP_A", "MVP_IO"}
@@ -66,6 +66,7 @@ def test_run_uc_slice_installs_from_the_named_jar_and_routes_recipes_to_the_scal
         ]
 
     monkeypatch.setattr(uc, "install", install)
+    monkeypatch.setattr(uc_build_probe, "assert_installed_build", lambda *a, **k: seen.setdefault("probe", a[1:]))
     monkeypatch.setattr("databricks.labs.gbx.register", lambda *a, **k: {})
     monkeypatch.setattr(
         oracles,
@@ -83,6 +84,7 @@ def test_run_uc_slice_installs_from_the_named_jar_and_routes_recipes_to_the_scal
     )
     assert scratch.is_dir()
     assert seen["install"][3]["jar"] == "/Volumes/c/s/v/j.jar"
+    assert seen["probe"] == ("c", "s", "/Volumes/c/s/v/f")  # the build the functions import is checked after the install
     assert out["scala"] == 1 and out["statements"] == 2 and out["failures"] == []
     man = manifest.load()
     assert all(

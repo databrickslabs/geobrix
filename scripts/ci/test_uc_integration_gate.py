@@ -421,6 +421,10 @@ def test_install_notebook_installs_with_procedures_and_asserts_routines(driver):
     # Fail on revert: uc.install does not create the schema (first E2E run: SCHEMA_NOT_FOUND), so the notebook must, first.
     create = "CREATE SCHEMA IF NOT EXISTS `cat`.`sch`"
     assert create in code and code.index(create) < code.index("uc.install(")
+    # Fail on revert: a wheel staged again under the same name could leave the functions on an older build; the notebook
+    # makes one UC function call that reports the imported build, after the install.
+    probe = "uc_build_probe.assert_installed_build(spark, 'cat', 'sch', '/Volumes/c/s/v/uc-it/abc'"
+    assert probe in code and code.index("uc.install(") < code.index(probe)
 
 
 def test_wheel_reuse_refuses_a_wheel_built_from_a_dirty_tree(driver):

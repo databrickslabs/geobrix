@@ -655,6 +655,26 @@ def test_a_stopped_chunk_leaves_lower_bounds_and_gets_a_chunk_of_its_own_first_n
     assert not tm.lower_bounds(tm.load(path), 4), "a later full run answers the bound"
 
 
+def test_a_stopped_chunks_bounds_share_only_the_time_its_keys_did_not_take(tmp_path):
+    files = _ds_files(4)
+    junit = _junit(tmp_path / "junit.xml", [(_mod(files[0]), "a", 30), (_mod(files[1]), "b", 20)])  # stopped inside files[1]
+    busy = 2742
+    got = {x["key"]: x["s"] for x in tm.run_samples({"files": files}, "INCOMPLETE", busy, junit, REPO_ROOT, 1)}
+    elapsed = busy - ts.FIXED_MIN * 60
+    assert sum(got.values()) == pytest.approx(elapsed), "the stopped key's own 20 s is counted once"
+    assert got[files[1]] - got[files[2]] == pytest.approx(20.0)
+
+
+def test_a_chunk_that_never_ran_leaves_no_zero_second_bound(tmp_path):
+    files = _ds_files(2)
+    absent = tmp_path / "absent.xml"
+    assert tm.run_samples({"files": files}, "INCOMPLETE", None, absent, REPO_ROOT, 1) == []
+    assert tm.run_samples({"files": files}, "INCOMPLETE", 30, absent, REPO_ROOT, 1) == [], "under the fixed start cost"
+    path = tmp_path / "h.json"
+    tm.merge(path, tm.run_samples({"files": files}, "INCOMPLETE", None, absent, REPO_ROOT, 1), {"run": "lost"})
+    assert not set(files) & set(tm.seconds(tm.load(path), 4)), "no 0-minute estimate: the planner keeps CI's share"
+
+
 def test_a_failed_or_partial_run_still_leaves_its_samples(tmp_path):
     files = _ds_files(2)
     junit = _junit(tmp_path / "junit.xml", [(_mod(files[0]), "a", 3), (_mod(files[0]), "b", 4), (_mod(files[1]), "c", 5)])

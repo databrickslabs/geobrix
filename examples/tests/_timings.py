@@ -371,9 +371,12 @@ def _run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path
     if not open_keys:
         return [{"key": k, "s": s, "slots": slots, "lb": False} for k, s in done.items()]
     elapsed = float(busy_s or 0.0) - ts.FIXED_MIN * 60
-    left = max(0.0, elapsed - sum(done.values()))
+    # what no key's cases took: the stopped key's own seconds are already in its share, so they are not left over too
+    left = max(0.0, elapsed - sum(per.values()))
     out = [{"key": k, "s": s, "slots": slots, "lb": False} for k, s in done.items()]
-    out += [{"key": k, "s": per.get(k, 0.0) + left / len(open_keys), "slots": slots, "lb": True} for k in open_keys]
+    bounds = [(k, per.get(k, 0.0) + left / len(open_keys)) for k in open_keys]
+    # a bound of 0 s (a chunk that never ran) says nothing, and would plan the key at 0 minutes in place of CI's share
+    out += [{"key": k, "s": s, "slots": slots, "lb": True} for k, s in bounds if s > 0]
     return out
 
 

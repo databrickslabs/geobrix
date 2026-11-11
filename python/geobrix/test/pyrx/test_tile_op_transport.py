@@ -111,6 +111,9 @@ class _FakeSpark:
 def _no_override(monkeypatch):
     for cap in ("ARROW_TILE_TRANSPORT", "ARROW_TILE_UDTF_TRANSPORT"):
         monkeypatch.delenv(caps.CAP_ENV_PREFIX + cap, raising=False)
+    # every signal the choice reads is the fake session's: on a Serverless node the registry reads no conf at all
+    # (DATABRICKS_RUNTIME_VERSION=client.*), which would ignore the conf a test hands its _FakeSpark
+    monkeypatch.setattr(caps, "is_serverless", lambda: False)
 
 
 # ---------------------------------------------------------------------------

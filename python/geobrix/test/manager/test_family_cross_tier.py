@@ -92,12 +92,18 @@ def _rows():
 
 
 def _run(spark, fn, cases, tmpdir, column_of=None):
+    # the cases that can share a query run in one (GBX_ORACLE_BATCH=0 runs each alone; see oracles._run_batched)
+    batch = oracles.batching()
     if oracles.has_groups(
         fn
     ):  # an aggregate, or a table function over TABLE(...) PARTITION BY
-        return oracles.run_groups(spark, cases, tmpdir=tmpdir, column_of=column_of)
+        return oracles.run_groups(
+            spark, cases, tmpdir=tmpdir, column_of=column_of, batch=batch
+        )
     if fn.kind == "generator":
-        return oracles.run_rows(spark, cases, tmpdir=tmpdir, table_of=column_of)
+        return oracles.run_rows(
+            spark, cases, tmpdir=tmpdir, table_of=column_of, batch=batch
+        )
     empty = [c for c in cases if c.kind == "no_rows"]
     if fn.kind == "scalar" and empty:
         # a scalar that returns an array of chips: the rows that expect no chip are judged on the exploded array
@@ -107,6 +113,7 @@ def _run(spark, fn, cases, tmpdir, column_of=None):
             [c for c in cases if c not in empty],
             tmpdir=tmpdir,
             column_of=column_of,
+            batch=batch,
         )
         if column_of is None:
             ran += oracles.run_rows(
@@ -116,7 +123,9 @@ def _run(spark, fn, cases, tmpdir, column_of=None):
                 tmpdir=tmpdir,
             )
         return ran
-    return oracles.run_session(spark, cases, tmpdir=tmpdir, column_of=column_of)
+    return oracles.run_session(
+        spark, cases, tmpdir=tmpdir, column_of=column_of, batch=batch
+    )
 
 
 ROWS = list(_rows())
@@ -186,6 +195,7 @@ def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, 
             cases,
             name_of=lambda f: f"gbx__l1_{f[len('gbx_'):]}",
             tmpdir=str(tmp_path),
+            batch=oracles.batching(),
         )
         assert [m for _, m in ran if m] == []
         return

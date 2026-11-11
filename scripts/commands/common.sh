@@ -647,12 +647,14 @@ gbx_native_env_args() {
 # gbx_test_env_args: GBX_TEST_ENV_ARGS, the `docker exec` -e arguments for the test-selection variables a host
 # caller sets (GBX_ORACLE_TABLES: the oracle tables the family harness runs; PYTEST_ADDOPTS: the caller's
 # --durations / --junitxml; GBX_DRIVERS_SNAPSHOT=write: refresh manifest/shipped_drivers.json from the payload's GDAL,
-# see python/geobrix/test/core/test_drivers.py). Empty when none is set.
+# see python/geobrix/test/core/test_drivers.py; GBX_ORACLE_BATCH=0: the family harness runs each oracle case as its
+# own query, to compare with the batched default). Empty when none is set.
 gbx_test_env_args() {
     GBX_TEST_ENV_ARGS=()
     [ -n "${PYTEST_ADDOPTS:-}" ] && GBX_TEST_ENV_ARGS+=(-e "PYTEST_ADDOPTS=${PYTEST_ADDOPTS}")
     [ -n "${GBX_ORACLE_TABLES:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_ORACLE_TABLES=${GBX_ORACLE_TABLES}")
     [ -n "${GBX_DRIVERS_SNAPSHOT:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_DRIVERS_SNAPSHOT=${GBX_DRIVERS_SNAPSHOT}")
+    [ -n "${GBX_ORACLE_BATCH:-}" ] && GBX_TEST_ENV_ARGS+=(-e "GBX_ORACLE_BATCH=${GBX_ORACLE_BATCH}")
     return 0
 }
 

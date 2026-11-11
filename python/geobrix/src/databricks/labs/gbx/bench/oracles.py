@@ -5174,6 +5174,160 @@ def run_recipe(
         return check_error(case, exc)
 
 
+# --- Batching: the cases of one function at one level and surface in one Spark query --------------------------------
+# A query costs seconds of overhead on Serverless and a DBR 19 pool, whatever it computes, so the family harness puts
+# the cases of one call that can share a query into ONE: each group of cases with one input schema (and one call) is a
+# view of their argument rows, with the case and row index, and the groups are one UNION ALL whose column `o<g>` is
+# group g's answer (NULL in the other groups' rows, so no column takes a type widened from another group's). Each case
+# is then judged on its own rows with the same judges. A case that must raise runs alone (it would end the batch), as
+# do recipes and the shapes listed at each runner. A batch that fails as a whole, and a case that fails its judge in a
+# batch, are run alone again: the alone run's verdict is the one recorded, so a red row is named and judged exactly as
+# it is unbatched. `GBX_ORACLE_BATCH=0` runs every case alone (to compare the two).
+BATCH_ENV = "GBX_ORACLE_BATCH"
+_ALONE_KINDS = ("raises", "uc_refused")
+
+
+def batching() -> bool:
+    """True unless ``GBX_ORACLE_BATCH=0``: whether the family harness batches the cases of a call."""
+    return os.environ.get(BATCH_ENV, "1").strip() != "0"
+
+
+def _run_batched(cases, prepare, run_batch, judge, run_alone):
+    """Run ``cases`` in batches; one ``(case, verdict)`` per case run, in the order of ``cases``.
+
+    ``prepare(case)`` gives ``(key, payload)``, or None for a case that runs alone; cases with one key share a group.
+    ``run_batch(groups)`` (each group a list of ``(index, payload)``) runs every group in one query and gives
+    ``{index: outputs}``. ``judge(case, payload, outputs)`` is the verdict. ``run_alone(case)`` gives the unbatched
+    ``[(case, verdict)]`` (empty for a case the runner skips).
+    """
+    groups: Dict[Any, list] = {}
+    alone = []
+    for k, case in enumerate(cases):
+        try:
+            got = prepare(case)
+        except (
+            Exception
+        ):  # noqa: BLE001 - the alone run raises it, or judges it, as unbatched
+            got = None
+        if got is None:
+            alone.append(k)
+        else:
+            groups.setdefault(got[0], []).append((k, got[1]))
+    done: Dict[int, list] = {}
+    if groups:
+        try:
+            outs = run_batch(list(groups.values()))
+        except (
+            Exception
+        ):  # noqa: BLE001 - re-run case by case, so a failure names its case
+            outs = None
+        for members in groups.values():
+            for k, payload in members:
+                why = "batch failed"
+                if outs is not None:
+                    try:
+                        why = judge(cases[k], payload, outs.get(k, []))
+                    except Exception:  # noqa: BLE001 - judged again alone
+                        why = "judge raised"
+                if why is None:
+                    done[k] = [(cases[k], None)]
+                else:
+                    alone.append(k)
+    for k in alone:
+        done[k] = run_alone(cases[k])
+    return [r for k in range(len(cases)) for r in done.get(k, [])]
+
+
+def _batch_rows(members) -> list:
+    """The rows of one group's view: ``(case index, row index, *arguments)`` for each argument row of each case."""
+    return [
+        (k, i, *row) for k, payload in members for i, row in enumerate(payload["rows"])
+    ]
+
+
+def _batch_schema(schema: str) -> str:
+    return ", ".join(s for s in ("_gbx_case int, _gbx_i int", schema) if s)
+
+
+def _gather(got, group_of: Dict[int, int]) -> Dict[int, list]:
+    """``{case index: [its group's column, row by row, in argument-row order]}`` from the rows of a batch query."""
+    rows: Dict[int, list] = {}
+    for r in got:
+        rows.setdefault(r["_gbx_case"], []).append(r)
+    return {
+        k: [r[f"o{group_of[k]}"] for r in sorted(rs, key=lambda r: r["_gbx_i"])]
+        for k, rs in rows.items()
+    }
+
+
+def _batch_sql(spark, groups, select_of) -> Dict[int, list]:
+    """One UNION ALL over a view per group (``_gbx_oracle_b<g>``): ``select_of(g, payload, view, n)`` is group g's
+    branch (of n), its answer as ``o<g>`` and a NULL for each other group's (`_answer_columns`).
+    """
+    branches, group_of = [], {}
+    for g, members in enumerate(groups):
+        payload = members[0][1]
+        view = f"_gbx_oracle_b{g}"
+        spark.createDataFrame(
+            _batch_rows(members), _batch_schema(payload["schema"])
+        ).createOrReplaceTempView(view)
+        branches.append(select_of(g, payload, view, len(groups)))
+        group_of.update({k: g for k, _ in members})
+    return _gather(spark.sql(" UNION ALL ".join(branches)).collect(), group_of)
+
+
+def _answer_columns(g: int, n: int, answer: str) -> str:
+    return ", ".join(answer if j == g else f"NULL AS o{j}" for j in range(n))
+
+
+def _batch_python(spark, groups, call_of) -> Dict[int, list]:
+    """The Python API form of `_batch_sql`: one DataFrame per group, ``call_of(payload)`` its answer Column, the groups
+    one ``union``."""
+    from pyspark.sql import functions as F
+
+    frames, group_of = [], {}
+    for g, members in enumerate(groups):
+        payload = members[0][1]
+        df = spark.createDataFrame(
+            _batch_rows(members), _batch_schema(payload["schema"])
+        )
+        call = call_of(payload)
+        frames.append(
+            df.select(
+                "_gbx_case",
+                "_gbx_i",
+                *[
+                    (call if j == g else F.lit(None)).alias(f"o{j}")
+                    for j in range(len(groups))
+                ],
+            )
+        )
+        group_of.update({k: g for k, _ in members})
+    return _gather(
+        functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+    )
+
+
+def _session_py_call(case: Case, rows, params, column_of):
+    """The Python API call of a session case over the frame ``c0..``: a str_only parameter takes the Python value
+    itself (the API refuses a Column for it), so it is one value for every row of the case.
+    """
+    from pyspark.sql import functions as F
+
+    args = rows[0]
+    for i in range(min(len(args), len(params))):
+        if params[i].str_only and any(r[i] != args[i] for r in rows):
+            raise TypeError(
+                f"{case.cid}: {params[i].name} of {case.fn} differs between the rows, but the Python API "
+                "takes it as one Python str. Fix: give the variant rows one value for it."
+            )
+    fcols = [
+        (args[i] if i < len(params) and params[i].str_only else F.col(f"c{i}"))
+        for i in range(len(args))
+    ]
+    return column_of(case.fn)(*fcols, **dict(case.py_kw))
+
+
 def run_session(
     spark,
     cases: Sequence[Case],
@@ -5181,64 +5335,48 @@ def run_session(
     tmpdir: Optional[str] = None,
     surface: str = "session",
     column_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
 ) -> List[Tuple[Case, Optional[str]]]:
     """Run each case through SQL (`name_of(fn)(cols...)`) and check it. One result per case.
 
     With `column_of` (SQL name -> Column function) the case runs through the Python Column
     API instead of SQL, so both APIs are held to the same rows.
+
+    With `batch` the cases that can share a query run in one (see `_run_batched`); a case that must raise, and a
+    recipe, run alone.
     """
     from databricks.labs.gbx import manifest
 
     if tmpdir is None:  # virtual-tile fixtures live here; removed when the run ends
         with tempfile.TemporaryDirectory(prefix="gbx-oracle-") as d:
-            return run_session(spark, cases, name_of, d, surface, column_of)
+            return run_session(spark, cases, name_of, d, surface, column_of, batch)
     man = manifest.load()
+    cases = [
+        c
+        for c in cases
+        if surface in c.surfaces or (column_of is not None and "python" in c.surfaces)
+    ]
+    if batch:
+        return _run_session_batched(
+            spark, man, cases, name_of, tmpdir, surface, column_of
+        )
     results = []
     for case in cases:
-        if surface not in case.surfaces and not (
-            column_of is not None and "python" in case.surfaces
-        ):
-            continue
         if (
             case.sql is not None
         ):  # a recipe: one statement, `{q}` the qualifier name_of gives a bare name
             results.append((case, run_recipe(spark, case, name_of(""), tmpdir)))
             continue
-        rows = _argument_rows(case, tmpdir)
-        args = rows[0]
-        fn = man.functions[case.fn]
-        params = fn.params
-        schema = argument_schema(case, rows, surface)
-        # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
-        cols = _projection(case, params, rows, surface)
-        call = f"{name_of(case.fn)}({cols})"
-        if surface == "uc" and fn.returns_uc == "GEOMETRY":
-            call = f"st_asewkb({call})"
+        rows, schema, call = _session_parts(man, case, name_of, tmpdir, surface)
         try:
             df = spark.createDataFrame([tuple(r) for r in rows], schema)
             if column_of is None:
                 df.createOrReplaceTempView("_gbx_oracle")
                 got = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").collect()
             else:
-                from pyspark.sql import functions as F
-
-                # a str_only parameter takes the Python value itself: the API refuses a Column for it, so it is
-                # one value for every row of the case
-                for i in range(min(len(args), len(params))):
-                    if params[i].str_only and any(r[i] != args[i] for r in rows):
-                        raise TypeError(
-                            f"{case.cid}: {params[i].name} of {case.fn} differs between the rows, but the Python API "
-                            "takes it as one Python str. Fix: give the variant rows one value for it."
-                        )
-                fcols = [
-                    (
-                        args[i]
-                        if i < len(params) and params[i].str_only
-                        else F.col(f"c{i}")
-                    )
-                    for i in range(len(args))
-                ]
-                call_py = column_of(case.fn)(*fcols, **dict(case.py_kw))
+                call_py = _session_py_call(
+                    case, rows, man.functions[case.fn].params, column_of
+                )
                 got = df.select(call_py.alias("out")).collect()
             outs = [r["out"] for r in got]
             results.append((case, verdict(case, outs, rows, tmpdir)))
@@ -5247,6 +5385,66 @@ def run_session(
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             results.append((case, check_error(case, exc)))
     return results
+
+
+def _session_parts(man, case: Case, name_of, tmpdir: str, surface: str):
+    """The argument rows, view schema and SQL call of a session case."""
+    rows = _argument_rows(case, tmpdir)
+    fn = man.functions[case.fn]
+    schema = argument_schema(case, rows, surface)
+    # On the UC surface GEOMETRY params get an integer-SRID constructor, never a CRS string.
+    cols = _projection(case, fn.params, rows, surface)
+    call = f"{name_of(case.fn)}({cols})"
+    if surface == "uc" and fn.returns_uc == "GEOMETRY":
+        call = f"st_asewkb({call})"
+    return rows, schema, call
+
+
+def _run_session_batched(spark, man, cases, name_of, tmpdir, surface, column_of):
+    def prepare(case):
+        if case.sql is not None or case.kind in _ALONE_KINDS:
+            return None
+        rows, schema, call = _session_parts(man, case, name_of, tmpdir, surface)
+        payload = {"case": case, "rows": rows, "schema": schema, "call": call}
+        if column_of is None:
+            return (case.fn, schema, call), payload
+        params = man.functions[case.fn].params
+        _session_py_call(
+            case, rows, params, column_of
+        )  # refuses here what it refuses alone
+        str_only = tuple(
+            repr(rows[0][i])
+            for i in range(min(len(rows[0]), len(params)))
+            if params[i].str_only
+        )
+        return (case.fn, schema, str_only, repr(case.py_kw)), payload
+
+    def run_batch(groups):
+        if column_of is None:
+            return _batch_sql(
+                spark,
+                groups,
+                lambda g, p, view, n: (
+                    "SELECT _gbx_case, _gbx_i, "
+                    + _answer_columns(g, n, f"{p['call']} AS o{g}")
+                    + f" FROM {view}"
+                ),
+            )
+        return _batch_python(
+            spark,
+            groups,
+            lambda p: _session_py_call(
+                p["case"], p["rows"], man.functions[p["case"].fn].params, column_of
+            ),
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, outs: verdict(case, outs, p["rows"], tmpdir),
+        lambda case: run_session(spark, [case], name_of, tmpdir, surface, column_of),
+    )
 
 
 _WINDOW_KEYS = ("col_off", "row_off", "width", "height")
@@ -5552,15 +5750,19 @@ def _python_leg_args(args, fn) -> list:
     ]
 
 
+_ROWS_SHAPE = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t"
+
+
 def run_rows(
     spark,
     cases,
-    shape_sql: str = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t",
+    shape_sql: str = _ROWS_SHAPE,
     name_of: Callable[[str], str] = lambda f: f,
     tmpdir: Optional[str] = None,
     surface: str = "session",
     pad: bool = False,
     table_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
 ):
     """Generators: `shape_sql` (with {fn} and {args}) yields the rows a case checks; one shape per form.
 
@@ -5570,28 +5772,25 @@ def run_rows(
     instead of SQL, over the same frame: `table_of(fn)(df, <the column name of each argument, its value for a
     literal one>)`, so both APIs are held to the same rows. A row whose inputs that cannot express is skipped
     (`python_leg_unexpressible`).
+
+    With `batch` the cases of the default shape that can share a query run in one (see `_run_batched`), each case's
+    rows told apart by the input row they come from. Alone: a case that must raise, a windows batch (its rows are one
+    task of their own), a table function with no input row, and any other shape.
     """
     from databricks.labs.gbx import manifest
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     man = manifest.load()
+    cases = [c for c in cases if surface in c.surfaces]
+    if batch:
+        return _run_rows_batched(
+            spark, man, cases, shape_sql, name_of, tmpdir, surface, pad, table_of
+        )
     out = []
     for case in cases:
-        if surface not in case.surfaces:
-            continue
-        batch = case.kind == "windows_batch"
-        arg_rows = [
-            [resolve_arg(a, tmpdir) for a in row]
-            for row in (case.args if batch else (case.args,))
-        ]
+        window_batch = case.kind == "windows_batch"
+        arg_rows, schema, cols = _rows_parts(man, case, tmpdir, surface, pad)
         args = arg_rows[0]
-        params = man.functions[case.fn].params
-        schema = ", ".join(
-            f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(args)
-        )
-        cols = _projection(case, params, arg_rows, surface)
-        if pad:
-            cols = ", ".join([cols] + [p.default for p in params[len(args) :]])
         if table_of is not None and python_leg_unexpressible(
             case, man.functions[case.fn]
         ):
@@ -5605,7 +5804,7 @@ def run_rows(
                 schema,
             )
             # one partition: the rows of a batch case go through ONE task, one after the other
-            df = df.coalesce(1) if batch else df
+            df = df.coalesce(1) if window_batch else df
             if table_of is None:
                 df.createOrReplaceTempView("_gbx_oracle")
                 rows = spark.sql(
@@ -5617,12 +5816,107 @@ def run_rows(
             else:
                 py_args = _python_leg_args(args, man.functions[case.fn])
                 rows = table_of(case.fn)(df, *py_args).collect()
-            out.append((case, _check_rows(case, rows, arg_rows if batch else args)))
+            out.append(
+                (case, _check_rows(case, rows, arg_rows if window_batch else args))
+            )
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             out.append((case, check_error(case, exc)))
     return out
+
+
+def _rows_parts(man, case: Case, tmpdir: str, surface: str, pad: bool):
+    """The argument rows, view schema and argument list of a generator case."""
+    arg_rows = [
+        [resolve_arg(a, tmpdir) for a in row]
+        for row in (case.args if case.kind == "windows_batch" else (case.args,))
+    ]
+    params = man.functions[case.fn].params
+    schema = ", ".join(
+        f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(arg_rows[0])
+    )
+    cols = _projection(case, params, arg_rows, surface)
+    if pad:
+        cols = ", ".join([cols] + [p.default for p in params[len(arg_rows[0]) :]])
+    return arg_rows, schema, cols
+
+
+def _run_rows_batched(
+    spark, man, cases, shape_sql, name_of, tmpdir, surface, pad, table_of
+):
+    from pyspark.sql import functions as F
+
+    def prepare(case):
+        fn = man.functions[case.fn]
+        if (
+            case.kind in _ALONE_KINDS
+            or case.kind == "windows_batch"
+            or shape_sql != _ROWS_SHAPE
+            or (
+                table_of is not None
+                and (fn.source or python_leg_unexpressible(case, fn))
+            )
+        ):
+            return None
+        arg_rows, schema, cols = _rows_parts(man, case, tmpdir, surface, pad)
+        rows = [tuple(int(v) if isinstance(v, Big) else v for v in r) for r in arg_rows]
+        payload = {
+            "case": case,
+            "rows": rows,
+            "args": arg_rows[0],
+            "schema": schema,
+            "cols": cols,
+        }
+        if table_of is None:
+            return (case.fn, schema, cols), payload
+        py_args = _python_leg_args(arg_rows[0], fn)
+        payload["py_args"] = py_args
+        # a literal argument is the Python value of the call: one call per set of them
+        return (case.fn, schema, repr(py_args)), payload
+
+    def run_batch(groups):
+        if table_of is None:
+            return _batch_sql(
+                spark,
+                groups,
+                lambda g, p, view, n: (
+                    "SELECT v._gbx_case, v._gbx_i, "
+                    + _answer_columns(g, n, f"struct(t.*) AS o{g}")
+                    + f" FROM {view} v, LATERAL {name_of(p['case'].fn)}({p['cols']}) t"
+                ),
+            )
+        frames, group_of = [], {}
+        for g, members in enumerate(groups):
+            p = members[0][1]
+            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
+            got = table_of(p["case"].fn)(df, *p["py_args"])
+            # the rows as the DataFrame-first entry gives them alone: the input's columns, then the generated ones
+            fields = [c for c in got.columns if c not in ("_gbx_case", "_gbx_i")]
+            frames.append(
+                got.select(
+                    "_gbx_case",
+                    "_gbx_i",
+                    *[
+                        (F.struct(*fields) if j == g else F.lit(None)).alias(f"o{j}")
+                        for j in range(len(groups))
+                    ],
+                )
+            )
+            group_of.update({k: g for k, _ in members})
+        return _gather(
+            functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, rows: _check_rows(case, rows, p["args"]),
+        lambda case: run_rows(
+            spark, [case], shape_sql, name_of, tmpdir, surface, pad, table_of
+        ),
+    )
 
 
 def is_flat_struct(ddl: str) -> bool:
@@ -5745,6 +6039,7 @@ def run_groups(
     tmpdir: Optional[str] = None,
     null_burn: float = NAN,
     column_of: Optional[Callable[[str], Callable]] = None,
+    batch: bool = False,
 ):
     """Aggregates: `args[0]` is the group's rows, the rest are its constants. The table `_gbx_oracle` has one
     row per member: a key, the member's columns c0.., then the constants as columns. `shape_sql` takes `{fn}`,
@@ -5760,6 +6055,10 @@ def run_groups(
 
     A recipe row (`sql`) runs its own statement, which holds its groups: an argument a table holds as a column, or
     several groups with their own arguments. The Python API leg runs it as SQL too.
+
+    With `batch` the aggregate cases with one member schema and one set of constants run in one query, grouped by
+    the case (see `_run_batched`). Alone: a case that must raise, an `error_group` row (its check reads the output
+    type), a recipe, a table function (its partition key is the function's own input), and any other shape.
     """
     from pyspark.sql.types import StructType
 
@@ -5767,10 +6066,13 @@ def run_groups(
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     man = manifest.load()
+    cases = [c for c in cases if "session" in c.surfaces]
+    if batch:
+        return _run_groups_batched(
+            spark, man, cases, shape_sql, tmpdir, null_burn, column_of
+        )
     out = []
     for case in cases:
-        if "session" not in case.surfaces:
-            continue
         if (
             case.sql is not None
         ):  # a recipe: the statement holds its groups (a grid in a column, several keys)
@@ -5778,51 +6080,20 @@ def run_groups(
             continue
         fn = man.functions[case.fn]
         params = fn.params
-        group = group_arg = resolve_arg(case.args[0], tmpdir)
-        group = (
-            [group] if isinstance(group, dict) else group
-        )  # one tile is a group of one
-        consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
-        n_cols = group_width(fn)
-        # the constants' parameters follow the member parameters of an aggregate, or the one TABLE parameter
-        first_const = 1 if fn.table_input is not None else n_cols
-        if n_cols == 1:
-            rows = [("a", t, *consts) for t in group]
-            first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
-        else:
-            rows = [
-                ("a", *(None if v is OMITTED else v for v in m), *consts) for m in group
-            ]
-            first = [
-                f"c{i} {t}"
-                for i, t in enumerate(
-                    _member_types(man.functions[case.fn], group, n_cols)
-                )
-            ]
-        n0 = len(first)
-        omitted = {  # a member column left out of the call
-            i
-            for i in range(n0)
-            if n_cols > 1 and group and all(m[i] is OMITTED for m in group)
-        }
-        schema = ", ".join(
-            ["key string"]
-            + first
-            + [
-                f"c{i + n0} {_ddl_type(v, params[i + first_const])}"
-                for i, v in enumerate(consts)
-            ]
+        p = _group_parts(man, case, tmpdir, null_burn)
+        rows, schema, members, literals = (
+            p["rows"],
+            p["schema"],
+            p["members"],
+            p["literals"],
         )
-        members = ", ".join("NULL" if i in omitted else f"c{i}" for i in range(n0))
-        literals = [
-            _typed_literal(v, params[i + first_const], case)
-            for i, v in enumerate(consts)
-        ]
-        want = (
-            replace(case, expect=_burn_nulls(case.expect, null_burn))
-            if case.kind == "pixels" and not callable(case.expect)
-            else case
+        want, omitted, n0, first_const = (
+            p["want"],
+            p["omitted"],
+            p["n0"],
+            p["first_const"],
         )
+        consts, group_arg = p["consts"], p["group_arg"]
         if column_of is not None and fn.table_input is not None:
             # the Python API renders a table function's constants into the SQL text: a fixture or a structured value
             # is no literal. That is this row's limit, not the function's: say so rather than score it a failure.
@@ -5897,6 +6168,145 @@ def run_groups(
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             out.append((case, check_error(case, exc)))
     return out
+
+
+def _group_parts(man, case: Case, tmpdir: str, null_burn: float) -> dict:
+    """The member view of an aggregate case (its rows and schema, a key ``a``, the members then the constants), the
+    member columns and constants of the call, and the case its output is judged against.
+    """
+    fn = man.functions[case.fn]
+    params = fn.params
+    group = group_arg = resolve_arg(case.args[0], tmpdir)
+    group = [group] if isinstance(group, dict) else group  # one tile is a group of one
+    consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
+    n_cols = group_width(fn)
+    # the constants' parameters follow the member parameters of an aggregate, or the one TABLE parameter
+    first_const = 1 if fn.table_input is not None else n_cols
+    if n_cols == 1:
+        rows = [("a", t, *consts) for t in group]
+        first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
+    else:
+        rows = [
+            ("a", *(None if v is OMITTED else v for v in m), *consts) for m in group
+        ]
+        first = [
+            f"c{i} {t}"
+            for i, t in enumerate(_member_types(man.functions[case.fn], group, n_cols))
+        ]
+    n0 = len(first)
+    omitted = {  # a member column left out of the call
+        i
+        for i in range(n0)
+        if n_cols > 1 and group and all(m[i] is OMITTED for m in group)
+    }
+    schema = ", ".join(
+        ["key string"]
+        + first
+        + [
+            f"c{i + n0} {_ddl_type(v, params[i + first_const])}"
+            for i, v in enumerate(consts)
+        ]
+    )
+    members = ", ".join("NULL" if i in omitted else f"c{i}" for i in range(n0))
+    literals = [
+        _typed_literal(v, params[i + first_const], case) for i, v in enumerate(consts)
+    ]
+    want = (
+        replace(case, expect=_burn_nulls(case.expect, null_burn))
+        if case.kind == "pixels" and not callable(case.expect)
+        else case
+    )
+    return {
+        "rows": rows,
+        "schema": schema,
+        "members": members,
+        "literals": literals,
+        "want": want,
+        "omitted": omitted,
+        "n0": n0,
+        "first_const": first_const,
+        "consts": consts,
+        "group_arg": group_arg,
+    }
+
+
+def _run_groups_batched(spark, man, cases, shape_sql, tmpdir, null_burn, column_of):
+    from pyspark.sql import functions as F
+
+    def prepare(case):
+        fn = man.functions[case.fn]
+        if (
+            case.sql is not None
+            or case.kind in _ALONE_KINDS
+            or case.kind == "error_group"
+            or fn.table_input is not None
+            or shape_sql is not None
+        ):
+            return None
+        p = _group_parts(man, case, tmpdir, null_burn)
+        p["case"] = case
+        str_only = tuple(
+            repr(v)
+            for i, v in enumerate(p["consts"])
+            if fn.params[i + p["first_const"]].str_only
+        )
+        key = (case.fn, p["schema"], p["members"], tuple(p["literals"]), str_only)
+        return key, p
+
+    def call_py(p):
+        params = man.functions[p["case"].fn].params
+        return column_of(p["case"].fn)(
+            *[None if i in p["omitted"] else F.col(f"c{i}") for i in range(p["n0"])],
+            *[
+                v if params[i + p["first_const"]].str_only else F.expr(lit)
+                for i, (v, lit) in enumerate(zip(p["consts"], p["literals"]))
+            ],
+        )
+
+    def run_batch(groups):
+        if column_of is None:
+            return _batch_sql(
+                spark,
+                groups,
+                lambda g, p, view, n: (
+                    "SELECT _gbx_case, 0 AS _gbx_i, "
+                    + _answer_columns(
+                        g,
+                        n,
+                        f"{p['case'].fn}({', '.join([p['members']] + p['literals'])}) AS o{g}",
+                    )
+                    + f" FROM {view} GROUP BY _gbx_case"
+                ),
+            )
+        frames, group_of = [], {}
+        for g, members in enumerate(groups):
+            p = members[0][1]
+            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
+            agg = df.groupBy("_gbx_case").agg(call_py(p).alias("_gbx_out"))
+            frames.append(
+                agg.select(
+                    "_gbx_case",
+                    F.lit(0).alias("_gbx_i"),
+                    *[
+                        (F.col("_gbx_out") if j == g else F.lit(None)).alias(f"o{j}")
+                        for j in range(len(groups))
+                    ],
+                )
+            )
+            group_of.update({k: g for k, _ in members})
+        return _gather(
+            functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
+        )
+
+    return _run_batched(
+        cases,
+        prepare,
+        run_batch,
+        lambda case, p, outs: check(
+            p["want"], outs[0] if outs else None, [p["group_arg"], *p["consts"]]
+        ),
+        lambda case: run_groups(spark, [case], shape_sql, tmpdir, null_burn, column_of),
+    )
 
 
 @functools.lru_cache(maxsize=1)

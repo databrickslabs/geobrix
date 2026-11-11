@@ -881,3 +881,108 @@ def test_a_uc_row_mirrored_from_a_named_session_row_carries_its_geometrys_srid()
     )
     with pytest.raises(AssertionError, match="vs_wkb"):
         oracles.mirror((wkb,), refused=("vs_wkb",))
+
+
+# --- Batching: the cases of a call in one query (oracles._run_batched) --------------------------------------------------
+def _batched(cases, red_in_batch=(), batch_raises=False, key=lambda c: c.kind):
+    """`_run_batched` over fake cases: the batch answers each case its cid, a case in `red_in_batch` fails its judge
+    there, and the alone run answers 'alone:<cid>'."""
+    from databricks.labs.gbx.bench import oracles
+
+    calls = {"batches": [], "alone": []}
+
+    def prepare(case):
+        return None if case.kind == "raises" else (key(case), case.cid)
+
+    def run_batch(groups):
+        calls["batches"].append([[p for _, p in g] for g in groups])
+        if batch_raises:
+            raise RuntimeError("the batch failed")
+        return {k: [p] for g in groups for k, p in g}
+
+    def judge(case, payload, outs):
+        return f"{case.cid}: red" if case.cid in red_in_batch else None
+
+    def run_alone(case):
+        calls["alone"].append(case.cid)
+        return [(case, f"alone:{case.cid}")]
+
+    return oracles._run_batched(cases, prepare, run_batch, judge, run_alone), calls
+
+
+def _fake(cid, kind="exact"):
+    from databricks.labs.gbx.bench import oracles
+
+    return oracles.Case(cid, "gbx_x", (), kind)
+
+
+def test_a_batch_is_one_query_for_every_group_and_a_raising_case_runs_alone():
+    cases = [_fake("a"), _fake("b", "null"), _fake("c", "raises"), _fake("d")]
+    ran, calls = _batched(cases)
+    assert calls["batches"] == [[["a", "d"], ["b"]]]  # one query, a group per key
+    assert calls["alone"] == ["c"]
+    assert [(c.cid, m) for c, m in ran] == [
+        ("a", None),
+        ("b", None),
+        ("c", "alone:c"),
+        ("d", None),
+    ]
+
+
+def test_a_case_red_in_its_batch_and_every_case_of_a_failed_batch_is_judged_alone():
+    cases = [_fake("a"), _fake("b"), _fake("c")]
+    ran, calls = _batched(cases, red_in_batch={"b"})
+    assert calls["alone"] == ["b"] and [m for _, m in ran] == [None, "alone:b", None]
+    ran, calls = _batched(cases, batch_raises=True)
+    assert calls["alone"] == ["a", "b", "c"]
+    assert [m for _, m in ran] == ["alone:a", "alone:b", "alone:c"]
+
+
+def test_gbx_oracle_batch_0_turns_batching_off(monkeypatch):
+    from databricks.labs.gbx.bench import oracles
+
+    monkeypatch.delenv(oracles.BATCH_ENV, raising=False)
+    assert oracles.batching()
+    monkeypatch.setenv(oracles.BATCH_ENV, "0")
+    assert not oracles.batching()
+
+
+def test_a_batched_session_run_gives_each_case_the_verdict_it_has_alone(
+    spark, tmp_path
+):
+    """One function's rows, with a wrong value and a missing refusal among them, batched and alone, through SQL and
+    the Python API: the same verdict per case, and each red row named."""
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    name = "gbx_bng_cellarea"
+    register(spark, only=[name], _levels={name: ("L3", "c0")})
+    cases = [
+        c
+        for c in oracles.TABLES["GRID_SCALAR"]
+        if c.fn == name and "session" in c.surfaces
+    ][:6]
+    wrong = dataclasses.replace(
+        cases[0], cid="cellarea_wrong", kind="exact", expect=-1.0
+    )
+    refused = dataclasses.replace(
+        cases[0], cid="cellarea_no_raise", kind="raises", expect="nope"
+    )
+    cases += [wrong, refused]
+    py = manifest.resolve_ref(manifest.load().functions[name].python.ref)
+    for column_of in (None, lambda f: py):
+        got = {
+            batch: [
+                (c.cid, m is None)
+                for c, m in oracles.run_session(
+                    spark, cases, tmpdir=str(tmp_path), column_of=column_of, batch=batch
+                )
+            ]
+            for batch in (True, False)
+        }
+        assert got[True] == got[False]
+        assert dict(got[True])["cellarea_wrong"] is False
+        assert dict(got[True])["cellarea_no_raise"] is False
+        assert sum(ok for _, ok in got[True]) == 6, got[True]

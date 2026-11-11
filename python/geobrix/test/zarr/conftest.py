@@ -135,15 +135,12 @@ def spark_delta(tmp_path_factory):
 # (test/_provided_spark.py). These runtime confs give it what the local session has where a
 # test counts versions or files:
 # - 2 shuffle partitions, as locally: a commit writes a file or two, not up to 200;
-# - no auto compaction: Databricks compacts a table after a MERGE (every manifest commit)
-#   when enough small files gather, and the compaction is a Delta version of its own
-#   (OPTIMIZE, operationParameters.auto = true). A test that expects the version after a
-#   commit to be the commit's, or OPTIMIZE to find files to compact, then sees one more.
-#   GeoBrix copes with those versions (they are not GeoBrix commits); the tests that pin
-#   version numbers assume none comes between. The session conf stops the compaction that
-#   runs after a write; Unity Catalog managed tables are also compacted in the background,
-#   later, unless the table carries the property, which the defaults conf gives every table
-#   a test creates.
+# - less auto compaction: Databricks compacts a table after a write when enough small files
+#   gather, and the compaction is a Delta version of its own (OPTIMIZE, operationParameters
+#   auto = true). These confs turn it off where Databricks lets them; it cannot be turned off
+#   after a MERGE, which every manifest commit is, and the pool's history still shows such
+#   versions (tst-20261111-122502-cc49). Fewer files per MERGE make one rarer. A test that
+#   pins the version after a commit, or the version a no-op returns, can still meet one.
 PROVIDED_CONFS = {
     "spark.sql.shuffle.partitions": "2",
     "spark.databricks.delta.autoCompact.enabled": "false",

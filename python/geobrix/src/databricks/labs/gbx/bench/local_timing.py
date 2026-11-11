@@ -302,16 +302,14 @@ SETS: Dict[str, SetSpec] = {
         fn="gbx_rst_summary",
         peer_exempt=("engine-c1@mem",),  # the same UDF as c0: recorded, not a peer
     ),
-    # TRI, the terrain function that keeps a JVM companion: the companion (`today`), the engine's two light UDFs and a floor,
-    # over 1024 px DEM tiles replicated in memory. The companion is what the pass measures, so it is not a peer of the light
-    # forms.
+    # TRI, the engine's two light UDFs and a floor, over 1024 px DEM tiles replicated in memory. It has no JVM level left.
     "DEM": SetSpec(
         mvp="DEM",
-        forms=("today@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
         reference="engine-c0@mem",
         ns=(24, 96, 384),
         fn="gbx_rst_tri",
-        peer_exempt=("today@mem", "engine-c1@mem"),
+        peer_exempt=("engine-c1@mem",),
     ),
     "SE-transformcrs": SetSpec(
         mvp="SE",
@@ -467,7 +465,6 @@ _JV_NS = {  # small n per input: the pass checks that every form runs, scales an
     ),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
     "dem_1024_mem": (8, 32, 128),
     "se_pair_512_mem": (8, 32, 128),
-    "jv_nc_512_mem": (8, 32, 128),
     "bng_cells": (50_000, 200_000, 800_000),
     "jv_bng_cells_gen": (25_000, 100_000, 400_000),
     "jv_bng_points_wkt": (50_000, 200_000, 800_000),

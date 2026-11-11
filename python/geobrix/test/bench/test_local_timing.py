@@ -161,12 +161,12 @@ _HV_SETS = tuple(
 
 
 def test_every_form_of_the_dem_sets_exists_for_its_function():
-    """Each name of a DEM set picks exactly one form of its function (the companion, the light forms, the floor)."""
+    """Each name of a DEM set picks exactly one form of its function (the light forms, the floor)."""
     from databricks.labs.gbx.bench import levels_forms as lf
 
     for name in _DEM_SETS:
         spec = lt.SETS[name]
-        assert spec.mvp == "DEM" and spec.forms[0] == "today@mem"
+        assert spec.mvp == "DEM" and spec.forms[0] == "engine-c0@mem"
         assert spec.forms[-1] == "floor-c0@mem"
         for variant in spec.forms:
             picked = [

@@ -431,7 +431,6 @@ _NODATA = _PYRX + "_nodata.py"
 # tile (de)serialization — the reader/constructor fns (fromcontent/fromfile)
 # have no dedicated core module; their behavior is the _serde tile round-trip.
 _PYRX_SERDE = "python/geobrix/src/databricks/labs/gbx/pyrx/_serde.py"
-_DEM_HELPER = _HEAVY + "dem/RST_DEMProcessingHelper.scala"
 
 # pyrx core module + shared _nodata, by module (added to per-function sources
 # together with that function's heavy Scala expression / helpers).
@@ -981,7 +980,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {},
-        sources=_ENGINE_LIGHT + (_HEAVY + "dem/RST_TRI.scala", _DEM_HELPER),
+        sources=_ENGINE_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core("gbx_rst_tri", {})(ds),
         col_fn=lambda t, a: rx.rst_tri(t),
@@ -1461,8 +1461,9 @@ REGISTRY: Dict[str, FnSpec] = {
         min_bands=2,
         core_fn=lambda ds, a: edit.band(ds, a["band_index"]),
         col_fn=lambda t, a: rx.rst_band(t, a["band_index"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Band.scala",),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # rst_threshold (timing-only): the function has no heavyweight level; the engine runs it on GDAL raster calc.
     "rst_threshold": FnSpec(
@@ -1500,8 +1501,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {"srid": 4326},
         core_fn=lambda ds, a: edit.set_srid(ds, a["srid"]),
         col_fn=lambda t, a: rx.rst_setsrid(t, a["srid"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetSrid.scala",),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- CRS-string ops (Sub-spec R): string companions to the srid ops ---
     "rst_crs": FnSpec(
@@ -1524,8 +1526,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: edit.set_crs(ds, a["crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
         col_fn=lambda t, a: rx.rst_setcrs(t, F.lit(a["crs"])),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetCrs.scala",),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_transformcrs": FnSpec(
         "rst_transformcrs",
@@ -2063,9 +2066,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # core RAISES ValueError ("no subdataset named '0'"). That would surface as a
     # status=error row from the runner's per-fn try/catch. To time it WITHOUT a
     # noisy error, the bench core_fn swallows the expected "no subdataset" raise
-    # and returns the empty map (timing-only, fingerprint suppressed). The heavy
-    # RST_GetSubdataset.execute likewise returns null on GTiff; the dispatch
-    # guards the null and emits an empty fingerprint.
+    # and returns the empty map (timing-only, fingerprint suppressed).
     "rst_getsubdataset": FnSpec(
         "rst_getsubdataset",
         "gbx_rst_getsubdataset",
@@ -2074,8 +2075,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {"name": "0"},
         core_fn=lambda ds, a: _getsubdataset_timing(ds, a["name"]),
         col_fn=lambda t, a: rx.rst_getsubdataset(t, a["name"]),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_GetSubdataset.scala",),
+        sources=_ACCESSORS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         fingerprint=False,
     ),
     # --- bucket C, group C3: multi-tile-input functions (3) -------------------

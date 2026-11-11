@@ -3,7 +3,7 @@
 The keep rule (dedicated DBR 19): a JVM level (L1) stays, and is the default, only where it is at least 1.2x faster than the
 best light form (c0 or c1, `l3` where the light level has no variants) at 4x OR 16x rows, with equal decoded output. The
 set holds every function with an L1 block that has no such record: the ones the level order never picks, and the ones it
-picks first without a dedicated 4x and 16x measurement. TRI is in the `DEM` set, not here.
+picks first without a dedicated 4x and 16x measurement.
 
 Each function gets, over ONE input every one of its forms reads:
 
@@ -67,7 +67,6 @@ _VALUE = {
 _REPLICATED = {
     "dem_1024_mem": "xxhash64(tile.raster)",
     "se_pair_512_mem": "xxhash64(tiles[0].raster, tiles[1].raster)",
-    "jv_nc_512_mem": "xxhash64(tile.raster)",
 }
 # the few corpus tiles a decode reads: those whose path hashes to 0 mod 8 (every form reads the same tiles; no sort of
 # 16 MiB rows)
@@ -139,11 +138,6 @@ SPECS: List[Spec] = [
             ("worldtorastercoordy", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
         )
     ],
-    # -- the tile operations, over the replicated 1024 px DEM tiles (as TRI and the engine rows)
-    Spec("gbx_rst_band", "dem_1024_mem", "dem", "tile", "{fn}(tile, 1)", "raster", "tile"),
-    Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
-    Spec("gbx_rst_setcrs", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'EPSG:32633')", "raster", "tile"),
-    Spec("gbx_rst_setsrid", "dem_1024_mem", "dem", "tile", "{fn}(tile, 32633)", "raster", "tile"),
     # -- the web tiles: the DEM tiles lie in z12 tile (2088, 1384) of web mercator (EPSG:3857)
     Spec(
         "gbx_rst_tilexyz", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 12, 2088, 1384, 'PNG', 256, 'bilinear', 'auto')",
@@ -255,7 +249,6 @@ FUNCTIONS: Tuple[str, ...] = tuple(s.fn for s in SPECS)
 
 # --- the inputs ------------------------------------------------------------------------------------------------------
 BASE_ROWS = {
-    "jv_nc_512_mem": 128,
     "jv_bng_cells_gen": 250_000,
     "jv_bng_points_wkt": 1_000_000,
     "jv_bng_chips": 250_000,
@@ -278,35 +271,6 @@ _GRID_SQL = (
 
 def _key(F, seed):
     return F.floor(F.rand(seed) * _KEYS).cast("string").alias("key")
-
-
-def _nc_tile(size: int, seed: int) -> dict:
-    """The bytes of a NetCDF file whose three variables `Band1` to `Band3` are three DEM surfaces (a materialized tile)."""
-    import os
-    import shutil
-    import tempfile
-
-    import numpy as np
-
-    from databricks.labs.gbx._gdal_policy import open_bytes
-    from databricks.labs.gbx.bench import oracles
-    from databricks.labs.gbx.bench.levels_forms import _se_dem_tile
-
-    def surface(k):
-        with open_bytes(_se_dem_tile(size, seed + k)["raster"]) as ds:
-            return ds.read(1)
-
-    bands = np.stack([surface(k) for k in range(3)])
-    d = tempfile.mkdtemp(prefix="gbx-jv-nc-")
-    try:
-        tif, nc = os.path.join(d, "b.tif"), os.path.join(d, "b.nc")
-        with open(tif, "wb") as fh:
-            fh.write(oracles._gtiff(bands, "EPSG:3857"))
-        oracles.to_netcdf(tif, nc)
-        with open(nc, "rb") as fh:
-            return oracles._tile(fh.read())
-    finally:
-        shutil.rmtree(d, ignore_errors=True)
 
 
 def _bng_points_wkt(spark, n, corpus, schema):
@@ -756,7 +720,6 @@ def install(lf) -> None:
     """Add the JV inputs and `FORMS["JV"]` to `levels_forms` (called once, at its import)."""
     lf.INPUTS.update(
         {
-            "jv_nc_512_mem": lf._se_dems_replicated(512, _nc_tile, "jvnc", parts=32),
             "jv_bng_cells_gen": _bng_cells_gen,
             "jv_bng_points_wkt": _bng_points_wkt,
             "jv_bng_chips": _bng_chips,
@@ -791,13 +754,9 @@ PARTS: Dict[str, Tuple[str, ...]] = {
         f"gbx_rst_{n}"
         for n in (
             "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoordx", "worldtorastercoordy",
-            "tilexyz", "band",
+            "tilexyz",
         )
     ),  # fmt: skip
-    "dem2": tuple(
-        f"gbx_rst_{n}" for n in ("setcrs", "setsrid")
-    ),
-    "tiles": ("gbx_rst_getsubdataset",),
     "cells": (
         "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg", "gbx_custom_cellfill",
         "gbx_rst_custom_rasterize_agg", "gbx_rst_quadbin_rasterize_agg",

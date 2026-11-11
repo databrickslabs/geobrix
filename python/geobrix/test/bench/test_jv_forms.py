@@ -25,13 +25,9 @@ def _of(fn):
 
 
 def test_the_set_holds_every_jvm_level_not_proven_and_nothing_else():
-    """From the code: every row with an L1 block, less the proven ones and TRI (the DEM set times it)."""
+    """From the code: every row with an L1 block, less the proven ones."""
     rows = manifest.load().functions.values()
-    want = {
-        f.sql_name
-        for f in rows
-        if "L1" in f.levels and f.sql_name not in PROVEN | {"gbx_rst_tri"}
-    }
+    want = {f.sql_name for f in rows if "L1" in f.levels and f.sql_name not in PROVEN}
     assert set(FNS) == want
     assert len(FNS) == len(set(FNS))
 
@@ -41,7 +37,7 @@ def test_the_set_covers_both_halves_of_the_list():
     never = {fn for fn in FNS if "L1" not in levels.order(rows[fn])}
     first = {fn for fn in FNS if levels.order(rows[fn])[0] == "L1"}
     assert never | first == set(FNS)
-    assert {"gbx_rst_band", "gbx_rst_setcrs"} <= never
+    assert never  # a JVM level the level order never picks
     assert {"gbx_rst_crs", "gbx_bng_aswkb", "gbx_rst_h3_rasterize_agg"} <= first
 
 

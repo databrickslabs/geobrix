@@ -2038,7 +2038,7 @@ def setup_se_floor(spark):
         "gbx_bench_floor_c0",
         engine_l3.c0(
             "gbx_bench_engine_floor", (), _SE_FLOOR_REF, section_ref=_SE_SECTION_REF
-        ),
+        ).for_session(spark),
     )
     spark.udf.register(
         "gbx_bench_floor_c1",
@@ -2550,15 +2550,12 @@ FORMS["SE"] += [
 ]
 
 
-# --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
+# --- DEM, the terrain function against its engine forms, and the JVM probes -----------------------------------------------
 #
-# The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF
-# (c1), and the engine's floor. One input: 1024 px DEM tiles replicated on the executors (128 at 1x, 512 at 4x, 2048 at
-# 16x), spread over 32 partitions. Every form is compared by the decoded pixels it returns, and the JVM form (which can
-# return an error tile under load) reports the distinct `last_error` texts it returned with their counts.
+# TRI has no JVM level left: its forms are the engine's row-wise UDF (c0) and its batch UDF (c1), and the engine's floor.
+# One input: 1024 px DEM tiles replicated on the executors (128 at 1x, 512 at 4x, 2048 at 16x), spread over 32
+# partitions. Every form is compared by the decoded pixels it returns.
 DEM_FUNCTIONS = ("gbx_rst_tri",)
-_DEM_PKG = "com.databricks.labs.gbx.rasterx.expressions.dem."
-_DEM_COMPANION = {fn: _DEM_PKG + "RST_" + c for fn, c in zip(DEM_FUNCTIONS, ("TRI",))}
 BASE_ROWS["dem_1024_mem"] = 128
 BASE_ROWS["dem_bytes_1024_mem"] = 128
 INPUTS["dem_1024_mem"] = _se_dems_replicated(1024, label="dem32", parts=32)
@@ -2568,18 +2565,8 @@ INPUTS["dem_bytes_1024_mem"] = _se_dems_replicated(
 
 
 def dem_l1_name(fn: str) -> str:
-    """The private session name of a DEM companion (`gbx__l1_<x>`), beside whatever the registrar put under the SQL name."""
+    """The private session name of a probe companion (`gbx__l1_<x>`), beside whatever the registrar put under the SQL name."""
     return "gbx__l1_" + fn[len("gbx_") :]
-
-
-def setup_dem_l1(spark):
-    """Install the companion under its private name (dedicated compute; a Connect session refuses)."""
-    from databricks.labs.gbx.manager import jvm
-
-    for fn, fqn in _DEM_COMPANION.items():
-        why = jvm.install_private_l1(spark, fqn, dem_l1_name(fn))
-        if why:
-            raise RuntimeError(why)
 
 
 def _dem_call(name: str, fn: str) -> str:
@@ -2611,24 +2598,10 @@ FORMS["DEM"] = []
 for _fn in DEM_FUNCTIONS:
     _l3 = "engine-c0"
     _calls = {
-        "l1": _dem_call(dem_l1_name(_fn), _fn),
         "l3": _dem_call(_fn, _fn),
         "floor": "gbx_bench_floor_c0(tile)",
     }
     FORMS["DEM"] += [
-        _dem(
-            _fn,
-            "L1",
-            "today@mem",
-            "dem_1024_mem",
-            _SE_FP.format(call=_calls["l1"]),
-            setup="databricks.labs.gbx.bench.levels_forms:setup_dem_l1",
-            register=False,
-            computes=("dedicated",),
-            allows_null=True,  # an error tile under load is reported, not a lost row
-            vsql=_DEM_VFP.format(call=_calls["l1"]),
-            nullsql=_DEM_ERRORS.format(call=_calls["l1"]),
-        ),
         _dem(
             _fn,
             "L3",

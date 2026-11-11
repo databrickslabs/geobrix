@@ -510,6 +510,8 @@ _TIN_CONFORMING = (
     _PYVX + "_conforming.py",
     _PYVX + "_quadedge.py",
     _PYVX + "_jmath.py",
+    "rust/gbxrs/src/tin.rs",  # the same steps in Rust, run where the wheel carries the module
+    "rust/gbxrs/src/jmath.rs",
     "src/main/scala/com/databricks/labs/gbx/vectorx/jts/InterpolateElevation.scala",
     "src/main/scala/com/databricks/labs/gbx/vectorx/jts/JTSConformingDelaunayTriangulationBuilder.scala",
 )

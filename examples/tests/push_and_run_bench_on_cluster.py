@@ -1854,9 +1854,10 @@ def _main(_stack) -> int:
                 return 2
         wheel = _staged_env_wheel(w, volroot, ver, env)
         cfg["wheel"] = wheel
-        # after the install: the driver and the Python workers must import this wheel, not a same-version geobrix
-        # that is already on the compute (a cluster library); the run fails at this cell otherwise
-        cfg["guard_cell"] = _wheel_guard.guard_source(wheel=wheel)
+    # after the install: the driver and the Python workers must import this wheel (the derived one, or the one
+    # GBX_BUNDLE_WHEEL_VOLUME_PATH names), not a same-version geobrix that is already on the compute (a cluster
+    # library); the run fails at this cell otherwise
+    cfg["guard_cell"] = _wheel_guard.guard_source(wheel=wheel)
 
     # Pre-flight: show the operator exactly what will run before submitting.
     print("=" * 64)

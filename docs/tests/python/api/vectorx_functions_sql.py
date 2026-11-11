@@ -53,6 +53,36 @@ st_asmvt_sql_example_output = """
 """
 
 
+def st_asmvt_array_sql_example():
+    """Encode one tile's features from an array of (geom, attrs) structs (SQL).
+
+    Reads the two-row ``mvt_features`` fixture view (tile-local WKB POINT(100, 100) and
+    POINT(200, 200), both in tile z=0/x=0/y=0). ``collect_list(struct(...))`` gathers each
+    tile's features into one array, after the ``GROUP BY`` of the tile key. The attributes
+    go in as JSON object text (``to_json``), because an array element has no free-form struct.
+    The layer is the one ``gbx_st_asmvt`` builds from the same rows.
+    """
+    return """
+SELECT z, x, y,
+       gbx_st_asmvt_array(
+         collect_list(struct(geom_wkb AS geom, to_json(attrs) AS attrs)),
+         'layer'
+       ) AS mvt
+FROM mvt_features
+GROUP BY z, x, y;
+"""
+
+
+st_asmvt_array_sql_example_output = """
++-+-+-+--------+
+|z|x|y|mvt     |
++-+-+-+--------+
+|0|0|0|[binary]|
++-+-+-+--------+
+... (MVT binary)
+"""
+
+
 def st_asmvt_pyramid_sql_example():
     """Explode one WGS-84 feature into per-tile (z, x, y, mvt_bytes) rows (SQL, heavy form).
 
@@ -631,6 +661,55 @@ GROUP BY cov_id
 
 
 st_coverageinvalidedges_sql_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|1     |[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; empty geometry when the coverage is clean)
+"""
+
+
+def st_coverageisvalid_array_sql_example():
+    """Check whether an array of polygons forms a valid coverage (SQL).
+
+    The ``coverage_parcels`` view holds two adjacent squares that share the edge x=5, as WKB in
+    ``geom_wkb``. ``collect_list(geom_wkb)`` gathers each ``cov_id`` group into one array.
+    ``gbx_st_coverageisvalid_array(geoms, 0.0)`` returns the answer of the aggregate
+    ``gbx_st_coverageisvalid`` over the same polygons: ``true``.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageisvalid_array(collect_list(geom_wkb), 0.0) AS is_valid
+FROM coverage_parcels
+GROUP BY cov_id
+"""
+
+
+st_coverageisvalid_array_sql_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|1     |true    |
++------+--------+
+... (BOOLEAN — true when the polygons have no overlap and no gap narrower than gap_width)
+"""
+
+
+def st_coverageinvalidedges_array_sql_example():
+    """Return the invalid edges of an array of polygons (SQL).
+
+    The ``coverage_overlap`` view holds two squares that overlap in [4,6]x[4,6], as WKB in
+    ``geom_wkb``. ``gbx_st_coverageinvalidedges_array`` returns the union of the edges that
+    make the coverage invalid, the answer of the aggregate over the same polygons.
+    """
+    return """
+SELECT cov_id, gbx_st_coverageinvalidedges_array(collect_list(geom_wkb), 0.0) AS bad_edges
+FROM coverage_overlap
+GROUP BY cov_id
+"""
+
+
+st_coverageinvalidedges_array_sql_example_output = """
 +------+---------+
 |cov_id|bad_edges|
 +------+---------+

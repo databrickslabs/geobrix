@@ -727,8 +727,18 @@ _SETUP_VIEWS_VECTORX_HEAVY = {
 # Two views used by the coverage SQL examples.
 # ``coverage_parcels`` — valid coverage (2 adjacent squares sharing an edge).
 # ``coverage_overlap`` — invalid coverage (2 overlapping squares).
-# Both views have schema (cov_id INT, geom STRING).
+# Both views have schema (cov_id INT, geom STRING, geom_wkb BINARY).
 # ---------------------------------------------------------------------------
+
+
+def _coverage_df(spark, wkts):
+    """``(cov_id INT, geom STRING, geom_wkb BINARY)`` rows of one coverage group."""
+    from shapely import from_wkt  # noqa: PLC0415
+
+    return spark.createDataFrame(
+        [(1, w, bytearray(from_wkt(w).wkb)) for w in wkts],
+        "cov_id INT, geom STRING, geom_wkb BINARY",
+    )
 
 
 def coverage_parcels_df(spark):
@@ -739,13 +749,16 @@ def coverage_parcels_df(spark):
     - polygon 2: [5,10]×[0,5]
     Both belong to ``cov_id=1`` so a GROUP BY collects them as one group.
     Expected result: ``gbx_st_coverageisvalid(..., 0.0)`` → ``true``.
+
+    ``geom`` is WKT; ``geom_wkb`` is the same polygon as WKB, the input of the
+    ``*_array`` coverage functions.
     """
-    return spark.createDataFrame(
+    return _coverage_df(
+        spark,
         [
-            (1, "POLYGON((0 0, 5 0, 5 5, 0 5, 0 0))"),
-            (1, "POLYGON((5 0, 10 0, 10 5, 5 5, 5 0))"),
+            "POLYGON((0 0, 5 0, 5 5, 0 5, 0 0))",
+            "POLYGON((5 0, 10 0, 10 5, 5 5, 5 0))",
         ],
-        ["cov_id", "geom"],
     )
 
 
@@ -758,13 +771,15 @@ def coverage_overlap_df(spark):
     Both belong to ``cov_id=1``.
     Expected result: ``gbx_st_coverageinvalidedges(..., 0.0)`` → non-empty BINARY
     (the boundary segments in the overlap zone).
+
+    ``geom`` is WKT; ``geom_wkb`` is the same polygon as WKB.
     """
-    return spark.createDataFrame(
+    return _coverage_df(
+        spark,
         [
-            (1, "POLYGON((0 0, 6 0, 6 6, 0 6, 0 0))"),
-            (1, "POLYGON((4 4, 10 4, 10 10, 4 10, 4 4))"),
+            "POLYGON((0 0, 6 0, 6 6, 0 6, 0 0))",
+            "POLYGON((4 4, 10 4, 10 10, 4 10, 4 4))",
         ],
-        ["cov_id", "geom"],
     )
 
 

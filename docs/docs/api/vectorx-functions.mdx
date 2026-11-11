@@ -271,6 +271,13 @@ Encode one tile's features from an array of `(geom, attrs)` structs, for example
 
 **Returns:** `BINARY`, the MVT protobuf of one layer. An array with no usable feature gives an empty layer, and a NULL array gives NULL. An attribute text that is not a JSON object raises with a Fix, and so does an extent below 1. An array of more than 64 MiB is refused with a Fix that names `gbx_st_asmvt`. Use `gbx_st_asmvt_pyramid` to cut a feature into the tiles it touches first.
 
+<FunctionExamples
+  name="st_asmvt_array"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
 ---
 
 ### st_asmvt_pyramid
@@ -839,6 +846,13 @@ Say whether an array of polygons is a valid coverage, for example `collect_list(
 
 **Returns:** `BOOLEAN`. NULL for a NULL array or one with no usable polygon. An array of more than 64 MiB is refused with a Fix that names `gbx_st_coverageisvalid`.
 
+<FunctionExamples
+  name="st_coverageisvalid_array"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+/>
+
 ---
 
 ### st_coverageinvalidedges_array
@@ -861,6 +875,13 @@ Say whether an array of polygons is a valid coverage, for example `collect_list(
 Give the invalid edges of an array of polygons that should form a coverage, for example `collect_list(st_asewkb(geom))` after a `GROUP BY`. It is the array form of `gbx_st_coverageinvalidedges`. Pass EWKB members to keep their SRID on the edges.
 
 **Returns:** `BINARY`, the union of the invalid edges, empty when the coverage is valid. NULL for a NULL array or one with no usable polygon. An array of more than 64 MiB is refused with a Fix that names `gbx_st_coverageinvalidedges`.
+
+<FunctionExamples
+  name="st_coverageinvalidedges_array"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+/>
 
 ---
 

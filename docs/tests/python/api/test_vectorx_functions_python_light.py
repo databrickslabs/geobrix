@@ -140,6 +140,37 @@ def test_st_asmvt_python_example(spark):
     assert len(result) > 0, "MVT bytes should be non-empty"
 
 
+def test_st_asmvt_array_python_example(spark):
+    """st_asmvt_array encodes the fixture's two features, as st_asmvt does."""
+    import json  # noqa: PLC0415
+
+    import mapbox_vector_tile  # noqa: PLC0415
+    from shapely import from_geojson  # noqa: PLC0415
+
+    assert light_examples is not None
+
+    def decoded(blob):
+        tile = mapbox_vector_tile.decode(
+            bytes(blob), default_options={"y_coord_down": True}
+        )
+        return sorted(
+            (
+                from_geojson(json.dumps(f["geometry"])).wkt,
+                tuple(sorted(f["properties"].items())),
+            )
+            for f in tile["layer"]["features"]
+        )
+
+    result = light_examples.st_asmvt_array_python_example(spark)
+    assert isinstance(result, (bytes, bytearray)) and len(result) > 0
+    got = decoded(result)
+    assert got == [
+        ("POINT (100 100)", (("id", 1), ("name", "a"))),
+        ("POINT (200 200)", (("id", 2), ("name", "b"))),
+    ]
+    assert got == decoded(light_examples.st_asmvt_python_example(spark))
+
+
 def test_st_asmvt_pyramid_python_light_example(spark):
     """st_asmvt_pyramid LATERAL emits non-empty MVT bytes for WGS-84 POINT(0,0) zoom 0-2."""
     assert light_examples is not None
@@ -433,6 +464,27 @@ def test_st_coverageinvalidedges_python_example(spark):
     assert len(result) > 0, "bad_edges WKB bytes should be non-empty"
     geom = wkb_loads(bytes(result))
     assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"
+
+
+def test_st_coverageisvalid_array_python_example(spark):
+    """st_coverageisvalid_array is True for two adjacent squares, as the aggregate is."""
+    assert light_examples is not None
+    result = light_examples.st_coverageisvalid_array_python_example(spark)
+    assert result is True, f"Expected True, got {result!r}"
+    assert result is light_examples.st_coverageisvalid_python_example(spark)
+
+
+def test_st_coverageinvalidedges_array_python_example(spark):
+    """st_coverageinvalidedges_array returns the overlap's edges, equal to the aggregate's."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    assert light_examples is not None
+    result = light_examples.st_coverageinvalidedges_array_python_example(spark)
+    assert isinstance(result, (bytes, bytearray)) and len(result) > 0
+    edges = wkb_loads(bytes(result))
+    assert not edges.is_empty, "overlapping squares have invalid edges"
+    agg = light_examples.st_coverageinvalidedges_python_example(spark)
+    assert edges.equals(wkb_loads(bytes(agg)))
 
 
 def test_coverage_simplify_python_light_example(spark):

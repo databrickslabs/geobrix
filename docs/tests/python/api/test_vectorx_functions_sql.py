@@ -64,6 +64,10 @@ def vectorx_registered(spark):
             "gbx_st_snap",
             "gbx_st_coverageisvalid",
             "gbx_st_coverageinvalidedges",
+            # the array forms of the aggregates
+            "gbx_st_asmvt_array",
+            "gbx_st_coverageisvalid_array",
+            "gbx_st_coverageinvalidedges_array",
             # the generators are table functions (FROM t, LATERAL f(...)), installed by the manager
             "gbx_st_asmvt_pyramid",
             "gbx_st_triangulate",
@@ -89,6 +93,40 @@ def test_st_asmvt_sql_example(vectorx_registered):
     mvt = result[0]["mvt"]
     assert mvt is not None, "st_asmvt should return non-null MVT bytes"
     assert len(mvt) > 0, "MVT bytes should be non-empty"
+
+
+def _decoded_layer(mvt_bytes, layer="layer"):
+    """The layer's features as (shapely WKT, properties) pairs, in a stable order."""
+    import mapbox_vector_tile  # noqa: PLC0415
+    from shapely import from_geojson  # noqa: PLC0415
+    import json  # noqa: PLC0415
+
+    tile = mapbox_vector_tile.decode(bytes(mvt_bytes), default_options={"y_coord_down": True})
+    feats = tile[layer]["features"]
+    return sorted(
+        (from_geojson(json.dumps(f["geometry"])).wkt, tuple(sorted(f["properties"].items())))
+        for f in feats
+    )
+
+
+def test_st_asmvt_array_sql_example(vectorx_registered):
+    """Run the ``gbx_st_asmvt_array`` SQL example; the layer holds the fixture's two features.
+
+    The ``mvt_features`` fixture has 2 rows in tile (z=0, x=0, y=0). The array form decodes to the
+    same features and attributes as the aggregate ``gbx_st_asmvt`` over the same rows.
+    """
+    spark = vectorx_registered
+    result = spark.sql(_statement(vectorx_functions_sql.st_asmvt_array_sql_example())).collect()
+    assert len(result) == 1
+    mvt = result[0]["mvt"]
+    assert mvt is not None and len(mvt) > 0, "st_asmvt_array should return non-empty MVT bytes"
+    got = _decoded_layer(mvt)
+    assert got == [
+        ("POINT (100 100)", (("id", 1), ("name", "a"))),
+        ("POINT (200 200)", (("id", 2), ("name", "b"))),
+    ]
+    agg = spark.sql(_statement(vectorx_functions_sql.st_asmvt_sql_example())).collect()
+    assert got == _decoded_layer(agg[0]["mvt"]), "array form and aggregate differ"
 
 
 def test_st_asmvt_pyramid_sql_example(vectorx_registered):
@@ -644,3 +682,32 @@ def test_coverageinvalidedges_sql_example(vectorx_registered):
     assert len(bad_edges) > 0, "bad_edges WKB bytes should be non-empty"
     geom = wkb_loads(bytes(bad_edges), hex=False)
     assert not geom.is_empty, "Invalid edges geometry should be non-empty for overlapping polygons"
+
+
+def test_coverageisvalid_array_sql_example(vectorx_registered):
+    """The array form says ``true`` for the valid coverage, as the aggregate does."""
+    spark = vectorx_registered
+    result = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageisvalid_array_sql_example())
+    ).collect()
+    assert len(result) == 1
+    assert result[0]["is_valid"] is True
+    agg = spark.sql(_statement(vectorx_functions_sql.st_coverageisvalid_sql_example())).collect()
+    assert agg[0]["is_valid"] is result[0]["is_valid"]
+
+
+def test_coverageinvalidedges_array_sql_example(vectorx_registered):
+    """The array form returns the overlap's invalid edges, the same geometry as the aggregate."""
+    from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
+
+    spark = vectorx_registered
+    result = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageinvalidedges_array_sql_example())
+    ).collect()
+    assert len(result) == 1
+    edges = wkb_loads(bytes(result[0]["bad_edges"]))
+    assert not edges.is_empty, "overlapping polygons have invalid edges"
+    agg = spark.sql(
+        _statement(vectorx_functions_sql.st_coverageinvalidedges_sql_example())
+    ).collect()
+    assert edges.equals(wkb_loads(bytes(agg[0]["bad_edges"])))

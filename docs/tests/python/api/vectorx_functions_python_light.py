@@ -156,6 +156,39 @@ st_asmvt_python_example_output = """
 """
 
 
+def st_asmvt_array_python_example(spark):
+    """Encode each tile's features from an array of (geom, attrs) structs (light pyvx tier).
+
+    Reads the ``mvt_features`` setup view (2 tile-local WKB POINTs in z=0/x=0/y=0).
+    ``collect_list(struct(...))`` gathers each tile's features into one array after the
+    ``groupBy`` of the tile key, and ``st_asmvt_array`` encodes the array as one layer. The
+    attributes are JSON object text (``to_json``). The layer is the one ``st_asmvt`` builds
+    from the same rows.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.table("mvt_features")
+    features = f.collect_list(
+        f.struct(f.col("geom_wkb").alias("geom"), f.to_json("attrs").alias("attrs"))
+    )
+    result = df.groupBy("z", "x", "y").agg(
+        vectorx_api.st_asmvt_array(features, "layer").alias("mvt")
+    )
+    row = result.first()
+    return row["mvt"]
+
+
+st_asmvt_array_python_example_output = """
++---+---+---+---------+
+|  z|  x|  y|      mvt|
++---+---+---+---------+
+|  0|  0|  0|[binary] |
++---+---+---+---------+
+... (MVT binary)
+"""
+
+
 def st_asmvt_pyramid_python_example(spark):
     """Explode a WGS-84 feature into per-tile MVT rows via SQL LATERAL (light pyvx tier).
 
@@ -781,6 +814,80 @@ def st_coverageinvalidedges_python_example(spark):
 
 
 st_coverageinvalidedges_python_example_output = """
++------+---------+
+|cov_id|bad_edges|
++------+---------+
+|     1|[binary] |
++------+---------+
+... (BINARY — union of the invalid edge segments; non-empty because the two squares overlap)
+"""
+
+
+def st_coverageisvalid_array_python_example(spark):
+    """Check polygon-coverage validity from an array of WKB polygons (light pyvx tier).
+
+    Two adjacent squares share the edge x=5 in group ``cov_id=1``. ``collect_list`` gathers
+    each group's WKB polygons into one array, and ``st_coverageisvalid_array`` returns the
+    answer of the aggregate ``st_coverageisvalid`` over the same polygons: ``True``.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            (1, bytearray(to_wkb(box(0.0, 0.0, 5.0, 5.0)))),
+            (1, bytearray(to_wkb(box(5.0, 0.0, 10.0, 5.0)))),
+        ],
+        "cov_id INT, geom BINARY",
+    )
+    result = df.groupBy("cov_id").agg(
+        vectorx_api.st_coverageisvalid_array(f.collect_list("geom"), 0.0).alias(
+            "is_valid"
+        )
+    )
+    return result.first()["is_valid"]
+
+
+st_coverageisvalid_array_python_example_output = """
++------+--------+
+|cov_id|is_valid|
++------+--------+
+|     1|    true|
++------+--------+
+... (BOOLEAN — true: the two adjacent squares share a clean edge with no overlap)
+"""
+
+
+def st_coverageinvalidedges_array_python_example(spark):
+    """Return the invalid edges of an array of overlapping WKB polygons (light pyvx tier).
+
+    Two squares overlap in [4,6]x[4,6] in group ``cov_id=1``. ``st_coverageinvalidedges_array``
+    returns the BINARY union of the edges that make the coverage invalid, the answer of the
+    aggregate ``st_coverageinvalidedges`` over the same polygons.
+    """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from shapely import to_wkb  # noqa: PLC0415
+    from shapely.geometry import box  # noqa: PLC0415
+
+    df = spark.createDataFrame(
+        [
+            (1, bytearray(to_wkb(box(0.0, 0.0, 6.0, 6.0)))),
+            (1, bytearray(to_wkb(box(4.0, 4.0, 10.0, 10.0)))),
+        ],
+        "cov_id INT, geom BINARY",
+    )
+    result = df.groupBy("cov_id").agg(
+        vectorx_api.st_coverageinvalidedges_array(f.collect_list("geom"), 0.0).alias(
+            "bad_edges"
+        )
+    )
+    return result.first()["bad_edges"]
+
+
+st_coverageinvalidedges_array_python_example_output = """
 +------+---------+
 |cov_id|bad_edges|
 +------+---------+

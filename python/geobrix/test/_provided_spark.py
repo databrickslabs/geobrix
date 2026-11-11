@@ -201,6 +201,14 @@ def _patch_sql(session_cls) -> None:
     session_cls.sql = sql
 
 
+def cover(session):
+    """Patch the class of ``session`` too, then return it. The provided session can be a subclass with its own ``sql``
+    (newer Spark lines define one per classic and Connect session, past the base class ``install`` patches).
+    """
+    _patch_sql(type(session))
+    return session
+
+
 def install(env=None) -> bool:
     """Apply the change when it is wanted; True when it is in effect. Safe to call twice."""
     global _installed
@@ -215,6 +223,12 @@ def install(env=None) -> bool:
     _patch_builder(classic.SparkSession.Builder)
     _patch_stop(classic.SparkSession)
     _patch_sql(classic.SparkSession)
+    try:  # a Spark line with a classic session class of its own
+        from pyspark.sql.classic import session as classic_own
+
+        _patch_sql(classic_own.SparkSession)
+    except ImportError:
+        pass
     try:
         from pyspark.sql import readwriter
         from pyspark.sql.streaming import readwriter as streaming

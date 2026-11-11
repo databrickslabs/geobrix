@@ -286,3 +286,26 @@ def test_a_delta_path_in_sql_text_is_qualified_like_a_write(tmp_path):
         "SELECT * FROM delta.`dbfs:/x`",
         "SELECT '/local' AS p, delta_t.x FROM delta_t",
     ]
+
+
+def test_the_class_of_the_session_given_is_covered_too(tmp_path):
+    """A runtime's session may be a subclass that defines its own ``sql`` (the classic and Connect
+    sessions of newer Spark lines do), which a patch of the base class never reaches. ``cover``
+    patches the class of the session a fixture got."""
+    seen = []
+
+    class Base:
+        def sql(self, sqlQuery, args=None, **kwargs):
+            seen.append(("base", sqlQuery))
+
+    class Runtime(Base):
+        def sql(self, sqlQuery, args=None, **kwargs):
+            seen.append(("runtime", sqlQuery))
+
+    ps._patch_sql(Base)
+    ledger = str(tmp_path / "_gbx_owner")
+    session = Runtime()
+    assert ps.cover(session) is session
+    ps.cover(session)  # twice: still one wrapper
+    session.sql(f"SELECT * FROM delta.`{ledger}`")
+    assert seen == [("runtime", f"SELECT * FROM delta.`file:{ledger}`")]

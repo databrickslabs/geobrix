@@ -119,9 +119,13 @@ def spark_delta(tmp_path_factory):
     clean up after themselves (tables dropped, the session time zone and current schema
     restored), so they share it safely.
     """
-    from test._provided_spark import wanted
+    from test._provided_spark import cover, wanted
 
     session = delta_session(tmp_path_factory.mktemp("delta_wh"))
+    if wanted():
+        cover(
+            session
+        )  # its class's own sql, too (the zarr ownership ledger's delta.`<path>`)
     with provided_session_confs(session, PROVIDED_CONFS if wanted() else {}):
         yield session
     session.stop()
@@ -136,11 +140,15 @@ def spark_delta(tmp_path_factory):
 #   (OPTIMIZE, operationParameters.auto = true). A test that expects the version after a
 #   commit to be the commit's, or OPTIMIZE to find files to compact, then sees one more.
 #   GeoBrix copes with those versions (they are not GeoBrix commits); the tests that pin
-#   version numbers assume none comes between.
+#   version numbers assume none comes between. The session conf stops the compaction that
+#   runs after a write; Unity Catalog managed tables are also compacted in the background,
+#   later, unless the table carries the property, which the defaults conf gives every table
+#   a test creates.
 PROVIDED_CONFS = {
     "spark.sql.shuffle.partitions": "2",
     "spark.databricks.delta.autoCompact.enabled": "false",
     "spark.databricks.delta.autoCompact.minNumFiles": "1000000",
+    "spark.databricks.delta.properties.defaults.autoOptimize.autoCompact": "false",
 }
 
 

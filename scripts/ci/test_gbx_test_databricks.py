@@ -289,6 +289,105 @@ def test_a_rust_change_follows_calls_inside_the_crate_to_the_export():
     assert got == set() and notes, "a change inside the crate's tests reaches no export"
 
 
+_P = "python/geobrix/src/databricks/labs/gbx"
+_T = "python/geobrix/test"
+
+
+def _mini(files):
+    """A graph of these files alone (path -> text), as build_graph makes one from a commit."""
+    return af.Graph(af.graph_of(files))
+
+
+def _mini_sel(files, changed, old, shards):
+    G = _mini(files)
+    return af.select(G, changed, shards, old_text=lambda f: old.get(f, files.get(f)), new_text=files.get)
+
+
+def test_an_autouse_fixture_reached_through_a_conftest_selects_the_tests_under_it(shards):
+    files = {
+        f"{_P}/__init__.py": "", f"{_P}/helper.py": "def make():\n    return 1\n",
+        f"{_T}/__init__.py": "", f"{_T}/zz/__init__.py": "",
+        f"{_T}/zz/conftest.py": "import pytest\nfrom databricks.labs.gbx.helper import make\n\n\n@pytest.fixture(autouse=True)\n"
+                                "def _setup():\n    make()\n\n\ndef pytest_configure(config):\n    pass\n",
+        f"{_T}/zz/test_a.py": "def test_a():\n    assert 1\n",
+    }
+    sel = _mini_sel(files, [f"{_P}/helper.py"], {f"{_P}/helper.py": "def make():\n    return 0\n"}, shards)
+    assert "test/zz/test_a.py" in sel.files, "the autouse fixture runs for every test under the conftest, named or not"
+
+
+def test_an_aliased_import_through_a_hub_follows_the_name_it_was_given(shards):
+    files = {
+        f"{_P}/__init__.py": "", f"{_P}/core.py": "def f():\n    return 1\n\n\ndef g():\n    return 2\n",
+        f"{_P}/hub/__init__.py": "from databricks.labs.gbx.core import f as _f\n\n\ndef api():\n    return _f()\n",
+        f"{_T}/__init__.py": "", f"{_T}/test_x.py": "from databricks.labs.gbx.hub import api\n\n\ndef test_x():\n    api()\n",
+    }
+    old = {f"{_P}/core.py": "def f():\n    return 0\n\n\ndef g():\n    return 2\n"}
+    sel = _mini_sel(files, [f"{_P}/core.py"], old, shards)
+    assert "test/test_x.py" in sel.files, "f changed; the hub calls it as _f in api; the test uses api"
+
+
+def test_a_package_init_whose_module_code_changed_selects_the_importers_of_its_submodules(shards):
+    files = {
+        f"{_P}/__init__.py": "", f"{_P}/pkg/__init__.py": "X = 1\nprint(X)\n", f"{_P}/pkg/sub.py": "def s():\n    return 1\n",
+        f"{_T}/__init__.py": "", f"{_T}/test_s.py": "from databricks.labs.gbx.pkg import sub\n\n\ndef test_s():\n    sub.s()\n",
+    }
+    sel = _mini_sel(files, [f"{_P}/pkg/__init__.py"], {f"{_P}/pkg/__init__.py": "X = 1\n"}, shards)
+    assert "test/test_s.py" in sel.files, "importing pkg.sub runs pkg/__init__"
+
+
+def test_a_deleted_module_selects_the_tests_that_still_import_it(shards):
+    files = {
+        f"{_P}/__init__.py": "", f"{_P}/pkg/__init__.py": "",
+        f"{_T}/__init__.py": "", f"{_T}/test_a.py": "from databricks.labs.gbx.pkg import gone\n\n\ndef test_a():\n    gone.x()\n",
+        f"{_T}/test_b.py": "import databricks.labs.gbx.pkg.gone as g\n\n\ndef test_b():\n    g.x()\n",
+        f"{_T}/test_c.py": "def test_c():\n    pass\n",
+    }
+    gone = f"{_P}/pkg/gone.py"
+    sel = _mini_sel(files, [gone], {gone: "def x():\n    return 1\n"}, shards)
+    assert {"test/test_a.py", "test/test_b.py"} <= set(sel.files) and "test/test_c.py" not in sel.files, "they now fail to import"
+
+
+def test_a_manifest_change_selects_the_tests_that_read_the_whole_manifest(graph, shards):
+    G, sha = graph
+    text = af.blobs(REPO_ROOT, sha, [af.MANIFEST_JSON])[af.MANIFEST_JSON]
+    rows = json.loads(text)
+    rows["functions"][0] = dict(rows["functions"][0], status="tweaked")
+    sel = _sel(graph, shards, [af.MANIFEST_JSON], old={af.MANIFEST_JSON: json.dumps(rows)})
+    assert {"test/manager/test_virtual_dispatch.py", "test/manager/test_surfaces.py"} <= set(sel.files)
+    assert af.light_selected(sel, shards, REPO_ROOT) < af.BROAD_SHARE * af.light_units(shards, REPO_ROOT), "not the whole bank"
+
+
+def test_a_rust_const_static_macro_or_attribute_change_reaches_the_export():
+    lib = ("const SCALE: f64 = 2.0;\nstatic mut N: i32 = 0;\nmacro_rules! twice {\n    ($x:expr) => { $x * 2.0 };\n}\n\n"
+           "#[pyfunction]\nfn scaled(x: f64) -> f64 {\n    twice!(x) * SCALE\n}\n#[pyfunction]\nfn other() {\n    1\n}\n"
+           "#[pymodule]\nfn m(m: &M) {\n    m.add_function(wrap_pyfunction!(scaled, m)?)?;\n    m.add_function(wrap_pyfunction!(other, m)?)?;\n}\n")
+    for line, why in ((1, "a const"), (4, "a macro"), (7, "the attribute above the fn")):
+        got, _ = af.rust_changed_exports({"lib.rs": (lib, {line})})
+        assert "scaled" in got, why
+    got, _ = af.rust_changed_exports({"lib.rs": ("use x::y;\n" + lib, {1})})
+    assert {"scaled", "other"} <= got, "a changed line outside every item: every item of the file"
+
+
+def test_an_affected_subset_takes_its_share_of_its_ci_shards_minutes(graph, shards):
+    f = f"test/pyrx/{_first_test('pyrx')}"
+    sel = _sel(graph, shards, [f"python/geobrix/{f}"], old={})
+    out, _ = af.to_shards(sel, shards, REPO_ROOT)
+    sub = next(s for s in out if s.name == "pyrx affected")
+    home = next(s for s in shards if s.name == "pyrx 1/2" and ts._covers(s, f, ts.shard_of(REPO_ROOT))) or \
+        next(s for s in shards if s.name == "pyrx 2/2")
+    per_home = ts.untimed_file_seconds(home, len(ts.files_of(home, REPO_ROOT)))
+    assert ts.untimed_file_seconds(sub, len(sub.paths)) == pytest.approx(per_home), "a file's share of pyrx's 17 min, not of the 12 min default"
+
+
+def test_a_guessed_subset_or_rerun_estimate_gives_no_contention_record():
+    per = {"a.py": 400.0}
+    for chunk in ({"name": "pyrx affected", "subset": True, "est_src": "ci", "solo_min": 2.0},
+                  {"name": "rerun test/a.py", "est_src": "ci", "solo_min": 2.0},
+                  {"name": "files", "est_src": "ci", "solo_min": 2.0}):
+        assert tm.contention_records(chunk, 600.0, per, 2, 3) == [], chunk["name"]
+    assert tm.contention_records({"name": "ds", "est_src": "ci", "solo_min": 2.0}, 600.0, per, 2, 3), "a whole CI shard's minutes are measured"
+
+
 def test_an_oracle_table_module_maps_to_its_family_parts_only(graph, shards):
     f = "python/geobrix/src/databricks/labs/gbx/bench/oracle_tables/vector_scalar.py"
     sel = _sel(graph, shards, [f])
@@ -308,7 +407,8 @@ def test_a_manifest_row_change_maps_to_its_family_and_the_tests_that_name_it(gra
     row["since"] = "0.0.1"  # the commit changed one field of the row
     sel = _sel(graph, shards, [af.MANIFEST_JSON], old={af.MANIFEST_JSON: json.dumps(doc)})
     assert set(sel.tables) == {"VECTOR_GENERATOR"} and "row gbx_st_triangulate" in sel.tables["VECTOR_GENERATOR"][0]
-    assert sel.files and all("gbx_st_triangulate" in w[0] for w in sel.files.values())
+    assert sel.files and all("gbx_st_triangulate" in w[0] or "reads the whole manifest" in w[0] for w in sel.files.values())
+    assert any("gbx_st_triangulate" in w[0] for w in sel.files.values())
 
 
 def test_the_family_file_selects_every_table_and_a_conftest_its_folder(graph, shards):
@@ -2422,6 +2522,47 @@ def test_an_unintended_empty_chunk_fails_its_own_run_its_runner_and_the_job(shar
     assert '"empty_ok": S.get("empty_ok", True)' in launcher.run_source(plan) or "empty_ok=S.get(" in launcher.run_source(plan)
     rec = sr.run_loop(sr.DirQueue("/tmp/gbx-empty-q-" + str(os.getpid()), ["a"]), "r0", lambda slug: dict(empty, empty_ok=False))
     assert [x for x in rec["shards"] if sr.chunk_failed(x)], "the runner's bad list (and so the job) sees it"
+
+
+def test_relane_rescales_the_solo_expectations_to_the_slots_it_leased(shards):
+    a = _args("--max-parallel", "0")
+    picked = [ts.Shard(name="ds", kind="light", paths=["test/ds"], est_min=10.0, solo_min=8.0, est_src="history")]
+    plan = launcher.make_plan(a, "a" * 40, picked, None, None, "/Volumes/c/s/v", REPO_ROOT, fsolo={})
+    pool = next(iter(plan["pools"]))
+    plan["shards"]["ds"]["unit_solo_s"] = {"test/ds/test_x.py": 100.0}
+    before = plan["pools"][pool]["slots"]
+    launcher.relane(plan, pool, a, 1, 64)  # a 64 vCPU node: 8 slots, not the plan's 4
+    k = ts.slowdown(8) / ts.slowdown(before)
+    c = plan["shards"]["ds"]
+    assert plan["pools"][pool]["slots"] == 8 and k > 1
+    assert c["solo_min"] == pytest.approx(8.0 * k, rel=0.02) and c["unit_solo_s"]["test/ds/test_x.py"] == pytest.approx(100.0 * k, rel=0.02)
+    assert c["expected_min"] == pytest.approx(10.0 * k, rel=0.02), "the estimate at the slots the node runs"
+    launcher.relane(plan, pool, a, 1, 64)
+    assert c["solo_min"] == pytest.approx(8.0 * k, rel=0.02), "a second relane at the same slots changes nothing"
+
+
+def test_a_chunk_removes_its_scratch_and_a_runner_its_checkout(shards):
+    src = launcher.run_source(_plan(_args(), ts.select(shards, "ds")))
+    assert "OWN_BASE = True" in src and "shutil.rmtree(base if OWN_BASE else root" in src, "a chunk's own temp folder goes, not just its files"
+    assert src.index("shutil.rmtree(base if OWN_BASE else root") > src.index('shutil.copy(root + "/out/" + f, OUT + "/" + f)')
+    runner = launcher.runner_source(_plan(_args(), ts.select(shards, "ds")))
+    assert '"/_checkout-" + WHO' in runner, "the runner removes its checkout when its loop ends"
+    assert "STALE_SCRATCH_S" in src and "os.path.getmtime(_p) > STALE_SCRATCH_S" in src, "and a chunk sweeps old launches' scratch off the node"
+
+
+def test_a_spark_conf_the_session_refuses_fails_the_chunk_with_the_reason(shards):
+    src = launcher.run_source(_plan(_args("--spark-conf", "spark.x=1"), ts.select(shards, "ds")))
+    start, end = src.index("CONF_ERR = "), src.index('print("shard", S["name"]')
+    snippet = textwrap.dedent(src[start:end])
+
+    class Conf:
+        def set(self, k, v):
+            raise RuntimeError("[CONFIG_NOT_AVAILABLE] Configuration spark.x is not available.")
+
+    ns = {"S": {"spark_conf": {"spark.x": "1"}}, "spark": type("Sp", (), {"conf": Conf()})()}
+    exec(compile(snippet, "conf", "exec"), ns)  # noqa: S102
+    assert "spark.x=1" in ns["CONF_ERR"] and "CONFIG_NOT_AVAILABLE" in ns["CONF_ERR"]
+    assert "if CONF_ERR:" in src and src.index("if CONF_ERR:") < src.index("rc = int(pytest.main(args, plugins=plugins))")
 
 
 def test_the_wall_budget_starts_after_the_lease_wait_when_the_pool_is_submitted(shards, monkeypatch, tmp_path):

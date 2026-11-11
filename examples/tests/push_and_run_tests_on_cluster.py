@@ -575,8 +575,17 @@ def _shared_dir(d):  # a folder the next chunks may write even when they run as 
 # a folder per launch attempt (run id + attempt): a relaunch under the same run id never meets the files, or the tables that
 # own them, of a cancelled attempt
 base = scratch + "/%%s-%%s" %% (PLAN["run_id"], PLAN.get("attempt", "0"))
+OWN_BASE = False  # True: a temp folder of this chunk's own, removed at its end with everything in it
+STALE_SCRATCH_S = 6 * 3600  # an earlier launch's scratch on this node older than this is removed (no run lasts that long)
 try:
     _shared_dir(scratch)
+    for _old in os.listdir(scratch):  # earlier launches' folders on this node (a pool node lives on): gone after STALE_SCRATCH_S
+        _p = scratch + "/" + _old
+        try:
+            if _p != base and time.time() - os.path.getmtime(_p) > STALE_SCRATCH_S:
+                shutil.rmtree(_p, ignore_errors=True)
+        except OSError:
+            pass
     _shared_dir(base)
     root = base + "/" + SLUG
     shutil.rmtree(root, ignore_errors=True)
@@ -585,6 +594,7 @@ except OSError:  # a folder this chunk cannot write: one of its own (the checkou
     import tempfile
 
     base = tempfile.mkdtemp(prefix="gbxtest-")
+    OWN_BASE = True
     root = base + "/" + SLUG
     os.makedirs(root + "/out")
 try:  # the runner that runs this chunk: its chunks share one checkout, one after another
@@ -882,8 +892,12 @@ try:
     iso["conf_fresh"] = spark.conf.get("gbx.isolation.probe", "") == ""
 except Exception as exc:  # the probe never decides a shard
     iso["error"] = str(exc)[:200]
+CONF_ERR = ""  # a --spark-conf this session refuses (Serverless refuses many): the chunk fails, saying which and why, before its tests
 for _k, _v in S.get("spark_conf", {}).items():  # --spark-conf: set before the tests, in this shard's own session
-    spark.conf.set(_k, _v)
+    try:
+        spark.conf.set(_k, _v)
+    except Exception as exc:
+        CONF_ERR = CONF_ERR or "--spark-conf %%s=%%s refused by this session: %%s: %%s" %% (_k, _v, type(exc).__name__, " ".join(str(exc).split())[:240])
 print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| spark conf", S.get("spark_conf", {}), "| cores", os.cpu_count(), "| session", type(spark).__name__, "| isolation", iso, flush=True)
 # a test's tmp_path holds the files its virtual tiles name; on Serverless the Python workers are other machines that
 # cannot see the driver's disk, so there tmp_path is under the run's Volume folder, which every worker reads
@@ -945,7 +959,12 @@ def smoke_pick():  # the first tests of the run's fastest chunk that collects an
 
 rc = 0
 try:
-    if S.get("collect"):  # the smoke chunk: collect every selected file first (an import error anywhere shows here, in seconds)
+    if CONF_ERR:
+        rc = 2
+        state["reason"] = CONF_ERR
+        state["first_failure"] = {"id": "(--spark-conf)", "msg": CONF_ERR}
+        print(CONF_ERR, flush=True)
+    elif S.get("collect"):  # the smoke chunk: collect every selected file first (an import error anywhere shows here, in seconds)
         rc = int(pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider"] + S["collect"], plugins=[Counter()]))
         print("smoke: collect-only of %%d path(s) rc %%d, %%d collection error(s)" %% (len(S["collect"]), rc, state["errors"]), flush=True)
         if rc in (0, 5) and not state["errors"]:
@@ -985,6 +1004,8 @@ for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
 beat()
 print("shard rc:", rc, "after", result["wall_s"], "s", flush=True)
+# its files are on the Volume now: the chunk's scratch goes (a temp folder of its own whole; else its folder, the runner's checkout stays)
+shutil.rmtree(base if OWN_BASE else root, ignore_errors=True)
 if chunk_failed(result):
     # this run's status tells the truth: it fails (the runner reads the result file it just wrote). A chunk stopped at --overrun-x with
     # no failed test is an overrun (a timing miss, OVERRUN in the summary), not a failed run
@@ -1109,6 +1130,9 @@ else:
     rec["conflicts"] = q.conflicts
     save(rec)
     print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s);", rec["stopped"] or "the queue is empty", flush=True)
+    # the checkout its chunks shared (the shard cell's node_checkout, on the node's disk) and its own record folder go with it
+    shutil.rmtree(gate_root + "/" + PLAN["run_id"] + "-" + PLAN.get("attempt", "0") + "/_checkout-" + WHO, ignore_errors=True)
+    shutil.rmtree(tmp_dir, ignore_errors=True)
     if rec["error"]:
         raise RuntimeError(rec["error"])
     if SMOKE and last.get("failed_chunk"):  # the runners depend on this task: a failed smoke stops the job before the queue
@@ -1845,10 +1869,24 @@ def pool_name_of(a, pool: str, with_jar: bool = False) -> str:
 
 
 def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
-    """Size the pool's runners again for the clusters actually leased and the cores they have (the queue stays as it is)."""
+    """Size the pool's runners again for the clusters actually leased and the cores they have (the queue stays as it is). When the
+    slots per node differ from the plan's, each chunk's estimate, solo time and units' solo seconds move to the new slots
+    (``_test_shards.slowdown``): they were taken at the plan's, and a run measures its chunks against them."""
     spec = plan["pools"][pool]
     before = list(spec["queue"])
-    size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min,
+    slots = a.max_parallel or ts.slots_for(cores)
+    was = int(spec.get("time_slots") or spec.get("slots") or slots)
+    if slots != was:
+        k = ts.slowdown(slots) / ts.slowdown(was)
+        for slug in before:
+            c = plan["shards"][slug]
+            if c.get("smoke"):
+                continue  # a fixed guess, not a time at any slot count
+            c["expected_min"] = round(c["expected_min"] * k, 2)
+            c["solo_min"] = round(float(c.get("solo_min") or 0.0) * k, 2)
+            c["unit_solo_s"] = {u: round(v * k, 1) for u, v in (c.get("unit_solo_s") or {}).items()}
+    spec["time_slots"] = slots
+    size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, slots, n_clusters, a.shard_cap_min,
               {slug for slug in before if plan["shards"][slug].get("heavy")}, smoke=spec.get("smoke") or "",
               start=(plan.get("fail_fast") or {}).get("start_chunks", 0))
     assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"

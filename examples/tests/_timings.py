@@ -311,14 +311,22 @@ def chunk_keys(chunk: dict) -> List[str]:
     return [f"table:{t}" for t in tables] + [REST] if tables else list(chunk.get("files") or [])
 
 
+def ci_guess(chunk: dict) -> bool:
+    """Whether a chunk's CI-minutes estimate is a guess, not a measured solo time: CI's minutes are measured for a whole CI shard
+    only, so a split part (``[i/n]``), an ``affected`` subset, a rerun or a ``files`` shard estimated from them is a share or a
+    default."""
+    name = str(chunk.get("name") or "")
+    return chunk.get("est_src") == "ci" and (name.endswith("]") or bool(chunk.get("subset")) or name.startswith(("rerun ", "files")))
+
+
 def contention_records(chunk: dict, actual_s: Optional[float], per_key_s: Dict[str, float], nb: int, peak: int,
                        incomplete: bool = False) -> List[dict]:
     """The contention records one chunk leaves: per key, its actual seconds over its solo-expected seconds (the plan's
     ``unit_solo_s``); without those, the chunk's actual over its solo-expected time, given to the keys that took a fifth or more of
-    its test time. Only keys whose actual time reaches CONTENTION_MIN_S, and never for a lower-bound estimate, nor for a part of a
-    split CI shard estimated by its share of CI's minutes (a guess; CI's minutes for a whole shard are a measured solo time). A chunk
+    its test time. Only keys whose actual time reaches CONTENTION_MIN_S, and never for a lower-bound estimate, nor for a chunk whose
+    estimate is a guess from CI's minutes (``ci_guess``; CI's minutes for a whole shard are a measured solo time). A chunk
     that did not finish (a cap) gives its ratio, a lower bound, only when that already reaches CONTENTION_HEAVY."""
-    if chunk.get("est_src") == "lower bound" or (chunk.get("est_src") == "ci" and str(chunk.get("name") or "").endswith("]")):
+    if chunk.get("est_src") == "lower bound" or ci_guess(chunk):
         return []
     out = []
     unit = chunk.get("unit_solo_s") or {}

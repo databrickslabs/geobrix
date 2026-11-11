@@ -19,6 +19,9 @@ shard of the node shares.
   (a read) or when the folder it goes in exists (a write), so the read finds what the test wrote, and what the test
   wrote through Spark is where the test (and the Python workers) look for it, as on a local session. The test clusters
   are single node: the driver's disk is the executor's.
+* ``SparkSession.sql`` gives a Delta table named by a bare local path in its text (``delta.`<path>```, the zarr
+  ownership ledger at ``<root>/_gbx_owner``) the writers' rule, so the table is the local folder the test (and
+  GeoBrix's own directory listing) looks at, not a DBFS path.
 
 It applies when ``DATABRICKS_RUNTIME_VERSION`` is set, or when ``GBX_TEST_PROVIDED_SPARK`` is a true value (a way to
 try it off Databricks); ``GBX_TEST_PROVIDED_SPARK=0`` turns it off on Databricks. Without either, a run is exactly
@@ -31,6 +34,7 @@ run shares.
 from __future__ import annotations
 
 import os
+import re
 from typing import List, Tuple
 
 # (builder call, its arguments): what a fixture asked for and the platform's session ignored
@@ -166,6 +170,37 @@ def _patch_start(writer_cls) -> None:
     _patch_paths(writer_cls, ("start",), local_write_uri)
 
 
+# a table named by its path in SQL text: delta.`<path>`, a backtick inside doubled
+_DELTA_PATH = re.compile(r"delta\.`((?:[^`]|``)+)`")
+
+
+def _qualify_sql(text):
+    """``text`` with each ``delta.`<bare local path>``` given the writers' rule (``local_write_uri``)."""
+    if not isinstance(text, str) or "delta.`" not in text:
+        return text
+
+    def one(m):
+        path = m.group(1).replace("``", "`")
+        return "delta.`" + local_write_uri(path).replace("`", "``") + "`"
+
+    return _DELTA_PATH.sub(one, text)
+
+
+def _patch_sql(session_cls) -> None:
+    """``SparkSession.sql``: a Delta table named by a bare local path (the zarr ownership ledger at
+    ``<root>/_gbx_owner``) is the local file, as on a local session, not a DBFS path."""
+    fn = getattr(session_cls, "sql", None)
+    if fn is None or getattr(fn, "_gbx_provided", False):
+        return
+
+    def sql(self, sqlQuery, *args, **kwargs):
+        return fn(self, _qualify_sql(sqlQuery), *args, **kwargs)
+
+    sql.__name__ = "sql"
+    sql._gbx_provided = True  # type: ignore[attr-defined]
+    session_cls.sql = sql
+
+
 def install(env=None) -> bool:
     """Apply the change when it is wanted; True when it is in effect. Safe to call twice."""
     global _installed
@@ -179,6 +214,7 @@ def install(env=None) -> bool:
         return False
     _patch_builder(classic.SparkSession.Builder)
     _patch_stop(classic.SparkSession)
+    _patch_sql(classic.SparkSession)
     try:
         from pyspark.sql import readwriter
         from pyspark.sql.streaming import readwriter as streaming
@@ -196,6 +232,7 @@ def install(env=None) -> bool:
 
         _patch_builder(connect.SparkSession.Builder)
         _patch_stop(connect.SparkSession)
+        _patch_sql(connect.SparkSession)
         _patch_load(connect_rw.DataFrameReader)
         _patch_save(connect_rw.DataFrameWriter)
         _patch_stream_load(connect_stream.DataStreamReader)

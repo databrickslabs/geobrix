@@ -248,3 +248,41 @@ def test_the_writers_qualify_save_the_formats_and_start(tmp_path):
         ("save", None),
         ("save", "/Volumes/c/s/v/w"),
     ]
+
+
+def test_a_delta_path_in_sql_text_is_qualified_like_a_write(tmp_path):
+    """``spark.sql("... delta.`<path>` ...")`` names a table by path, as the zarr ownership ledger
+    (``<root>/_gbx_owner``) does. On Databricks a bare local path there is a DBFS path, so the
+    ledger landed in DBFS while the test (and GeoBrix's own listing) looked for it on the local
+    disk. It gets the writers' rule: a bare local path whose folder exists is a ``file:`` URI.
+    """
+    seen = []
+
+    class Session:
+        def sql(self, sqlQuery, args=None, **kwargs):
+            seen.append(sqlQuery)
+
+    ps._patch_sql(Session)
+    ps._patch_sql(Session)  # twice: still one wrapper
+    ledger = str(tmp_path / "root" / "_gbx_owner")  # neither exists yet: tmp_path does
+    odd = str(tmp_path / "a`b")
+    Session().sql(f"CREATE TABLE delta.`{ledger}` AS SELECT 1")
+    Session().sql(sqlQuery=f"SELECT * FROM delta.`{ledger}` JOIN delta.`{ledger}`")
+    Session().sql("SELECT * FROM delta.`" + odd.replace("`", "``") + "`")
+    for kept in (
+        "SELECT * FROM delta.`/Volumes/c/s/v/t`",
+        "SELECT * FROM delta.`file:/x`",
+        "SELECT * FROM delta.`dbfs:/x`",
+        "SELECT '/local' AS p, delta_t.x FROM delta_t",
+    ):
+        Session().sql(kept)
+    uri = f"delta.`file:{ledger}`"
+    assert seen == [
+        f"CREATE TABLE {uri} AS SELECT 1",
+        f"SELECT * FROM {uri} JOIN {uri}",
+        "SELECT * FROM delta.`file:" + odd.replace("`", "``") + "`",
+        "SELECT * FROM delta.`/Volumes/c/s/v/t`",
+        "SELECT * FROM delta.`file:/x`",
+        "SELECT * FROM delta.`dbfs:/x`",
+        "SELECT '/local' AS p, delta_t.x FROM delta_t",
+    ]

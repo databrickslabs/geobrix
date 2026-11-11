@@ -27,7 +27,7 @@ export default function Surfaces(props) {
         {props.scala && (
           <Link
             to={jarTo}
-            className={styles.implLink}
+            className={`${styles.tierGroup} ${styles.implLink}`}
             title="Functions the JAR speeds up"
             data-gbx-scala-link="true"
           >

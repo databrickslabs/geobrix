@@ -229,3 +229,9 @@
   overflow-wrap: anywhere;
   white-space: normal;
 }
+
+/* A row anchor in a table (the jar-functions rows a Scala tag links to): clear the fixed navbar when scrolled to,
+   as Docusaurus does for headings. */
+.markdown td a[id] {
+  scroll-margin-top: calc(var(--ifm-navbar-height) + 0.5rem);
+}

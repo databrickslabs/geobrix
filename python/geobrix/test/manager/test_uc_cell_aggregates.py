@@ -78,6 +78,11 @@ def test_the_bng_chip_arrays_write_ewkb_with_srid_27700_like_the_uc_chip_functio
     assert body.count("st_asewkb(") == 1 and "27700" in text
     wkbornull = next(h for h in helpers if h["name"] == "gbx__bng_wkbornull")
     assert "length(w) <= 13" in wkbornull["sql"]  # an empty EWKB is 13 bytes
+    # every chip is read as BNG: plain WKB chips (SRID 0, as a session writes them) fold to SRID 27700 too. Found on a
+    # SQL warehouse: the two-chip rows answered SRID 0, the EWKB-chip rows 27700.
+    reads = body.count("st_geomfromewkb(")
+    assert reads == 2 and body.count("st_setsrid(st_geomfromewkb(") == reads
+    assert body.count(".chip), 27700)") == reads
 
 
 # --- the BNG cell polygon helper: pure SQL, judged against the kernel -----------------------------------------------------

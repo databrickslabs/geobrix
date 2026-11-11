@@ -63,7 +63,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Each shard runs as a notebook run of its own (`dbutils.notebook.run`). It has its own Python process and Spark session, as a task of its own had.
 - A failed, stopped or timed-out shard never stops its runner. The runner records it as not finished and takes the next.
 - Reports the wall time against the longest shard and against running the shards one after another.
-- Each shard installs the wheel in its own session, unpacks the tarball and runs pytest there. The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
+- Each shard installs the wheel in its own session (a forced `--force-reinstall --no-deps` of geobrix first, so a same-version geobrix already on the cluster cannot stand in for it), then a guard cell fails the shard unless the driver and a Python worker import the staged wheel (build commit and source digest are printed), unpacks the tarball and runs pytest there. A pool cluster carries only JARs and its notebook-scoped install is per session, so an earlier run's wheel does not carry over; the guard also covers a wheel library someone attached to the cluster. The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
 - Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`. It prints one table and writes `summary.md` with the first lines of each failure and the skip reasons.
 - Removes the Volume folder, the notebooks and the queue table after the download. Exit code 1 when any shard failed, errored or did not finish.
 

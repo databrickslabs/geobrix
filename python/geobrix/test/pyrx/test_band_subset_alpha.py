@@ -6,8 +6,7 @@ selected last, and at least one data band is selected with it. Otherwise every s
 data, valid wherever its own NoData or mask says so: a lone alpha band (``rst_band(tile, 4)`` of
 an RGBA raster) is wanted for its values, and an alpha label on any other band is data.
 
-The lazy read of a virtual tile with a pending band selection, the eager ``rst_band`` and the
-heavyweight ``gbx_rst_band`` (``test_parity_bng_quadbin_raster_grid.py``) agree on this.
+The lazy read of a virtual tile with a pending band selection and the eager ``rst_band`` agree on this.
 """
 
 import numpy as np

@@ -112,12 +112,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # forms returned none. The JVM expressions are deleted. The light level is the engine alone (no numpy form).
     "gbx_rst_slope": ("L3",),
     "gbx_rst_mapalgebra": ("L3",),
-    # The DEM functions, measured against the best light form (c0 or c1) on dedicated compute (DBR 19, medians of 3, about
-    # 15% spread between iterations), at 4x and 16x tiles with equal output. TRI took 1.07x at 4x and 1.24x at 16x, past the
-    # 1.2x line at 16x, so it keeps its JVM expression and runs it first on JAR compute. Aspect (1.19x, 1.17x), TPI (1.12x,
-    # 1.14x) and roughness (1.03x, 1.05x) stayed under the line, so their JVM expressions are deleted and they are light.
-    # Hillshade has no JVM level.
-    "gbx_rst_tri": ("L1", "L3"),
+    # The DEM functions, measured against the best light form (c0 or c1) on dedicated compute (DBR 19), at 4x and 16x tiles
+    # with equal output. TRI took 1.10x at 4x and 1.16x at 16x (5 iterations), under the 1.2x line, so its JVM expression is
+    # deleted and it takes the family order, light, like aspect (1.19x, 1.17x), TPI (1.12x, 1.14x) and roughness
+    # (1.03x, 1.05x). Hillshade has no JVM level.
     "gbx_rst_aspect": ("L3",),
     "gbx_rst_tpi": ("L3",),
     "gbx_rst_roughness": ("L3",),

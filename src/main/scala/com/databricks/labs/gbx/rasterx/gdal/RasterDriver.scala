@@ -176,7 +176,7 @@ object RasterDriver {
 
     /** As [[readFromBytesUngated]], but a driver outside the self-contained class is not translated to a GeoTIFF: the
       * tile's own dataset (netCDF, HDF5, ...), subdatasets and all, which the translation does not keep. For
-      * `gbx_rst_subdatasets` and `gbx_rst_getsubdataset`, whose answer is the source file's structure. The bytes rule
+      * the header accessors, whose answer is the source file's structure. The bytes rule
       * still holds (a driver that can name other files is refused). The caller reads no pixel from it and releases it;
       * a netCDF / HDF dataset is opened here under [[GDALManager.withHdfLock]] and the caller holds that lock for the
       * rest of its use. */

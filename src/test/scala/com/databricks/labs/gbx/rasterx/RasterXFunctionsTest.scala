@@ -26,11 +26,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_getsubdataset should accept tile and subset name") {
-        val result = functions.rst_getsubdataset(col("tile"), col("name"))
-        result should not be null
-    }
-
     test("rst_height should create Column") {
         val result = functions.rst_height(col("tile"))
         result should not be null
@@ -134,9 +129,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
         // int scalars
-        functions.rst_band(col("tile"), 1) should not be null
-        // string scalars
-        functions.rst_getsubdataset(col("tile"), "Band1") should not be null
+        functions.rst_rastertoworldcoordx(col("tile"), 1, 2) should not be null
         // double scalars
         functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null
     }

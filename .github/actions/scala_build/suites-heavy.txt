@@ -40,8 +40,6 @@ com.databricks.labs.gbx.rasterx.expressions.RST_TileStructureTest
 com.databricks.labs.gbx.rasterx.expressions.RST_V2RoundTripTest
 com.databricks.labs.gbx.rasterx.expressions.agg.*
 com.databricks.labs.gbx.rasterx.expressions.constructor.*
-com.databricks.labs.gbx.rasterx.expressions.dem.*
-com.databricks.labs.gbx.rasterx.expressions.pixel.*
 com.databricks.labs.gbx.rasterx.expressions.vector.VectorRasterBridgeTest
 com.databricks.labs.gbx.rasterx.expressions.web.*
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerNativeDirTest
@@ -55,7 +53,6 @@ com.databricks.labs.gbx.rasterx.gdal.NativeCopyTest
 com.databricks.labs.gbx.rasterx.gdal.RasterDriversTest
 com.databricks.labs.gbx.rasterx.gdal.ValidMaskTest
 com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest
-com.databricks.labs.gbx.rasterx.operations.BandSubsetAlphaTest
 com.databricks.labs.gbx.rasterx.operations.ClipToGeomTest
 com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometryTest
 com.databricks.labs.gbx.rasterx.operations.RasterAccessorsTest

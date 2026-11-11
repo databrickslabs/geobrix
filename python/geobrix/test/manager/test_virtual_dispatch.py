@@ -6,6 +6,8 @@ front of it that sends the reference to light, or not be served from the JVM by 
 manifest function, not one by one.
 """
 
+import dataclasses
+
 import pytest
 
 from databricks.labs.gbx import manifest
@@ -34,8 +36,8 @@ BYTES_TO_JVM = [
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # TRI and the 21 accessors that return one value
-    assert len(L1_TILE_FNS) >= 22, [f.sql_name for f in L1_TILE_FNS]
+    # the 21 accessors and coordinate functions that return one value
+    assert len(L1_TILE_FNS) >= 21, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)
@@ -273,16 +275,21 @@ def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm
         jvm_spark.sql("SELECT gbx__l1_rst_width(v) FROM _gbx_w").collect()
 
 
+# No row has both a JVM level and the GDAL spec engine as its only light form now (TRI, the last, is light). The branch
+# stays for a row that is: a copy of slope (an engine-only row) with a JVM level stands for it.
 ENGINE_ONLY_L1 = [
     f
     for f in FNS
     if "L1" in f.levels and f.accepts_virtual_tile and levels.engine_only(f, "L3")
+] or [
+    dataclasses.replace(
+        MAN.functions["gbx_rst_slope"],
+        levels={
+            **MAN.functions["gbx_rst_slope"].levels,
+            "L1": {"companion": "com.example.RST_Slope", "needs_gdal": True},
+        },
+    )
 ]
-
-
-def test_there_are_engine_only_rows_with_a_jvm_companion():
-    """The set is derived: TRI, the DEM row that kept its JVM companion, has no numpy light form."""
-    assert {"gbx_rst_tri"} <= {f.sql_name for f in ENGINE_ONLY_L1}
 
 
 @pytest.mark.parametrize("fn", ENGINE_ONLY_L1, ids=lambda f: f.sql_name)

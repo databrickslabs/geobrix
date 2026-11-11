@@ -5,6 +5,7 @@ import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VirtualTileException}
 import com.databricks.labs.gbx.udfs
 import com.databricks.labs.gbx.udfs.st_buffer
+import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
@@ -18,7 +19,7 @@ import org.scalatest.matchers.should.Matchers._
   * End-to-end parity tests for the v2 tile layout (Task 9).
   *
   * Proves:
-  *  - heavy rst_* consumes a v1 binary tile (rst_fromcontent) and emits a 9-field v2 struct
+  *  - heavy rst_fromcontent builds a 9-field v2 struct from a file's bytes
   *  - heavy rst_* consumes a v2 materialized tile end-to-end without ClassCastException
   *  - heavy rst_* raises the materialize-first guard through the Spark plan (SparkException wraps
   *    the IllegalArgumentException produced by RasterSerializationUtil.guardMaterialized)
@@ -39,7 +40,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
 
     // ---- 1. v1-in → v2-out --------------------------------------------------
 
-    test("heavy rst_* consumes a v1 binary tile and emits a v2 tile") {
+    test("heavy rst_fromcontent builds a v2 tile from a file's bytes") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
@@ -47,16 +48,16 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
-        // rst_fromcontent produces a v1 3-field tile (cellid, raster, metadata).
+        // rst_fromcontent builds a materialized tile from the file's bytes.
         val df = spark.read
             .format("binaryFile")
             .load(tifPath)
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
 
-        // Run a tile-returning op that has a JVM form (rst_setsrid).
+        // The constructor's output is the v2 tile.
         val out = df
-            .select(rst_setsrid(col("tile"), 4326).as("t"))
+            .select(col("tile").as("t"))
 
         // Output schema must be the v2 9-field struct.
         val tileType = out.schema("t").dataType.asInstanceOf[StructType]
@@ -78,13 +79,13 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
-        // Stage 1: build a v2 materialized tile via rst_fromcontent + rst_setsrid (v1 → v2).
+        // Stage 1: build a v2 materialized tile via rst_fromcontent.
         val stage1 = spark.read
             .format("binaryFile")
             .load(tifPath)
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-            .select(rst_setsrid(col("tile"), 4326).as("t"))
+            .select(col("tile").as("t"))
             .cache()
 
         stage1.count() // materialise
@@ -149,42 +150,20 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         )
     }
 
-    // ---- 3b. rst_setsrid on VIRTUAL tile raises error through tile-returning (3-arg) overload ----
+    // ---- 3b. a tile-returning op raises the materialize-first error through the 3-arg safeEval ----
 
-    test("heavy rst_setsrid on a VIRTUAL tile raises the materialize-first error (3-arg overload)") {
-        // This test covers the gap fixed by Task 9b: tile-returning ops use the 3-arg
-        // safeEval(eval, row, rasterType) overload. Pre-fix it swallowed the VirtualTileException
-        // as an error-row and .collect() would NOT throw. Post-fix it re-throws.
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        TestL1.installAll(spark)
+    test("a VirtualTileException from the 3-arg safeEval overload (tile-returning ops) is re-thrown, not an error row") {
+        // Tile-returning ops use the 3-arg safeEval(eval, row, rasterType) overload. It must not swallow the
+        // VirtualTileException as an error row: the materialize-first error has to reach the caller.
+        val metadataMapData = SerializationUtil.toMapData[String, String](Map.empty[String, String])
+        val row: InternalRow = new GenericInternalRow(Array[Any](
+            1L, Array.emptyByteArray, null, null, null, null, null, null, metadataMapData))
 
-        // Build a v2 virtual tile DataFrame: raster=null, path set, 9-field schema.
-        val tileSchema = StructType(Seq(
-            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = false)))
-
-        val virtualRow = Row(Row(
-            0L,
-            null,                  // raster = null → virtual
-            "/some/virtual.tif",   // path set
-            null,                  // path_mode
-            null, null, null, null, // window, clip_polygon, clip_crs, crs
-            Map.empty[String, String]))  // metadata (last)
-
-        val dfVirtual = spark.createDataFrame(
-            spark.sparkContext.parallelize(Seq(virtualRow)),
-            tileSchema)
-
-        val ex = intercept[Exception] {
-            dfVirtual.select(rst_setsrid(col("tile"), 4326)).collect()
+        intercept[VirtualTileException] {
+            RST_ErrorHandler.safeEval(
+                () => (throw new VirtualTileException("virtual tile guard test")): InternalRow,
+                row, RST_ExpressionUtil.v2TileType)
         }
-
-        assert(
-            causeChainContains(ex, Seq("virtual tile", "materialize", "lightweight")),
-            s"Expected 'virtual tile', 'materialize', 'lightweight' in cause chain.\n" +
-            s"Top-level: ${ex.getMessage}\n" +
-            Option(ex.getCause).map(c => s"Cause: ${c.getMessage}").getOrElse("(no cause)")
-        )
     }
 
     // ---- 3c. F1 regression guard: plain IAE is NOT propagated (null-tolerant) ----
@@ -197,7 +176,6 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         import org.apache.spark.sql.types.BinaryType
         import org.apache.spark.unsafe.types.UTF8String
         import org.apache.spark.util.SerializableConfiguration
-        import com.databricks.labs.gbx.util.SerializationUtil
 
         val conf = new ExpressionConfig(
             Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "false"),
@@ -240,7 +218,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
             .load(tifPath)
             .limit(1)
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
-            .select(rst_setsrid(col("tile"), 4326).as("t"))
+            .select(col("tile").as("t"))
 
         val heavyType = heavyOutDF.schema("t").dataType.asInstanceOf[StructType]
         val canonical = RST_ExpressionUtil.v2TileType

@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Crs
 import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_SRID
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import org.gdal.gdal.{Dataset, gdal}
@@ -12,7 +11,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 /**
-  * Direct-execute tests for the CRS-string ops (RST_Crs / RST_SetCrs)
+  * Direct-execute tests for the CRS-string ops (RST_Crs / RST_SRID)
   * plus the SpatialRefOps.resolveCrs / crsToCanonical helpers. The MODIS fixture is a
   * NON-EPSG raster (World Sinusoidal — the case that surfaced the need for CRS strings),
   * so it exercises the authority-else-WKT paths that rst_srid (int/0)
@@ -127,31 +126,15 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("RST_Crs and RST_SRID agree on an EPSG raster (relabelled to 4326)") {
-        // Relabel the fixture to EPSG:4326 (header only), then read both accessors back.
-        val (relabelled, _) = RST_SetCrs.execute(ds, Map.empty, "4326")
+        // Relabel a copy of the fixture to EPSG:4326 (header only), then read both accessors back.
+        val relabelled = gdal.GetDriverByName("MEM").CreateCopy("", ds)
         try {
+            val sr4326 = SpatialRefOps.resolveCrs("4326")
+            relabelled.SetProjection(sr4326.ExportToWkt())
+            sr4326.delete()
             RST_Crs.execute(relabelled) shouldBe "EPSG:4326"
             RST_SRID.execute(relabelled) shouldBe 4326
         } finally relabelled.delete()
-    }
-
-    // --- RST_SetCrs relabel (int-cast rule) ---
-
-    test("RST_SetCrs with int-string == EPSG relabel (no reproject, pixels/size unchanged)") {
-        val (out, _) = RST_SetCrs.execute(ds, Map.empty, "4326")
-        try {
-            RST_SRID.execute(out) shouldBe 4326
-            out.GetRasterXSize shouldBe ds.GetRasterXSize
-            out.GetRasterYSize shouldBe ds.GetRasterYSize
-        } finally out.delete()
-    }
-
-    test("RST_SetCrs accepts a non-EPSG target (ESRI) without requiring a positive EPSG") {
-        val (out, _) = RST_SetCrs.execute(ds, Map.empty, "ESRI:54008")
-        try {
-            RST_Crs.execute(out) shouldBe "ESRI:54008"
-            out.GetRasterXSize shouldBe ds.GetRasterXSize
-        } finally out.delete()
     }
 
     test("VectorRasterBridge.buildEmptyRaster stamps an ESRI srid as ESRI (resolveCrs)") {

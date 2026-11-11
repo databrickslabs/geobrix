@@ -3,8 +3,6 @@ package com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Custom_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent
-import com.databricks.labs.gbx.rasterx.expressions.dem._
-import com.databricks.labs.gbx.rasterx.expressions.pixel._
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -22,7 +20,6 @@ object functions extends Serializable {
     // Accessors
     def rst_boundingbox(tile: Column): Column = ColumnAdapter(RST_BoundingBox.name, Seq(tile))
     def rst_format(tile: Column): Column = ColumnAdapter(RST_Format.name, Seq(tile))
-    def rst_getsubdataset(tile: Column, subsetName: Column): Column = ColumnAdapter(RST_GetSubdataset.name, Seq(tile, subsetName))
     def rst_height(tile: Column): Column = ColumnAdapter(RST_Height.name, Seq(tile))
     def rst_memsize(tile: Column): Column = ColumnAdapter(RST_MemSize.name, Seq(tile))
     def rst_numbands(tile: Column): Column = ColumnAdapter(RST_NumBands.name, Seq(tile))
@@ -193,7 +190,6 @@ object functions extends Serializable {
     // Scalar-literal overloads — so users can pass plain values for non-Column params
     // (e.g. rst_clip(tile, clip, true) instead of rst_clip(tile, clip, lit(true))).
     // Column params (tile, geometry, kernel, tiles, content) stay as Column.
-    def rst_getsubdataset(tile: Column, subsetName: String): Column = rst_getsubdataset(tile, lit(subsetName))
     def rst_fromcontent(content: Column, driver: String): Column = rst_fromcontent(content, lit(driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper or scalar
     // overloads (the JVM cannot read UC Volumes -- see register/#34). Use the Python/SQL binding.
@@ -220,25 +216,5 @@ object functions extends Serializable {
         format: String, size: Int, resampling: String
     ): Column =
         rst_tilexyz(tile, lit(z), lit(x), lit(y), lit(format), lit(size), lit(resampling))
-
-    // Terrain analysis (DEM processing) - Column form
-    def rst_tri(tile: Column): Column = ColumnAdapter(RST_TRI.name, Seq(tile))
-
-    // Pixel ops + extraction — Column form + scalar overloads
-
-    def rst_setsrid(tile: Column, srid: Column): Column =
-        ColumnAdapter(RST_SetSrid.name, Seq(tile, srid))
-    def rst_setsrid(tile: Column, srid: Int): Column =
-        rst_setsrid(tile, lit(srid))
-
-    def rst_setcrs(tile: Column, crs: Column): Column =
-        ColumnAdapter(RST_SetCrs.name, Seq(tile, crs))
-    def rst_setcrs(tile: Column, crs: String): Column =
-        rst_setcrs(tile, lit(crs))
-
-    def rst_band(tile: Column, bandIndex: Column): Column =
-        ColumnAdapter(RST_Band.name, Seq(tile, bandIndex))
-    def rst_band(tile: Column, bandIndex: Int): Column =
-        rst_band(tile, lit(bandIndex))
 
 }

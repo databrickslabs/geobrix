@@ -50,7 +50,7 @@ def subset_colorinterp(colorinterp, indexes):
     """The colour interpretation of the band subset *indexes* (1-based, in output order) of a
     dataset labelled *colorinterp*: the labels a copy of those bands is written with.
 
-    THE band-subset rule of both tiers (heavy ``GDAL.subsetAlphaIndex``). A subset keeps the
+    THE band-subset rule. A subset keeps the
     Alpha label only when ALL of these hold: the selected band is the source's alpha band
     (:func:`alpha_index`), it is selected LAST, and at least one data band is selected with it.
     Otherwise every selected band is data (a band labelled Alpha is relabelled undefined), so a

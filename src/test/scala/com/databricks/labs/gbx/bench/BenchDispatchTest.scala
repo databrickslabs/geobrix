@@ -75,7 +75,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // separatebands, h3 and quadbin tessellate, and the h3 centroid case), isempty, tryopen, isoband and merge: 55 - 15 = 40.
     // derivedband and xyzpyramid left too (the level order never picks them): 40 - 2 = 38.
     // asformat, convolve, initnodata, updatetype and frombands left (slower than light on dedicated compute): 38 - 5 = 33.
-    assert(BenchDispatch.all.size == 33)
+    // band, setsrid, setcrs, getsubdataset and tri left too (0.28x to 1.16x of light on dedicated compute): 33 - 5 = 28.
+    assert(BenchDispatch.all.size == 28)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -97,15 +98,11 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.minBands("rst_band") == 2)
     assert(BenchDispatch.minBands("rst_width") == 1)
-    assert(BenchDispatch.category("rst_tri") == "terrain")
     assert(BenchDispatch.category("rst_srid") == "accessor")
-    // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_setcrs is an edit/relabel (like rst_setsrid).
+    // CRS-string accessor: rst_crs is an accessor (like rst_srid).
     assert(BenchDispatch.category("rst_crs") == "accessor")
-    assert(BenchDispatch.category("rst_setcrs") == "edit")
     assert(BenchDispatch.inputKind("rst_crs") == "tile")
-    assert(BenchDispatch.inputKind("rst_setcrs") == "tile")
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
@@ -127,11 +124,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.bngRasterizeCells().toSet.size == BenchDispatch.bngRaggNCells)
   }
 
-  test("pureCore runs an accessor and a terrain op, returning a fingerprint") {
+  test("pureCore runs an accessor, returning a fingerprint") {
     val wfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_width", ds, Map.empty))
     assert(wfp.get("kind").asText() == "scalar")
-    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_tri", ds, Map.empty))
-    assert(sfp.get("kind").asText() == "raster")
   }
 
 }

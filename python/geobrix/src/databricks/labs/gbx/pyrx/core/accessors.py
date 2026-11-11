@@ -265,7 +265,7 @@ def subdatasets(ds) -> Dict[str, str]:
 def getsubdataset(ds, name: str):
     """Open the named subdataset and return its GTiff-encoded bytes.
 
-    Mirrors heavyweight RST_GetSubdataset: builds ``<driver>:<path>:<name>`` and
+    Builds ``<driver>:<path>:<name>`` and
     opens it. Raises ValueError if no subdataset matches ``name``.
     """
 

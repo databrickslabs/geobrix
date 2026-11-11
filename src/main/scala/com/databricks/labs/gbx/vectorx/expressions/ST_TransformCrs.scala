@@ -31,7 +31,7 @@ import scala.util.control.NonFatal
   *
   * GDAL/PROJ config child — [[ExpressionConfigExpr]] is injected as a trailing, non-user
   * child (mirroring the raster expressions, e.g.
-  * [[com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs]]). Its base64-serialized
+  * [[com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Crs]]). Its base64-serialized
   * [[ExpressionConfig]] carries the driver-registered custom PROJ grid dirs
   * (`spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS`, folded by [[ExpressionConfig.apply]] from
   * `ProjGridRegistry`) to executors. `evalSqlWithConf` runs `GDALManager.init` with it so the

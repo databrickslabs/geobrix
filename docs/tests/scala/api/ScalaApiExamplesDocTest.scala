@@ -153,7 +153,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("RasterX accessor signatures compile — the accessors with a wrapper") {
     val _: Column = rx.rst_format(col("tile"))
-    val _: Column = rx.rst_getsubdataset(col("tile"), lit(""))
     val _: Column = rx.rst_height(col("tile"))
     val _: Column = rx.rst_memsize(col("tile"))
     val _: Column = rx.rst_pixelheight(col("tile"))
@@ -172,7 +171,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("ScalaApiExamples accessor snippet vals are non-empty") {
     assert(ScalaApiExamples.rst_format_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_getsubdataset_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_height_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_memsize_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_pixelheight_scala_example.nonEmpty)
@@ -190,7 +188,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("ScalaApiExamples accessor output vals are non-empty") {
     assert(ScalaApiExamples.rst_format_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_getsubdataset_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_height_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_memsize_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_pixelheight_scala_example_output.nonEmpty)

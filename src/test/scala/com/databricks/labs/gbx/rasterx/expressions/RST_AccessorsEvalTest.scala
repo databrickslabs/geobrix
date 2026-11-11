@@ -59,16 +59,6 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
 
         noException should be thrownBy runQuery(df2)
 
-        val netCDFPath = this.getClass.getResource("/binary/netcdf-CMIP5/").toString
-
-        val df3: DataFrame = Seq(
-          (1, s"$netCDFPath/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc")
-        ).toDF("id", "path")
-            .withColumn("raster", udfs.rasterFromPath(col("path"), "NetCDF"))
-            .withColumn("subds", rst_getsubdataset(col("raster"), lit("prAdjust")))
-
-        noException should be thrownBy df3.collect()
-
     }
 
     test("RST_Width returns NULL (not 0) on a corrupt raster") {

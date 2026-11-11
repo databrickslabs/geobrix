@@ -324,31 +324,6 @@ result.show()
 +------+
 """.trim
 
-  val rst_getsubdataset_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses committed CMIP5 NetCDF fixture (has time_bnds and prAdjust subdatasets).
-// Subdatasets require a multi-layer format such as NetCDF.
-// rst_width wraps the result to return a real scalar proving extraction.
-val rasters = spark.table("netcdf_rasters")
-val result = rasters.select(
-  rx.rst_width(rx.rst_getsubdataset(col("tile"), lit("prAdjust"))).alias("width")
-)
-result.show()
-""".trim
-
-  val rst_getsubdataset_scala_example_output: String =
-    """
-+-----+
-|width|
-+-----+
-|  720|
-+-----+
-(width of the extracted prAdjust subdataset — 720 pixels, 31 bands, 360 rows)
-""".trim
-
   val rst_height_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -600,27 +575,6 @@ result.show()
   // Tile ops & constructors family (Scala)
   // ===========================================================================
 
-  val rst_band_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands) to demonstrate band extraction.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_band(col("tile"), lit(1)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_band_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(single band extracted from the 3-band multiband fixture)
-""".trim
-
   val rst_fromcontent_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -644,46 +598,6 @@ result.show()
 |GTiff |
 +------+
 (format of the tile loaded from binary content via binaryFile reader)
-""".trim
-
-  val rst_setcrs_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_crs(rx.rst_setcrs(col("tile"), lit("EPSG:32618"))).alias("crs"))
-result.show()
-""".trim
-
-  val rst_setcrs_scala_example_output: String =
-    """
-+----------+
-|crs       |
-+----------+
-|EPSG:32618|
-+----------+
-(CRS string after stamping; does NOT reproject — use rst_transformcrs to reproject)
-""".trim
-
-  val rst_setsrid_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_setsrid(col("tile"), lit(32618)).alias("tile"))
-result.show()
-""".trim
-
-  val rst_setsrid_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
 """.trim
 
   // ===========================================================================
@@ -778,26 +692,6 @@ result.show()
   // ============================================================================
   // Terrain Analysis Functions
   // ============================================================================
-
-  val rst_tri_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_tri(col("tile")).alias("tri"))
-result.show(truncate = false)
-""".trim
-
-  val rst_tri_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tri                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TRI: mean absolute neighbour difference)
-""".trim
 
   // ========================================================================
   // Coordinate Transforms & Tiling

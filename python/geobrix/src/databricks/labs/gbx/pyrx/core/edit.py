@@ -302,7 +302,7 @@ def init_nodata(ds, default: float | None = None) -> bytes:
 def set_srid(ds, srid: int) -> bytes:
     """Stamp the CRS from a SRID integer WITHOUT reprojecting.
 
-    Mirrors the heavyweight ``gbx_rst_setsrid`` (``gdal_edit.py -a_srs``):
+    Like ``gdal_edit.py -a_srs``:
     pixel values and the GeoTransform are unchanged; only the CRS metadata is
     rewritten. Use ``rst_transform`` for an actual reprojecting warp.
 
@@ -360,7 +360,7 @@ def set_crs(ds, crs_value) -> bytes:
 def band(ds, band_index: int) -> bytes:
     """Extract a single 1-based band as a new single-band GTiff tile.
 
-    Mirrors the heavyweight ``gbx_rst_band`` (``gdal_translate -b``): the
+    Like ``gdal_translate -b``: the
     extracted tile preserves the source CRS, GeoTransform, nodata, and dtype;
     only the band count is reduced to 1.
 

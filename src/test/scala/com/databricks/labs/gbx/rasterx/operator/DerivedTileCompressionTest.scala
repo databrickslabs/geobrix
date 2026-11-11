@@ -1,8 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
 import org.apache.hadoop.conf.Configuration
@@ -15,7 +13,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.util.UUID
 
 /**
-  * Derived heavy tiles (warp / translate / band / DEM / grid rasterize) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
+  * Derived heavy tiles (warp / translate / grid rasterize) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
   * the Databricks image preview) when the caller passes no `compression` option. The default is decided in two places that have to agree: the
   * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
   * into `OperatorOptions.appendOptions`) and the `appendOptions` fallback itself. Each test therefore
@@ -107,30 +105,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             val (out, meta) = GDALTranslate.executeTranslate(mem("translated.tif"), src, "gdal_translate", Map.empty)
             try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("RST_TRI.execute (DEM helper) defaults to DEFLATE") {
-        withRamp("tri.tif") { src =>
-            // RST_TRI.execute(ds: Dataset): (Dataset, Map[String, String])
-            //     -- delegates to RST_DEMProcessingHelper.process
-            val (out, meta) = RST_TRI.execute(src)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("RST_Band.execute defaults to DEFLATE and honours an incoming compression") {
-        withRamp("band.tif") { src =>
-            // RST_Band.execute(ds: Dataset, options: Map[String, String], bandIndex: Int):
-            //     (Dataset, Map[String, String])
-            val (out, meta) = RST_Band.execute(src, Map.empty, 1)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-
-            val (lzw, lzwMeta) = RST_Band.execute(src, Map("compression" -> "LZW"), 1)
-            try assertCodec(lzw, lzwMeta, "LZW")
-            finally RasterDriver.releaseDataset(lzw)
         }
     }
 

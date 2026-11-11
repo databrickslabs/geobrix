@@ -12,7 +12,6 @@ object TestL1 {
         // rasterx
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox",
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Format",
-        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_GetSubdataset",
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Height",
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_MemSize",
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_NumBands",
@@ -38,10 +37,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX",
         "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY",
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ",
-        "com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI",
-        "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band",
-        "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid",
-        "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs",
         // gridx/bng
         "com.databricks.labs.gbx.gridx.bng.BNG_AsWKB",
         "com.databricks.labs.gbx.gridx.bng.BNG_AsWKT",

@@ -459,14 +459,12 @@ def test_the_array_family_is_light_and_the_engine_rows_are_light():
         assert "L1" not in MAN.functions[name].levels
 
 
-def test_the_dem_verdicts_tri_keeps_its_jvm_level_and_the_rest_are_light():
-    """TRI took 1.24x of the best light form at 16x tiles, so it is JVM first; aspect, TPI, roughness and colour relief
-    stayed under 1.2x, so they have no JVM level. Each light form is the faster of c0 and c1 in the 16x rows.
+def test_the_dem_verdicts_are_all_light():
+    """TRI took 1.10x and 1.16x of the best light form at 4x and 16x tiles; aspect, TPI, roughness and colour relief
+    stayed under 1.2x too, so none has a JVM level. Each light form is the faster of c0 and c1 in the 16x rows.
     """
-    tri = MAN.functions["gbx_rst_tri"]
-    assert levels.order(tri) == ("L1", "L3")
-    assert levels.select(tri, _caps(jar=OK_JAR)).level == "L1"
     for name in (
+        "gbx_rst_tri",
         "gbx_rst_aspect",
         "gbx_rst_tpi",
         "gbx_rst_roughness",

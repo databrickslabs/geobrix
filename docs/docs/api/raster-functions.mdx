@@ -421,7 +421,7 @@ NoData values per band.
 ### rst_getsubdataset
 
 {/* BEGIN GENERATED gbx_rst_getsubdataset: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5458,7 +5458,7 @@ Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dim
 
 ## Terrain Analysis {#terrain}
 
-Digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. They run GDAL's own `raster` algorithm in the worker, with Horn's method where the algorithm has a choice. `rst_tri` runs its JVM form first on a dedicated cluster with the JAR. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
+Digital elevation model (DEM) derivatives. Each function takes a single-band DEM tile and returns a derived tile of the same footprint. They run GDAL's own `raster` algorithm in the worker, with Horn's method where the algorithm has a choice. See the [Helios notebooks](../notebooks/helios) for a worked example: `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` are applied to 3DEP DEMs in NB03 to produce terrain layers and a per-H3-cell solar score.
 
 ### rst_aspect
 
@@ -5676,7 +5676,7 @@ Topographic Position Index — pixel value minus the mean of its 8 neighbours. P
 ### rst_tri
 
 {/* BEGIN GENERATED gbx_rst_tri: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala jar="gbx_rst_tri" />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5963,7 +5963,7 @@ Per-pixel transformations and band-level extraction.
 ### rst_band
 
 {/* BEGIN GENERATED gbx_rst_band: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6157,7 +6157,7 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 ### rst_setcrs
 
 {/* BEGIN GENERATED gbx_rst_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6189,7 +6189,7 @@ Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS st
 ### rst_setsrid
 
 {/* BEGIN GENERATED gbx_rst_setsrid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|

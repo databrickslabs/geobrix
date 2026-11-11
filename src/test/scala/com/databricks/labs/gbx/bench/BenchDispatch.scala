@@ -7,10 +7,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
-import com.databricks.labs.gbx.rasterx.expressions.dem._
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
@@ -28,18 +24,16 @@ object BenchDispatch {
   private def argI(a: Map[String, String], k: String, d: Int) = a.get(k).map(_.toInt).getOrElse(d)
   private def argB(a: Map[String, String], k: String, d: Boolean) = a.get(k).map(_.toBoolean).getOrElse(d)
 
-  private val ACC = "accessor"; private val TER = "terrain"
-  private val EDIT = "edit"
+  private val ACC = "accessor"
   private val FMT = "format"
   private val DGGS = "dggs"
   private val VECTOR = "vector"
 
-  // Functions that need a >=2-band source (rst_band selects band 2 on the 2-band corpus).
-  private val multiBand: Set[String] = Set("rst_band")
+  // Functions that need a >=2-band source (none has a heavyweight level now: rst_band was the last).
+  private val multiBand: Set[String] = Set.empty
 
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
-    "rst_tri" -> TER,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
@@ -54,16 +48,11 @@ object BenchDispatch {
     // timing-only accessors
     "rst_boundingbox" -> ACC,
     // (the accessors and statistics that return an array, a map or a struct have no heavyweight level)
-    // tile-out transforms with scalar / fixed args
-    "rst_band" -> EDIT,
-    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT,
-    // (asformat, convolve, initnodata and updatetype have no heavyweight level: they measured slower than light.)
+    // (band, setsrid, setcrs, asformat, convolve, initnodata and updatetype have no heavyweight level: they measured slower than light.)
     // (derivedband has no heavyweight level: its output kept the source data type, not Float64.)
-    // bucket C, group C1 (readers) + C2 (subdataset fns).
-    // getsubdataset is accessor-flavored; the readers emit a tile -> format.
+    // bucket C, group C1 (readers): the readers emit a tile -> format. (getsubdataset has no heavyweight level.)
     // (buildoverviews has no heavyweight level: it measured slower than light.)
     "rst_fromcontent" -> FMT,
-    "rst_getsubdataset" -> ACC,
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles). None has a heavyweight level: the combine
     // family, merge and frombands measured slower than light.
     // (The tiling, tessellate, xyzpyramid and isoband functions have no heavyweight level.)
@@ -276,7 +265,6 @@ object BenchDispatch {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
     // scalar accessors
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
     // rst_crs: canonical CRS STRING (authority else WKT). ofScalar coerces the
@@ -313,21 +301,6 @@ object BenchDispatch {
       BenchFingerprint.empty
     // timing-only accessors (polygon, JSON bytes).
     case "rst_boundingbox"   => { RST_BoundingBox.execute(ds); BenchFingerprint.empty }
-    // tile-out transforms with scalar / fixed args: all produce a raster
-    // tile -> fpDerived raster fingerprint (same path as terrain).
-    case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
-    case "rst_setsrid"     => fpDerived(RST_SetSrid.execute(ds, Map.empty, argI(a, "srid", 4326)))
-    // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
-    case "rst_setcrs"      => fpDerived(RST_SetCrs.execute(ds, Map.empty, argS(a, "crs", "4326")))
-    // bucket C, group C2: the subdataset function (timing-only).
-    // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
-    // (no such subdataset). Guard the null so the timing call does not NPE; the
-    // fingerprint is suppressed regardless. Mirrors the pyrx core swallowing its
-    // "no subdataset" raise for a clean timing-only row.
-    case "rst_getsubdataset" =>
-      val sub = RST_GetSubdataset.execute(ds, argS(a, "name", "0"))
-      if (sub != null) RasterDriver.releaseDataset(sub)
-      BenchFingerprint.empty
     case other            => throw new IllegalArgumentException(s"unknown bench fn: $other")
     }
   }
@@ -412,19 +385,12 @@ object BenchDispatch {
     finally RasterDriver.releaseDataset(out)
   }
 
-  private def fpDerived(res: (Dataset, Map[String, String])): String = {
-    val out = res._1
-    try BenchFingerprint.ofDataset(out)
-    finally RasterDriver.releaseDataset(out)
-  }
-
   def column(fn: String, tile: Column, a: Map[String, String]): Column = {
     import functions._
     fn match {
       case "rst_width"      => rst_width(tile)
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
-      case "rst_tri"        => rst_tri(tile)
       // scalar accessors
       case "rst_srid"        => rst_srid(tile)
       case "rst_crs"         => rst_crs(tile)
@@ -448,18 +414,11 @@ object BenchDispatch {
       case "rst_worldtorastercoordy" => rst_worldtorastercoordy(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
       case "rst_boundingbox"   => rst_boundingbox(tile)
-      // tile-out transforms with scalar / fixed args
-      case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
-      case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
-      case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
-      // bucket C, group C1/C2. fromcontent reads the tile's raster (binary
-      // content) column. getsubdataset is pure-core-only here; its column form
-      // exists only to keep the match exhaustive (the spark-path runner filters
-      // by modes). rst_fromfile is lightweight-only now (issue #34) and is not
+      // bucket C, group C1. fromcontent reads the tile's raster (binary
+      // content) column. rst_fromfile is lightweight-only now (issue #34) and is not
       // dispatched on the heavy tier.
       case "rst_fromcontent" =>
         rst_fromcontent(tile.getField("raster"), argS(a, "driver", "GTiff"))
-      case "rst_getsubdataset" => rst_getsubdataset(tile, argS(a, "name", "0"))
       // bucket A aggregators have no scalar column form; they are aggregate
       // expressions handled by aggregateColumn (the spark-path runner routes them
       // through the aggregate branch, not column()).

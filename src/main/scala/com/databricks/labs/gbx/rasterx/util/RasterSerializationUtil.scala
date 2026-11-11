@@ -83,10 +83,6 @@ object RasterSerializationUtil {
             noPixels && lyt.path.forall(row.isNullAt) && (metadata.contains("error_message") || metadata.contains("last_error"))
         }.getOrElse(false)
 
-    /** True when a tile op's own arguments are to be checked for `row`: the row is not NULL and not an error tile.
-      * An error tile passes through whole, whatever the arguments are (NULL, then error tile, then arguments). */
-    def checksArguments(row: InternalRow): Boolean = row != null && !isErrorTile(row)
-
     /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver.
       * A tile with no raster and no path (an error tile) has nothing to open: the Dataset is null and GDAL is
       * not called. `gated = false` opens it without the decoded-size gate ([[RasterDriver.readFromBytesUngated]]):
@@ -131,19 +127,6 @@ object RasterSerializationUtil {
             val lyt = tileLayout(row)
             !row.isNullAt(lyt.raster) && GDALManager.isHdfFamilyBytes(row.getBinary(lyt.raster))
         }.getOrElse(false)
-
-    /** [[rowToTile]] with the tile's bytes read as their own driver's dataset, not their GeoTIFF translation
-      * ([[RasterDriver.readSourceFromBytes]]): for the functions that answer from a netCDF / HDF file's subdatasets.
-      * The metadata is the tile's own. A netCDF / HDF dataset stays open under the caller's [[GDALManager.withHdfLock]]. */
-    def rowToSourceTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {
-        val lyt = tileLayout(row)
-        guardMaterialized(row, lyt)
-        if (row.isNullAt(lyt.raster)) (cellIdOf(row), null, metadataOf(row))
-        else {
-            val metadata = SerializationUtil.createMap[String, String](row.getMap(lyt.metadata))
-            (row.getLong(lyt.cellid), RasterDriver.readSourceFromBytes(row.getBinary(lyt.raster), metadata), metadata)
-        }
-    }
 
     /** The driver a materialized tile's bytes were written in when [[rowToDS]] reads them as a GeoTIFF translation
       * (netCDF, HFA, JP2OpenJPEG, GPKG, ...), else None (a TIFF, a tile with no raster, or bytes that do not open). */

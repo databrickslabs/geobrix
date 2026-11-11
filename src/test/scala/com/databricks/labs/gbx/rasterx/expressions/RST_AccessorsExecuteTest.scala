@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_Format, RST_GetSubdataset, RST_Height, RST_MemSize, RST_NumBands, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_Format, RST_Height, RST_MemSize, RST_NumBands, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -35,20 +35,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val format = RST_Format.execute(ds)
         format shouldBe a[String]
         format shouldBe "GTiff"
-    }
-
-    test("RST_GetSubdataset should return a subdaset of the raster") {
-        val netcdfPath = this.getClass
-            .getResource(
-              "/binary/netcdf-CMIP5/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc"
-            )
-            .toString
-            .replace("file:/", "/")
-        val netcdf = gdal.Open(netcdfPath)
-        val sds = RST_GetSubdataset.execute(netcdf, "prAdjust")
-        sds should not be null
-        sds.GetRasterBand(1).AsMDArray().GetStatistics().getValid_count should not be 0
-        netcdf.delete()
     }
 
     test("RST_Height should return height of the raster") {

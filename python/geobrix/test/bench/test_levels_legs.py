@@ -64,9 +64,11 @@ def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
         # the Python worker time came back NULL: the time split is checked on a local session only
         if "attr=rest" in r.note and not _provided_session():
             assert r.py_eval_s > 0 and 0 < r.py_eval_frac <= 1.0
-    # Spark counts no more bytes sent for 4x the DOUBLEs: NULL, and says so. WKT scales.
+    # Open-source Spark counts no more bytes sent for 4x the DOUBLEs: NULL, and says so. WKT scales. The Databricks
+    # runtime counts them (415539 bytes on a pool node), so the NULL rule is checked on a local session only.
     for r in c0:
-        assert r.ser_sent_bytes is None and "Spark under-counts numeric" in r.note
+        if not _provided_session():
+            assert r.ser_sent_bytes is None and "Spark under-counts numeric" in r.note
     assert all(
         r.ser_sent_bytes > 0
         for r in ok

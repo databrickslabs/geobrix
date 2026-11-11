@@ -1,6 +1,9 @@
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+
+mod jmath;
+mod tin;
 
 const QUADRANTS: [&str; 5] = ["", "SW", "NW", "NE", "SE"];
 const LETTER_MAP: [[&str; 8]; 14] = [
@@ -171,9 +174,128 @@ fn bng_eastnorth_cells<'py>(
     ))
 }
 
+pyo3::create_exception!(
+    _gbxrs,
+    LocateFailure,
+    PyRuntimeError,
+    "JTS's LocateFailureException: the walk to a point did not converge."
+);
+
+/// A little-endian float64 buffer as floats.
+fn f64s(b: &[u8], what: &str) -> PyResult<Vec<f64>> {
+    if !b.len().is_multiple_of(8) {
+        return Err(PyValueError::new_err(format!(
+            "{what} must be a float64 buffer"
+        )));
+    }
+    Ok(b.as_chunks::<8>()
+        .0
+        .iter()
+        .map(|c| f64::from_le_bytes(*c))
+        .collect())
+}
+
+fn xy(xs: &Bound<'_, PyBytes>, ys: &Bound<'_, PyBytes>) -> PyResult<(Vec<f64>, Vec<f64>)> {
+    let (x, y) = (f64s(xs.as_bytes(), "xs")?, f64s(ys.as_bytes(), "ys")?);
+    if x.len() != y.len() {
+        return Err(PyValueError::new_err(
+            "xs/ys must be equal-length float64 buffers",
+        ));
+    }
+    Ok((x, y))
+}
+
+/// The triangles JTS 1.20's incremental Delaunay triangulation makes inserting the sites (float64 x/y buffers) in
+/// order, framed on `env` = (minx, miny, maxx, maxy) with tolerance `tol`: int64 little-endian triples of site
+/// indices, each ascending, in ascending order. Raises LocateFailure where JTS's point location does.
+#[pyfunction]
+fn tin_delaunay<'py>(
+    py: Python<'py>,
+    xs: &Bound<'py, PyBytes>,
+    ys: &Bound<'py, PyBytes>,
+    env: (f64, f64, f64, f64),
+    tol: f64,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let (x, y) = xy(xs, ys)?;
+    let tris = py
+        .detach(move || tin::delaunay(&x, &y, env, tol))
+        .map_err(|_| LocateFailure::new_err("Locate failed to converge"))?;
+    let mut out = Vec::with_capacity(tris.len() * 24);
+    for t in tris {
+        for v in t {
+            out.extend_from_slice(&(v as i64).to_le_bytes());
+        }
+    }
+    Ok(PyBytes::new(py, &out))
+}
+
+/// JTS's KdTree as the conforming triangulation uses it: a point within `tol` of a node snaps onto it. A node's id is
+/// its insertion rank (the root is 0).
+#[pyclass(module = "_gbxrs")]
+struct TinKdTree {
+    tree: tin::KdTree,
+    buf: Vec<u32>,
+}
+
+#[pymethods]
+impl TinKdTree {
+    #[new]
+    fn new(tol: f64) -> Self {
+        TinKdTree {
+            tree: tin::KdTree::new(tol),
+            buf: Vec::new(),
+        }
+    }
+
+    /// Insert (x, y); true when it made a new node (false: it snapped onto one).
+    fn insert(&mut self, x: f64, y: f64) -> bool {
+        self.tree.insert(x, y)
+    }
+
+    /// Insert every point of the float64 buffers in order: one byte per point, 1 where it made a new node.
+    fn insert_many<'py>(
+        &mut self,
+        py: Python<'py>,
+        xs: &Bound<'py, PyBytes>,
+        ys: &Bound<'py, PyBytes>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let (x, y) = xy(xs, ys)?;
+        let tree = &mut self.tree;
+        let mask: Vec<u8> = py.detach(move || {
+            x.iter()
+                .zip(y.iter())
+                .map(|(a, b)| tree.insert(*a, *b) as u8)
+                .collect()
+        });
+        Ok(PyBytes::new(py, &mask))
+    }
+
+    /// The id of the node strictly inside the diametral circle of segment p-q closest to its midpoint (the first
+    /// found on a tie), or -1.
+    fn encroacher(&mut self, px: f64, py: f64, qx: f64, qy: f64) -> i64 {
+        self.tree
+            .encroacher(px, py, qx, qy, &mut self.buf)
+            .map_or(-1, |id| id as i64)
+    }
+
+    /// The ids of the nodes inside the closed envelope, in JTS's traversal order.
+    fn query(&mut self, minx: f64, miny: f64, maxx: f64, maxy: f64) -> Vec<u32> {
+        let mut out = Vec::new();
+        self.tree.query(minx, miny, maxx, maxy, &mut out);
+        out
+    }
+
+    fn __len__(&self) -> usize {
+        self.tree.len()
+    }
+}
+
 #[pymodule]
 fn _gbxrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bng_eastnorth_cells, m)?)?;
+    m.add_function(wrap_pyfunction!(tin_delaunay, m)?)?;
+    m.add_class::<TinKdTree>()?;
+    m.add("LocateFailure", m.py().get_type::<LocateFailure>())?;
     Ok(())
 }
 

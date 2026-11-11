@@ -22,6 +22,9 @@ from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
 from pyspark.sql.types import BinaryType, BooleanType
 
+# an array of geometries (a whole coverage, the features of an MVT layer) crosses as Arrow batches on Spark 4.1+
+from databricks.labs.gbx._transport import tile_udf as _session_udf
+
 from . import _legacy, _mvt, _tin
 
 ColLike = Union[Column, str, bool, int, float, bytes]
@@ -100,14 +103,14 @@ def _array_coverage(geoms, gap_width, kernel: str, fn: str):
         return None
 
 
-@f.udf(BooleanType())
+@_session_udf(returns=BooleanType(), tiles=())
 def _coverageisvalid_array_udf(geoms, gap_width=None):
     return _array_coverage(
         geoms, gap_width, "coverage_is_valid_agg", "gbx_st_coverageisvalid_array"
     )
 
 
-@f.udf(BinaryType())
+@_session_udf(returns=BinaryType(), tiles=())
 def _coverageinvalidedges_array_udf(geoms, gap_width=None):
     return _array_coverage(
         geoms,
@@ -117,7 +120,7 @@ def _coverageinvalidedges_array_udf(geoms, gap_width=None):
     )
 
 
-@f.udf(BinaryType())
+@_session_udf(returns=BinaryType(), tiles=())
 def _asmvt_array_udf(features, layer_name, extent=None):
     from databricks.labs.gbx.uc import forms
 

@@ -1639,8 +1639,9 @@ class Live:
     live table, and its files (junit.xml, pytest.log, result.json) are downloaded at once; the fail-fast policy is checked against
     every result so far (``_shard_runner.stop_rule``)."""
 
-    def __init__(self, w, plan: dict, local_out: Optional[Path] = None, t0: Optional[float] = None, out=print):
-        self.w, self.plan, self.local_out, self.out = w, plan, local_out, out
+    def __init__(self, w, plan: dict, local_out: Optional[Path] = None, t0: Optional[float] = None, out=None):
+        # flushed: the launcher's output is often a log file, where an unflushed row would show minutes late
+        self.w, self.plan, self.local_out, self.out = w, plan, local_out, out or (lambda text: print(text, flush=True))
         self.t0 = time.monotonic() if t0 is None else t0
         self.lines: Dict[str, dict] = {}
         self.fetched: set = set()
@@ -1866,7 +1867,13 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
     smokes = {spec.get("smoke") for spec in plan["pools"].values() if spec.get("smoke")}
     for slug, s in plan["shards"].items():
         d = local_out / slug
-        got = sorted(p.name for p in d.iterdir()) if fetched and slug in fetched and d.is_dir() else mut.download_dir(w, f"{plan['stage']}/out/{slug}", d)
+        mine = claims.get(slug, [])
+        if fetched and slug in fetched and d.is_dir():
+            got = sorted(p.name for p in d.iterdir())
+        elif stopped and not mine:  # the stop left it unrun: there are no files to fetch
+            got = []
+        else:
+            got = mut.download_dir(w, f"{plan['stage']}/out/{slug}", d)
         res = json.loads((d / "result.json").read_text()) if (d / "result.json").exists() else None
         junit = None
         if (d / "junit.xml").exists():
@@ -1876,7 +1883,6 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
                 junit = None
         verdict = shard_verdict(res, junit)
         reason = (res or {}).get("reason", "")
-        mine = claims.get(slug, [])
         if res is None:
             if mine:
                 reason = mine[-1].get("reason") or f"runner {mine[-1]['runner']} ran it, but it left no result"

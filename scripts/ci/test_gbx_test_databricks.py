@@ -1957,8 +1957,10 @@ def test_collect_says_which_chunks_the_stop_left_unrun(shards, monkeypatch, tmp_
     plan = _picked_plan(shards)
     plan["stopped_early"] = "5 chunks failed (--max-failed-chunks 5)"
     queue = plan["pools"]["gbx-test-1n"]["queue"]
-    monkeypatch.setattr(launcher.mut, "download_dir", lambda w, remote, local: [])
+    asked = []
+    monkeypatch.setattr(launcher.mut, "download_dir", lambda w, remote, local: asked.append(remote.rsplit("/", 1)[-1]) or [])
     recs = {"gbx-test-1n": [{"runner": "r0", "shards": [{"slug": queue[0], "start": 0, "end": 9}]}]}
     rows = {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}
+    assert asked == [queue[0]], "a chunk the stop left unrun has no files to fetch"
     assert rows[queue[0]]["reason"] == "stopped early (5 chunks failed (--max-failed-chunks 5)) while it ran"
     assert rows[queue[1]]["reason"] == "not run: stopped early (5 chunks failed (--max-failed-chunks 5))" and rows[queue[1]]["verdict"] == "INCOMPLETE"

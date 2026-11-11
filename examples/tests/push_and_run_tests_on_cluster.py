@@ -2108,6 +2108,7 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[L
     t0 = time.monotonic()
     live = live or Live(w, plan, t0=t0)
     last_say = 0.0
+    alive: Dict[str, PoolWatch] = {}
     over: Dict[str, str] = {}
     last_beat: Dict[str, float] = {}
     changed: Dict[str, dict] = {}
@@ -2138,15 +2139,12 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[L
             last_beat[pool] = now
             spec = plan["pools"][pool]
             names = (["smoke"] if spec.get("smoke") else []) + [f"r{i}" for i in range(spec["runners"])]
-            recs = [r for r in (mut.read_json(w, f"{plan['stage']}/runners/{pool}/{n}.json") for n in names) if r]
+            pw = alive.setdefault(pool, PoolWatch())
+            recs = pw.records({n: mut.read_json(w, f"{plan['stage']}/runners/{pool}/{n}.json") for n in names})
             current = [r["current"] for r in recs if r.get("current") and not r.get("done")]  # the shards the runners are on now
-            beats = {}
-            for slug in current:
-                b = mut.read_json(w, f"{plan['stage']}/hb/{slug}.json")
-                if b:
-                    beats[slug] = b
+            beats = pw.beats({slug: mut.read_json(w, f"{plan['stage']}/hb/{slug}.json") for slug in current})
             ran = [x for r in recs for x in r.get("shards", [])]
-            started = bool(beats or ran)
+            started = pw.started
             if say:
                 tot = sum(x.get(k) or 0 for x in ran for k in ("passed", "failed", "skipped")) + sum(b.get("passed", 0) + b.get("failed", 0) + b.get("skipped", 0) for b in beats.values())
                 bad = sum(x.get(k) or 0 for x in ran for k in ("failed", "errors")) + sum(b.get("failed", 0) + b.get("errors", 0) for b in beats.values())
@@ -2172,6 +2170,34 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[L
         if say:
             last_say = now
     return rc
+
+
+class PoolWatch:
+    """What the launcher knows of one pool's runners between polls. A runner record or a heartbeat is copied onto the Volume with a
+    plain copy (a FUSE mount has no atomic rename), so a read can find it half written or not there for a moment: such a read keeps
+    the last whole one, and a pool that has started (a record with a shard, or a beat) stays started. A read that fails can then
+    never make a healthy run look as if it had not started, or leave its running shards out of the stuck check."""
+
+    def __init__(self):
+        self.last: Dict[str, dict] = {}
+        self.last_beat: Dict[str, dict] = {}
+        self.started = False
+
+    def records(self, read: Dict[str, Optional[dict]]) -> List[dict]:
+        for name, rec in read.items():
+            if isinstance(rec, dict):
+                self.last[name] = rec
+        recs = list(self.last.values())
+        self.started = self.started or any(r.get("shards") for r in recs)
+        return recs
+
+    def beats(self, read: Dict[str, Optional[dict]]) -> Dict[str, dict]:
+        for slug, b in read.items():
+            if isinstance(b, dict):
+                self.last_beat[slug] = b
+        got = {slug: self.last_beat[slug] for slug in read if slug in self.last_beat}
+        self.started = self.started or bool(got)
+        return got
 
 
 def run_is_stuck(running: List[str], beats: Dict[str, dict], changed: Dict[str, tuple], now: float, limit_s: float) -> bool:

@@ -973,6 +973,24 @@ def test_a_run_is_stuck_only_when_every_running_shard_has_stopped_beating():
     assert not stuck([], beats, changed, 9999.0, 900.0), "nothing running is not stuck"
 
 
+def test_a_half_written_runner_record_never_makes_a_healthy_run_look_unstarted_or_stuck():
+    pw = launcher.PoolWatch()
+    rec0 = {"runner": "r0", "current": "a", "shards": [{"slug": "z", "start": 0, "end": 5}]}
+    rec1 = {"runner": "r1", "current": "b", "shards": []}
+    assert [r["runner"] for r in pw.records({"r0": rec0, "r1": rec1})] == ["r0", "r1"] and pw.started
+    recs = pw.records({"r0": None, "r1": None})  # both copies caught mid-write
+    assert pw.started, "a pool that started stays started: the start cap never cancels it"
+    current = [r["current"] for r in recs if r.get("current") and not r.get("done")]
+    assert current == ["a", "b"], "the shards the runners were on stay in the stuck check"
+    assert pw.beats({"a": {"ts": 1.0}}) == {"a": {"ts": 1.0}} and pw.beats({"a": None}) == {"a": {"ts": 1.0}}
+    changed = {}
+    launcher.run_is_stuck(current, {"a": {"ts": 1.0}, "b": {"ts": 1.0}}, changed, 0.0, 60.0)
+    assert not launcher.run_is_stuck(current, {"a": {"ts": 1.0}, "b": {"ts": 2.0}}, changed, 100.0, 60.0), "b moved: not stuck"
+    fresh = launcher.PoolWatch()
+    fresh.records({"r0": {"runner": "r0", "current": "a", "shards": []}})
+    assert not fresh.started, "a claim with no beat and no finished shard is not a start (it may hang in its install)"
+
+
 def test_a_shard_that_has_not_started_or_one_that_died_earlier_does_not_decide():
     changed = {}
     beats = {"killed": {"ts": 1.0}, "live": {"ts": 1.0}}

@@ -12,6 +12,7 @@ rows need the payload's GDAL (the container with GBX_NATIVE_ROOT); elsewhere the
   first, and the allowed-driver list on every open. These need no payload.
 """
 
+import functools
 import json
 import os
 import subprocess
@@ -409,12 +410,40 @@ def test_tile_bytes_open_with_the_allowed_drivers_only(tmp_path):
     assert "REFUSED raw" in out, out[-800:]
 
 
-def _partial_run(code: str) -> str:
-    """A fresh process with no payload (GBX_NATIVE_DISABLE): rasterio is the PyPI or the system one, the partial mode.
-    These rows need no payload, so they run wherever rasterio is installed."""
+def _partial_env() -> dict:
     env = _child_env()
     env.pop("GBX_NATIVE_ROOT", None)
     env["GBX_NATIVE_DISABLE"] = "1"
+    return env
+
+
+@functools.lru_cache(maxsize=1)
+def _partial_bindings_missing() -> str:
+    """Why a process with the payload off cannot import rasterio and pyogrio, or "" when it can. Where the only copies
+    are the payload's (an env wheel vendors them, as on a Databricks node), the partial mode has no bindings at all.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-c", "import rasterio, pyogrio"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=_partial_env(),
+        cwd=str(REPO),
+    )
+    if proc.returncode == 0:
+        return ""
+    last = (proc.stderr.strip().splitlines() or ["no output"])[-1]
+    return f"no rasterio or pyogrio outside the payload ({last})"
+
+
+def _partial_run(code: str) -> str:
+    """A fresh process with no payload (GBX_NATIVE_DISABLE): rasterio is the PyPI or the system one, the partial mode.
+    These rows need no payload, so they run wherever rasterio is installed; where only the payload's copies exist they
+    skip, since the partial mode has nothing to run on there."""
+    missing = _partial_bindings_missing()
+    if missing:
+        pytest.skip(f"PRECONDITION MISSING: {missing}; the partial-mode row is not run")
+    env = _partial_env()
     proc = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,

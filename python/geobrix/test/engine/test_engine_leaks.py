@@ -4,6 +4,7 @@ GBX_NATIVE_ROOT).
 """
 
 import os
+from test._provided_spark import wanted as _provided_session
 
 import pytest
 
@@ -112,6 +113,11 @@ def test_a_thousand_tiles_through_c1_leave_no_vsimem_file_and_flat_workers(
             assert _count(spark8, tiles, "L3", "engine-c1") == (N, N)
         states.append(_worker_state(spark8))
     assert states and all(left == 0 for st in states for left, _ in st.values())
+    if _provided_session():
+        pytest.skip(
+            "the RSS half sums a local[8] session's Python workers; on a Databricks node the provided session is "
+            "shared by the node's shards, so other work grows and replaces the workers it reads (no /vsimem file left)"
+        )
     steady = set.intersection(*(set(st) for st in states))
     assert steady, "no worker is in every snapshot"
     grown = [

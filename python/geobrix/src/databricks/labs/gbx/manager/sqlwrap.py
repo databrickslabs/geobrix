@@ -78,8 +78,9 @@ def bytes_dispatch(fn, jvm_call: str, l3_name: str) -> str:
 
     Only a tile with bytes goes to the JVM (``jvm_call``, placeholders as in ``tile_dispatch``); every other tile, a
     virtual, NULL or error tile, goes to the light UDF ``l3_name`` as it is, and light answers for it as it does alone.
-    Spark evaluates a Python UDF in a CASE on every row, so on the rows the JVM serves light gets NULL for its first
-    required argument after the tile and returns at once, rendering nothing.
+    Spark evaluates a Python UDF in a CASE on every row, so on the rows the JVM serves light gets NULL for the tile (no
+    bytes cross into Python for a row the JVM renders) and for its first required argument after the tile, so it
+    returns at once, rendering nothing.
     """
     t = fn.params[0].name
     if fn.min_args < 2:
@@ -91,7 +92,8 @@ def bytes_dispatch(fn, jvm_call: str, l3_name: str) -> str:
     rest = "".join(f", {n}" for n in others)
     has_bytes = f"{t}.raster IS NOT NULL"
     light = ", ".join(
-        [t] + [f"(IF({has_bytes}, NULL, {n}))" if n == gate else n for n in others]
+        [f"(IF({has_bytes}, NULL, {t}))"]
+        + [f"(IF({has_bytes}, NULL, {n}))" if n == gate else n for n in others]
     )
     jvm = jvm_call.format(tile=f"(IF({has_bytes}, {t}, NULL))", rest=rest)
     return (

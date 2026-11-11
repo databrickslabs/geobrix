@@ -411,8 +411,9 @@ def test_tilexyz_keeps_light_first_until_it_is_measured_against_the_arrow_light_
 
 def test_tilexyz_sends_only_a_tile_with_bytes_to_the_jvm():
     """tilexyz returns a transparent image for a NULL or error tile, where the standard dispatch gives NULL: its wrapper
-    (ready for the JVM level) sends a virtual, NULL or error tile to light, and light gets NULL for z on the rows the
-    JVM serves."""
+    (ready for the JVM level) sends a virtual, NULL or error tile to light. On the rows the JVM serves light gets NULL
+    for the tile and for z, so no tile bytes cross into Python there (Spark runs the UDF on every row of a CASE).
+    """
     from databricks.labs.gbx.manager import jvm
 
     fn = MAN.functions["gbx_rst_tilexyz"]
@@ -422,8 +423,63 @@ def test_tilexyz_sends_only_a_tile_with_bytes_to_the_jvm():
     assert body.startswith(
         "CASE WHEN tile.raster IS NOT NULL THEN gbx__l1_x((IF(tile.raster IS NOT NULL, tile, NULL))"
     )
-    assert "ELSE gbx__l3_x(tile, (IF(tile.raster IS NOT NULL, NULL, z)), x, y," in body
+    assert (
+        "ELSE gbx__l3_x((IF(tile.raster IS NOT NULL, NULL, tile)), (IF(tile.raster IS NOT NULL, NULL, z)), x, y,"
+        in body
+    )
     assert " IS NULL THEN NULL" not in body  # a NULL tile is light's to answer
+
+
+def test_tilexyz_dispatch_keeps_tile_bytes_on_the_jvm_rows_out_of_python(spark):
+    """Run the wrapper on Spark with stand-in levels: light must never receive a tile that has bytes, and each row
+    gets the answer of the level that serves it (the JVM for bytes; light for a virtual or NULL tile).
+    """
+    from pyspark.sql.functions import udf
+
+    from databricks.labs.gbx.manager import jvm
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    @udf("binary")
+    def light(tile, z, x, y, fmt, size, resampling, rescale):
+        if tile is not None and tile["raster"] is not None:
+            raise AssertionError("tile bytes reached the light UDF")
+        return None if z is None else b"light"
+
+    spark.udf.register("gbx__l3_probe", light)
+    spark.sql(
+        f"CREATE OR REPLACE TEMPORARY FUNCTION gbx__l1_probe(tile {TILE_SQL}, z INT, x INT, y INT, f STRING, "
+        "s INT, r STRING, c STRING) RETURNS BINARY RETURN IF(tile IS NULL, NULL, CAST('jvm' AS BINARY))"
+    )
+    spark.sql(
+        jvm.dispatch_ddl(
+            MAN.functions["gbx_rst_tilexyz"], "gbx__l1_probe", "gbx__l3_probe"
+        )
+    )
+    try:
+        got = _run_tilexyz_probe(spark, TILE_SQL)
+    finally:
+        spark.sql("DROP TEMPORARY FUNCTION IF EXISTS gbx_rst_tilexyz")
+        spark.sql("DROP TEMPORARY FUNCTION IF EXISTS gbx__l1_probe")
+    assert dict((r[0], r[1]) for r in got) == {
+        "bytes": "jvm",
+        "virtual": "light",
+        "null": "light",
+    }
+
+
+def _run_tilexyz_probe(spark, TILE_SQL):
+    return spark.sql(
+        "SELECT k, CAST(gbx_rst_tilexyz(t, 1, 0, 0) AS STRING) FROM VALUES "
+        f"('bytes', named_struct('cellid', -1L, 'raster', X'01', 'path', CAST(NULL AS STRING), "
+        "'path_mode', CAST(NULL AS STRING), 'window', CAST(NULL AS struct<col_off:int,row_off:int,width:int,"
+        "height:int>), 'clip_polygon', CAST(NULL AS BINARY), 'clip_crs', CAST(NULL AS STRING), "
+        "'crs', CAST(NULL AS STRING), 'metadata', map('driver', 'GTiff'))), "
+        f"('virtual', named_struct('cellid', -1L, 'raster', CAST(NULL AS BINARY), 'path', '/x.tif', "
+        "'path_mode', CAST(NULL AS STRING), 'window', CAST(NULL AS struct<col_off:int,row_off:int,width:int,"
+        "height:int>), 'clip_polygon', CAST(NULL AS BINARY), 'clip_crs', CAST(NULL AS STRING), "
+        "'crs', CAST(NULL AS STRING), 'metadata', map('driver', 'GTiff'))), "
+        f"('null', CAST(NULL AS {TILE_SQL})) AS v(k, t)"
+    ).collect()
 
 
 def test_an_unknown_l1_dispatch_is_refused():

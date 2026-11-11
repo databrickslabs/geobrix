@@ -66,10 +66,13 @@ def test_metadata_passthrough(spark, tmp_path):
 
 
 def _agg_registered(spark):
-    names = {
-        f.name for f in spark.catalog.listFunctions()
-    }  # SHOW USER FUNCTIONS is not Databricks SQL
-    return any(n.endswith("gbx_pmtiles_agg") for n in names)
+    try:
+        spark.sql(
+            "DESCRIBE FUNCTION gbx_pmtiles_agg"
+        ).collect()  # listing functions fails on some runtimes
+        return True
+    except Exception:  # noqa: BLE001 - an unregistered name raises
+        return False
 
 
 def _drop_agg(spark):

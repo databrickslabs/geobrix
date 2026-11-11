@@ -388,11 +388,6 @@ def test_sql_registration_combine_family(spark):
         level="L3",
     )
     # SQL name check: function should exist in catalog
-    funcs = {
-        r.function
-        for r in spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_combine*'").collect()
-    }
     for stat in ("min", "max", "sum", "count", "median", "stddev"):
-        assert (
-            f"gbx_rst_combine{stat}" in funcs
-        ), f"gbx_rst_combine{stat} not registered"
+        # DESCRIBE FUNCTION raises when the name is not registered
+        spark.sql(f"DESCRIBE FUNCTION gbx_rst_combine{stat}").collect()

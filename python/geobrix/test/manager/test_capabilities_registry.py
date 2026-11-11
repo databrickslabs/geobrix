@@ -385,6 +385,37 @@ def test_a_runtime_that_cannot_list_a_function_with_a_file_in_it_has_no_sql_file
     )  # a runtime that lists it keeps the FILE wrappers
 
 
+def test_a_runtime_whose_function_listing_is_broken_for_another_reason_is_checked_by_describe():
+    """DBR 19 dedicated (Spark 4.2.0): `SHOW FUNCTIONS` fails with PARSE_SYNTAX_ERROR for any input. FILE is not the cause."""
+
+    class ParseBroken(SqlSpark):
+        def sql(self, text):
+            if "SHOW USER FUNCTIONS" in text:
+                self.statements.append(text)
+                raise RuntimeError("[PARSE_SYNTAX_ERROR] Syntax error at or near ':'")
+            return super().sql(text)
+
+    sess = ParseBroken()
+    ok, detail = caps._sql_file_type_probe(sess)
+    assert ok is True and "described" in detail
+    assert any(
+        s.startswith("DESCRIBE FUNCTION gbx__probe_filetype_") for s in sess.statements
+    )
+    assert sess.statements[-1].startswith("DROP TEMPORARY FUNCTION IF EXISTS")
+    # and a runtime that also cannot describe it has no SQL FILE type
+
+    class Both(ParseBroken):
+        def sql(self, text):
+            if "DESCRIBE FUNCTION" in text:
+                raise RuntimeError(
+                    '[UNSUPPORTED_DATATYPE] Unsupported data type "FILE"'
+                )
+            return super().sql(text)
+
+    with pytest.raises(RuntimeError, match="UNSUPPORTED_DATATYPE"):
+        caps._sql_file_type_probe(Both())
+
+
 @pytest.mark.parametrize(
     "probe_ok,override,expect_file",
     [(True, None, True), (False, None, False), (True, "0", False), (True, "1", True)],
@@ -419,13 +450,30 @@ def test_without_file_support_the_wrapper_never_asks_the_capability(monkeypatch)
 
 def test_the_udtf_probe_leaves_no_function_or_view_behind(spark):
     """The probe registers a UDTF and a view; both are gone afterwards, whether the probe passes or not."""
-    caps._udtf_partition_probe(False)(spark)
-    left = [
-        r[0]
-        for r in spark.sql("SHOW USER FUNCTIONS").collect()
-        if "gbx__probe_udtf" in r[0]
+
+    class Recording:  # delegates to the session and keeps the statements; no runtime lists functions the same way
+        def __init__(self):
+            self.statements = []
+
+        def sql(self, text):
+            self.statements.append(text)
+            return spark.sql(text)
+
+        def __getattr__(self, attr):
+            return getattr(spark, attr)
+
+    rec = Recording()
+    caps._udtf_partition_probe(False)(rec)
+    names = [
+        s.rsplit(" ", 1)[1]
+        for s in rec.statements
+        if s.startswith("DROP TEMPORARY FUNCTION IF EXISTS gbx__probe_udtf")
     ]
-    assert left == []
+    assert len(names) == 1
+    with pytest.raises(
+        Exception, match="(?i)not found|UNRESOLVED_ROUTINE|cannot be found"
+    ):
+        spark.sql(f"DESCRIBE FUNCTION {names[0]}")
     assert [
         t.name for t in spark.catalog.listTables() if "gbx__probe_view" in t.name
     ] == []

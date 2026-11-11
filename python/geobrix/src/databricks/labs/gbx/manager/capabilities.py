@@ -488,6 +488,9 @@ def _sql_file_type_probe(spark) -> Tuple[bool, str]:
     parses the FILE type in an expression can still refuse it when it lists the session's functions (DBR 17.3:
     `SHOW USER FUNCTIONS` fails with UNSUPPORTED_DATATYPE "FILE" once a function with such a body exists), and one
     such function breaks the listing of all of them. The probe function is dropped again.
+
+    A runtime whose listing fails for another reason (DBR 19 dedicated, Spark 4.2.0: every `SHOW FUNCTIONS` form fails
+    with PARSE_SYNTAX_ERROR, FILE or not) says nothing about FILE: the check there is that `DESCRIBE FUNCTION` reads it.
     """
     import uuid
 
@@ -497,8 +500,16 @@ def _sql_file_type_probe(spark) -> Tuple[bool, str]:
             f"CREATE OR REPLACE TEMPORARY FUNCTION {name}(p STRING) RETURNS BOOLEAN "
             "RETURN try_to_file(p) IS NULL"
         )
-        spark.sql(f"SHOW USER FUNCTIONS LIKE '{name}'").collect()
-        return True, "created and listed"
+        try:
+            spark.sql(f"SHOW USER FUNCTIONS LIKE '{name}'").collect()
+            return True, "created and listed"
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - only a FILE refusal means no FILE support
+            if "UNSUPPORTED_DATATYPE" in str(exc):
+                raise
+        spark.sql(f"DESCRIBE FUNCTION {name}").collect()
+        return True, "created and described (the runtime cannot list functions)"
     finally:
         try:
             spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")

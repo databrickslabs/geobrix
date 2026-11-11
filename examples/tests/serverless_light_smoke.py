@@ -160,10 +160,10 @@ try:
     databricks.labs.gbx.register(spark)
     r["pyrx_import"] = "ok"
     # a trivially small light op end-to-end via SQL would need data; just
-    # confirm a registered function resolves in the catalog.
+    # confirm a registered function resolves (listing functions fails on some runtimes).
     try:
-        funcs = [f.name for f in spark.catalog.listFunctions() if f.name.startswith("gbx_rst_")]
-        r["gbx_rst_registered_count"] = len(funcs)
+        spark.sql("DESCRIBE FUNCTION gbx_rst_width").collect()
+        r["gbx_rst_registered"] = True
     except Exception as e:
         r["catalog_error"] = repr(e)
 except Exception as e:
@@ -306,13 +306,12 @@ try:
     databricks.labs.gbx.register(spark); r["pyvx_register"] = "ok"
 except Exception as e:
     r["pyvx_register"] = "ERROR"; r["pyvx_error"] = repr(e)[:400]
-# Characterize the catalog.listFunctions() SUM:DOUBLE separately (NOT a gbx
-# call path users need — it's a Serverless/UC introspection quirk).
+# A registered name resolves (DESCRIBE FUNCTION works on every runtime; listing functions does not).
 try:
-    n = len([f for f in spark.catalog.listFunctions() if f.name.startswith("gbx_rst_")])
-    r["listfunctions_ok"] = True; r["gbx_rst_count"] = n
+    spark.sql("DESCRIBE FUNCTION gbx_rst_width").collect()
+    r["describe_ok"] = True
 except Exception as e:
-    r["listfunctions_ok"] = False; r["listfunctions_error"] = repr(e)[:200]
+    r["describe_ok"] = False; r["describe_error"] = repr(e)[:200]
 dbutils.notebook.exit(json.dumps(r))
 '''
     return "# Databricks notebook source\n" + body
@@ -354,7 +353,8 @@ try:
     import databricks.labs.gbx
     databricks.labs.gbx.register(spark)
     r["pyrx_import"] = "ok"
-    r["gbx_rst_count"] = len([f.name for f in spark.catalog.listFunctions() if f.name.startswith("gbx_rst_")])
+    spark.sql("DESCRIBE FUNCTION gbx_rst_width").collect()
+    r["gbx_rst_registered"] = True
 except Exception as e:
     r["pyrx_import"] = "ERROR"; r["pyrx_error"] = repr(e); r["pyrx_trace"] = traceback.format_exc()[-1200:]
 try:

@@ -540,7 +540,7 @@ def session_read_cap(spark) -> Optional[int]:
     if spark is None:
         return None
     if "connect" in type(spark).__module__:
-        return decoded_budget_bytes("classic") if _driver_compute_is_classic() else None
+        return None if session_on_serverless(spark) else decoded_budget_bytes("classic")
     try:
         value = spark.conf.get(READ_CAP_KEY, None)
     except (
@@ -552,6 +552,23 @@ def session_read_cap(spark) -> Optional[int]:
     except ValueError:
         cap = 0
     return cap if cap > 0 else decoded_budget_bytes("classic")
+
+
+def session_on_serverless(spark) -> bool:
+    """Driver side: True for a Spark Connect session on Serverless compute, the one kind of session whose tasks hold
+    Serverless's memory. A classic session is not, nor is a Connect session of standard access mode: its driver has
+    the classic memory environment and a runtime version that is not Serverless's (read on DBR 19.15:
+    ``SPARK_WORKER_MEMORY=26985m``, ``DATABRICKS_RUNTIME_VERSION=19.15``), and its workers run on classic executors.
+    Every connect-aware cap (``ds.file_gbx._connect_aware_lru_sizing``, :func:`session_read_cap`) keys on this.
+    """
+    from databricks.labs.gbx import _gdal_policy
+
+    spark = _gdal_policy.real_session(spark)
+    return (
+        spark is not None
+        and "connect" in type(spark).__module__
+        and not _driver_compute_is_classic()
+    )
 
 
 def _driver_compute_is_classic() -> bool:

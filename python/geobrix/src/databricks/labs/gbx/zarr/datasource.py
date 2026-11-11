@@ -343,8 +343,8 @@ def _unit_plan(opts: ZarrGbxOptions, *, units: bool):
 def _tile_plans(opts: ZarrGbxOptions, cap: int):
     """The ``TilePlan`` of each variable, as ``gbx_zarr_read`` plans a tiles read.
 
-    ``cap`` is the largest tile a task may hold, measured once by the planner
-    (``session_free_stream_cap``) and handed to the workers with the partitions: it is baked
+    ``cap`` is the largest tile a task may hold, decided once by the planner (the driver's cap the
+    registration carried, else ``session_free_stream_cap``) and handed to the workers with the partitions: it is baked
     into every tile, and a worker's own probe must not decide it.
     """
     from databricks.labs.gbx.zarr import _read
@@ -464,7 +464,10 @@ class ZarrGbxReader(DataSourceReader):
             from databricks.labs.gbx.ds.file_gbx import session_free_stream_cap
             from databricks.labs.gbx.zarr import _read
 
-            cap = session_free_stream_cap()
+            # the driver's stream cap, carried in by the registration (``carrying_source``): this planner may run
+            # where the runtime cannot be told (a standard-access planner reads as Serverless)
+            carried = getattr(self, "_gbx_read_cap", None)
+            cap = carried if carried is not None else session_free_stream_cap()
             plans = _tile_plans(opts, cap)
             fingerprint = _fingerprint(plans)
             total = sum(p.n_tiles for p in plans)

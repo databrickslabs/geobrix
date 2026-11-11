@@ -1180,9 +1180,10 @@ class RasterGbxReader(DataSourceReader):
 
     @property
     def _read_cap(self) -> Optional[int]:
-        """The read cap of a task that decodes at read (64 MiB on Serverless / Spark Connect, 256 MiB classic; None
-        when the read keeps virtual tiles). A worker cannot measure it: it is the cap the driver carried, else (a reader
-        used with no registration) what this process resolves; with no session, as on a worker, the smaller Serverless cap.
+        """The read cap of a task that decodes at read (64 MiB on Serverless, 256 MiB on classic compute, standard access
+        mode included; None when the read keeps virtual tiles). A worker cannot measure it: it is the cap the driver
+        carried, else (a reader used with no registration) what this process resolves; with no session, as on a worker,
+        the smaller Serverless cap.
         """
         if self._read_cap_set is not None:
             return self._read_cap_set

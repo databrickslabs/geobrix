@@ -386,6 +386,23 @@ def test_the_tile_cap_follows_the_runtime(tmp_path, monkeypatch):
     assert cap() == 12345
 
 
+def test_the_tile_cap_is_the_one_the_registration_carried(tmp_path, monkeypatch):
+    """A registered reader plans by the stream cap the driver carried (``carrying_source``): on standard access mode
+    the planner sees a worker's signals (``test._standard_access``), whose own probe says Serverless, while the
+    driver's says classic (256 MiB)."""
+    from test import _standard_access
+
+    path = tmp_path / "s.zarr"
+    _growing(path)
+    _standard_access.apply(monkeypatch, "worker")
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    reader = ZarrGbxReader({"path": str(path), "output": "tiles"})
+    reader._gbx_read_cap = 256 * 1024**2
+    first = next(iter(reader.read(reader.partitions()[0])))
+    meta = dict(first.to_pylist()[0]["tile"]["metadata"])
+    assert json.loads(meta["zarr_meta"])["cap"] == 256 * 1024**2
+
+
 # --- the shape of the source ------------------------------------------------------------
 
 

@@ -299,8 +299,8 @@ def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[s
         selected = list(dict.fromkeys(n for _o, n in requested))
     # each reader carries the driver's remote-path switch into its planning (the workers never read it)
     allowed = _gdal_policy.driver_switch()
-    # ... and the driver's read cap (64 MiB on Serverless / Spark Connect), which a planner process without a session
-    # could not tell from the classic 256 MiB
+    # ... and the driver's read cap (64 MiB on Serverless, the classic 256 MiB elsewhere, standard access mode included),
+    # which a planner process without a session could not tell
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
 
     cap = report_detected_cap(spark)

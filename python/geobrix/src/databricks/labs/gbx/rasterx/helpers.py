@@ -594,12 +594,16 @@ def _cap_bytes(df: DataFrame) -> int:
 
 
 def _decoded_budget(df: DataFrame) -> int:
-    """The decoded-tile budget (64 MiB on Serverless and Connect, 1.5 GiB on classic): what one
-    member may decode to. Taken on the driver."""
-    from databricks.labs.gbx.manager.capabilities import is_connect
-    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+    """The decoded-tile budget (64 MiB on Serverless, 1.5 GiB on classic compute, standard access mode included):
+    what one member may decode to. Taken on the driver."""
+    from databricks.labs.gbx.pyrx.core.budget import (
+        decoded_budget_bytes,
+        session_on_serverless,
+    )
 
-    return decoded_budget_bytes("serverless" if is_connect(df.sparkSession) else "auto")
+    return decoded_budget_bytes(
+        "serverless" if session_on_serverless(df.sparkSession) else "auto"
+    )
 
 
 _FIX_SPLIT = (

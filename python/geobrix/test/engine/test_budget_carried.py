@@ -23,15 +23,13 @@ def _engine():
 
 
 def _standard_access_worker(monkeypatch):
-    """A worker that sees no memory signal of its own (standard access mode: Connect over classic compute)."""
+    """A worker that sees no memory signal of its own (standard access mode: Connect over classic compute), by the
+    signals read on one (``test._standard_access``)."""
+    from test import _standard_access
+
     from databricks.labs.gbx.pyrx.core import budget
 
-    for k in (*budget.CLASSIC_MEMORY_ENV, "IS_SERVERLESS"):
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setattr(budget, "_cgroup_task_limit_bytes", lambda: None)
-    monkeypatch.setattr(
-        budget, "process_read_cap", lambda: budget.decoded_budget_bytes("auto")
-    )
+    _standard_access.apply(monkeypatch, "worker")
     assert budget.decoded_budget_bytes("auto") == 64 << 20
 
 

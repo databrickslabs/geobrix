@@ -1932,7 +1932,7 @@ On Unity Catalog the points and break lines are an `ARRAY<GEOMETRY(ANY)>`, and t
 ### rst_frombands
 
 {/* BEGIN GENERATED gbx_rst_frombands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala jar="gbx_rst_frombands" />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1994,7 +1994,7 @@ Create a raster from binary content.
 _Constructor — builds a tile from binary content. Example uses Spark's `binaryFile` reader to load bytes, then `rst_fromcontent` to decode them — this is the canonical pattern and works on any compute, including Serverless._
 
 :::caution Serverless memory — you own the bytes
-`rst_fromcontent` materializes bytes that are **already in a column**. Those bytes are in executor memory before this call; GeoBrix does not guard their size. On Serverless / Spark Connect the connect-aware cap is **64 MiB** per tile — keep individual `content` values at or under that limit. For larger sources, use the virtual-tile raster readers (the default) and let the runtime page bytes lazily. See [Serverless & Memory](../serverless-and-memory#rst_fromcontent-you-own-the-bytes).
+`rst_fromcontent` materializes bytes that are **already in a column**. Those bytes are in executor memory before this call; GeoBrix does not guard their size. On Serverless the connect-aware cap is **64 MiB** per tile — keep individual `content` values at or under that limit. For larger sources, use the virtual-tile raster readers (the default) and let the runtime page bytes lazily. See [Serverless & Memory](../serverless-and-memory#rst_fromcontent-you-own-the-bytes).
 :::
 
 <FunctionExamples
@@ -2033,7 +2033,7 @@ A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refus
 :::
 
 :::caution `materialize=True` errors over the Serverless cap
-Reading a file larger than the connect-aware stream cap raises a `ValueError`. The cap is **64 MiB on Serverless / Spark Connect** and 256 MiB on classic. This applies to `materialize=True` and to the SQL function `gbx_rst_fromfile`. The error is intentional, because reading an oversized tile would run the executor out of memory. The Python default (`materialize` unset, a virtual tile) is Serverless-safe: pixels are read lazily and size-gated at each later function. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
+Reading a file larger than the connect-aware stream cap raises a `ValueError`. The cap is **64 MiB on Serverless** and 256 MiB on classic compute (dedicated or standard access mode). This applies to `materialize=True` and to the SQL function `gbx_rst_fromfile`. The error is intentional, because reading an oversized tile would run the executor out of memory. The Python default (`materialize` unset, a virtual tile) is Serverless-safe: pixels are read lazily and size-gated at each later function. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
 :::
 
 <FunctionExamples
@@ -2742,7 +2742,7 @@ A NULL tile, an error tile and a tile that cannot be read give no rows. A resolu
 ### h3_cell_bbox
 
 {/* BEGIN GENERATED gbx_h3_cell_bbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala jar="gbx_h3_cell_bbox" />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4055,7 +4055,7 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
 ### rst_asformat
 
 {/* BEGIN GENERATED gbx_rst_asformat: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4391,7 +4391,7 @@ Sum of pixel values per location.
 ### rst_convolve
 
 {/* BEGIN GENERATED gbx_rst_convolve: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4500,7 +4500,7 @@ Spatial filter over a square window. A window width that is not a positive odd n
 ### rst_initnodata
 
 {/* BEGIN GENERATED gbx_rst_initnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5012,7 +5012,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo,
 ### rst_updatetype
 
 {/* BEGIN GENERATED gbx_rst_updatetype: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|

@@ -90,7 +90,7 @@ QC mode extends the metadata schema with two additional columns:
 :::note Serverless memory guard
 In `qc` mode each image is fully materialized into executor RAM to compute pixel
 metrics. The reader checks the file size against the connect-aware materialize cap
-(64 MiB on Serverless / Spark Connect; 256 MiB on classic). It skips oversized
+(64 MiB on Serverless; 256 MiB on classic compute, standard access mode included). It skips oversized
 images with a warning rather than OOMing the task. Use a classic cluster for
 high-resolution (> 64 MiB) images in QC mode.
 :::

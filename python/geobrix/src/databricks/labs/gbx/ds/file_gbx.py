@@ -1340,8 +1340,9 @@ def report_detected_cap(spark: Optional["SparkSession"] = None) -> int:
 
     Returns:
         The stream cap in bytes:
-        - 64 MiB (67,108,864) on Spark Connect / Serverless.
-        - 256 MiB (268,435,456) on classic Spark (no Connect session).
+        - 64 MiB (67,108,864) on Serverless (a Spark Connect session there).
+        - 256 MiB (268,435,456) on classic compute: a classic session, or a Spark Connect
+          session of standard access mode.
         - ``GBX_STREAM_MAX_BYTES`` override if set (wins in both modes).
 
     Args:
@@ -1492,22 +1493,21 @@ def _connect_aware_lru_sizing(spark) -> tuple[int, int, int]:
 
     Returns:
         (stream_max_bytes, lru_max_bytes, max_count):
-        - Classic Spark: (256 MiB, 4 GiB, 4) — existing behavior.
-        - Spark Connect: (64 MiB, 512 MiB, 4) — serverless-safe.
+        - Classic compute: (256 MiB, 4 GiB, 4), for a classic session and for a Spark
+          Connect session of standard access mode (Connect over classic compute), whose
+          tasks run on classic executors.
+        - Serverless (a Connect session on Serverless compute): (64 MiB, 512 MiB, 4).
         - Env overrides win in both: GBX_STREAM_MAX_BYTES, GBX_LRU_MAX_BYTES.
         - Serverless worst case: 4 × 64 MiB = 256 MiB, well under ~1 GB task.
+    The kind is judged on the driver (``pyrx.core.budget.session_on_serverless``).
     """
-    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx.core.budget import session_on_serverless
 
-    spark = _gdal_policy.real_session(
-        spark
-    )  # a registrar's proxy: the session behind it
-    is_connect = spark is not None and "connect" in type(spark).__module__
-    return _lru_sizing(is_connect)
+    return _lru_sizing(session_on_serverless(spark))
 
 
 def _lru_sizing(is_connect: bool) -> tuple[int, int, int]:
-    """``_connect_aware_lru_sizing`` once it is known whether the runtime is Connect."""
+    """``_connect_aware_lru_sizing`` once it is known whether the tasks have Serverless's memory (``is_connect``)."""
     # Read raw os.environ to distinguish "explicitly set" from "default".
     # Module-level constants already baked the env-or-default at import.
     stream_max_bytes_env = os.environ.get("GBX_STREAM_MAX_BYTES")

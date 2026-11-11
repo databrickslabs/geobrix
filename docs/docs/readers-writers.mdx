@@ -101,7 +101,7 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 | **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |
 | **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~30 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); slower than the Delta-table path on all runtimes |
 
-The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing. The Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic. It beats it by **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
+The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing. The Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic. It beats it by **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless, 256 MiB on classic compute, standard access mode included) and a full guide to memory-safe pipelines.
 
 The **no-gating rule**: `access="auto"` on readers and `file_mode="auto"` on writers silently
 downgrade to the best available tier and never error. Explicitly requesting
@@ -117,7 +117,7 @@ When a lightweight reader opens a source file it calls `open_for_read(source, ac
 The resolver checks the tier and picks a strategy:
 
 - **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Files at or under
-  `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless/Connect**, 256 MiB on classic)
+  `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless**, 256 MiB on classic compute, standard access mode included)
   open a byte-range **stream**. The stream is one round-trip, no FUSE, no local copy, and the fastest
   path for typical tile sizes. Files over the cap fall through to `as_local_file()`, a
   lazy local-file reference backed by the FILE handle. It pages bytes from the Volume

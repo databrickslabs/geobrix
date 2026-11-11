@@ -13,8 +13,8 @@ When GeoBrix opens a raster tile it decides whether to **stream the whole file i
 
 | Runtime | Default stream cap | Override |
 |---|---|---|
-| Serverless / Spark Connect | **64 MiB** | `GBX_STREAM_MAX_BYTES=<bytes>` env var |
-| Classic (non-Connect) cluster | **256 MiB** | `GBX_STREAM_MAX_BYTES=<bytes>` env var |
+| Serverless | **64 MiB** | `GBX_STREAM_MAX_BYTES=<bytes>` env var |
+| Classic compute, dedicated or standard access mode | **256 MiB** | `GBX_STREAM_MAX_BYTES=<bytes>` env var |
 
 - **At or under the cap** — the tile is read in full via a FILE byte-range stream in one network round-trip. No FUSE mount, no local copy.
 - **Over the cap** — the tile is opened lazily via a local-file reference backed by the FILE handle. Bytes are paged from the Volume as the rasterio reader requests them; the tile never fully lands in executor memory.
@@ -160,13 +160,13 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 
 ### `rst_fromfile(materialize=True)` {#rst_fromfile-materialize-true}
 
-`rst_fromfile` with `materialize=True` (and the SQL function `gbx_rst_fromfile`, which always materializes) forces the raster bytes into the tile's `raster` field immediately. The connect-aware cap is **64 MiB on Serverless and Spark Connect**, and 256 MiB on classic. A larger file fails the call with an error that says how to fix it. The failure is intentional, because silently materializing an oversized tile would run the executor out of memory. A tile that is already in a column and over the cap gives an error tile instead. See [Error handling](./api/error-handling).
+`rst_fromfile` with `materialize=True` (and the SQL function `gbx_rst_fromfile`, which always materializes) forces the raster bytes into the tile's `raster` field immediately. The connect-aware cap is **64 MiB on Serverless**, and 256 MiB on classic compute (dedicated or standard access mode). A larger file fails the call with an error that says how to fix it. The failure is intentional, because silently materializing an oversized tile would run the executor out of memory. A tile that is already in a column and over the cap gives an error tile instead. See [Error handling](./api/error-handling).
 
 **Fix:** Use the virtual default (`materialize=False`, or omit the argument; Python only). Virtual tiles are Serverless-safe by construction — pixels are read lazily, size-gated, at each downstream operation.
 
 ### `rst_fromcontent` — you own the bytes {#rst_fromcontent-you-own-the-bytes}
 
-`rst_fromcontent(content, driver)` builds a materialized tile from bytes already in a column (e.g. from Spark's `binaryFile` reader or a prior operation). Those bytes are already in executor memory before this call; GeoBrix does not guard their size. On Serverless / Spark Connect, keep individual `content` values at or under **64 MiB**. For larger sources, use the virtual-tile raster readers (the default) and let the connect-aware cap gate pixel reads lazily.
+`rst_fromcontent(content, driver)` builds a materialized tile from bytes already in a column (e.g. from Spark's `binaryFile` reader or a prior operation). Those bytes are already in executor memory before this call; GeoBrix does not guard their size. On Serverless, keep individual `content` values at or under **64 MiB**. For larger sources, use the virtual-tile raster readers (the default) and let the connect-aware cap gate pixel reads lazily.
 
 ### Large tile with pending warp or clip {#large-tile-pending-warp-or-clip}
 

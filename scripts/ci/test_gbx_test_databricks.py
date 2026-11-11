@@ -400,9 +400,14 @@ def test_the_notebook_opens_with_the_four_line_header_and_its_code_compiles(shar
     # then the guard, before the checkout's package is laid over the installed one: driver and workers must import the staged wheel
     guard = "".join(nb["cells"][2]["source"])
     compile(guard, "guard", "exec")
-    assert "def run_guard(" in guard and f"'wheel': '{wheel}'" in guard and "spark=spark" in guard
+    assert "def run_guard(" in guard and f"'wheel': '{wheel}'" in guard
+    assert "WHEEL_GUARD = run_guard(" in guard and "spark=None" in guard  # driver only here: the workers are checked after the overlay
     compile("".join(nb["cells"][3]["source"]), "runner", "exec")  # no leftover format fields
     assert "pytest.main" in "".join(nb["cells"][3]["source"])
+    # after the checkout is laid over the installed package, the checkout must be what the driver AND the workers import
+    run = "".join(nb["cells"][3]["source"])
+    overlay, check, tests = run.index("shutil.copytree(src_pkg, inst"), run.index('run_guard({"tree": src_pkg}'), run.index("pytest.main")
+    assert overlay < check < tests and 'exclude=("_build_info.py",)' in run and "spark=spark" in run
     served = launcher.build_notebook(dict(plan, serverless=True), "gbx-test-1n")["cells"]
     assert len(served) == 3 and "def run_guard(" in "".join(served[1]["source"])  # no %pip cell on Serverless; the guard stays
 
@@ -961,6 +966,27 @@ def test_a_plan_that_only_explains_makes_no_copy_of_the_jar(tmp_path):
     jar.write_bytes(b"jar")
     got = launcher.stage_jar(jar, REPO_ROOT, copy=False)
     assert got["local"] == str(jar) and got["sha256"] and got["dir"].startswith("test-pool-jars/")
+
+
+def test_wheel_takes_a_file_or_the_folder_that_holds_the_newest_env6_wheel(tmp_path):
+    import os
+
+    old = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    old.write_bytes(b"PK")
+    (tmp_path / "geobrix-0.6.0+env5-py3-none-any.whl").write_bytes(b"PK")  # the other family is not the one
+    assert launcher.mut.find_wheel(str(tmp_path)) == old
+    assert launcher.mut.find_wheel(str(tmp_path) + "/") == old
+    assert launcher.mut.find_wheel(str(old)) == old
+    newer = tmp_path / "geobrix-0.10.0+env6-py3-none-any.whl"
+    newer.write_bytes(b"PK")
+    os.utime(old, (1, 1))  # an older build, though its name sorts after the newer one
+    assert launcher.mut.find_wheel(str(tmp_path)) == newer
+    os.utime(old, (5, 5))
+    os.utime(newer, (5, 5))  # equal mtimes (a copied folder): the higher version wins, not the later name
+    assert launcher.mut.find_wheel(str(tmp_path)) == newer
+    (tmp_path / "none").mkdir()
+    with pytest.raises(SystemExit, match="no geobrix-.*env6.*in .*none"):
+        launcher.mut.find_wheel(str(tmp_path / "none"), required=False)  # a folder the user named must hold a wheel
 
 
 def test_jar_path_takes_a_file_or_the_folder_that_holds_the_jar(tmp_path):

@@ -478,6 +478,25 @@ def test_the_trend_compares_only_runs_with_the_same_tests():
     )
 
 
+def test_wheel_takes_a_folder_and_the_default_folder_gives_its_newest_wheel(tmp_path, monkeypatch):
+    import os
+
+    a = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    b = tmp_path / "geobrix-0.6.1+env6-py3-none-any.whl"
+    a.write_bytes(b"PK")
+    b.write_bytes(b"PK")
+    os.utime(a, (9, 9))
+    os.utime(b, (3, 3))
+    assert launcher.find_wheel(str(tmp_path)) == a  # the newest by mtime
+    os.utime(b, (9, 9))
+    assert launcher.find_wheel(str(tmp_path)) == b  # equal mtimes: the higher version
+    monkeypatch.setattr(launcher, "REPO_ROOT", tmp_path / "repo")
+    (tmp_path / "repo" / "dist" / "env6").mkdir(parents=True)
+    assert "built at launch" in str(launcher.find_wheel("", required=False))  # none built: a placeholder in a plan
+    with pytest.raises(SystemExit, match="no geobrix-"):
+        launcher.find_wheel("")
+
+
 def test_a_wheel_path_the_user_passed_must_exist_even_in_a_plan_only_run(tmp_path):
     with pytest.raises(SystemExit):
         launcher.find_wheel(str(tmp_path / "missing.whl"), required=False)

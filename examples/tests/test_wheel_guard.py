@@ -216,3 +216,48 @@ def test_an_existing_cluster_with_no_wheel_given_and_no_pip_cell_only_reports_wh
     assert "run_guard({}," in cells[0] or "run_guard({}, spark=spark)" in cells[0]  # nothing expected: report only
     cells = _uploaded(nb, strip_pip=False, report_only=False)  # --wheel given (or a new cluster): that wheel is expected
     assert "'wheel': '/Volumes/c/s/v/default.whl'" in cells[0]
+
+
+# ---- the shard runner: the checkout's package must be what the driver and the workers import after the overlay
+
+
+def _checkout(tmp_path, tag, extra=None):
+    root = tmp_path / "checkout" / "src" / "databricks" / "labs" / "gbx"
+    for rel, text in {**_files(tag), **(extra or {})}.items():
+        if rel.startswith("_vendor"):
+            continue
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    return root
+
+
+def test_the_checkout_must_be_what_is_imported_after_the_overlay_not_the_wheels_older_copy(tmp_path, monkeypatch):
+    import shutil
+
+    checkout = _checkout(tmp_path, "checkout")
+    installed = _install(tmp_path, monkeypatch, "wheel", NEW_SHA)  # the wheel's copy: another build, plus its _build_info.py
+    _, say = _says()
+    expected = {"tree": str(checkout)}
+    workers = lambda: [json.loads(g.worker_identity(("_build_info.py",)))]  # noqa: E731
+    # before the overlay the installed package is the wheel's: the shard would test the wheel's code
+    with pytest.raises(RuntimeError) as e:
+        g.run_guard(expected, say=say, workers=workers, exclude=("_build_info.py",))
+    assert "pyrx/core/focal.py" in str(e.value) and "not the checkout's" in str(e.value) and "worker" in str(e.value)
+    # the overlay (the runner's copytree) makes the checkout win, whatever the wheel's _build_info.py says
+    shutil.copytree(checkout, installed, dirs_exist_ok=True)
+    verdict = g.run_guard(expected, say=say, workers=workers, exclude=("_build_info.py",))
+    assert verdict["ok"]
+    # a module the checkout dropped but the wheel kept (the runner deletes it) would also fail the check
+    (installed / "pyrx" / "core" / "gone.py").write_text("x = 1\n")
+    with pytest.raises(RuntimeError, match="gone.py"):
+        g.run_guard(expected, say=say, workers=workers, exclude=("_build_info.py",))
+
+
+def test_a_worker_that_still_holds_the_wheels_copy_fails_the_checkout_check(tmp_path, monkeypatch):
+    checkout = _checkout(tmp_path, "checkout")
+    _install(tmp_path, monkeypatch, "checkout", NEW_SHA)  # the driver is right
+    _, say = _says()
+    stale = {"module": "/cluster_libraries/databricks/labs/gbx/__init__.py", "git_sha": OLD_SHA, "digest": "0" * 64, "host": "w1"}
+    with pytest.raises(RuntimeError) as e:
+        g.run_guard({"tree": str(checkout)}, say=say, workers=lambda: [stale], exclude=("_build_info.py",))
+    assert "worker w1 imports source digest" in str(e.value) and "driver imports" not in str(e.value)

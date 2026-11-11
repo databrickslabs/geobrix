@@ -32,7 +32,7 @@ Options:
   --base <rev>           `affected`: the files changed between this and --sha pick the tests (default origin/streamline/0.6.0)
   --allow-broad          let `affected` run a selection over a quarter of the light bank (it refuses one without this)
   --sha <rev>            the commit to test (default HEAD)
-  --wheel <path>         the env6 wheel (default dist/env6/); it carries dependencies and native payload, not the code under test
+  --wheel <path>         the env6 wheel or the folder that holds it (newest by mtime; default dist/env6/); it carries dependencies and native payload, not the code under test
   --jar-path <path>      the JAR of the heavy shards, or its folder (default python/geobrix/lib/; copied out and sha-checked)
   --max-parallel <n>     runners per cluster, so shards side by side (default: the node's cores / 8; 4 on 32 vCPU)
   --serverless           run the selected light shards on Serverless env 6 (a fidelity leg; Spark-free dirs only)
@@ -361,7 +361,9 @@ def guard_source(plan: dict) -> str:
     """The cell after the install: the driver and the Python workers must import the staged wheel (before the checkout's
     package is laid over it), else the shard fails here with the fix."""
     built = plan["wheel"]["built_from"]
-    return wg.guard_source(wheel=plan["wheel"]["volume"], git_sha=built if re.fullmatch(r"[0-9a-f]{7,40}", built or "") else None)
+    # driver only: a Python worker that imports geobrix here would keep the wheel's modules in memory after the checkout is
+    # laid over them; the workers are checked after the copy (run_source), against the checkout
+    return wg.guard_source(wheel=plan["wheel"]["volume"], git_sha=built if re.fullmatch(r"[0-9a-f]{7,40}", built or "") else None, workers=False)
 
 
 def run_source(plan: dict) -> str:
@@ -427,6 +429,9 @@ import databricks, pkgutil, filecmp
 databricks.__path__ = pkgutil.extend_path(databricks.__path__, "databricks")
 import databricks.labs.gbx as _gbx
 assert os.path.realpath(_gbx.__file__).startswith(os.path.realpath(sitedir)) and filecmp.cmp(_gbx.__file__, pkg + "/src/databricks/labs/gbx/__init__.py", shallow=False), "the package under test is not the checkout's: " + _gbx.__file__
+# The checkout wins, in the driver AND in the Python workers: every .py file of the imported package is the checkout's (the wheel's
+# _build_info.py aside); the shard fails here, naming the differing files, rather than test the wheel's older copy
+WHEEL_GUARD_TREE = run_guard({"tree": src_pkg}, spark=spark, exclude=("_build_info.py",))
 os.chdir(repo + "/" + S["cwd"])
 os.environ.update(S["env"])
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"

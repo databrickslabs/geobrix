@@ -36,9 +36,23 @@ _SKIP_PARTS = ("_vendor", "__pycache__")
 # ---------------------------------------------------------------------------------------------- identity
 
 
-def _wanted(rel):
+def _wanted(rel, exclude=()):
     parts = rel.split("/")
-    return rel.endswith(".py") and not any(p in _SKIP_PARTS for p in parts)
+    return rel.endswith(".py") and rel not in exclude and not any(p in _SKIP_PARTS for p in parts)
+
+
+def tree_files(root, exclude=()):
+    """{path relative to ``root``: sha256} of the ``.py`` files under ``root`` (the identity's file set)."""
+    files = {}
+    for dp, dn, fn in os.walk(root):
+        dn[:] = [d for d in dn if d not in _SKIP_PARTS]
+        for f in fn:
+            full = os.path.join(dp, f)
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            if _wanted(rel, exclude):
+                with open(full, "rb") as fh:
+                    files[rel] = hashlib.sha256(fh.read()).hexdigest()
+    return files
 
 
 def _digest(files):
@@ -86,27 +100,20 @@ def wheel_identity(path):
             "digest": _digest(files)}
 
 
-def installed_identity(with_files=True):
+def installed_identity(with_files=True, exclude=()):
     """The identity of the geobrix this process imports: module, root, git_sha, dirty, version, files, digest, host, pid.
 
-    Raises ImportError when geobrix cannot be imported."""
+    ``exclude``: package paths left out of the file set (the shard runner leaves out ``_build_info.py``, which only the
+    wheel has, when it compares with the checkout). Raises ImportError when geobrix cannot be imported."""
     import importlib
     import socket
 
     gbx = importlib.import_module("databricks.labs.gbx")
-
     root = os.path.dirname(os.path.abspath(gbx.__file__))
-    files, info = {}, ""
-    for dp, dn, fn in os.walk(root):
-        dn[:] = [d for d in dn if d not in _SKIP_PARTS]
-        for f in fn:
-            full = os.path.join(dp, f)
-            rel = os.path.relpath(full, root).replace(os.sep, "/")
-            if rel == "_build_info.py":
-                info = open(full, encoding="utf-8", errors="replace").read()
-            if _wanted(rel):
-                with open(full, "rb") as fh:
-                    files[rel] = hashlib.sha256(fh.read()).hexdigest()
+    files = tree_files(root, exclude)
+    info = ""
+    if os.path.exists(os.path.join(root, "_build_info.py")):
+        info = open(os.path.join(root, "_build_info.py"), encoding="utf-8", errors="replace").read()
     sha, dirty, version = _build_fields(info)
     out = {"module": os.path.abspath(gbx.__file__), "root": root, "git_sha": sha, "dirty": dirty, "version": version,
            "digest": _digest(files), "host": socket.gethostname(), "pid": os.getpid()}
@@ -115,10 +122,10 @@ def installed_identity(with_files=True):
     return out
 
 
-def worker_identity():
+def worker_identity(exclude=()):
     """What a Python worker imports, as a JSON string (a UDF returns it). A worker that cannot import says so."""
     try:
-        return json.dumps(installed_identity(with_files=False))
+        return json.dumps(installed_identity(with_files=False, exclude=tuple(exclude)))
     except Exception as exc:  # noqa: BLE001 - the verdict is the report
         import socket
 
@@ -144,7 +151,13 @@ def _differing(installed, expected):
     return diff[:3], len(diff)
 
 
-def fix_text(wheel):
+def fix_text(wheel, tree=None):
+    if tree:
+        return (
+            "Fix: the package this process imports is not the checkout's %s: the code under test is not what runs. The shard "
+            "copies the checkout's package over the installed one; a module imported before the copy, a second geobrix "
+            "earlier on sys.path or on a worker's path, or a failed copy leaves another build in place. Look at the "
+            "differing files above, then rerun; if a worker differs, remove the geobrix cluster library and restart the cluster." % tree)
     return (
         "Fix: another geobrix of the same version is on this compute (a cluster library, an init script or an earlier "
         "install) and wins over the staged wheel%s. Uninstall that library from the cluster (Compute > Libraries, or "
@@ -153,13 +166,19 @@ def fix_text(wheel):
         (" " + wheel if wheel else ""))
 
 
-def resolve_expected(expected):
+def resolve_expected(expected, exclude=()):
     """The expected identity: the staged wheel's (read at ``expected['wheel']``) with the launcher's own fields over it.
 
     ``expected`` keys: ``wheel`` (a path the compute can read), ``git_sha`` (the commit the launcher staged),
-    ``digest`` (a source digest the launcher computed). Returns (identity or None, problems)."""
+    ``digest`` (a source digest the launcher computed), ``tree`` (a package folder, such as a checkout's
+    ``src/databricks/labs/gbx``, whose ``.py`` files are the expected ones, less ``exclude``). Returns (identity or None, problems)."""
     expected = dict(expected or {})
     out, problems = {}, []
+    if expected.get("tree"):
+        files = tree_files(expected["tree"], tuple(exclude))
+        if not files:
+            problems.append("the expected tree %s holds no package files" % expected["tree"])
+        out = {"files": files, "digest": _digest(files)}
     wheel = expected.get("wheel")
     if wheel:
         try:
@@ -199,31 +218,35 @@ def check(installed, expected, label="driver"):
     return problems
 
 
-def collect_workers(spark, tasks=8):
+def collect_workers(spark, tasks=8, exclude=()):
     """The distinct identities (dicts) the Python workers import: a UDF over ``tasks`` partitions."""
     import pyspark.sql.functions as F
 
+    exclude = tuple(exclude)
+
     @F.udf("string")
     def _who(_):
-        return worker_identity()
+        return worker_identity(exclude)
 
     rows = spark.range(tasks).repartition(tasks).select(_who("id").alias("w")).distinct().collect()
     return [json.loads(r["w"]) for r in rows]
 
 
-def run_guard(expected, spark=None, say=print, workers=None):
+def run_guard(expected, spark=None, say=print, workers=None, exclude=()):
     """Print what is imported, fail (RuntimeError) when it is not the staged wheel.
 
     ``expected`` is as in ``resolve_expected``; none given means nothing is staged to compare with: the identity is
     printed and the run goes on (said so). ``spark`` makes the Python workers be checked too; ``workers`` is a
-    function returning their identities (a test fakes it). Returns the verdict dict."""
-    exp, problems = resolve_expected(expected)
+    function returning their identities (a test fakes it). ``exclude`` leaves package paths out of the compared file set
+    (with an expected ``tree``). Returns the verdict dict."""
+    exclude = tuple(exclude)
+    exp, problems = resolve_expected(expected, exclude)
     say("WHEEL GUARD expected: %s" % (
         "none staged: nothing to compare with" if exp is None else
-        "wheel=%s git_sha=%s dirty=%s digest=%s" % ((expected or {}).get("wheel"), _short(exp.get("git_sha")),
+        "wheel=%s git_sha=%s dirty=%s digest=%s" % ((expected or {}).get("wheel") or (expected or {}).get("tree"), _short(exp.get("git_sha")),
                                                     exp.get("dirty"), _short(exp.get("digest")))))
     try:
-        drv = installed_identity()
+        drv = installed_identity(exclude=exclude)
     except Exception as exc:  # noqa: BLE001
         drv = {"error": "%s: %s" % (type(exc).__name__, str(exc)[:300])}
     say(_describe("WHEEL GUARD driver", drv) if not drv.get("error") else "WHEEL GUARD driver: cannot import geobrix: %s" % drv["error"])
@@ -231,7 +254,7 @@ def run_guard(expected, spark=None, say=print, workers=None):
     seen = []
     if workers is not None or spark is not None:
         try:
-            seen = (workers or (lambda: collect_workers(spark)))()
+            seen = (workers or (lambda: collect_workers(spark, exclude=exclude)))()
         except Exception as exc:  # noqa: BLE001 - a worker check that cannot run is a failed guard
             problems.append("the worker check could not run (%s: %s)" % (type(exc).__name__, str(exc)[:300]))
         for w in seen:
@@ -243,7 +266,7 @@ def run_guard(expected, spark=None, say=print, workers=None):
     verdict = {"ok": not problems, "problems": problems, "driver": {k: v for k, v in drv.items() if k != "files"},
                "workers": seen}
     if problems:
-        msg = "WHEEL GUARD FAILED:\n  - " + "\n  - ".join(problems) + "\n" + fix_text((expected or {}).get("wheel"))
+        msg = "WHEEL GUARD FAILED:\n  - " + "\n  - ".join(problems) + "\n" + fix_text((expected or {}).get("wheel"), (expected or {}).get("tree"))
         say(msg)
         raise RuntimeError(msg)
     say("WHEEL GUARD ok: %s%s" % ("driver" if not seen else "driver and %d worker identit%s" % (

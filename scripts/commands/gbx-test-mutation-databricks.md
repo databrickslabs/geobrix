@@ -20,7 +20,7 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - `--pip-extra "<reqs>"` - more pip requirements the selected tests import. Default: `mercantile>=1.2,<2` (the oracle tables).
 - `--run-id <id>` - Default: `mut-<date>-<time>-<4 hex>`.
 - `--sha <rev>` - the commit to test. Default: `HEAD`.
-- `--wheel <path>` - the env6 wheel. Default: the one in `dist/env6/` (from `gbx:build:wheel --env 6`).
+- `--wheel <path>` - the env6 wheel, or a folder that holds it (the newest `geobrix-*+env6-py3-none-any.whl` there by mtime, then by version). Default: `dist/env6/` (from `gbx:build:wheel --env 6`).
 - `--table <c.s.t>` - the result table. Default: `<catalog>.<schema>.mutation_results` of the bundle Volume.
 - `--oracle-tables <T1,T2>` - sets `GBX_ORACLE_TABLES` for the family harness.
 - `--wall-cap-min <n>` - stop the mutants after n minutes. Default: 180.

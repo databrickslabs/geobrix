@@ -52,6 +52,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from typing import Optional
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
@@ -145,20 +146,32 @@ def uncommitted_in_subset() -> list:
     return [ln[3:] for ln in out.splitlines() if ln.strip()]
 
 
+def _version_key(name: str) -> tuple:
+    """The numbers of a file name as ints, so ``0.10.0`` sorts after ``0.9.0`` (the tie-break of equal mtimes)."""
+    return tuple(int(n) for n in re.findall(r"\d+", name))
+
+
+def wheel_in(folder: Path) -> Optional[Path]:
+    """The env6 wheel ``geobrix-*+env6-py3-none-any.whl`` of a folder: the newest by mtime, then by version should
+    several share an mtime (as ``--jar-path`` takes a JAR from a folder). None when the folder holds none."""
+    found = sorted(Path(folder).glob("geobrix-*+env6-py3-none-any.whl"), key=lambda w: (w.stat().st_mtime, _version_key(w.name)))
+    return found[-1] if found else None
+
+
 def find_wheel(explicit: str, required: bool = True) -> Path:
-    """The env6 wheel to stage. A plan-only run (``required=False``) needs no built wheel: it shows a placeholder."""
-    if explicit:
-        p = Path(explicit)
-    else:
-        found = sorted(REPO_ROOT.glob("dist/env6/geobrix-*+env6-py3-none-any.whl"))
-        if len(found) != 1 and not required:
+    """The env6 wheel to stage: ``explicit`` is the wheel file or a folder that holds it (the newest wheel there);
+    unset, ``dist/env6/``. A plan-only run (``required=False``) needs no built wheel: it shows a placeholder."""
+    p = Path(explicit) if explicit else REPO_ROOT / "dist/env6"
+    if p.is_dir():
+        found = wheel_in(p)
+        if found is None and not required and not explicit:
             return REPO_ROOT / "dist/env6/<env6 wheel, built at launch>"
-        if len(found) != 1:
+        if found is None:
             sys.exit(
-                f"PRECONDITION MISSING: expected one dist/env6/geobrix-*+env6-py3-none-any.whl, found {len(found)}; "
-                "wheel stage not run. Fix: bash scripts/commands/gbx-build-wheel.sh --env 6, or pass --wheel <path>."
+                f"PRECONDITION MISSING: no geobrix-*+env6-py3-none-any.whl in {p}; wheel stage not run. "
+                "Fix: bash scripts/commands/gbx-build-wheel.sh --env 6, or pass --wheel <path to a wheel or its folder>."
             )
-        p = found[0]
+        return found
     if not p.is_file() and (required or explicit):
         sys.exit(f"PRECONDITION MISSING: wheel {p} does not exist; run not started.")
     return p

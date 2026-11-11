@@ -172,6 +172,12 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 
 If a tile reaching the writer has a pending warp or clip operation that has not yet been resolved, the writer must fully materialize it. It does so to apply the transform before writing. A tile over the connect-aware cap in this state will fully materialize, not lazily page. Split such tiles or resolve the warp/clip in an intermediate step before reaching the writer.
 
+### Tile tables with large row groups {#tile-table-row-groups}
+
+A tile table written in very large Parquet row groups, about 128 MB each, costs memory in every batch. Spark reads a row group as one batch, so a task holds all of its tiles at once. On dedicated DBR 19, 64 tiles of 2.3 MB per file spent up to 45% of each task in garbage collection.
+
+**Fix:** Write about 16 tiles per file, as in `df.write.option("maxRecordsPerFile", 16).saveAsTable(...)`. Smaller Parquet row groups work as well.
+
 ### Large vector file reads and writes {#large-vector-file-reads}
 
 The `vector_gbx` reader assigns one Spark task per source file and reads it whole. A single large shapefile, GPKG, or GeoJSON file approaching hundreds of megabytes can push close to the ~1 GB Serverless per-task memory limit.

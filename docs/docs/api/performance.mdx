@@ -435,6 +435,8 @@ A **vectorized Arrow scalar `pandas_udf`** receives an Arrow batch of rows, call
 
 This shape fits **one-row-in, one-row-out transforms**: tile accessors, warps, edits, band math, terrain and the vector scalars. Functions that return `MapType` use a plain `@f.udf` for SQL registration, because Arrow does not support `MapType` in every `pandas_udf` build.
 
+The row functions over tiles move their rows to Python in Arrow batches on Serverless environment 6, where a batch is bounded in bytes. DBR 17.3 and 18 send them as pickles, because Spark 4.0 can round a large BIGINT cell id in an Arrow batch. Classic DBR 19 also sends pickles unless its cluster sets `spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled` to `false`. A tile table written in large Parquet row groups still costs memory per batch: see [Tile tables with large row groups](../serverless-and-memory#tile-table-row-groups).
+
 ### Chaining functions
 
 Compose tile functions in **one expression**, for example `rx.rst_slope(rx.rst_setcrs(col("tile"), "EPSG:32633"))`. Do not split them across separate `.select()` or `.withColumn()` steps.

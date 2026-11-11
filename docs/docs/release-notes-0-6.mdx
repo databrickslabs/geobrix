@@ -708,6 +708,17 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - When the outermost `rasterio.Env` that names the option exits, rasterio keeps the value it found on entry as a GDAL option for the process. A later change of the environment variable then has no effect.
 - **A local copy of a Volume file is removed from disk as soon as it is opened (fix).** The copy that `rst_sample` keeps open for a task leaves the disk at once, even when the Python worker ends without cleanup.
 
+### Lightweight tile functions move rows in Arrow batches (fix) {#arrow-tile-rows}
+
+- **On Serverless environment 6 the lightweight tile functions move their rows to Python in Arrow batches.** Before, Spark pickled up to 100 tiles into one buffer on the executor heap. With large tiles, 16 times the rows spent up to half of each task in garbage collection, and executors were lost.
+  - This covers the tile operations, accessors, statistics, constructors, the array and pair functions, and the rasterizers. It also covers `rst_apply`, the GDAL spec engine's row form and the vector array functions.
+  - A batch is bounded in bytes, so time grows in line with the rows.
+  - DBR 17.3 and 18 (Spark 4.0) keep the pickled rows. Spark 4.0 can round a large BIGINT cell id in an Arrow batch.
+  - Classic DBR 19 converts Arrow UDF arguments through pandas by default, so a NULL argument arrives as NaN. There the functions keep the pickled rows.
+  - To use Arrow batches on classic DBR 19, set `spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled false` in the cluster's Spark config.
+  - Set the `GBX_CAP_ARROW_TILE_TRANSPORT=0` environment variable on the cluster to keep the pickled rows anywhere.
+  - A tile table written in large Parquet row groups still costs memory per batch. See [Tile tables with large row groups](./serverless-and-memory#tile-table-row-groups).
+
 ### Raster tiling functions (behavior change, fix) {#raster-tiling}
 
 - **Call a generator with `FROM t, LATERAL f(...)`.** This works on every compute for `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_custom_tessellate`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the `rst_*_rastertogrid*` reducers.

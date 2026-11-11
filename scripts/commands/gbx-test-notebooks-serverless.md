@@ -23,7 +23,13 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--wheel VOLPATH` – Volume path to the geobrix wheel (default: the env6 wheel, `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl`; stage it with `gbx:data:stage-wheel --env 6`). An env wheel must match `--env-version` (the env5 wheel with `--env-version 5`): the other environment's wheel refuses to import, so the runner stops before submitting.
 - On `--new-cluster`, `--wheel` is also installed as a library of the cluster, and its environment must match the runtime (DBR 17.3 and 18: env5, DBR 19: env6).
 - With `--hardware-accelerator`, pass the env6 wheel and `--env-version 6`: the UDF workers of Serverless GPU run environment 6. An env5 wheel prints a warning.
-- `--no-wheel-guard` – Skip the wheel guard. By default each uploaded notebook gets a guard cell after its install that fails the run, with a Fix, when the driver or a Python worker imports another geobrix build (commit, source digest, module path printed) than the staged wheel: the wheel the notebook's own `%pip` installs, else `--wheel`. On a classic cluster (`--existing-cluster-id`, `--pool`, `--new-cluster`) a forced install of the wheel (`--force-reinstall --no-deps`, geobrix only) is added before each geobrix `%pip` line of the uploaded copy, since a same-version cluster library makes a plain install a no-op. On an existing cluster with no `--wheel` and no geobrix `%pip` cell the guard only reports. The committed notebook is never changed.
+- `--no-wheel-guard` – Skip the wheel guard.
+  - By default each uploaded notebook gets a guard cell after its install.
+  - The guard fails the run, with a Fix, when the driver or a Python worker imports another geobrix build than the staged wheel. It prints the commit, the source digest and the module path.
+  - The staged wheel is the one the notebook's own `%pip` installs, else `--wheel`.
+  - On a classic cluster (`--existing-cluster-id`, `--pool`, `--new-cluster`), the uploaded copy gets a forced install of the wheel (`--force-reinstall --no-deps`, geobrix only) before each geobrix `%pip` line. A same-version cluster library makes a plain install a no-op.
+  - On an existing cluster with no `--wheel` and no geobrix `%pip` cell, the guard only reports.
+  - The committed notebook is never changed.
 - `--no-wheel` – Install no geobrix wheel and no `--extras`; only `--extra-deps` are installed. Use it for a probe notebook that runs on plain pyspark. Exclusive with `--wheel`. On `--new-cluster` the cluster gets no wheel library.
 - `--env-version VER` – Serverless environment version (default: `6`).
 - `--existing-cluster-id ID` – Run on an existing (warm) classic cluster instead of Serverless; the notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version` do not apply).

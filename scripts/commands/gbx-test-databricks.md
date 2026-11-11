@@ -63,7 +63,12 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Each shard runs as a notebook run of its own (`dbutils.notebook.run`). It has its own Python process and Spark session, as a task of its own had.
 - A failed, stopped or timed-out shard never stops its runner. The runner records it as not finished and takes the next.
 - Reports the wall time against the longest shard and against running the shards one after another.
-- Each shard installs the wheel in its own session (a forced `--force-reinstall --no-deps` of geobrix first, so a same-version geobrix already on the cluster cannot stand in for it), then a guard cell fails the shard unless the driver and a Python worker import the staged wheel (build commit and source digest are printed), unpacks the tarball and runs pytest there. A pool cluster carries only JARs and its notebook-scoped install is per session, so an earlier run's wheel does not carry over; the guard also covers a wheel library someone attached to the cluster. The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
+- Each shard installs the wheel in its own session. It forces `--force-reinstall --no-deps` of geobrix first, so a same-version geobrix already on the cluster cannot stand in for it.
+  - A guard cell then fails the shard unless the driver and a Python worker import the staged wheel. It prints the build commit and the source digest.
+  - The shard then unpacks the tarball and runs pytest there.
+  - A pool cluster carries only JARs, and the notebook-scoped install lasts one session. An earlier run's wheel does not carry over.
+  - The guard also covers a wheel library someone attached to the cluster.
+  - The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
 - Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`. It prints one table and writes `summary.md` with the first lines of each failure and the skip reasons.
 - Removes the Volume folder, the notebooks and the queue table after the download. Exit code 1 when any shard failed, errored or did not finish.
 
@@ -78,9 +83,12 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - The wait should be a few seconds per shard (the claim). A large wait means a slot idled while work was queued.
   - The idle time at the end is the tail: the last shards end at different times.
 - The summary also checks isolation: one Python process per shard, and no temp view or conf left by an earlier shard.
-- Each runner adds about 6 s per shard: the claim and the start of the shard's notebook run (2026-11-10: 107 s over 18 shards on 4 slots).
+- Each runner adds about 6 s per shard, for the claim and the start of the shard's notebook run. One run took 107 s over 18 shards on 4 slots.
 - The order of the queue follows the estimates. A long shard estimated short starts last and makes the tail; the next run's timings correct it.
-- `affected` runs only the test files and tables a change reaches, which is usually a few chunks and a few minutes. For the TIN Rust kernel change (`7274d554d~1..66d5ead5b`: `rust/gbxrs/src/*`, `_rs/__init__.py`, `pyvx/_tin.py`, `pyvx/_conforming.py`, the pyvx tests) it selects 22 files and 1 table, 7 chunks; the earlier per-directory rule selected 48 chunks, nearly the whole light bank.
+- `affected` runs only the test files and tables a change reaches. That is usually a few chunks and a few minutes.
+  - Example: the TIN Rust kernel change (`7274d554d~1..66d5ead5b`) touched `rust/gbxrs/src/*`, `_rs/__init__.py`, `pyvx/_tin.py`, `pyvx/_conforming.py` and the pyvx tests.
+  - It selects 22 files and 1 table, in 7 chunks.
+  - The earlier per-directory rule selected 48 chunks, nearly the whole light bank.
 
 ## Affected
 
@@ -100,15 +108,22 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## Heavy chunks and the watchdog
 
-- A chunk is heavy when it holds a table of the GDAL spec engine (`SPEC_*`, listed in `HEAVY_TABLES` of `_test_shards.py`) or a file or table the timing history records at 15 min or more on its own. On 2026-11-10 the engine tables of family 3/3 slowed the chunks beside them by about 10x on the node's one driver, and both parts of that shard stopped at the 45 min cap.
+- A chunk is heavy when it holds a table of the GDAL spec engine (`SPEC_*`, listed in `HEAVY_TABLES` of `_test_shards.py`). It is also heavy when it holds a file or table that the timing history records at 15 min or more alone.
+  - The engine tables of family 3/3 once slowed the chunks beside them by about 10x on the node's one driver.
+  - Both parts of that shard then stopped at the 45 min cap.
 - Heavy units are cut into chunks apart from the light ones, so a chunk is heavy as a whole. `--explain-only` marks them (`, heavy`) and lists them.
 - The runners of one cluster share a lock on the node's local disk. A runner takes it before it claims, and keeps it only for a heavy chunk, so at most one heavy chunk runs per cluster. The other slots take light chunks meanwhile; when only heavy chunks are left, a runner waits for the one that runs. The expected wall in the plan counts those waits, and the runner task's timeout allows for them.
 - The stall cap (`--stall-min`, no test finished) of a chunk is at least half of the recorded time of its longest file or table, never past `--shard-cap-min`. `--explain-only` lists the chunks whose cap is above the flat one.
-- When the shard's watchdog stops a shard (the shard cap or the stall cap), the shard's reason, the runner's record and `summary.md` say `killed by watchdog: <why>`. The watchdog ends a stuck process with SIGKILL (exit 137), which Databricks reports as "Execution ran out of memory" or "kernel unresponsive": that message is the platform's label for any killed process, and is not an out-of-memory.
+- When the watchdog stops a shard (the shard cap or the stall cap), the shard's reason, the runner's record and `summary.md` say `killed by watchdog: <why>`.
+  - The watchdog ends a stuck process with SIGKILL (exit 137).
+  - Databricks reports that as "Execution ran out of memory" or "kernel unresponsive". The message is the platform's label for any killed process. It does not mean an out-of-memory.
 
 ## Contention
 
-- On 2026-11-10 (`tst-20261110-210406-c575`, 2 clusters x 4 slots) some estimates collapsed: `zarr 4/4` was expected at 9 min and took about 46; `zarr 3/4` 9 vs 30; `manager family 3/3` (GDAL engine tables) 9 vs 45, at the cap.
+- On 2 clusters x 4 slots (run `tst-20261110-210406-c575`), some estimates collapsed:
+  - `zarr 4/4` was expected at 9 min and took about 46.
+  - `zarr 3/4` was expected at 9 min and took about 30.
+  - `manager family 3/3` (GDAL engine tables) was expected at 9 min and took 45, the cap.
 - Each run records, per unit (a test file or `table:<T>`), its actual time over its solo-expected time. The solo-expected time is the plan's estimate without contention factors. The record also holds the chunks that ran beside it on its cluster.
 - A unit's contention factor is the median of those ratios over its last 5 runs with neighbours. A factor of 2 or more marks it contention-heavy. It then joins the heavy gate: at most one per cluster at a time, and the other slots take light chunks meanwhile.
 - The planner plans a unit at its solo time times its factor, for the queue order and the expected wall. A sample taken beside neighbours is divided by its run's ratio before it joins the solo estimate, so the factor is not counted twice.
@@ -134,17 +149,26 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 Run `tst-nodefix-1` (commit `109a45ad80`: the `ds` shards, `bench 3/3` and `scripts/ci`, 19 chunks) passed every test: 4738 passed, 0 failed, 6 skipped. What a node does differently from a local session, and how the tests allow for it:
 
-- Spark resolves a bare path on DBFS. The provided session (`python/geobrix/test/_provided_spark.py`) therefore reads a bare local path (a test's `tmp_path`) as a `file:` URI in `load` and in the format readers (`parquet`, `csv`, `json`, `orc`, `text`), and writes one as a `file:` URI in `DataFrameWriter.save` and the format writers and in `DataStreamWriter.start`. A path in `/Volumes`, `/dbfs` or `/Workspace`, or one with a scheme, is left alone. Not covered: `option("path", ...)`, a `saveAsTable` path, and `CREATE TABLE ... LOCATION '<local path>'`, which Unity Catalog refuses ("Missing cloud file system scheme"). A test that needs a table uses a managed table in the session's default schema.
+- Spark resolves a bare path on DBFS. The provided session (`python/geobrix/test/_provided_spark.py`) therefore reads a bare local path as a `file:` URI. A test's `tmp_path` is an example.
+  - It does so in `load` and in the format readers (`parquet`, `csv`, `json`, `orc`, `text`).
+  - It writes a bare local path as a `file:` URI in `DataFrameWriter.save`, in the format writers and in `DataStreamWriter.start`.
+  - It leaves alone a path in `/Volumes`, `/dbfs` or `/Workspace`, and a path with a scheme.
+  - Not covered: `option("path", ...)`, a `saveAsTable` path, and `CREATE TABLE ... LOCATION '<local path>'`. Unity Catalog refuses the last one ("Missing cloud file system scheme").
+  - A test that needs a table uses a managed table in the session's default schema.
 - A node probes as a FILE tier (`read_files`), which lists a local path through DBFS. The FILE-leg tests of `test/bench` (`fuse_tier` in its `conftest.py`) pin the FUSE tier they are about.
 - The runtime's own SQL parser accepts the Databricks-only statements that open-source Spark rejects; `test_t28_files` checks that rejection only off Databricks.
 - A node's interpreter reads no `.pth`; the shard runner activates the native payload through a `sitecustomize` on `PYTHONPATH`. A test that starts a Python child keeps that `PYTHONPATH` (the readdir probe of `bench/local_timing.py` does).
 - The wheel's `rasterio` and `osgeo` sit under `_vendor/` in the package. Tests that scan the package source for GeoBrix's own anti-patterns skip it.
-- A run that ignores SIGHUP (a notebook, `nohup`) hands that to a bash child, which cannot trap it: the `scripts/ci` sandbox resets SIGINT and SIGHUP in the children it starts.
+- A run that ignores SIGHUP (a notebook, `nohup`) hands that to a bash child, which cannot trap it. The `scripts/ci` sandbox resets SIGINT and SIGHUP in the children it starts.
 - The Python data source calls `read` once with a bare `InputPartition` when no partition is planned (the open-source session passes `None`); the raster reader returns nothing for either.
 - With 32 slots `DataFrame.repartition(n)` over one-row partitions is not even; `levels_family.spread_evenly` is.
 - The overture tests that mix Spark and file I/O on a bare path skip under the provided session, with the reason.
 - `test/bench/test_levels.py`'s worker-peak tests inspect Spark's local-mode Python workers and cannot pass against the cluster's session.
-- The skips that remain: no Rust toolchain or vendored crates on the node, no QC judge, no mutation venv, and `/tmp` is not a symlink off macOS.
+- These skips remain:
+  - no Rust toolchain or vendored crates on the node;
+  - no QC judge;
+  - no mutation venv;
+  - `/tmp` is not a symlink off macOS.
 - The family oracle chunks need several minutes each, and the GDAL engine tables are heavy (see above); the Scala suites never run here.
 
 ## Limits

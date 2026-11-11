@@ -152,6 +152,25 @@ def test_the_eager_warp_keeps_the_mask_beside_the_alpha_band(name, target, warpe
     assert valid[from_visible].all()
 
 
+@pytest.fixture
+def volume_like_tmp(tmp_path, monkeypatch):
+    """``tmp_path`` as it is on Serverless, where the test runner puts it under the run's Volume folder (the
+    workers read it): GDAL cannot update a file there in place, so a GTiff whose mask is added after its
+    data ("Failed to create mask.") must be built elsewhere and written in one sequential pass.
+    """
+    real = rasterio.open
+
+    def refuse_in_place(fp, mode="r", *a, **k):
+        if mode != "r" and str(fp).startswith(str(tmp_path)):
+            raise rasterio.errors.RasterioIOError(
+                f"Volume-like tmp_path: GDAL cannot write {fp} in place"
+            )
+        return real(fp, mode, *a, **k)
+
+    monkeypatch.setattr(rasterio, "open", refuse_in_place)
+    return tmp_path
+
+
 def _per_band_nodata_masked(tmp_path, nodatavals):
     """A VRT (the only source rasterio reads with a NoData per band) over a GTiff with an
     internal mask band over row 5. Every band holds ``100 + row`` except rows 0-1, which hold
@@ -172,10 +191,13 @@ def _per_band_nodata_masked(tmp_path, nodatavals):
         crs="EPSG:4326",
         transform=rasterio.transform.from_origin(0, 8, 1, 1),
     )
-    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(path, "w", **prof) as dst:
+    # built in memory, then written in one pass: on Serverless tmp_path is on a Volume (see volume_like_tmp)
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+        with mf.open(**prof) as dst:
             dst.write(data)
             dst.write_mask(mask)
+        with open(path, "wb") as fh:
+            fh.write(mf.read())
     bands = "".join(
         f'<VRTRasterBand dataType="Byte" band="{b}">'
         + (f"<NoDataValue>{v}</NoDataValue>" if v is not None else "")
@@ -194,11 +216,11 @@ def _per_band_nodata_masked(tmp_path, nodatavals):
     )
 
 
-def test_the_own_mask_warp_treats_each_band_by_its_own_nodata(tmp_path):
+def test_the_own_mask_warp_treats_each_band_by_its_own_nodata(volume_like_tmp):
     """A source with an own mask whose bands declare different NoData values: band 1's value
     is what the output declares, and each band's OWN NoData pixels (rows 0-1) are still
     NoData after the warp, not data. Every band ends up invalid in the same pixels."""
-    vrt = _per_band_nodata_masked(tmp_path, (10, 20, 30))
+    vrt = _per_band_nodata_masked(volume_like_tmp, (10, 20, 30))
     with rasterio.open(vrt) as ds:
         assert ds.nodatavals == (10.0, 20.0, 30.0) and nd.has_own_mask(ds)
         out = warp.reproject_to_srid(ds, 3857)
@@ -211,13 +233,13 @@ def test_the_own_mask_warp_treats_each_band_by_its_own_nodata(tmp_path):
 
 
 def test_the_own_mask_warp_declares_the_first_nodata_when_band_one_declares_none(
-    tmp_path,
+    volume_like_tmp,
 ):
     """Band 1 declares no NoData, bands 2 and 3 do: as for the fill plan (``_fill_plan``) the
     output declares the first declared value (20), and the masked pixels and the NoData
     pixels of bands 2 and 3 are NoData, while band 1 keeps its rows 0-1 (value 0) as data.
     """
-    vrt = _per_band_nodata_masked(tmp_path, (None, 20, 30))
+    vrt = _per_band_nodata_masked(volume_like_tmp, (None, 20, 30))
     with rasterio.open(vrt) as ds:
         assert ds.nodata is None and nd.has_own_mask(ds)
         out = warp.reproject_to_srid(ds, 3857)

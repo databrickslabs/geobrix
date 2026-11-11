@@ -433,8 +433,11 @@ def test_the_grid_and_vector_generator_kinds_can_fail():
     assert judge("cell_rows", [big], [cell(float(big))]) is not None  # through a float
 
     tri = lambda *v: {"triangle": wkb.dumps(Polygon(v))}  # noqa: E731
-    t = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
-    assert judge("triangles", [t], [tri(*t[::-1])]) is None  # vertex order aside
+    t = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]  # counter-clockwise from its lowest vertex
+    assert judge("triangles", [t[::-1]], [tri(*t)]) is None  # the expected order aside
+    # every level writes a ring one way: a clockwise ring, or one from another vertex, fails
+    assert judge("triangles", [t], [tri(*t[::-1])]) is not None
+    assert judge("triangles", [t], [tri(*t[1:], t[0])]) is not None
     assert (
         judge("triangles", [t], [tri((0.0, 0.0), (2.0, 0.0), (0.0, 1.0))]) is not None
     )
@@ -442,7 +445,7 @@ def test_the_grid_and_vector_generator_kinds_can_fail():
     # triangles_exact takes each X and Y as it is: an error of 1e-12, within the 1e-9 of "triangles", fails
     near = tri((0.0, 0.0), (1.0 + 1e-12, 0.0), (0.0, 1.0))
     assert judge("triangles", [t], [near]) is None
-    assert judge("triangles_exact", [t], [tri(*t[::-1])]) is None
+    assert judge("triangles_exact", [t[::-1]], [tri(*t)]) is None
     assert judge("triangles_exact", [t], [near]) is not None
     assert judge("triangles_exact", [t], [tri(*t), tri(*t)]) is not None  # twice
 

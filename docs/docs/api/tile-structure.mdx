@@ -4,7 +4,6 @@ sidebar_position: 1
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import tileStructureExamples from '!!raw-loader!../../tests/python/api/tile_structure.py';
-import tileStructureScala from '!!raw-loader!../../tests/scala/api/TileStructureExamples.scala';
 import zarrTileExamples from '!!raw-loader!../../tests/python/formats/zarr_tile_examples.py';
 
 # Tile Structure
@@ -66,17 +65,6 @@ Use dot notation to access tile struct fields:
 **Python:**
 
 <CodeFromTest code={tileStructureExamples} functionName="accessing_tile_fields_python" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="accessing_tile_fields_python_output" />
-
-**Scala:**
-
-<CodeFromTest
-  code={tileStructureScala}
-  language="scala"
-  source="docs/tests/scala/api/TileStructureExamples.scala"
-  testFile="docs/tests/scala/api/TileStructureExamplesDocTest.scala"
-  functionName="ACCESSING_TILE_FIELDS_SCALA"
-  outputConstant="ACCESSING_TILE_FIELDS_SCALA_output"
-/>
 
 **SQL:**
 

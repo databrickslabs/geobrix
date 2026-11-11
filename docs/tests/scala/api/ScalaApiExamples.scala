@@ -1,15 +1,16 @@
 /*
- * Scala API Reference Examples - Single source of truth for docs/docs/api/scala.mdx.
+ * Scala examples of the GeoBrix functions, kept as tests of the Scala forms the JAR carries.
  *
- * Each val holds the exact snippet shown in the docs. Validated at compile time by
- * ScalaApiExamplesDocTest. Package docs.tests.scala.api so Maven compiles this with
- * the doc test sources.
+ * The API pages show no Scala tabs: Scala is the performance tier, and a function's Scala tag
+ * links to docs/docs/api/jar-functions.mdx. docs/docs/installation.mdx shows the JVM-job vals.
+ * Validated at compile time by ScalaApiExamplesDocTest. Package docs.tests.scala.api so Maven
+ * compiles this with the doc test sources.
  */
 package docs.tests.scala.api
 
 object ScalaApiExamples {
 
-  /** Register all packages (used in docs/docs/api/overview.mdx - Scala section) */
+  /** Register all packages */
   val RegisterAllPackages: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

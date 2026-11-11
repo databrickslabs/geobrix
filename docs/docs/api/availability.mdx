@@ -5,12 +5,13 @@ sidebar_label: Availability
 
 # Availability by surface
 
-GeoBrix functions exist on up to four surfaces:
+GeoBrix functions exist on up to three surfaces:
 
 - SQL in a notebook or job session: `gbx_*` after `databricks.labs.gbx.register(spark)`.
 - SQL in Unity Catalog: `<catalog>.<schema>.gbx_*` after `gbx.uc.install`.
 - The Python API.
-- Scala.
+
+The **Scala** column marks a function with a JVM form in the GeoBrix JAR. The JAR is the performance tier, not an API: you call the function from SQL or Python. See [Functions the JAR speeds up](./jar-functions).
 
 Python names are relative to the `databricks.labs.gbx` package. For example,
 `gridx.bng.functions.bng_tessellate` is `from databricks.labs.gbx.gridx.bng import functions`.

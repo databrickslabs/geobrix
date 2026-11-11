@@ -3,11 +3,15 @@ title: Functions the JAR speeds up
 sidebar_label: With the JAR
 ---
 
+import Link from '@docusaurus/Link';
+
 # Functions the JAR speeds up
 
 The GeoBrix JAR adds a JVM level (L1) to some functions. On a dedicated cluster with the JAR, these functions run in the JVM instead of in a Python worker.
 
 The env wheel alone runs every function. The JAR is optional: install it only where you want the JVM level.
+
+The JAR is a performance tier, not an API. You call every function from SQL or Python, and GeoBrix picks the JVM level where it is faster. The **Scala** tag on a function's API page links here. For the measured speed-ups, see [Performance with the JAR](./performance#heavy-level-with-the-jar) and the [benchmark results by function](./benchmarking#levels-by-function).
 
 ## Where the JAR loads
 
@@ -37,71 +41,71 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 
 | Function | Package | Notes |
 |---|---|---|
-| `gbx_rst_bng_rasterize_agg` | RasterX |  |
-| `gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_crs` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_format` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_frombands` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_fromcontent` | RasterX |  |
-| `gbx_rst_height` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_memsize` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_numbands` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_pixelheight` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_pixelwidth` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_rastertoworldcoordx` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_rastertoworldcoordy` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_rotation` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_scalex` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_scaley` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_skewx` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_skewy` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_srid` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_tri` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_upperleftx` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_upperlefty` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_width` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_worldtorastercoordx` | RasterX | A virtual tile runs in Python. |
-| `gbx_rst_worldtorastercoordy` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_bng_rasterize_agg" />`gbx_rst_bng_rasterize_agg` | RasterX |  |
+| <Link id="gbx_rst_boundingbox" />`gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_crs" />`gbx_rst_crs` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_format" />`gbx_rst_format` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_frombands" />`gbx_rst_frombands` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_fromcontent" />`gbx_rst_fromcontent` | RasterX |  |
+| <Link id="gbx_rst_height" />`gbx_rst_height` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_memsize" />`gbx_rst_memsize` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_numbands" />`gbx_rst_numbands` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_pixelheight" />`gbx_rst_pixelheight` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_pixelwidth" />`gbx_rst_pixelwidth` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_rastertoworldcoordx" />`gbx_rst_rastertoworldcoordx` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_rastertoworldcoordy" />`gbx_rst_rastertoworldcoordy` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_rotation" />`gbx_rst_rotation` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_scalex" />`gbx_rst_scalex` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_scaley" />`gbx_rst_scaley` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_skewx" />`gbx_rst_skewx` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_skewy" />`gbx_rst_skewy` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_srid" />`gbx_rst_srid` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_tri" />`gbx_rst_tri` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_upperleftx" />`gbx_rst_upperleftx` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_upperlefty" />`gbx_rst_upperlefty` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_width" />`gbx_rst_width` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_worldtorastercoordx" />`gbx_rst_worldtorastercoordx` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_worldtorastercoordy" />`gbx_rst_worldtorastercoordy` | RasterX | A virtual tile runs in Python. |
 
 ### GridX
 
 | Function | Package | Notes |
 |---|---|---|
-| `gbx_bng_aswkb` | GridX |  |
-| `gbx_bng_aswkt` | GridX |  |
-| `gbx_bng_cellarea` | GridX |  |
-| `gbx_bng_cellfill` | GridX |  |
-| `gbx_bng_cellintersection` | GridX |  |
-| `gbx_bng_cellunion` | GridX |  |
-| `gbx_bng_centroid` | GridX |  |
-| `gbx_bng_distance` | GridX |  |
-| `gbx_bng_euclideandistance` | GridX |  |
-| `gbx_bng_geomkloopexplode` | GridX |  |
-| `gbx_bng_geomkringexplode` | GridX |  |
-| `gbx_bng_kloopexplode` | GridX |  |
-| `gbx_bng_kring` | GridX |  |
-| `gbx_bng_kringexplode` | GridX |  |
-| `gbx_bng_pointascell` | GridX |  |
-| `gbx_bng_tessellate` | GridX |  |
-| `gbx_bng_tessellateexplode` | GridX |  |
-| `gbx_custom_cellaswkb` | GridX |  |
-| `gbx_custom_cellaswkt` | GridX |  |
-| `gbx_custom_centroid` | GridX |  |
-| `gbx_custom_distance` | GridX |  |
-| `gbx_custom_grid` | GridX |  |
-| `gbx_custom_pointascell` | GridX |  |
-| `gbx_h3_cell_bbox` | GridX |  |
-| `gbx_h3_cellfill` | GridX |  |
+| <Link id="gbx_bng_aswkb" />`gbx_bng_aswkb` | GridX |  |
+| <Link id="gbx_bng_aswkt" />`gbx_bng_aswkt` | GridX |  |
+| <Link id="gbx_bng_cellarea" />`gbx_bng_cellarea` | GridX |  |
+| <Link id="gbx_bng_cellfill" />`gbx_bng_cellfill` | GridX |  |
+| <Link id="gbx_bng_cellintersection" />`gbx_bng_cellintersection` | GridX |  |
+| <Link id="gbx_bng_cellunion" />`gbx_bng_cellunion` | GridX |  |
+| <Link id="gbx_bng_centroid" />`gbx_bng_centroid` | GridX |  |
+| <Link id="gbx_bng_distance" />`gbx_bng_distance` | GridX |  |
+| <Link id="gbx_bng_euclideandistance" />`gbx_bng_euclideandistance` | GridX |  |
+| <Link id="gbx_bng_geomkloopexplode" />`gbx_bng_geomkloopexplode` | GridX |  |
+| <Link id="gbx_bng_geomkringexplode" />`gbx_bng_geomkringexplode` | GridX |  |
+| <Link id="gbx_bng_kloopexplode" />`gbx_bng_kloopexplode` | GridX |  |
+| <Link id="gbx_bng_kring" />`gbx_bng_kring` | GridX |  |
+| <Link id="gbx_bng_kringexplode" />`gbx_bng_kringexplode` | GridX |  |
+| <Link id="gbx_bng_pointascell" />`gbx_bng_pointascell` | GridX |  |
+| <Link id="gbx_bng_tessellate" />`gbx_bng_tessellate` | GridX |  |
+| <Link id="gbx_bng_tessellateexplode" />`gbx_bng_tessellateexplode` | GridX |  |
+| <Link id="gbx_custom_cellaswkb" />`gbx_custom_cellaswkb` | GridX |  |
+| <Link id="gbx_custom_cellaswkt" />`gbx_custom_cellaswkt` | GridX |  |
+| <Link id="gbx_custom_centroid" />`gbx_custom_centroid` | GridX |  |
+| <Link id="gbx_custom_distance" />`gbx_custom_distance` | GridX |  |
+| <Link id="gbx_custom_grid" />`gbx_custom_grid` | GridX |  |
+| <Link id="gbx_custom_pointascell" />`gbx_custom_pointascell` | GridX |  |
+| <Link id="gbx_h3_cell_bbox" />`gbx_h3_cell_bbox` | GridX |  |
+| <Link id="gbx_h3_cellfill" />`gbx_h3_cellfill` | GridX |  |
 
 ### VectorX
 
 | Function | Package | Notes |
 |---|---|---|
-| `gbx_st_crs` | VectorX |  |
-| `gbx_st_interpolateelevationbbox` | VectorX |  |
-| `gbx_st_setcrs` | VectorX |  |
-| `gbx_st_transformcrs` | VectorX |  |
-| `gbx_st_triangulate` | VectorX |  |
+| <Link id="gbx_st_crs" />`gbx_st_crs` | VectorX |  |
+| <Link id="gbx_st_interpolateelevationbbox" />`gbx_st_interpolateelevationbbox` | VectorX |  |
+| <Link id="gbx_st_setcrs" />`gbx_st_setcrs` | VectorX |  |
+| <Link id="gbx_st_transformcrs" />`gbx_st_transformcrs` | VectorX |  |
+| <Link id="gbx_st_triangulate" />`gbx_st_triangulate` | VectorX |  |
 {/* END GENERATED jar-functions */}
 
 ## Check the level GeoBrix picked

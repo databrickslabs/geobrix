@@ -9,16 +9,17 @@ GeoBrix has one function set. You choose a **surface**: where you call a functio
 
 You never pick a level. The compute decides, and GeoBrix says why when it falls back to another level.
 
-## The four surfaces
+## The surfaces
 
 | Surface | Form | Use it for | Runs on |
 |---|---|---|---|
 | **SQL (session)** | `gbx_*` after `register(spark)` | Notebooks, jobs and pipelines | Every compute except a SQL warehouse |
 | **SQL (Unity Catalog)** | `<catalog>.<schema>.gbx_*` after `gbx.uc.install` | Warehouses, dashboards, governed and ad-hoc SQL | SQL warehouses, and any compute through a three-part name |
 | **Python** | `rasterx`, `gridx.<grid>`, `vectorx`, `pmtiles` | DataFrame code, readers, writers and helpers | Every compute except a SQL warehouse |
-| **Scala** | `com.databricks.labs.gbx.<package>.functions` | Scala code on a dedicated cluster | Dedicated clusters with the JAR |
 
-A function has the same name on the SQL surfaces. The Python and Scala names drop the `gbx_` prefix.
+A function has the same name on the SQL surfaces. The Python names drop the `gbx_` prefix.
+
+Scala is the performance tier, not a surface you call. The GeoBrix JAR adds a JVM level to some functions, and GeoBrix picks it where it is faster. A function's **Scala** tag links to [Functions the JAR speeds up](./jar-functions).
 
 Not every function exists on every surface. The [availability page](./availability) lists each function and the surfaces it runs on. Each function section shows the same badges.
 
@@ -36,7 +37,7 @@ register(spark)   # every gbx_* SQL function and every *_gbx reader and writer
 
 - The call registers the functions and the lightweight data sources.
 - The Python API also registers a function on its first call, so `register(spark)` is optional for Python-only code.
-- Scala registers no SQL. A Scala caller relies on the Python call. See [Language bindings](./language-bindings).
+- The JAR registers no SQL. See [Functions the JAR speeds up](./jar-functions).
 - The old per-package `register` calls (`rasterx.functions.register` and the like) raise an error. The message gives the fix.
 
 Pass `only=` to register a subset. Names are case-insensitive and take the SQL name or the short name.
@@ -125,7 +126,7 @@ Limits today:
 | Feature | Dedicated cluster | Standard access mode | Serverless | SQL warehouse |
 |---|---|---|---|---|
 | Every function at its Python level (L3), readers and writers | Yes | Yes | Yes | No (use UC functions) |
-| The JVM level (L1) and the [Scala surface](./language-bindings) | Yes, with the [DCS image](../installation/dcs.mdx) or the JAR | No. GeoBrix runs the Python level and says why | No | No |
+| The JVM level (L1): [Functions the JAR speeds up](./jar-functions) | Yes, with the [DCS image](../installation/dcs.mdx) or the JAR | No. GeoBrix runs the Python level and says why | No | No |
 | [UC functions](./uc-functions) | Yes | Yes | Yes | Yes |
 | The Scala form of three UC grid functions (`gbx_bng_kring`, `gbx_bng_aswkb`, `gbx_bng_centroid`) | Not verified | Not verified | Not verified | Yes |
 | `gbx_rst_merge_tvf` and `gbx_rst_bng_rasterize_tvf` (`TABLE(...) PARTITION BY`) | Yes | Yes | No. Use `gbx_rst_merge_agg` and `gbx_rst_bng_rasterize_agg` | No |

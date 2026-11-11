@@ -7,7 +7,6 @@ import FunctionExamples from '@site/src/components/FunctionExamples';
 import vectorxFunctionsExamples from '!!raw-loader!../../tests/python/api/vectorx_functions.py';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
-import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Impl';
 import VectorXIcon from '../../../resources/images/brand/VectorX.png';
@@ -34,8 +33,8 @@ As of v0.5.0 it covers:
 Vector files are read and written by the `*_gbx` readers and writers. See the [readers overview](../readers/overview).
 
 :::note Using these functions
-- **Import paths** — Python: `databricks.labs.gbx.vectorx.functions`. Python-only helpers such as `coverage_simplify`: `databricks.labs.gbx.vectorx.helpers`. Scala: `com.databricks.labs.gbx.vectorx`.
-- **SQL examples** — examples use **SQL** (and Python where shown); in SQL, VectorX functions are prefixed with **`gbx_`** (e.g. `gbx_st_legacyaswkb`). For SQL, Python, and Scala usage patterns, see [Language Bindings](./language-bindings).
+- **Import paths** — Python: `databricks.labs.gbx.vectorx.functions`. Python-only helpers such as `coverage_simplify`: `databricks.labs.gbx.vectorx.helpers`.
+- **SQL examples** — examples use **SQL** (and Python where shown); in SQL, VectorX functions are prefixed with **`gbx_`** (e.g. `gbx_st_legacyaswkb`). For SQL and Python usage patterns, see [Language Bindings](./language-bindings).
 - **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; EWKB/EWKT carry one. Pass whichever encoding your upstream produces — no separate conversion step is required.
 :::
 
@@ -102,7 +101,8 @@ Every function on this page shows **one example**, expressed on each surface it 
 | **SQL** | Session SQL, after `register(spark)` |
 | **Unity Catalog SQL** | A `<catalog>.<schema>.gbx_*` function, where the function exists in Unity Catalog |
 | **Python** | The `vectorx` Python API |
-| **Scala** | The `vectorx` Scala functions |
+
+The **Scala** tag has no tab: it links to [Functions the JAR speeds up](./jar-functions).
 
 The tabs operate on the **same input fixture** with the **same arguments**. Where a genuine difference exists, such as a diverging output schema or a mode available at one level only, the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
 
@@ -403,7 +403,7 @@ Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t
 ### st_interpolateelevationbbox
 
 {/* BEGIN GENERATED gbx_st_interpolateelevationbbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_st_interpolateelevationbbox" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -440,7 +440,6 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
   name="st_interpolateelevationbbox"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
@@ -492,7 +491,7 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 ### st_triangulate
 
 {/* BEGIN GENERATED gbx_st_triangulate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_st_triangulate" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -522,7 +521,6 @@ Builds a Delaunay TIN from mass-point geometries (with Z values) and optional br
   name="st_triangulate"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
@@ -577,7 +575,7 @@ These apply in **every** input encoding and at every level — they are properti
 ### st_crs
 
 {/* BEGIN GENERATED gbx_st_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_st_crs" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -599,7 +597,6 @@ An SRID is classified against the authoritative PROJ registries, so an ESRI-rang
   name="st_crs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -608,7 +605,7 @@ An SRID is classified against the authoritative PROJ registries, so an ESRI-rang
 ### st_setcrs
 
 {/* BEGIN GENERATED gbx_st_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_st_setcrs" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -636,7 +633,6 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
   name="st_setcrs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -645,7 +641,7 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 ### st_transformcrs
 
 {/* BEGIN GENERATED gbx_st_transformcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_st_transformcrs" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -680,7 +676,6 @@ When the output is EWKB (the SRID travels with the geometry), convert it with th
   name="st_transformcrs"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -1193,7 +1188,6 @@ Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WK
   name="st_legacyaswkb"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 

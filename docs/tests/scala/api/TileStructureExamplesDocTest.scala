@@ -1,5 +1,5 @@
 /*
- * Compile-time validation for Tile Structure Scala examples (docs/docs/api/tile-structure.mdx).
+ * Compile-time validation for the Tile Structure Scala examples.
  */
 package docs.tests.scala.api
 

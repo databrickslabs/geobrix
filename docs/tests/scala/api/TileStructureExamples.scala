@@ -1,6 +1,6 @@
 /*
- * Scala Tile Structure examples - Single source of truth for docs/docs/api/tile-structure.mdx § Working with Tiles (Scala).
- * Displayed via CodeFromTest; validated by TileStructureExamplesDocTest.
+ * Scala Tile Structure examples, kept as tests (docs/docs/api/tile-structure.mdx shows the SQL
+ * and Python forms only). Validated by TileStructureExamplesDocTest.
  */
 package docs.tests.scala.api
 

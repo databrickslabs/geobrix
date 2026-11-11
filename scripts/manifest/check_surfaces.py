@@ -497,7 +497,6 @@ _TABS = {
     "ucSql": ("uc", "_uc_sql_example"),
     "python": ("python", "_python_example"),
     "pythonLight": ("python", "_python_light_example"),
-    "scala": ("scala", "_scala_example"),
 }
 
 
@@ -516,7 +515,8 @@ def _defined_names(path: Path) -> set:
 
 def docs_findings(fns: Iterable) -> List[str]:
     """G4: a function's hand-written tabs match the availability matrix: a tab only for a surface it has, one
-    Python tab (no lightweight/heavyweight split), and each tab's example and output exist in its source.
+    Python tab (no lightweight/heavyweight split), no Scala tab (Scala is the performance tier: the function's
+    Scala tag links to the jar-functions page), and each tab's example and output exist in its source.
     """
     out = []
     pages: dict = {}
@@ -538,6 +538,11 @@ def docs_findings(fns: Iterable) -> List[str]:
         if "pythonHeavy" in props:
             out.append(
                 f"{fn.sql_name}: a 'pythonHeavy' tab (the Python API is one; drop it) in {_rel(page)}"
+            )
+        if "scala" in props:
+            out.append(
+                f"{fn.sql_name}: a 'scala' tab (Scala is the performance tier, not an API page tab; drop it) "
+                f"in {_rel(page)}"
             )
         if {"python", "pythonLight"} <= props:
             out.append(

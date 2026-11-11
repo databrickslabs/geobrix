@@ -1,5 +1,5 @@
 /*
- * Compile-time validation for Scala API Reference examples (docs/docs/api/scala.mdx).
+ * Compile-time validation for the Scala examples in ScalaApiExamples.
  *
  * Per documentation-test-validation rule: Doc Tests = Compilation Tests.
  * We do NOT execute examples (no SparkSession, file I/O, or SQL execution).

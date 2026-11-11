@@ -9,7 +9,6 @@ import { Impl } from '@site/src/components/Impl';
 import RasterXIcon from '../../../resources/images/brand/RasterX.png';
 import pyrxCode from '!!raw-loader!../../tests/python/api/pyrx_functions.py';
 import rasterxSqlCode from '!!raw-loader!../../tests/python/api/rasterx_functions_sql.py';
-import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
 import rasterxAccessorsLightCode from '!!raw-loader!../../tests/python/api/rasterx_accessors_python_light.py';
 import rasterxTileopsLightCode from '!!raw-loader!../../tests/python/api/rasterx_tileops_python_light.py';
@@ -58,7 +57,7 @@ Many RasterX functions accept CRS parameters. Use `srid` / `out_srid` (integer E
 
 ## Function Categories
 
-RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
+RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories:
 
 ![RasterX function categories — Constructors, Accessors, Aggregators, Generators, Operations, H3 Grid](../../../resources/images/diagrams/rasterx/rasterx-function-categories.png)
 
@@ -116,8 +115,6 @@ The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other
   code={pyrxCode}
 />
 
-**Scala** uses the same four views: create them with `spark.read.format("binaryFile").load(...)` and `call_function("gbx_rst_fromcontent", ...)`, then `createOrReplaceTempView("rasters")`. Each Scala example reads `val df = spark.table("multiband_rasters")`. The Scala functions call the SQL names, so run the Python `register(spark)` first, in the same session. See [Language bindings](./language-bindings#scala).
-
 Prefer pure SQL? After `register(spark)`, create the same four views directly so the SQL examples can use `FROM rasters`, `FROM multiband_rasters`, and so on:
 
 <CodeFromTest
@@ -155,7 +152,6 @@ In every example on this page:
 
 - **SQL:** `rasters` is a temporary view whose `tile` column holds the canonical sample loaded via the reader. `FROM rasters` means "the sample as tiles."
 - **Python:** `df` is a DataFrame with a `tile` column loaded from the canonical file. `df.select(...)` means "apply this function to the sample tiles."
-- **Scala:** `rasters` is a DataFrame with the same `tile` column. `rasters.select(...)` is identical in intent to the Python form.
 
 Each function's example therefore shows only the invocation — the load is the convention, not the code.
 
@@ -166,11 +162,10 @@ Each function's example therefore shows only the invocation — the load is the 
 | **SQL** | Session SQL, after `register(spark)` |
 | **Unity Catalog SQL** | A `<catalog>.<schema>.gbx_*` function, where the function exists in Unity Catalog |
 | **Python** | The `rasterx` Python API |
-| **Scala** | The `rasterx` Scala functions |
 
-A function shows only the tabs for the surfaces it runs on. The tabs show the **same operation** on the **same file**. Where the output differs in form, a short note explains why — for example:
+A function shows only the tabs for the surfaces it runs on. The **Scala** tag has no tab: it links to [Functions the JAR speeds up](./jar-functions). The tabs show the **same operation** on the **same file**. Where the output differs in form, a short note explains why — for example:
 
-- Geometry-returning functions (`rst_boundingbox`, `rst_georeference`): SQL returns WKT; Python and Scala return a binary column. The note reads `...` `(WKB binary)`.
+- Geometry-returning functions (`rst_boundingbox`, `rst_georeference`): SQL returns WKT; Python returns a binary column. The note reads `...` `(WKB binary)`.
 - Subdataset maps (`rst_subdatasets`): SQL returns `map<string,string>`; rendered as `{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> ...}`. A note clarifies the key pattern.
 - Band-metadata maps (`rst_bandmetadata`): similarly noted where the rendering differs between surfaces.
 
@@ -178,7 +173,7 @@ Scalar values are **identical across all tabs** — same fixture, same function,
 
 Tile-returning functions (`rst_clip`, `rst_resample`, `rst_transform`, the aggregators, the constructors, …) return a **[v2 Tile](./tile-structure)**. Their output is shown as a representative struct — `{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}` — rather than a literal byte dump. Tiles loaded via `rst_fromcontent` / `rst_fromfile` (as in [Setup](#setup)) are **materialized**: the `raster` field holds the encoded bytes and `path` is null. [**Virtual tiles**](./virtual-tiles) — a populated `path` with lazily-read bytes — arise from the force-output parameters, not from the default load.
 
-**SQL naming and arguments:** in the SQL tab, RasterX functions carry the **`gbx_`** prefix (e.g. `gbx_rst_boundingbox`, `gbx_rst_width`); Python and Scala use the bare `rst_*` name via `rx`. SQL binds arguments by position, so leave out only trailing optional arguments. See [Language Bindings](./language-bindings) for more.
+**SQL naming and arguments:** in the SQL tab, RasterX functions carry the **`gbx_`** prefix (e.g. `gbx_rst_boundingbox`, `gbx_rst_width`); Python uses the bare `rst_*` name via `rx`. SQL binds arguments by position, so leave out only trailing optional arguments. See [Language Bindings](./language-bindings) for more.
 
 ### Per-function notes
 
@@ -256,7 +251,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with per-band 
 ### rst_boundingbox
 
 {/* BEGIN GENERATED gbx_rst_boundingbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_boundingbox" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -279,14 +274,13 @@ Bounding box geometry.
   name="rst_boundingbox"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_crs
 
 {/* BEGIN GENERATED gbx_rst_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_crs" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -317,14 +311,13 @@ Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`
   name="rst_crs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_format
 
 {/* BEGIN GENERATED gbx_rst_format: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_format" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -347,7 +340,6 @@ GDAL format name.
   name="rst_format"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -451,14 +443,13 @@ _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which ha
   name="rst_getsubdataset"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_height
 
 {/* BEGIN GENERATED gbx_rst_height: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_height" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -481,7 +472,6 @@ Height in pixels.
   name="rst_height"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -554,7 +544,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_memsize
 
 {/* BEGIN GENERATED gbx_rst_memsize: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_memsize" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -577,7 +567,6 @@ In-memory size in bytes.
   name="rst_memsize"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -646,7 +635,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_numbands
 
 {/* BEGIN GENERATED gbx_rst_numbands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_numbands" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -671,7 +660,6 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, gre
   name="rst_numbands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -709,7 +697,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoDa
 ### rst_pixelheight
 
 {/* BEGIN GENERATED gbx_rst_pixelheight: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_pixelheight" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -732,14 +720,13 @@ Pixel height in ground units.
   name="rst_pixelheight"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_pixelwidth
 
 {/* BEGIN GENERATED gbx_rst_pixelwidth: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_pixelwidth" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -762,14 +749,13 @@ Pixel width in ground units.
   name="rst_pixelwidth"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_rotation
 
 {/* BEGIN GENERATED gbx_rst_rotation: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_rotation" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -792,14 +778,13 @@ Rotation in radians.
   name="rst_rotation"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_scalex
 
 {/* BEGIN GENERATED gbx_rst_scalex: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_scalex" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -822,14 +807,13 @@ Scale (pixel size) in X/Y.
   name="rst_scalex"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_scaley
 
 {/* BEGIN GENERATED gbx_rst_scaley: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_scaley" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -852,14 +836,13 @@ Scale (pixel size) in X/Y.
   name="rst_scaley"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_skewx
 
 {/* BEGIN GENERATED gbx_rst_skewx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_skewx" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -882,14 +865,13 @@ Skew in X/Y.
   name="rst_skewx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_skewy
 
 {/* BEGIN GENERATED gbx_rst_skewy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_skewy" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -912,14 +894,13 @@ Skew in X/Y.
   name="rst_skewy"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_srid
 
 {/* BEGIN GENERATED gbx_rst_srid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_srid" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -942,7 +923,6 @@ The stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the
   name="rst_srid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -1085,7 +1065,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands, `UInt16`)._
 ### rst_upperleftx
 
 {/* BEGIN GENERATED gbx_rst_upperleftx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_upperleftx" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1108,14 +1088,13 @@ Upper-left corner coordinates.
   name="rst_upperleftx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_upperlefty
 
 {/* BEGIN GENERATED gbx_rst_upperlefty: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_upperlefty" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1138,14 +1117,13 @@ Upper-left corner coordinates.
   name="rst_upperlefty"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
 ### rst_width
 
 {/* BEGIN GENERATED gbx_rst_width: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_width" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1168,7 +1146,6 @@ Width in pixels.
   name="rst_width"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAccessorsLightCode} pythonSource="docs/tests/python/api/rasterx_accessors_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
@@ -1181,7 +1158,7 @@ Combine or merge rasters in group-by (7 total).
 ### rst_bng_rasterize_agg
 
 {/* BEGIN GENERATED gbx_rst_bng_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_rst_bng_rasterize_agg" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1218,7 +1195,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 :::
 
 :::warning `gbx_rst_bng_rasterize_agg` returns BINARY
-In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct there. The Scala function `rst_bng_rasterize_agg` keeps returning the tile struct. Wrap the SQL or Python result with `gbx_rst_fromcontent` to get a tile back:
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), not a tile. A grouped aggregate cannot return the tile struct there. Wrap the SQL or Python result with `gbx_rst_fromcontent` to get a tile back:
 
 ```sql
 SELECT
@@ -1243,7 +1220,6 @@ _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) 
   name="rst_bng_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1580,7 +1556,6 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
   name="rst_h3_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1740,7 +1715,6 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
   name="rst_quadbin_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1819,7 +1793,6 @@ Streaming aggregator that burns custom-grid cell values into one raster tile per
   name="rst_custom_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1955,7 +1928,7 @@ On Unity Catalog the points and break lines are an `ARRAY<GEOMETRY(ANY)>`, and t
 ### rst_frombands
 
 {/* BEGIN GENERATED gbx_rst_frombands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_frombands" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1984,7 +1957,6 @@ _Constructor — stacks per-band tiles into a multi-band tile. Example splits th
   name="rst_frombands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -1993,7 +1965,7 @@ _Constructor — stacks per-band tiles into a multi-band tile. Example splits th
 ### rst_fromcontent
 
 {/* BEGIN GENERATED gbx_rst_fromcontent: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_fromcontent" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2025,7 +1997,6 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
   name="rst_fromcontent"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -2767,7 +2738,7 @@ A NULL tile, an error tile and a tile that cannot be read give no rows. A resolu
 ### h3_cell_bbox
 
 {/* BEGIN GENERATED gbx_h3_cell_bbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_h3_cell_bbox" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2798,7 +2769,6 @@ Scalar function — returns the bounding box `STRUCT<xmin, ymin, xmax, ymax>` fo
   name="h3_cell_bbox"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGridaggLightCode} pythonSource="docs/tests/python/api/rasterx_gridagg_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_gridagg_python_light.py"
 />
 
@@ -4109,7 +4079,6 @@ Convert to another format. A driver that is unknown, or cannot write a raster, r
   name="rst_asformat"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -4450,7 +4419,6 @@ _Example kernel: 3×3 identity (`[[0,0,0],[0,1,0],[0,0,0]]`), which passes pixel
   name="rst_convolve"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -4555,7 +4523,6 @@ Initialize NoData values.
   name="rst_initnodata"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -4750,7 +4717,7 @@ Pixel to world coordinates as a struct with `.x` and `.y` fields.
 ### rst_rastertoworldcoordx
 
 {/* BEGIN GENERATED gbx_rst_rastertoworldcoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_rastertoworldcoordx" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4775,14 +4742,13 @@ World X / Y coordinate of a pixel.
   name="rst_rastertoworldcoordx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_rastertoworldcoordy
 
 {/* BEGIN GENERATED gbx_rst_rastertoworldcoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_rastertoworldcoordy" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4807,7 +4773,6 @@ World X / Y coordinate of a pixel.
   name="rst_rastertoworldcoordy"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
@@ -5071,7 +5036,6 @@ Convert raster data type.
   name="rst_updatetype"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -5109,7 +5073,7 @@ World to pixel coordinates as a struct with `.x` and `.y` fields.
 ### rst_worldtorastercoordx
 
 {/* BEGIN GENERATED gbx_rst_worldtorastercoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_worldtorastercoordx" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5134,14 +5098,13 @@ Pixel column / row for a world coordinate.
   name="rst_worldtorastercoordx"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_worldtorastercoordy
 
 {/* BEGIN GENERATED gbx_rst_worldtorastercoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_worldtorastercoordy" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5166,7 +5129,6 @@ Pixel column / row for a world coordinate.
   name="rst_worldtorastercoordy"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
@@ -5217,7 +5179,6 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
   name="rst_tilexyz"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
@@ -5617,7 +5578,7 @@ Topographic Position Index — pixel value minus the mean of its 8 neighbours. P
 ### rst_tri
 
 {/* BEGIN GENERATED gbx_rst_tri: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_rst_tri" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5934,7 +5895,6 @@ _Example uses the multiband fixture (`rgb_nir_small.tif`, 3 bands) to demonstrat
   name="rst_band"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6125,7 +6085,6 @@ Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS st
   name="rst_setcrs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6160,7 +6119,6 @@ Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a w
   name="rst_setsrid"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6312,7 +6270,7 @@ A NoData pixel is never traced. That includes a pixel equal to -9999 in a tile t
 Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values. Or pass `array()` and set `interval` (above 0) for equal-step contours at `base + n*interval`.
 Levels may come in any order. Repeated and NULL elements are dropped, and `levels` wins over `interval` when both are given.
 Each entry is one contour line in the source raster's CRS. A line runs to the tile's edge, half a pixel past the outermost pixel centres.
-An empty array means no line crosses. NULL means a NULL, error or unreadable tile, or a call GDAL cannot run. A call over the compute's memory budget is NULL too. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
+An empty array means no line crosses. NULL means a NULL, error or unreadable tile, or a call GDAL cannot run. A call over the compute's memory budget is NULL too.
 
 <FunctionExamples
   name="rst_contour"

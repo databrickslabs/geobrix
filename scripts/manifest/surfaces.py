@@ -238,6 +238,21 @@ def _py_usage(fn) -> str:
     return ", ".join(parts)
 
 
+def jar_anchor(fn) -> str:
+    """The id of a function's row on the jar-functions page: its SQL name."""
+    return fn.sql_name
+
+
+def surfaces_props(fn) -> str:
+    """The `<Surfaces>` props: one flag per surface, and `jar="<anchor>"` when the function has a row on the
+    jar-functions page, so its Scala tag links to that row (a Scala form the default never picks links to the page).
+    """
+    props = list(fn.surfaces)
+    if "scala" in fn.surfaces and jvm_by_default(fn):
+        props.append(f'jar="{jar_anchor(fn)}"')
+    return " ".join(props)
+
+
 def render_doc_block(fn) -> str:
     from databricks.labs.gbx.manifest import usage_args
 
@@ -266,7 +281,7 @@ def render_doc_block(fn) -> str:
             )
         )
     out = [
-        f"<Surfaces {' '.join(fn.surfaces)} />",
+        f"<Surfaces {surfaces_props(fn)} />",
         "",
         "| Surface | Call | Returns |",
         "|---|---|---|",
@@ -670,10 +685,16 @@ def jvm_by_default(fn) -> bool:
     return False
 
 
+JAR_FUNCTIONS_LINK_IMPORT = "import Link from '@docusaurus/Link';"
+
+
 def render_jar_functions(man) -> str:
     """The functions that run on the JVM when the JAR is present, by package then name.
 
     The one note is the row's own fact: a tile function behind the SQL dispatch wrapper sends a virtual tile to Python.
+    Each row carries an anchor (`jar_anchor`), the target of the function's Scala tag on its API page. It is a
+    `<Link id>` (the page imports `@docusaurus/Link`, `JAR_FUNCTIONS_LINK_IMPORT`): Docusaurus registers that id for its
+    broken-anchor check, which a raw `<a id>` in MDX does not get.
     """
     fns = [
         f for f in man.functions.values() if f.status == "stable" and jvm_by_default(f)
@@ -689,7 +710,7 @@ def render_jar_functions(man) -> str:
             ["Function", "Package", "Notes"],
             [
                 [
-                    f"`{f.sql_name}`",
+                    f'<Link id="{jar_anchor(f)}" />`{f.sql_name}`',
                     pkg,
                     (
                         "A virtual tile runs in Python."

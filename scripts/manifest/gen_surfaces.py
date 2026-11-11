@@ -246,6 +246,10 @@ def check(only: Optional[str] = None) -> List[str]:
             findings += _hand_parameters(path, new)
         if _MACHINE_PATH.search(new):
             findings.append(f"{rel}: a machine path in generated output")
+        if path == JAR_FUNCTIONS and S.JAR_FUNCTIONS_LINK_IMPORT not in new:
+            findings.append(
+                f"{rel}: does not import Link ({S.JAR_FUNCTIONS_LINK_IMPORT}); the generated row anchors use it"
+            )
         if path in S.MODULE_FILES.values():
             findings += _duplicate_defs(path, new)
             if "from databricks.labs.gbx import _api" not in new:

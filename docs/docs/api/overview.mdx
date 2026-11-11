@@ -4,7 +4,6 @@ sidebar_position: 1
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import overviewExamples from '!!raw-loader!../../tests/python/api/overview.py';
-import scalaApiExamples from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import packagesExamples from '!!raw-loader!../../tests/python/packages/examples.py';
 import RasterXIcon from '../../../resources/images/brand/RasterX.png';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
@@ -13,7 +12,7 @@ import VizXIcon from '../../../resources/images/brand/VizX.png';
 
 # Functions Overview
 
-GeoBrix provides four specialized packages for different spatial processing needs. All packages expose Scala, Python, and SQL APIs backed by the same Spark columnar expressions.
+GeoBrix provides four specialized packages for different spatial processing needs. All packages expose SQL and Python APIs. The GeoBrix JAR is the performance tier: it speeds up some functions on a dedicated cluster. See [Functions the JAR speeds up](./jar-functions).
 
 ![GeoBrix Vision](../../../resources/images/brand/geobrix_vision.png)
 
@@ -151,31 +150,19 @@ Pass `only=` to register a few functions. GeoBrix still picks the implementation
 
 <CodeFromTest code={packagesExamples} language="python" functionName="register_only_rasterx" testFile="docs/tests/python/packages/test_examples.py" validationLevel="compile" />
 
-### Scala
-
-<CodeFromTest
-  code={scalaApiExamples}
-  functionName="RegisterAllPackages"
-  language="scala"
-  outputConstant="RegisterAllPackages_output"
-  source="docs/tests/scala/api/ScalaApiExamples.scala"
-  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
-  title="Register All Packages"
-/>
-
 ### SQL
 
-Call `gbx.register(spark)` from Python to register the SQL functions. Scala registers no SQL names; the Scala wrappers call the registered names. A JVM job can call them too: see [SQL from a JVM job](/docs/installation#jvm-sql). Once registered, the functions are available in any SQL context:
+Call `gbx.register(spark)` from Python to register the SQL functions. The JAR registers no SQL names. A JVM job can call the registered names too: see [SQL from a JVM job](/docs/installation#jvm-sql). Once registered, the functions are available in any SQL context:
 
 <CodeFromTest code={overviewExamples} functionName="SQL_DESCRIBE_FUNCTION" language="sql" source="docs/tests/python/api/overview.py" testFile="docs/tests/python/api/test_overview.py" outputConstant="SQL_DESCRIBE_FUNCTION_output" />
 
 ## API Languages
 
-GeoBrix provides the same functionality across three languages — SQL, Python, and Scala. See [Language Bindings](./language-bindings) for the registration and import patterns each surface uses, and the one-line lightweight-vs-heavyweight raster swap.
+GeoBrix provides the same functionality in SQL and Python. See [Language Bindings](./language-bindings) for the registration and import patterns each surface uses, and the one-line lightweight-vs-heavyweight raster swap.
 
 ## Scalar values vs `lit(...)` wrapping
 
-In 0.3.0, plain scalars are accepted across Python, Scala, and SQL bindings — no `f.lit(...)` wrapping required for non-string values.
+In 0.3.0, plain scalars are accepted across Python and SQL bindings — no `f.lit(...)` wrapping required for non-string values.
 
 **Python** — wrappers accept `Column` or scalar (`bool`/`int`/`float`/`bytes`); non-string scalars are auto-wrapped with `f.lit(...)`. Strings still follow pyspark's column-reference convention (bare string ≈ `f.col(name)`); wrap in `f.lit("...")` to pass a string literal.
 
@@ -191,16 +178,6 @@ rx.rst_clip("tile", "geom", True)
 rx.rst_transform("tile", 4326)
 bx.bng_pointascell("pt", 1)
 bx.bng_pointascell("pt", f.lit("1km"))   # string literal — still wrap in f.lit
-```
-
-**Scala** — typed overloads added for `Boolean` / `Int` / `Double` / `String` value parameters. Column args (e.g. geometry, tile) still take `Column`.
-
-```scala
-// ✅ 0.3.0 — scalar overloads resolve without lit(...)
-rst_updatetype(col("tile"), "Float32")
-rst_rastertoworldcoordx(col("tile"), 10, 20)
-bng_pointascell(col("pt"), 1)
-bng_pointascell(col("pt"), "1km")
 ```
 
 **SQL** — values are already natively accepted by Spark SQL; no change needed:

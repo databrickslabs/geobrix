@@ -7,7 +7,6 @@ import FunctionExamples from '@site/src/components/FunctionExamples';
 import pmtilesSqlCode from '!!raw-loader!../../tests/python/api/pmtiles_functions_sql.py';
 import pmtilesLightCode from '!!raw-loader!../../tests/python/api/pmtiles_functions_python_light.py';
 import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
-import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Impl';
 
@@ -18,7 +17,7 @@ The `gbx_pmtiles_agg` aggregate runs on every compute. The `pmtiles_gbx` DataSou
 GeoBrix encodes tile pyramids (raster or vector) into the [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file archive format. PMTiles replaces the "directory of tiles" pattern with one compact, hash-deduplicated, range-readable file servable directly from cloud object storage. Tile content bytes (PNG / JPEG / WebP / MVT) pass through verbatim — PMTiles is container-only.
 
 :::note Import path
-`databricks.labs.gbx.pmtiles` (Python) or `com.databricks.labs.gbx.pmtiles` (Scala). PMTiles is a peer of RasterX / VectorX / GridX, not a dependency.
+`databricks.labs.gbx.pmtiles` (Python). PMTiles is a peer of RasterX / VectorX / GridX, not a dependency.
 :::
 
 ## Two entry points
@@ -39,7 +38,7 @@ from databricks.labs.gbx import register
 register(spark, only=["gbx_pmtiles_agg"])
 ```
 
-`register(spark)` also installs the `pmtiles_gbx` writer, which is a Python DataSource. Scala registers nothing, so a Scala caller relies on the Python call.
+`register(spark)` also installs the `pmtiles_gbx` writer, which is a Python DataSource.
 
 `register(spark)` installs `gbx_pmtiles_agg` with every other function. To install only the aggregate, call the standalone helper:
 
@@ -175,7 +174,6 @@ Aggregate a per-tile `(z, x, y, bytes)` row set into a single PMTile v3 archive 
   name="pmtiles_agg"
   sql={pmtilesSqlCode}           sqlSource="docs/tests/python/api/pmtiles_functions_sql.py"
   python={pmtilesLightCode} pythonSource="docs/tests/python/api/pmtiles_functions_python_light.py"
-  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_pmtiles_functions_python_light.py"
 />
 

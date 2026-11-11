@@ -364,13 +364,73 @@ def test_an_aggregate_example_needs_literal_per_group_arguments():
 def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
     surfaces = _tool("surfaces")
     out = surfaces.render_jar_functions(manifest.load())
-    rows = [line for line in out.splitlines() if line.startswith("| `gbx_")]
+    rows = [line for line in out.splitlines() if line.startswith('| <Link id="gbx_')]
     assert out.startswith(
         f"{len(rows)} functions run on the JVM when the JAR is present."
     )
-    assert "| `gbx_rst_width` | RasterX | A virtual tile runs in Python. |" in rows
-    assert "| `gbx_bng_kringexplode` | GridX |  |" in rows
+    assert (
+        '| <Link id="gbx_rst_width" />`gbx_rst_width` | RasterX | A virtual tile runs in Python. |'
+        in rows
+    )
+    assert (
+        '| <Link id="gbx_bng_kringexplode" />`gbx_bng_kringexplode` | GridX |  |'
+        in rows
+    )
     # an L1 block the level table orders after L3, and one whose JVM form returns another shape, are not listed
     assert not any(
         n in out for n in ("`gbx_rst_merge`", "`gbx_bng_kloop`", "`gbx_rst_maketiles`")
     )
+
+
+def test_a_scala_tag_links_to_its_jar_functions_row_or_to_the_page():
+    """A function's Scala tag (`<Surfaces ... scala jar="<anchor>" />`) names the anchor of its row on the
+    jar-functions page; a Scala form the default never picks has no row there, so its tag names no anchor.
+    """
+    import re
+
+    surfaces = _tool("surfaces")
+    man = manifest.load()
+    rows = set(
+        re.findall(r'<Link id="(gbx_\w+)" />', surfaces.render_jar_functions(man))
+    )
+    tagged = [
+        f
+        for f in man.functions.values()
+        if f.status == "stable" and "scala" in f.surfaces
+    ]
+    assert tagged and rows
+    for fn in tagged:
+        props = surfaces.surfaces_props(fn)
+        if fn.sql_name in rows:
+            assert f'jar="{fn.sql_name}"' in props, fn.sql_name
+        else:
+            assert "jar=" not in props, fn.sql_name
+    # the anchor goes with the Scala tag only, and every anchor a tag names is a row on the page
+    named = {
+        m
+        for f in man.functions.values()
+        if f.status == "stable"
+        for m in re.findall(r'jar="(\w+)"', surfaces.surfaces_props(f))
+    }
+    assert named <= rows
+    assert 'jar="gbx_rst_width"' in surfaces.surfaces_props(
+        man.functions["gbx_rst_width"]
+    )
+    assert "jar=" not in surfaces.surfaces_props(man.functions["gbx_st_makevalid"])
+
+
+def test_check_names_a_jar_functions_page_that_stopped_importing_link(monkeypatch):
+    """The generated row anchors are `<Link id>`, so the jar-functions page must import Link."""
+    gen = _tool("gen_surfaces")
+    real = gen.read
+    monkeypatch.setattr(
+        gen,
+        "read",
+        lambda p: (
+            real(p).replace(gen.S.JAR_FUNCTIONS_LINK_IMPORT, "")
+            if p == gen.JAR_FUNCTIONS
+            else real(p)
+        ),
+    )
+    found = gen.check("jar-functions")
+    assert any("does not import Link" in f for f in found)

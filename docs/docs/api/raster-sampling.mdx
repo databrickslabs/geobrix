@@ -74,7 +74,7 @@ For `rst_resample*` examples (doc-tested), see the [`rst_resample` function refe
 
 ## Workflows
 
-The patterns below are **illustrative** SQL, Python, and Scala sketches. A runnable end-to-end sampling notebook is a doc-test follow-up.
+The patterns below are **illustrative** SQL and Python sketches. A runnable end-to-end sampling notebook is a doc-test follow-up.
 
 ### Workflow 1 — single point value
 
@@ -125,34 +125,6 @@ df_bilinear = df.select(
         rx.rst_resample("tile", F.lit(1.0), F.lit("bilinear")),
         point
     )[0].alias("elevation_bilinear"),
-)
-```
-
-</TabItem>
-<TabItem value="scala" label="Scala">
-
-```scala
-import com.databricks.labs.gbx.rasterx.functions as rasterx
-import org.apache.spark.sql.functions.lit
-
-val point = lit("SRID=32618;POINT(500320 4500320)")
-
-val df = spark.table("dem_rasters")
-
-// Nearest-pixel
-val dfSampled = df.select(
-  col("tile_id"),
-  rasterx.rst_sample(col("tile"), point).alias("elevation_array"),
-  rasterx.rst_sample(col("tile"), point).getItem(0).alias("elevation_m")
-)
-
-// Bilinear: resample first, then sample
-val dfBilinear = df.select(
-  col("tile_id"),
-  rasterx.rst_sample(
-    rasterx.rst_resample(col("tile"), lit(1.0), lit("bilinear")),
-    point
-  ).getItem(0).alias("elevation_bilinear")
 )
 ```
 

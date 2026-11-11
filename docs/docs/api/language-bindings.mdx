@@ -4,9 +4,9 @@ sidebar_position: 7
 
 # Language Bindings
 
-GeoBrix exposes one function set across **SQL**, **Python**, and **Scala**. The per-function reference lives on the package pages: [RasterX](./raster-functions), [GridX](./gridx-functions), [VectorX](./vectorx-functions), and [PMTiles](./pmtiles-functions). This page covers the names, registration and import pattern of each language, and how SQL names resolve in a session and in Unity Catalog.
+GeoBrix exposes one function set across **SQL** and **Python**. The per-function reference lives on the package pages: [RasterX](./raster-functions), [GridX](./gridx-functions), [VectorX](./vectorx-functions), and [PMTiles](./pmtiles-functions). This page covers the names, registration and import pattern of each language. It also covers how SQL names resolve in a session and in Unity Catalog, and where the Scala JAR fits.
 
-## One function, four surfaces
+## One function, three surfaces
 
 Every function has one canonical name. The surface decides only how you call it.
 
@@ -15,9 +15,8 @@ Every function has one canonical name. The surface decides only how you call it.
 | **SQL (session)** | `gbx_<name>` | `gbx_rst_boundingbox(tile)` |
 | **SQL (Unity Catalog)** | `<catalog>.<schema>.gbx_<name>` | `main.geobrix.gbx_bng_aswkb(cell)` |
 | **Python** | `<name>` in a package module | `rx.rst_boundingbox(tile)` |
-| **Scala** | `<name>` in a package object | `rst_boundingbox(col("tile"))` |
 
-The `gbx_` prefix keeps GeoBrix functions apart from the Databricks built-in `st_*` functions. Python and Scala use the bare `rst_*`, `bng_*`, `quadbin_*`, `st_*` and `pmtiles_*` names. The [availability page](./availability) shows which function runs on which surface.
+The `gbx_` prefix keeps GeoBrix functions apart from the Databricks built-in `st_*` functions. Python uses the bare `rst_*`, `bng_*`, `quadbin_*`, `st_*` and `pmtiles_*` names. The [availability page](./availability) shows which function runs on which surface.
 
 ## Python
 
@@ -75,21 +74,13 @@ To see which one a name resolves to, run `DESCRIBE FUNCTION EXTENDED`. A session
 
 `register(spark, catalog="main", schema="geobrix")` checks that the schema's GeoBrix version matches the wheel. It prints one line when it does not. `register(spark, target="uc", ...)` registers no session function, so a notebook behaves as a SQL warehouse does.
 
-## Scala
+## Scala and the JAR {#scala}
 
-GeoBrix is written in Scala, and the JAR provides the column functions. The JAR registers no SQL. The Python manager registers the SQL names and installs the JVM expressions on a dedicated cluster.
+Scala is the GeoBrix performance tier, not an API. The JAR adds a JVM level to some functions on a dedicated cluster. GeoBrix picks it where it is faster, so your SQL and Python calls use it with no change.
 
-```scala
-import org.apache.spark.sql.functions.{call_function, col}
-import com.databricks.labs.gbx.rasterx.functions._
-
-df.select(rst_boundingbox(col("tile")))
-```
-
-- **The kept per-name wrappers call a SQL name.** `rst_boundingbox` calls `gbx_rst_boundingbox`, so the Python manager must have registered it. Call `register(spark)` from Python first, in the same session.
-- **A name with no wrapper uses `call_function`.** Write `call_function("gbx_rst_clip", col("tile"), lit(wkt), lit(true))`. This is how the Scala examples call functions such as `gbx_rst_clip`, `gbx_rst_retile` and `gbx_rst_metadata`.
-- **Typed overloads** accept `Boolean`, `Int`, `Double` and `String` directly. `Column` arguments such as a geometry or a tile still take `Column`.
-- **A session with no Python registration has no `gbx_*` functions.** Registration is a Python step, so a Scala-only session cannot call the SQL names.
+- **The JAR registers no SQL.** `register(spark)` in Python registers every name, in the same session.
+- **JVM code calls the SQL names.** Scala or Java code on the session calls a function by name, for example `call_function("gbx_rst_width", col("tile"))`. See [SQL from a JVM job](../installation#jvm-sql).
+- **[Functions the JAR speeds up](./jar-functions)** lists the functions that run on the JVM. A function's **Scala** tag links there.
 
 ## Next steps
 

@@ -1914,7 +1914,8 @@ def test_docs_tab_gate_rejects_a_bad_tab(tmp_path, monkeypatch):
     monkeypatch.setattr(gates, "REPO", tmp_path)
     found = gates.docs_findings([fn])
     assert any("'pythonHeavy' tab" in f for f in found)
-    assert any("'scala' tab for a surface it does not have" in f for f in found)
+    # no page shows a Scala tab: Scala is the performance tier, and the Scala tag links to the jar-functions page
+    assert any("'scala' tab (Scala is the performance tier" in f for f in found)
     assert any("needs rst_slope_python_example_output" in f for f in found)
     assert not any("needs rst_slope_python_example in" in f for f in found)
 

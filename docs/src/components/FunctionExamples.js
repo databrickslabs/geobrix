@@ -7,12 +7,12 @@ import functionInfo from '@site/../src/main/resources/com/databricks/labs/gbx/fu
 
 // Tabs by surface, for a function whose function-info entry lists `surfaces` (generated from the function
 // manifest). The Python tab shows the Python-level example until a function has its own Python example.
+// Scala is the performance tier, not an API, so no Scala tab: the Surfaces tag links to the JAR page.
 const SURFACE_TABS = [
   { key: 'session', label: 'SQL',               prop: 'sql',    lang: 'sql',    suffix: '_sql_example' },
   { key: 'uc',      label: 'Unity Catalog SQL', prop: 'ucSql',  lang: 'sql',    suffix: '_uc_sql_example' },
   { key: 'python',  label: 'Python',            prop: 'python', lang: 'python', suffix: '_python_example',
     fallback: 'pythonLight', fallbackSuffix: '_python_light_example' },
-  { key: 'scala',   label: 'Scala',             prop: 'scala',  lang: 'scala',  suffix: '_scala_example' },
 ];
 
 function surfacesFor(name) {

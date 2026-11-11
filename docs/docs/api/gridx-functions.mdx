@@ -8,7 +8,6 @@ import FunctionExamples from '@site/src/components/FunctionExamples';
 import gridxFunctionsExamples from '!!raw-loader!../../tests/python/api/gridx_functions.py';
 import gridxFunctionsSqlExamples from '!!raw-loader!../../tests/python/api/gridx_functions_sql.py';
 import gridxLightCode from '!!raw-loader!../../tests/python/api/gridx_functions_python_light.py';
-import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Impl';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
@@ -34,7 +33,7 @@ GridX is GeoBrix's discrete-global-grid indexing package. It ships **CARTO quadb
 - H3: `databricks.labs.gbx.gridx.h3`
 - Helpers: `databricks.labs.gbx.gridx.helpers`
 
-Scala has the BNG functions in `com.databricks.labs.gbx.gridx.bng`. For other names, use `call_function("gbx_...", ...)`. One call registers all grids: `register(spark)`.
+One call registers all grids: `register(spark)`.
 :::
 
 ## Key Features
@@ -98,7 +97,8 @@ Every function on this page shows **one example** on each surface it runs on:
 | **SQL** | Session SQL, after `register(spark)` |
 | **Unity Catalog SQL** | A `<catalog>.<schema>.gbx_*` function, where the function exists in Unity Catalog |
 | **Python** | The `gridx.<grid>` Python API |
-| **Scala** | The `gridx` Scala functions |
+
+The **Scala** tag has no tab: it links to [Functions the JAR speeds up](./jar-functions).
 
 The tabs operate on the **same input fixture** with the **same arguments**. Where the output differs in form, the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
 
@@ -852,7 +852,7 @@ Functions to convert BNG cell IDs to standard geometry formats.
 ### bng_aswkb
 
 {/* BEGIN GENERATED gbx_bng_aswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_aswkb" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -878,7 +878,6 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
   name="bng_aswkb"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -887,7 +886,7 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 ### bng_aswkt
 
 {/* BEGIN GENERATED gbx_bng_aswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_aswkt" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -913,7 +912,6 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
   name="bng_aswkt"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -926,7 +924,7 @@ Fundamental operations on BNG cells.
 ### bng_cellarea
 
 {/* BEGIN GENERATED gbx_bng_cellarea: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_cellarea" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -952,7 +950,6 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
   name="bng_cellarea"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -961,7 +958,7 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
 ### bng_centroid
 
 {/* BEGIN GENERATED gbx_bng_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_centroid" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -987,7 +984,6 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
   name="bng_centroid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -996,7 +992,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 ### bng_distance
 
 {/* BEGIN GENERATED gbx_bng_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_distance" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1023,7 +1019,6 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count
   name="bng_distance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1032,7 +1027,7 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count
 ### bng_euclideandistance
 
 {/* BEGIN GENERATED gbx_bng_euclideandistance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_euclideandistance" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1059,7 +1054,6 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev distance in gri
   name="bng_euclideandistance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1076,7 +1070,7 @@ Operations combining multiple BNG chip structs.
 ### bng_cellintersection
 
 {/* BEGIN GENERATED gbx_bng_cellintersection: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_cellintersection" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1103,7 +1097,6 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
   name="bng_cellintersection"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1112,7 +1105,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
 ### bng_cellunion
 
 {/* BEGIN GENERATED gbx_bng_cellunion: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_cellunion" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1139,7 +1132,6 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
   name="bng_cellunion"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1188,7 +1180,7 @@ Runs as a SQL function that needs no JAR and no Python, and falls back to a nump
 ### bng_pointascell
 
 {/* BEGIN GENERATED gbx_bng_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_pointascell" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1215,7 +1207,6 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coor
   name="bng_pointascell"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1228,7 +1219,7 @@ Generate neighboring cells using k-ring patterns.
 ### bng_kring
 
 {/* BEGIN GENERATED gbx_bng_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_kring" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1255,7 +1246,6 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
   name="bng_kring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1291,7 +1281,6 @@ Powered by **pure Python**. The cells at exactly ring distance `k`.
   name="bng_kloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1330,7 +1319,6 @@ Powered by **pure Python** + **shapely**. Polyfills the geometry then expands by
   name="bng_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1369,7 +1357,6 @@ Powered by **pure Python** + **shapely**. Polyfills the geometry then returns on
   name="bng_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1409,7 +1396,6 @@ Powered by **pure Python** + **shapely**. Enumerates the cells covering the geom
   name="bng_polyfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1418,7 +1404,7 @@ Powered by **pure Python** + **shapely**. Enumerates the cells covering the geom
 ### bng_tessellate
 
 {/* BEGIN GENERATED gbx_bng_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_tessellate" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1446,7 +1432,6 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus 
   name="bng_tessellate"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1595,7 +1580,7 @@ Union the chips of one BNG cell from one array of `(cellid, core, chip)` structs
 ### bng_cellfill
 
 {/* BEGIN GENERATED gbx_bng_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_bng_cellfill" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1631,7 +1616,6 @@ Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity wi
   name="bng_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1665,7 +1649,7 @@ Explode array results into individual rows.
 ### bng_kringexplode
 
 {/* BEGIN GENERATED gbx_bng_kringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_kringexplode" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1704,7 +1688,7 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 ### bng_kloopexplode
 
 {/* BEGIN GENERATED gbx_bng_kloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_kloopexplode" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1743,7 +1727,7 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 ### bng_geomkringexplode
 
 {/* BEGIN GENERATED gbx_bng_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_geomkringexplode" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1785,7 +1769,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 ### bng_geomkloopexplode
 
 {/* BEGIN GENERATED gbx_bng_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_geomkloopexplode" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1827,7 +1811,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 ### bng_tessellateexplode
 
 {/* BEGIN GENERATED gbx_bng_tessellateexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_bng_tessellateexplode" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1900,7 +1884,7 @@ A custom grid is a user-defined regular rectangular grid specified by its spatia
 ### custom_grid
 
 {/* BEGIN GENERATED gbx_custom_grid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_grid" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1929,7 +1913,6 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
   name="custom_grid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1938,7 +1921,7 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
 ### custom_pointascell
 
 {/* BEGIN GENERATED gbx_custom_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_pointascell" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1962,7 +1945,6 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
   name="custom_pointascell"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1971,7 +1953,7 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
 ### custom_cellaswkb
 
 {/* BEGIN GENERATED gbx_custom_cellaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_cellaswkb" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1994,7 +1976,6 @@ Return the WKB footprint polygon of a custom grid cell.
   name="custom_cellaswkb"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2003,7 +1984,7 @@ Return the WKB footprint polygon of a custom grid cell.
 ### custom_cellaswkt
 
 {/* BEGIN GENERATED gbx_custom_cellaswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_cellaswkt" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2026,7 +2007,6 @@ Return the WKT footprint polygon of a custom grid cell.
   name="custom_cellaswkt"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2035,7 +2015,7 @@ Return the WKT footprint polygon of a custom grid cell.
 ### custom_centroid
 
 {/* BEGIN GENERATED gbx_custom_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_centroid" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2058,7 +2038,6 @@ Return the centroid of a custom grid cell as a WKB point.
   name="custom_centroid"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2091,7 +2070,6 @@ Fill a geometry with all custom grid cell IDs at the specified resolution.
   name="custom_polyfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2124,7 +2102,6 @@ Return all custom grid cells within `k` steps of a center cell (filled neighborh
   name="custom_kring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2157,7 +2134,6 @@ Return the hollow ring of custom grid cells at exactly `k` steps from the center
   name="custom_kloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2197,7 +2173,6 @@ Polyfill a geometry at a given custom grid resolution then expand by `k` ring st
   name="custom_geomkring"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2233,7 +2208,6 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
   name="custom_geomkloop"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2273,7 +2247,6 @@ Streaming version of `custom_geomkring` — one row per cell. Call it with `FROM
   name="custom_geomkringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2313,7 +2286,6 @@ Streaming version of `custom_geomkloop` — one row per cell at exactly `k` step
   name="custom_geomkloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2322,7 +2294,7 @@ Streaming version of `custom_geomkloop` — one row per cell at exactly `k` step
 ### custom_distance
 
 {/* BEGIN GENERATED gbx_custom_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_custom_distance" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2346,7 +2318,6 @@ Chebyshev (king-move) distance in grid steps between two custom grid cells. Retu
   name="custom_distance"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2388,7 +2359,6 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
   name="custom_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2427,7 +2397,7 @@ Fill missing custom-grid cell values from one array of `(cellid, value)` structs
 ### h3_cellfill
 
 {/* BEGIN GENERATED gbx_h3_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python scala jar="gbx_h3_cellfill" />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2451,7 +2421,6 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
   name="h3_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 

@@ -1191,3 +1191,24 @@ def test_a_short_generated_input_reaches_the_guard_as_the_processed_row_count():
         row = levels._run_one(ctx, form, base, 1000)
     assert row.status == "ok" and row.rows == 600
     assert "short input: 600 of 1000 rows" in row.note
+
+
+@pytest.mark.parametrize(
+    "spelling", [["--set", "IO,S"], ["--set=IO,S"], ["--k", "3", "--set=IO,S"]]
+)
+def test_several_sets_run_one_process_each_whatever_the_set_spelling(
+    monkeypatch, spelling
+):
+    """Each set is re-run with exactly one ``--set <name>``, the other arguments kept; the exit code is the worst."""
+    calls, codes = [], iter([0, 2])
+    monkeypatch.setattr(
+        lt.subprocess,
+        "run",
+        lambda cmd, **kw: calls.append(cmd[3:])
+        or types.SimpleNamespace(returncode=next(codes)),
+    )
+    assert lt.main(spelling) == 2
+    assert [c[c.index("--set") + 1] for c in calls] == ["IO", "S"]
+    for c in calls:
+        assert sum(t == "--set" or t.startswith("--set=") for t in c) == 1, c
+        assert ("--k" in c) == ("--k" in spelling), c

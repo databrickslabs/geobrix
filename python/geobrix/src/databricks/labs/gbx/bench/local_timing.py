@@ -1136,6 +1136,19 @@ def measure(spec: SetSpec, corpus: str, spark=None) -> Dict[Tuple[str, int], flo
     return measure_runs(spec, corpus, 1, spark)[0]
 
 
+def _without_set(args: List[str]) -> List[str]:
+    """`args` without its ``--set`` option, in either spelling argparse takes (``--set A,B`` or ``--set=A,B``)."""
+    out, skip = [], False
+    for t in args:
+        if skip:
+            skip = False
+        elif t == "--set":
+            skip = True
+        elif not t.startswith("--set="):
+            out.append(t)
+    return out
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         description="Local timing pass of a levels set. Exit 0: no flags; 1: a form was flagged; 2: a precondition is "
@@ -1272,11 +1285,10 @@ def main(argv=None) -> int:
     if len(names) > 1:
         # Several sets: each in its own process, one after the other, so a set that loses its JVM (a heap overflow)
         # does not take the next sets with it. The exit code is the worst of theirs.
-        args = list(sys.argv[1:] if argv is None else argv)
-        at = args.index("--set")
+        args = _without_set(list(sys.argv[1:] if argv is None else argv))
         codes: Dict[str, int] = {}
         for n in names:
-            one = args[:at] + ["--set", n] + args[at + 2 :]
+            one = args + ["--set", n]
             codes[n] = subprocess.run(
                 [sys.executable, "-m", "databricks.labs.gbx.bench.local_timing", *one]
             ).returncode

@@ -1,6 +1,7 @@
 """The read-only store over manifest rows: virtual shards, chunk overrides, range reads."""
 
 import asyncio
+import concurrent.futures
 import gc
 import os
 import pickle
@@ -35,7 +36,15 @@ PROTO = default_buffer_prototype()
 
 
 def _run(coro):
-    return asyncio.run(coro)
+    """Run ``coro`` to its end, also where an event loop already runs in this thread (a
+    Databricks notebook's kernel runs pytest inside one, and ``asyncio.run`` refuses there):
+    then a worker thread runs it on a loop of its own."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _alist(agen):
@@ -63,6 +72,35 @@ class Spy:
 
     def fetched(self):
         return sum(r.length for call in self.calls for r in call)
+
+
+def test_the_helpers_run_a_coroutine_inside_a_running_event_loop(era5_v2):
+    """A Databricks notebook runs every cell (pytest included) inside a running event loop,
+    where ``asyncio.run`` refuses to start. The helpers answer there as they do in a plain
+    process."""
+    metas, rows, arrays = plain_store_rows(era5_v2)
+    st = ManifestStore(metas, rows, FuseRangeReader(str(era5_v2)), arrays)
+
+    async def a_notebook_cell():
+        return _get(st, "u10/0.0.0"), _run(st.exists("u10/0.0.0"))
+
+    data, present = _run(a_notebook_cell())  # a loop runs inside the cell
+    assert data == (era5_v2 / "u10" / "0.0.0").read_bytes() and present
+
+
+def test_zarr_reads_the_store_inside_a_running_event_loop(era5_v3_sharded):
+    """What a notebook user does: zarr's synchronous API over the store, called while the
+    kernel's event loop runs. zarr drives the store's coroutines on its own loop thread, so
+    the read needs no loop of the caller's."""
+    metas, rows, arrays = plain_store_rows(era5_v3_sharded)
+    st = ManifestStore(metas, rows, FuseRangeReader(str(era5_v3_sharded)), arrays)
+
+    async def a_notebook_cell():
+        return zarr.open_array(store=st, path="t2m", mode="r")[:]
+
+    got = _run(a_notebook_cell())  # a loop runs inside the cell
+    want = zarr.open_array(str(era5_v3_sharded / "t2m"), mode="r")[:]
+    np.testing.assert_array_equal(got, want)
 
 
 def test_manifest_store_reads_like_the_plain_store(era5_v3_sharded):
@@ -203,8 +241,14 @@ def test_blocking_reads_run_off_the_event_loop_thread(era5_v2):
     metas, rows, arrays = plain_store_rows(era5_v2)
     spy = Spy(FuseRangeReader(str(era5_v2)))
     st = ManifestStore(metas, rows, spy, arrays)
-    assert _get(st, "u10/0.0.0") is not None
-    assert spy.threads and threading.get_ident() not in spy.threads
+    loop_threads = set()
+
+    async def get():
+        loop_threads.add(threading.get_ident())
+        return await st.get("u10/0.0.0", PROTO)
+
+    assert _run(get()) is not None
+    assert spy.threads and loop_threads and not loop_threads & spy.threads
 
 
 @pytest.mark.parametrize(

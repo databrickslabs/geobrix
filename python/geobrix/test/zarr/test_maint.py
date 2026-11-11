@@ -394,6 +394,9 @@ def layered(spark_delta, drop, tmp_path, no_hooks):
 
     w1 = uuid.uuid4().hex
     table, root, v1 = _store(spark_delta, drop, tmp_path, label="lay", write_id=w1)
+    _compact(
+        spark_delta, table
+    )  # each write is followed by a compaction, as on Databricks
     values, versions = {}, [v1]
     for generation in (2, 3):
         new = np.full((48, 10, 12), float(generation), dtype="float32")
@@ -402,6 +405,7 @@ def layered(spark_delta, drop, tmp_path, no_hooks):
                 _blocks(spark_delta, ("t2m", (0, 0, 0), new)), table, mode="overwrite"
             )
         )
+        _compact(spark_delta, table)
         values[generation] = new
     gbx_zarr_tag(spark_delta, table, "keep", version_as_of=versions[1])
     return SimpleNamespace(
@@ -572,12 +576,16 @@ def test_vacuum_keeps_deltas_retention_at_the_stores_and_survives_a_delta_vacuum
     assert props["delta.deletedFileRetentionDuration"] == "interval 7 days"
     assert props["delta.logRetentionDuration"] == "interval 90 days"
 
-    # Delta's maintenance a week on: it compacts, then removes every file no current
-    # version needs (the check is relaxed for the session in place of waiting a week)
+    # Delta's maintenance a week on: it compacts, purges the rows deletion vectors hide, then
+    # removes every file no current version needs (the check is relaxed for the session in
+    # place of waiting a week). v1 reads at the compaction after it; the purge rewrites the
+    # files of it that later writes changed, which a compaction alone may leave in place (an
+    # incremental OPTIMIZE of a clustered table on Databricks does)
     check = "spark.databricks.delta.retentionDurationCheck.enabled"
     spark.conf.set(check, "false")
     try:
         spark.sql(f"OPTIMIZE {table}").collect()
+        spark.sql(f"REORG TABLE {table} APPLY (PURGE)").collect()
         spark.sql(f"VACUUM {table} RETAIN 0 HOURS").collect()
     finally:
         spark.conf.set(check, "true")

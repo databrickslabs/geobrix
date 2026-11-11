@@ -607,7 +607,8 @@ def read_props(spark, table: str, *, need_file: bool = False) -> StoreProps:
 # Delta operations that change no row: their add and remove actions carry dataChange = false, or they change only
 # the table's metadata. Databricks runs one after every MERGE (auto compaction, an OPTIMIZE with auto = true, which
 # cannot be turned off: https://docs.databricks.com/aws/en/delta/tune-file-size), so a GeoBrix commit is often
-# followed by versions that read exactly as it does. Any other operation counts as a data change.
+# followed by versions that read exactly as it does. Any other operation counts as a data change, so an operation
+# missing here costs only the old behaviour: the version reads as itself.
 _NO_DATA_CHANGE = frozenset(
     {
         "OPTIMIZE",
@@ -619,6 +620,11 @@ _NO_DATA_CHANGE = frozenset(
         "UPGRADE PROTOCOL",
         "ADD FEATURE",
         "DROP FEATURE",
+        "CLUSTER BY",
+        "ROW TRACKING BACKFILL",
+        "ROW TRACKING UNBACKFILL",
+        # Databricks marks the files an OPTIMIZE of a clustered table wrote as a version of its own
+        "LIQUID TAGGING",
     }
 )
 _HISTORY_PAGE = 64  # the latest version: the newest versions of the history, all of it when they change no data

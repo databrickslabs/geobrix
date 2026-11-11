@@ -1721,6 +1721,25 @@ def test_a_version_with_no_data_change_reads_as_the_one_before():
         assert M._changes_data(op) is changed, op
 
 
+def test_the_pool_history_after_an_optimize_reads_as_its_last_merge():
+    """The operations of a store's history on the DBR 19 pool (tst-20261111-131939-e2f2): two
+    auto compactions, then an OPTIMIZE of the clustered manifest, which Databricks follows with
+    a LIQUID TAGGING version. None of the last four changes data."""
+    ops = [
+        "CREATE TABLE",
+        "MERGE",
+        "MERGE",
+        "OPTIMIZE",
+        "MERGE",
+        "OPTIMIZE",
+        "OPTIMIZE",
+        "LIQUID TAGGING",
+    ]
+    history = [(v, v, M._changes_data(op)) for v, op in enumerate(ops)]
+    assert M._data_version(history, 7) == 4
+    assert M._read_version(history, 4) == 7
+
+
 def test_the_latest_version_is_the_last_commit_not_a_compaction(spark_delta, table):
     (_, v1), (_, v2) = _commit_two(spark_delta, table)
     spark_delta.sql(f"OPTIMIZE {table}")  # what Databricks runs after a MERGE

@@ -25,7 +25,7 @@ show_help() {
     echo -e "  ${GREEN}--split auto|off${NC}       auto (default) cuts shards longer than --target-min by file; off keeps CI's shards"
     echo -e "  ${GREEN}--target-min <n>${NC}       Length a cut shard aims at (default: chosen for about 3.5 chunks per slot, at least 3.5 min)"
     echo -e "  ${GREEN}--timings <path>${NC}       Timing history every run merges into; it cuts and orders the queue (default test-logs/databricks-tests/timings-history.json)"
-    echo -e "  ${GREEN}--serverless${NC}           Run light shards on Serverless env 6: 8 runner tasks by default, chunks of 3-6 min, its own timings"
+    echo -e "  ${GREEN}--serverless${NC}           Run light shards on Serverless env 6: 8 runner tasks by default, chunks of 3-5 min, its own timings"
     echo -e "  ${GREEN}--fresh-cluster${NC}        Use a new cluster that ends with the run, not the pools"
     echo -e "  ${GREEN}--pool-light <name>${NC}    Default gbx-test-1n (no JAR)"
     echo -e "  ${GREEN}--pool-jar <name>${NC}      Default gbx-test-1n-jar (with the JAR)"
@@ -34,12 +34,17 @@ show_help() {
     echo -e "  ${GREEN}--stall-min <n>${NC}        Stop a shard when no test finished for n minutes (default 10)"
     echo -e "  ${GREEN}--start-cap-min <n>${NC}    Cancel when no shard has beaten n minutes after the submit (default 25)"
     echo -e "  ${GREEN}--pool-wait-min <n>${NC}    Wait up to n minutes for a free pool cluster (default 30)"
-    echo -e "  ${GREEN}--first-failed <k>${NC}     Stop the run when the first k chunks to finish all failed (default 3; 0 off)"
-    echo -e "  ${GREEN}--max-failed-chunks <n>${NC} Stop the run at n failed chunks (default 5; 0 off)"
+    echo -e "  ${GREEN}--first-failed <k>${NC}     Stop the run when the first k chunks to finish all failed (default 2; 0 off)"
+    echo -e "  ${GREEN}--max-failed-chunks <n>${NC} Stop the run at n failed chunks (default 3; 0 off)"
     echo -e "  ${GREEN}--max-failures <n>${NC}     Stop the run at n failed or erroring tests (default 20; 0 off)"
     echo -e "  ${GREEN}--maxfail <n>${NC}          pytest --maxfail in each chunk (default 3; 0 off)"
     echo -e "  ${GREEN}--no-fail-fast${NC}         Run every chunk to its end: no stop rule, no --maxfail (the smoke stays)"
     echo -e "  ${GREEN}--no-smoke${NC}             Start the whole queue at once, without the smoke chunk first"
+    echo -e "  ${GREEN}--start-chunks <n>${NC}     Runners that start at once; the rest wait for n passed chunks (default 2; 0 all)"
+    echo -e "  ${GREEN}--test-timeout <s>${NC}     Fail a test that runs longer than s seconds (default 120; 0 off)"
+    echo -e "  ${GREEN}--overrun-x <x>${NC}        Stop a chunk at x times its estimate, at least 3 min (default 2; 0 off)"
+    echo -e "  ${GREEN}--max-wall-min <n>${NC}     Stop the run at n minutes of wall (default 20; 0 off)"
+    echo -e "  ${GREEN}--rerun-failed <run id>${NC} Run only the tests that failed in that earlier run (--maxfail 1)"
     echo -e "  ${GREEN}--pip-extra \"<reqs>\"${NC}  More pip requirements the tests import"
     echo -e "  ${GREEN}--env KEY=VAL${NC}          An environment variable every shard sets (repeatable; e.g. GBX_CAP_ARROW_TILE_TRANSPORT=0)"
     echo -e "  ${GREEN}--spark-conf KEY=VAL${NC}   A Spark conf every shard's session sets before its tests (repeatable)"
@@ -67,7 +72,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--spark-conf|--run-id|--first-failed|--max-failed-chunks|--max-failures|--maxfail)
+        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--spark-conf|--run-id|--first-failed|--max-failed-chunks|--max-failures|--maxfail|--start-chunks|--test-timeout|--overrun-x|--max-wall-min|--rerun-failed)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASS_ARGS+=("$1" "$2")
             shift 2

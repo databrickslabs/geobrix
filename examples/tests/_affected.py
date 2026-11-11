@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 import json
+from collections import Counter
 import re
 import subprocess
 from dataclasses import dataclass, field
@@ -367,6 +368,8 @@ class Selection:
     tables: Dict[str, List[str]] = field(default_factory=dict)  # oracle table -> reasons
     notes: List[str] = field(default_factory=list)
     everything: List[str] = field(default_factory=list)  # changed files that select the whole bank
+    functions: Dict[str, Set[str]] = field(default_factory=dict)  # oracle table -> the functions whose rows a change reaches
+    whole: Set[str] = field(default_factory=set)  # oracle tables selected as a whole (their module, the family file, a conftest)
 
     def add_file(self, f: str, why: str) -> None:
         self.files.setdefault(f, [])
@@ -711,6 +714,7 @@ def select(G: Graph, changed: List[str], shards: List[ts.Shard], *, old_text: Ca
         if mod.startswith(ORACLE_PKG + ".") or mod == ORACLES:
             for t in [x for x in G.mods[mod]["defs"] if x in tables_of and (filt is ALL or x in filt)]:
                 sel.add_table(t, f"{_short(mod)} defines it")
+                sel.whole.add(t)
     rows = _rows(new_text(MANIFEST_JSON))
     for n, row in rows.items():
         for mod, sym in row_refs(row):
@@ -723,6 +727,7 @@ def select(G: Graph, changed: List[str], shards: List[ts.Shard], *, old_text: Ca
             for t in row_tables(rows.get(n) or {}):
                 if t in tables_of:
                     sel.add_table(t, f"row {n}: {why}")
+                    sel.functions.setdefault(t, set()).add(n)
         for t in G.tests:
             m = G.mods[t]
             hit = names & set(m["words"]) or {n for n in names if any(n in s for s in m["strings"])}
@@ -736,6 +741,7 @@ def _add_test(sel: Selection, G: Graph, t: str, why: str, tables_of: Dict[str, t
     if rel == FAMILY_FILE:
         for tb in tables_of:
             sel.add_table(tb, why)
+            sel.whole.add(tb)
     else:
         sel.add_file(rel, why)
 
@@ -780,13 +786,25 @@ def to_shards(sel: Selection, shards: List[ts.Shard], root: Path) -> Tuple[List[
         out.append(ts.Shard(name=f"{label} affected", kind=home.kind, paths=sorted(files), delta=home.delta, pool=home.pool,
                             marker=home.marker, subset=True))
     tables_of = family_tables(runnable)
+    try:
+        per_table = Counter(t for row in _rows((Path(root) / MANIFEST_JSON).read_text()).values() if row.get("status") == "stable" for t in row_tables(row))
+    except OSError:
+        per_table = Counter()
     for s in runnable:
         if not s.oracle_tables:
             continue
         mine = [t for t in s.oracle_tables.split(",") if t and t in sel.tables]
-        if mine:
-            out.append(ts.Shard(name=f"{s.name} affected", kind=s.kind, paths=list(s.paths), ignore=list(s.ignore), part=s.part,
-                                oracle_tables=",".join(mine), delta=s.delta, pool=s.pool, marker=s.marker, unsplittable=True, subset=True))
+        whole = [t for t in mine if t in sel.whole or not sel.functions.get(t)]
+        rows_only = [t for t in mine if t not in whole]
+        common = dict(kind=s.kind, paths=list(s.paths), ignore=list(s.ignore), part=s.part, delta=s.delta, pool=s.pool, marker=s.marker,
+                      unsplittable=True, subset=True)
+        if whole:
+            out.append(ts.Shard(name=f"{s.name} affected", oracle_tables=",".join(whole), **common))
+        if rows_only:  # only the rows of the functions the change reaches: -k with their names, not the whole table
+            fns = sorted(set().union(*(sel.functions[t] for t in rows_only)))
+            share = min(1.0, max(0.05, len(fns) / max(1, sum(per_table.get(t, 0) for t in rows_only))))
+            out.append(ts.Shard(name=f"{s.name} affected rows", oracle_tables=",".join(rows_only), select_k=" or ".join(fns),
+                                share=round(share, 3), **common))
     unknown = sorted(t for t in sel.tables if t not in tables_of)
     lost += [f"table:{t}" for t in unknown]
     return out, lost
@@ -816,7 +834,8 @@ def explain_lines(sel: Selection, n_units: int, n_light_selected: int) -> List[s
     for f, why in sorted(sel.files.items()):
         out.append(f"  {f}: {why[0]}" + (f" (and {len(why) - 1} more reason(s))" if len(why) > 1 else ""))
     for t, why in sorted(sel.tables.items()):
-        out.append(f"  table {t}: {why[0]}" + (f" (and {len(why) - 1} more reason(s))" if len(why) > 1 else ""))
+        rows = "" if t in sel.whole or not sel.functions.get(t) else f" [only the rows of {', '.join(sorted(sel.functions[t]))}: -k]"
+        out.append(f"  table {t}{rows}: {why[0]}" + (f" (and {len(why) - 1} more reason(s))" if len(why) > 1 else ""))
     return out
 
 

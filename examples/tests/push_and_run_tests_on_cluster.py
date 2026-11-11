@@ -104,7 +104,7 @@ TIMINGS = "test-logs/databricks-tests/timings-history.json"
 GRAPH_CACHE = "test-logs/databricks-tests/.import-graph"  # the import graph of a commit, built once (examples/tests/_affected.py)  # every run's samples (examples/tests/_timings.py)
 OLD_TIMINGS = "test-logs/databricks-tests/timings.json"  # the last run's seconds only: read when there is no history yet
 POLL_S = 15
-STATUS_EVERY_S = 150
+STATUS_EVERY_S = 120  # one status line per pool every 2 min
 BEAT_EVERY_S = 60  # heartbeats are read this often: a pool has up to 20 shards and each read is a Files call
 
 
@@ -147,14 +147,28 @@ def parse(argv):
     p.add_argument("--maxfail", type=int, default=None, help=f"pytest's --maxfail in each chunk (default {sr.POLICY['maxfail']}; 0: off)")
     p.add_argument("--no-fail-fast", action="store_true", help="run every chunk to its end: no stop rule, no --maxfail (the smoke stays)")
     p.add_argument("--no-smoke", action="store_true", help="start the whole queue at once, without the smoke chunk first")
+    p.add_argument("--start-chunks", type=int, default=sr.POLICY["start_chunks"], help="runners that start at once; the rest wait for that many passed chunks (0: all)")
+    p.add_argument("--test-timeout", type=float, default=TEST_TIMEOUT_S, help="fail a test that runs longer than this, in seconds (0: no limit)")
+    p.add_argument("--overrun-x", type=float, default=OVERRUN_X, help="stop a chunk at this many times its estimate (0: off)")
+    p.add_argument("--max-wall-min", type=float, default=MAX_WALL_MIN, help="stop the run when its wall time reaches this (0: no budget)")
+    p.add_argument("--rerun-failed", default="", metavar="RUN_ID", help="run only the tests that failed in that earlier run (its local results)")
     return p.parse_args(argv)
 
 
+TEST_TIMEOUT_S = 120.0  # --test-timeout: a test (its call; setup and teardown get 3x) that runs longer fails
+OVERRUN_X = 2.0  # --overrun-x: a chunk stops at 2x its estimate, never under OVERRUN_FLOOR_MIN
+OVERRUN_FLOOR_MIN = 3.0
+MAX_WALL_MIN = 20.0  # --max-wall-min: the run stops itself at this wall time
+
+
 def fail_fast(a) -> dict:
-    """The run's fail-fast policy as the runners and the launcher read it (``_shard_runner.stop_rule``)."""
-    maxfail = a.maxfail if a.maxfail is not None else (0 if a.no_fail_fast else sr.POLICY["maxfail"])
+    """The run's fail-fast policy as the runners and the launcher read it (``_shard_runner.stop_rule``). ``--rerun-failed`` stops a
+    chunk at its first failure."""
+    default_maxfail = 1 if a.rerun_failed else sr.POLICY["maxfail"]
+    maxfail = a.maxfail if a.maxfail is not None else (0 if a.no_fail_fast else default_maxfail)
     return {"first_k": a.first_failed, "max_failed_chunks": a.max_failed_chunks, "max_failures": a.max_failures, "maxfail": maxfail,
-            "off": bool(a.no_fail_fast), "smoke": not a.no_smoke}
+            "off": bool(a.no_fail_fast), "smoke": not a.no_smoke, "start_chunks": a.start_chunks, "test_timeout_s": a.test_timeout,
+            "overrun_x": a.overrun_x, "overrun_floor_min": OVERRUN_FLOOR_MIN, "max_wall_min": a.max_wall_min}
 
 
 def fail_fast_text(ff: dict) -> str:
@@ -165,8 +179,13 @@ def fail_fast_text(ff: dict) -> str:
                  f"{ff['max_failed_chunks']} failed chunks" if ff.get("max_failed_chunks") else "",
                  f"{ff['max_failures']} failed tests" if ff.get("max_failures") else ""]
         rules = "stop the run at " + (", or ".join(x for x in parts if x) or "nothing (every rule set to 0)")
-    return (f"{rules}; pytest --maxfail={ff['maxfail']} per chunk" if ff.get("maxfail") else f"{rules}; no --maxfail") + (
-        "; a smoke chunk runs first and its failure stops the run" if ff.get("smoke") else "; no smoke chunk (--no-smoke)")
+    more = [f"pytest --maxfail={ff['maxfail']} per chunk" if ff.get("maxfail") else "no --maxfail",
+            f"a test fails past {ff['test_timeout_s']:g} s" if ff.get("test_timeout_s") else "no test timeout",
+            f"a chunk stops at {ff['overrun_x']:g}x its estimate" if ff.get("overrun_x") else "no overrun stop",
+            f"the run stops at {ff['max_wall_min']:g} min of wall" if ff.get("max_wall_min") else "no wall budget",
+            f"{ff['start_chunks']} runner(s) start, the rest once {ff['start_chunks']} chunk(s) passed" if ff.get("start_chunks") else "every runner starts at once",
+            "a smoke chunk runs first and its failure stops the run" if ff.get("smoke") else "no smoke chunk (--no-smoke)"]
+    return rules + "; " + "; ".join(more)
 
 
 def problems(a) -> list:
@@ -179,8 +198,12 @@ def problems(a) -> list:
         out.append("--run-id may hold letters, digits, '.', '_' and '-' only (it names a Volume folder)")
     if a.max_parallel < 0 or a.clusters < 0:
         out.append("--max-parallel and --clusters must not be negative")
-    if min(a.first_failed, a.max_failed_chunks, a.max_failures, a.maxfail if a.maxfail is not None else 0) < 0:
-        out.append("--first-failed, --max-failed-chunks, --max-failures and --maxfail must not be negative (0 turns one off)")
+    if min(a.first_failed, a.max_failed_chunks, a.max_failures, a.maxfail if a.maxfail is not None else 0, a.start_chunks, a.test_timeout,
+           a.overrun_x, a.max_wall_min) < 0:
+        out.append("--first-failed, --max-failed-chunks, --max-failures, --maxfail, --start-chunks, --test-timeout, --overrun-x and --max-wall-min "
+                   "must not be negative (0 turns one off)")
+    if a.rerun_failed and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a.rerun_failed):
+        out.append("--rerun-failed takes the run id of an earlier run (its results under test-logs/databricks-tests/<run id>/)")
     if a.split not in ("auto", "off"):
         out.append("--split is auto or off")
     if a.target_min and a.target_min <= ts.FIXED_MIN * 2:
@@ -246,16 +269,22 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
     pools = {}
     slots = plan_slots(a)
     ff = fail_fast(a)
+    smokes: Dict[str, dict] = {}
     for name, items in by_pool.items():
         jar_pool = bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless)
         kind = "serverless" if name == "serverless" else ("jar" if jar_pool else "light")
         pools[name] = {"jar": jar_pool, "table": queue_table(volroot, run_id, kind)}
         # Serverless: every runner task has compute of its own, so no chunk is heavy for its neighbours (no gate)
         heavy = set() if a.serverless else {s.slug for s in items if s.heavy}
-        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, 1 if a.serverless else max(1, a.clusters), a.shard_cap_min, heavy,
-                  smoke=ff["smoke"])
+        expected = {s.slug: s.expected_min for s in items}
+        smoke = smoke_chunk(items, kind, sha, root, a, name) if ff["smoke"] and len(items) >= 2 else None
+        if smoke:
+            smokes[smoke["slug"]] = smoke
+            expected[smoke["slug"]] = smoke["expected_min"]
+        size_pool(pools[name], expected, slots, 1 if a.serverless else max(1, a.clusters), a.shard_cap_min, heavy,
+                  smoke=smoke["slug"] if smoke else "", start=ff["start_chunks"])
     return {
-        "run_id": run_id, "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps, "fail_fast": ff,
+        "run_id": run_id, "attempt": uuid.uuid4().hex[:6], "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps, "fail_fast": ff,
         "wheel": {"local": str(wheel) if wheel else "", "name": wheel.name if wheel else "",
                   "built_from": mut.wheel_git_sha(wheel) if wheel else "",
                   "sha256": wheel_sha,
@@ -267,7 +296,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "shards": {
             s.slug: {
                 "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": {**ts.shard_env(s), **extra_env(a)}, "spark_conf": spark_confs(a), "expected_min": round(s.expected_min, 1),
-                "est_src": s.est_src or "ci", "heavy": bool(s.heavy and not a.serverless), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
+                "test_part": s.test_part, "est_src": s.est_src or "ci", "heavy": bool(s.heavy and not a.serverless), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
                 "solo_min": round(s.solo_min or s.expected_min, 1),
                 "contention": round(s.expected_min / s.solo_min, 2) if s.solo_min else 1.0,
                 "unit_solo_s": unit_solo(s, root, fsolo or {}),
@@ -275,17 +304,42 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
                 "files": [] if s.oracle_tables else (ts.files_of(s, root) or []),
                 "tables": [t for t in s.oracle_tables.split(",") if t],
                 "cwd": "." if s.kind == "scripts" else ts.PKG, "pool": "serverless" if a.serverless else pool_of(s, a),
+                "select_k": s.select_k,
             }
             for s in shards
-        },
+        } | {slug: {k: v for k, v in sm.items() if k != "slug"} for slug, sm in smokes.items()},
     }
+
+
+SMOKE_TESTS = 2  # the tests the smoke runs from the run's own fastest chunk
+SMOKE_CANDIDATES = 3  # the fastest chunks it tries, in turn, for one that collects a test with its env, -k and markers
+
+
+def smoke_chunk(items: List[ts.Shard], kind: str, sha: str, root: Path, a, pool: str) -> Optional[dict]:
+    """The pool's smoke chunk, from the run's own selection: a collect-only of every test file its chunks run (an import error
+    anywhere shows in seconds), then the first SMOKE_TESTS tests of its fastest chunk, collected and run with that chunk's env,
+    ``-k``, markers and test part. It tries the next fastest (up to SMOKE_CANDIDATES) when one collects nothing; when none
+    collects a test, the smoke fails as a selection error. None when the pool runs no test of the package (scripts/ci only)."""
+    pkg = [s for s in items if s.kind != "scripts"]
+    files = sorted({f for s in pkg for f in ((ts.files_of(s, root) or []) if not s.oracle_tables else [tm.FAMILY_FILE])})
+    files += sorted({p.split("::")[0] for s in pkg if not s.oracle_tables and not ts.files_of(s, root) for p in s.paths})
+    if not files:
+        return None
+    light = [s for s in items if not (s.heavy and not a.serverless)] or items
+    cands = [s.slug for s in sorted(light, key=lambda s: (s.expected_min, s.slug))][:SMOKE_CANDIDATES]
+    return {"slug": f"smoke-{kind}", "name": "smoke", "kind": "smoke", "args": [], "candidates": cands, "smoke_tests": SMOKE_TESTS,
+            "collect": ["-m", "not integration"] + sorted(set(files)), "env": dict(extra_env(a)), "spark_conf": spark_confs(a),
+            "expected_min": round(ts.FIXED_MIN + 1.0, 1), "test_part": "", "est_src": "ci", "heavy": False, "unit_max_min": 0.5,
+            "subset": True, "solo_min": round(ts.FIXED_MIN + 1.0, 1), "contention": 1.0, "unit_solo_s": {},
+            "stall_min": a.stall_min, "files": [], "tables": [], "cwd": ts.PKG, "pool": pool, "select_k": "", "smoke": True}
 
 
 SRC_MARK = {"history": "h", "partial": "p", "lower bound": "lb", "ci": "ci"}
 # Serverless: runners side by side by default. Each runner task has its own compute (no shared driver JVM, unlike a pool node's
 # slots), so the count is a cost and quota choice, not a contention one.
 SERVERLESS_SLOTS = 8
-SERVERLESS_TARGET = (3.0, 6.0)  # the chunk length a Serverless cut aims at, in minutes: a few minutes, so failures show early
+SERVERLESS_TARGET = (3.0, 5.0)  # the chunk length a Serverless cut aims at, in minutes: a few minutes, so failures show early
+POOL_TARGET = (3.0, 5.0)  # the same on a pool cluster; either is a hard cap: no chunk is planned over it
 
 
 def plan_slots(a) -> int:
@@ -331,37 +385,55 @@ def schedule_wall(expected: Dict[str, float], queue: List[str], heavy: set, runn
     return max(free)
 
 
-def smoke_pick(expected: Dict[str, float], heavy: set) -> str:
-    """The smoke chunk: the shortest chunk that is not heavy (by name on a tie); "" when the queue has fewer than two chunks (a
-    single chunk is its own smoke) or every chunk is heavy."""
-    light = [s for s in expected if s not in heavy]
-    if len(expected) < 2 or not light:
-        return ""
-    return min(light, key=lambda s: (float(expected[s]), s))
+def ramp_wall(expected: Dict[str, float], queue: List[str], runners: int, start: int, need: int) -> float:
+    """The wall of the queue with the ramp: runners ``0..start-1`` take chunks from the start, the others once ``need`` chunks have
+    ended (the launch waits for clean results before it goes wide). List scheduling onto the runner that frees first."""
+    if not start or start >= runners:
+        start = runners
+    free = [0.0] * start
+    ends: List[float] = []
+    todo = list(queue)
+    opened = start == runners
+    while todo:
+        i = min(range(len(free)), key=lambda j: free[j])
+        if not opened and len(ends) >= need and free[i] >= sorted(ends)[need - 1]:
+            free += [sorted(ends)[need - 1]] * (runners - start)  # the held runners start when the need-th chunk ends
+            opened = True
+            continue
+        s = todo.pop(0)
+        free[i] += expected[s]
+        ends.append(free[i])
+    return max(free) if free else 0.0
 
 
 def size_pool(spec: dict, expected: Dict[str, float], slots: int, n_clusters: int, shard_cap_min: float, heavy: Optional[set] = None,
-              smoke: bool = False) -> None:
+              smoke: str = "", start: int = 0) -> None:
     """Fill a pool's plan: the queue (longest expected first), the runners (clusters x slots, never more than the shards), and the
     expected wall: the longest-first schedule onto the slot that frees first, which is what the runners do. The cap is the
     runner task's timeout: every shard of the busiest runner at the shard cap, plus one more when the shards outnumber the runners.
     ``heavy`` names the chunks that run one at a time per cluster: the wall waits for them in turn, and the cap allows for it.
-    ``smoke``: the shortest light chunk heads the queue and runs alone first (``smoke_pick``); the wall adds its time."""
+    ``smoke`` (a slug of ``expected``) heads the queue and runs alone first; the wall adds its time. ``start``: the ramp (only that
+    many runners start; the rest once that many chunks passed), which the wall and the runners' cap allow for."""
     heavy = {s for s in (heavy or ()) if s in expected}
-    first = smoke_pick(expected, heavy) if smoke else ""
+    first = smoke if smoke in expected else ""
     rest = {s: m for s, m in expected.items() if s != first}
-    queue = ([first] if first else []) + sr.queue_order(rest)
+    order = sr.queue_order(rest)
+    queue = ([first] if first else []) + order
     runners = max(1, min(slots * n_clusters, len(rest)))
     est = [ts.Shard(name=slug, kind="light", est_min=m) for slug, m in rest.items()]
     load = [sum(s.expected_min for s in lane) for lane in ts.lanes(est, runners)]
     wall = max(load)
     per_runner = math.ceil(len(rest) / runners) + (1 if len(rest) > runners else 0)
     cap = per_runner * (shard_cap_min + 10)
+    if start and start < runners:
+        wall = max(wall, ramp_wall(rest, order, runners, start, start))
+        cap += math.ceil(start / max(1, start)) * (shard_cap_min + 10)  # a held runner waits for the first chunks to pass
     if heavy:
-        wall = max(wall, schedule_wall(rest, [s for s in queue if s != first], heavy, runners, n_clusters))
+        wall = max(wall, schedule_wall(rest, order, heavy, runners, n_clusters))
         cap += math.ceil(len(heavy) / max(1, n_clusters)) * (shard_cap_min + 10)  # a runner may wait out the heavy chunks of its cluster
     spec.update(
         queue=queue, slots=slots, clusters=n_clusters, runners=runners, heavy=[s for s in queue if s in heavy], smoke=first,
+        start=min(start, runners) if start else runners,
         serial_min=round(sum(expected.values()), 1), longest_min=round(max(expected.values()), 1),
         expected_min=round(wall + (expected[first] if first else 0.0), 1), cap_min=cap,
         smoke_cap_min=(shard_cap_min + 10) if first else 0,
@@ -382,6 +454,8 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
         lines.append(f"    queue (longest first; each runner takes the next when it is free): "
                      + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')}"
                                  + (", heavy" if plan["shards"][s].get("heavy") else "")
+                                 + (f", part {plan['shards'][s]['test_part']}" if plan["shards"][s].get("test_part") else "")
+                                 + (f", -k {plan['shards'][s]['select_k']}" if plan["shards"][s].get("select_k") else "")
                                  + (f", x{plan['shards'][s]['contention']:g}" if plan["shards"][s].get("contention", 1.0) >= 1.2 else "") + ")" for s in spec["queue"]))
         lines.append("    (estimates: h = history, p = history for some of its files, lb = a lower bound from a stopped chunk, ci = CI's minutes; "
                      "xN = the estimate carries its units' contention factor, N times the solo time)")
@@ -405,10 +479,17 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
     lines.append(f"  caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test, {c['start_min']:g} min to the first beat")
     if plan.get("fail_fast"):
         lines.append(f"  fail fast: {fail_fast_text(plan['fail_fast'])}")
+        budget = plan["fail_fast"].get("max_wall_min") or 0
+        worst = max((spec["expected_min"] for spec in plan["pools"].values()), default=0)
+        if budget and worst > budget:
+            lines.append(f"  WARNING: the expected wall ({worst:g} min) passes --max-wall-min {budget:g}: the run stops at the budget. Narrow "
+                         "--shards, add clusters or runners, or raise the budget")
     for pool, spec in plan["pools"].items():
         if spec.get("smoke"):
-            lines.append(f"  smoke ({pool}): {plan['shards'][spec['smoke']]['name']} (~{plan['shards'][spec['smoke']]['expected_min']:g} min) runs alone first; "
-                         "the runners start when it passes")
+            sm = plan["shards"][spec["smoke"]]
+            lines.append(f"  smoke ({pool}, ~{sm['expected_min']:g} min, alone first; the runners start when it passes): collect-only of "
+                         f"{len(sm['collect']) - 2} file(s), then the first {sm['smoke_tests']} test(s) of the fastest chunk that collects one, "
+                         f"with its env and options (of: {', '.join(plan['shards'][c]['name'] for c in sm['candidates'])})")
     lines.append(f"  results: {plan['local_out']}/ (junit.xml + pytest.log per shard, summary.md)")
     for s in local_only:
         lines.append(f"  local only: {s.name}: {s.local_only}")
@@ -420,12 +501,13 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
 
 def header_md(plan: dict, pool: str) -> str:
     spec = plan["pools"][pool]
+    work = [x for x in spec["queue"] if x != spec.get("smoke")] or spec["queue"]
     c = plan["caps"]
     return (
         f"**Test shards `{plan['run_id']}`** (commit `{plan['sha'][:10]}`): {plan['purpose']}  \n"
         f"**Output:** per shard, `junit.xml` and `pytest.log` in `{plan['stage']}/out/<shard>/` (the launcher downloads them); "
         f"the verdict per shard is passed / failed / errors / skipped, and the notebook's result is that count as JSON.  \n"
-        f"**Time:** each shard about {min(plan['shards'][x]['expected_min'] for x in spec['queue']):g}-{max(plan['shards'][x]['expected_min'] for x in spec['queue']):g} min "
+        f"**Time:** each shard about {min(plan['shards'][x]['expected_min'] for x in work):g}-{max(plan['shards'][x]['expected_min'] for x in work):g} min "
         f"(recorded or CI's times); {spec['runners']} runner(s) take the shards from one queue, longest first; the run about {spec['expected_min']} min after the start, "
         f"at most {spec['cap_min']} min.  \n"
         f"**Monitoring:** caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test (the shard then dumps its stacks and stops; its runner "
@@ -471,7 +553,9 @@ except OSError:  # a temp dir of this process's own: the runner's notebook runs 
     import tempfile
 
     scratch = tempfile.mkdtemp(prefix="gbxtest-")
-root = scratch + "/%%s/%%s" %% (PLAN["run_id"], SLUG)
+# a folder per launch attempt (run id + attempt): a relaunch under the same run id never meets the files, or the tables that
+# own them, of a cancelled attempt
+root = scratch + "/%%s-%%s/%%s" %% (PLAN["run_id"], PLAN.get("attempt", "0"), SLUG)
 shutil.rmtree(root, ignore_errors=True)
 os.makedirs(root + "/out")
 shutil.copy(PLAN["tarball"], root + "/src.tar.gz")  # one read of the Volume file, then local disk
@@ -542,9 +626,51 @@ class Tee:
 sys.stdout = Tee(sys.stdout, log)
 sys.stderr = Tee(sys.stderr, log)  # a usage error of pytest is only on stderr
 
+FF = PLAN.get("fail_fast") or {}
+MAXFAIL = int(FF.get("maxfail") or 0)  # pytest stops this chunk at its MAXFAIL-th failure (0: never)
+TEST_TIMEOUT = float(FF.get("test_timeout_s") or 0)  # a test that runs longer fails (0: no limit)
+# the chunk stops at OVERRUN times its estimate (never under OVERRUN_FLOOR_MIN): its times are then a lower bound, and the next plan
+# cuts it finer
+OVERRUN_S = max(float(FF.get("overrun_x") or 0) * float(S.get("expected_min") or 0), float(FF.get("overrun_floor_min") or 0)) * 60 if FF.get("overrun_x") else 0
+
+
+def child_run():  # this notebook run's own ids (a child run of the runner task), for the queue table and the launcher's table
+    try:
+        ctx = json.loads(dbutils.notebook.entry_point.getDbutils().notebook().getContext().safeToJson()).get("attributes") or {}
+    except Exception as exc:  # the ids are a report; the shard runs without them
+        return {"error": type(exc).__name__}
+
+    def pick(*names):
+        for n in names:
+            v = ctx.get(n)
+            v = v.get("id") if isinstance(v, dict) else v
+            if v not in (None, "", "None"):
+                return str(v)
+        return ""
+
+    return {"job_id": pick("jobId"), "run_id": pick("currentRunId", "runId", "idInJob"), "org": pick("orgId"),
+            "host": pick("browserHostName"), "keys": sorted(ctx)[:40]}
+
+
+CHILD = child_run()
+
+
+def note_child():  # the queue table's row of this chunk names its run (the runner's UPDATE claimed it; this one adds the id)
+    table = (PLAN["pools"].get(S["pool"]) or {}).get("table")
+    if not table or not CHILD.get("run_id"):
+        return
+    q = ("UPDATE " + table + " SET child_run_id = '" + CHILD["run_id"] + "', child_job_id = '" + CHILD.get("job_id", "")
+         + "' WHERE slug = '" + SLUG + "'")
+    for i in range(4):
+        try:
+            spark.sql(q)
+            return
+        except Exception:  # a concurrent claim commit: try again; the id is a report, never a reason to fail
+            time.sleep(1 + i)
+
+
 state = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total": 0, "last": "", "last_t": time.time(), "reason": "", "watchdog": "", "done": False,
-         "first_failure": {}}
-MAXFAIL = int((PLAN.get("fail_fast") or {}).get("maxfail") or 0)  # pytest stops this chunk at its MAXFAIL-th failure (0: never)
+         "first_failure": {}, "child": CHILD, "cur": "", "cur_t": 0.0, "phase": "", "timed_out": [], "overrun": False}
 beat_lock = threading.Lock()  # the watchdog thread and the pytest hooks both beat: one write at a time
 def beat():
     with beat_lock:
@@ -576,6 +702,27 @@ class Counter:
     def pytest_runtest_logstart(self, nodeid, location):
         state["last_t"] = time.time()  # a test that starts counts as progress; only a test that outlasts stall_min is a stall
 
+    def _phase(self, item, phase):  # the per-test timeout counts each phase: the call gets TEST_TIMEOUT, setup and teardown 3x it
+        state["cur"], state["cur_t"], state["phase"] = item.nodeid, time.time(), phase
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_setup(self, item):
+        self._phase(item, "setup")
+        yield
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_call(self, item):
+        self._phase(item, "call")
+        yield
+
+    @pytest.hookimpl(hookwrapper=True)
+    def pytest_runtest_teardown(self, item):
+        self._phase(item, "teardown")
+        yield
+
+    def pytest_runtest_logfinish(self, nodeid, location):
+        state["cur"] = ""
+
     def pytest_collectreport(self, report):  # an import error of a test file: the shape of an environment-wide failure
         if report.failed:
             state["errors"] += 1
@@ -603,17 +750,47 @@ class Counter:
         if report.failed or (state["passed"] + state["failed"] + state["skipped"]) %% 50 == 0:
             beat()
 
+class TestTimeout(Exception):
+    """Raised inside a test that ran past --test-timeout: the test fails, and the chunk goes on."""
+
+    def __init__(self, *args):
+        Exception.__init__(self, *(args or (state.get("timeout_msg") or "the test ran past --test-timeout",)))
+
+
+MAIN_THREAD = threading.get_ident()
+
+
+def time_out_test(nodeid):  # an exception in the main thread, at its next Python bytecode: a test hung in C code gets it on return
+    import ctypes
+
+    state["timed_out"].append(nodeid)
+    state["timeout_msg"] = "%%s ran past %%g s (--test-timeout)" %% (nodeid, TEST_TIMEOUT)
+    ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(MAIN_THREAD), ctypes.py_object(TestTimeout))
+
+
 def watchdog():
     n = 0
     while not state["done"]:
-        time.sleep(15)
-        beat()
+        time.sleep(5)
         n += 1
-        if n %% 4 == 0:
+        if n %% 3 == 0:
+            beat()
+        if n %% 12 == 0:
             keep_log()
         why = ""
+        took = time.time() - state["cur_t"] if state["cur"] else 0
+        limit = TEST_TIMEOUT * (1 if state.get("phase") == "call" else 3)
+        if TEST_TIMEOUT and state["cur"] and took > limit and state["cur"] not in state["timed_out"]:
+            print("\\nTEST TIMEOUT: %%s ran past %%g s; failing it" %% (state["cur"], TEST_TIMEOUT), flush=True)
+            time_out_test(state["cur"])
         if time.time() - t0 > CAPS["shard_min"] * 60:
             why = "shard cap %%g min" %% CAPS["shard_min"]
+        elif OVERRUN_S and time.time() - t0 > OVERRUN_S:
+            state["overrun"] = True
+            why = "ran past %%g min, %%gx its estimate of %%g min (a lower bound; the next plan cuts it finer)" %% (
+                OVERRUN_S / 60, FF.get("overrun_x"), S.get("expected_min"))
+        elif TEST_TIMEOUT and state["cur"] and took > limit + 60:
+            why = "test %%s hung past %%g s and did not stop when timed out" %% (state["cur"], TEST_TIMEOUT)
         elif time.time() - state["last_t"] > STALL_MIN * 60:
             why = "no test finished for %%g min (last: %%s)" %% (STALL_MIN, state["last"])
         if why:
@@ -628,6 +805,8 @@ def watchdog():
             if not state["done"]:
                 os.kill(os.getpid(), signal.SIGKILL)
 threading.Thread(target=watchdog, daemon=True).start()
+note_child()
+print("chunk run:", CHILD, flush=True)
 
 # Isolation probe: a shard before this one in the same runner leaves a temp view and a conf in its own session. Seeing
 # neither here shows this shard has a session (and a Python process) of its own, as a job task of its own had.
@@ -642,12 +821,80 @@ for _k, _v in S.get("spark_conf", {}).items():  # --spark-conf: set before the t
 print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| spark conf", S.get("spark_conf", {}), "| cores", os.cpu_count(), "| session", type(spark).__name__, "| isolation", iso, flush=True)
 # a test's tmp_path holds the files its virtual tiles name; on Serverless the Python workers are other machines that
 # cannot see the driver's disk, so there tmp_path is under the run's Volume folder, which every worker reads
-basetemp = root + "/tmp" if scratch == "/local_disk0/gbxtest" else STAGE + "/tmp/" + SLUG
+basetemp = root + "/tmp" if scratch == "/local_disk0/gbxtest" else STAGE + "/tmp/" + PLAN.get("attempt", "0") + "/" + SLUG
 os.makedirs(os.path.dirname(basetemp), exist_ok=True)  # pytest makes basetemp itself, not its parent
 args = S["args"] + ["-p", "no:cacheprovider", "-v", "--tb=short", "-rfE", "--durations=15", "--basetemp=" + basetemp,
                     "--junitxml=" + root + "/out/junit.xml"] + (["--maxfail=" + str(MAXFAIL)] if MAXFAIL else [])
+import importlib.util, zlib
+if TEST_TIMEOUT and importlib.util.find_spec("pytest_timeout") and threading.current_thread() is threading.main_thread():
+    # pytest-timeout where the env has it (its signal method needs the main thread), on the call phase; the watchdog stays the backstop
+    args += ["--timeout=%%d" %% TEST_TIMEOUT, "--timeout-method=signal", "-o", "timeout_func_only=true"]
+
+
+class TestPart:  # --target-min cut this chunk's one file or table into parts: keep the tests whose node id hashes to this one
+    def __init__(self, spec):
+        self.i, self.n = (int(x) for x in spec.split("/"))
+
+    @pytest.hookimpl(trylast=True)
+    def pytest_collection_modifyitems(self, config, items):
+        keep = [it for it in items if zlib.crc32(it.nodeid.encode()) %% self.n == self.i]
+        drop = [it for it in items if zlib.crc32(it.nodeid.encode()) %% self.n != self.i]
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+            items[:] = keep
+
+
+plugins = [Counter()] + ([TestPart(S["test_part"])] if S.get("test_part") else [])
+
+
+def fresh_tests():  # each pytest session of the smoke imports the test modules again, under its own env (the family file reads it)
+    for m in [m for m in sys.modules if m == "test" or m.startswith("test.")]:
+        del sys.modules[m]
+
+
+class Ids:  # the node ids a collect-only session keeps after its -k, markers and test part
+    def __init__(self):
+        self.ids = []
+
+    def pytest_collection_finish(self, session):
+        self.ids = [it.nodeid for it in session.items]
+
+
+def smoke_pick():  # the first tests of the run's fastest chunk that collects any, with that chunk's own env and options
+    base_env = dict(os.environ)
+    for cand in S["candidates"]:
+        C = PLAN["shards"][cand]
+        os.environ.clear(); os.environ.update(base_env); os.environ.update(C["env"])
+        os.chdir(repo + "/" + C["cwd"])
+        got = Ids()
+        fresh_tests()
+        pytest.main(C["args"] + ["--collect-only", "-q", "-p", "no:cacheprovider"], plugins=[got] + ([TestPart(C["test_part"])] if C.get("test_part") else []))
+        print("smoke: chunk %%s collects %%d test(s)" %% (C["name"], len(got.ids)), flush=True)
+        if got.ids:
+            marker = [x for i, x in enumerate(C["args"]) if C["args"][i - 1:i] == ["-m"]]
+            return C, got.ids[: int(S.get("smoke_tests") or 2)] + (["-m", marker[0]] if marker else [])
+    os.environ.clear(); os.environ.update(base_env)
+    return None, []
+
+
+rc = 0
 try:
-    rc = int(pytest.main(args, plugins=[Counter()]))
+    if S.get("collect"):  # the smoke chunk: collect every selected file first (an import error anywhere shows here, in seconds)
+        rc = int(pytest.main(["--collect-only", "-q", "-p", "no:cacheprovider"] + S["collect"], plugins=[Counter()]))
+        print("smoke: collect-only of %%d path(s) rc %%d, %%d collection error(s)" %% (len(S["collect"]), rc, state["errors"]), flush=True)
+        if rc in (0, 5) and not state["errors"]:
+            chosen, ids = smoke_pick()
+            if not chosen:
+                rc = 5
+                state["reason"] = ("selection error: none of the %%d fastest chunks (%%s) collects a test with its env, -k and markers; "
+                                   "check --shards, --env and the oracle tables" %% (len(S["candidates"]), ", ".join(S["candidates"])))
+                state["first_failure"] = {"id": "(selection)", "msg": state["reason"]}
+            else:
+                print("smoke: runs", ids, "from", chosen["name"], flush=True)
+                fresh_tests()
+                rc = int(pytest.main(ids + args[len(S["args"]):], plugins=[Counter()]))
+    elif rc in (0, 5) and not state["errors"]:
+        rc = int(pytest.main(args, plugins=plugins))
 except BaseException as exc:  # an interrupt from the watchdog, or a crash of the harness itself
     state["reason"] = state["reason"] or "%%s: %%s" %% (type(exc).__name__, exc)
     rc = 130
@@ -664,12 +911,18 @@ ran_n = state["passed"] + state["failed"] + state["skipped"]
 maxfail_hit = bool(MAXFAIL) and state["failed"] + state["errors"] >= MAXFAIL and ran_n < state["total"]
 result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
-              first_failure=state["first_failure"], maxfail_hit=maxfail_hit)
+              first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
+              timed_out=state["timed_out"], test_part=S.get("test_part", ""))
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
 beat()
 print("shard rc:", rc, "after", result["wall_s"], "s", flush=True)
+if rc not in (0, 5) or state["failed"] or state["errors"] or state["reason"]:
+    # this run's status tells the truth: it fails (the runner reads the result file it just wrote)
+    ff = state["first_failure"] or {}
+    raise RuntimeError("chunk %%s: rc %%s, %%d failed, %%d errors%%s; first: %%s %%s" %% (
+        S["name"], rc, state["failed"], state["errors"], (", " + state["reason"]) if state["reason"] else "", ff.get("id", ""), ff.get("msg", "")))
 dbutils.notebook.exit(json.dumps(result))
 ''' % {"stage": plan["stage"]}
 
@@ -733,7 +986,10 @@ else:
     def execute(slug):
         print("+%ds" % (time.time() - T0), WHO, "runs", PLAN["shards"][slug]["name"], flush=True)
         res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug}), TIMEOUT_S,
-                        watchdog=lambda: heartbeat_watchdog(STAGE + "/hb/" + slug + ".json"))
+                        watchdog=lambda: heartbeat_watchdog(STAGE + "/hb/" + slug + ".json"),
+                        result=lambda: read_json_file(STAGE + "/out/" + slug + "/result.json"))
+        if not res.get("child"):  # a chunk that failed before pytest: its first cell named its run, so the launcher can read why
+            res["child"] = read_json_file(STAGE + "/out/" + slug + "/child.json") or {}
         print("+%ds" % (time.time() - T0), WHO, "ran", PLAN["shards"][slug]["name"], "rc", res.get("rc"), res.get("reason") or "", flush=True)
         return res
 
@@ -767,11 +1023,19 @@ else:
                     return "stopped early: " + json.load(f).get("rule", "the launcher stopped the run")
             except (OSError, ValueError):
                 return "stopped early: the launcher stopped the run"
+        if POLICY.get("deadline") and time.time() > POLICY["deadline"]:
+            return "stopped early: the wall budget of " + str(POLICY.get("max_wall_min")) + " min is spent (--max-wall-min)"
         why = stop_rule(read_results(RESULTS), POLICY)
         return "stopped early: " + why if why else ""
 
+    START = int(POLICY.get("start_chunks") or 0)  # the ramp: runners from this index on wait until START chunks have passed
+
+    def held():
+        queued = sql("SELECT count(*) FROM " + TABLE + " WHERE owner IS NULL")[0][0]
+        return not ramp_open(read_results(RESULTS), START, int(queued))
+
     rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save, heavy=HEAVY, gate=gate, stop=should_stop, on_result=write_result,
-                   limit=1 if SMOKE else 0)
+                   limit=1 if SMOKE else 0, hold=held if (START and not SMOKE and INDEX >= START) else None)
     rec["conflicts"] = q.conflicts
     save(rec)
     print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s);", rec["stopped"] or "the queue is empty", flush=True)
@@ -781,6 +1045,11 @@ else:
         ff = last.get("first_failure") or {}
         raise RuntimeError("stopped early: the smoke chunk " + last["slug"] + " failed (" + str(last.get("failed")) + " failed, "
                            + str(last.get("errors")) + " errors); first: " + (ff.get("id") or "") + " " + (ff.get("msg") or ""))
+    # the task's status tells the truth: it fails when a chunk it ran failed or did not finish (each chunk's own run failed too)
+    bad = [x for x in rec["shards"] if x.get("rc") not in (0, 5) or x.get("reason") or x.get("failed") or x.get("errors")]
+    if bad:
+        raise RuntimeError(str(len(bad)) + " of " + str(len(rec["shards"])) + " chunk(s) this runner ran failed or did not finish: "
+                           + ", ".join(PLAN["shards"][x["slug"]]["name"] + " (" + (x.get("reason") or "rc " + str(x.get("rc"))) + ")" for x in bad[:5]))
     dbutils.notebook.exit(json.dumps({"runner": WHO, "shards": len(rec["shards"]), "stopped": rec["stopped"]}))
 '''
 
@@ -803,8 +1072,30 @@ def cell(source: str, kind: str = "code") -> dict:
     return c
 
 
+START_SOURCE = '''# the chunk names its own run first: if a later cell fails before pytest, the launcher reads that run's error
+import json, os
+_ctx = {}
+try:
+    _ctx = json.loads(dbutils.notebook.entry_point.getDbutils().notebook().getContext().safeToJson()).get("attributes") or {}
+except Exception as _exc:
+    _ctx = {"error": type(_exc).__name__}
+_id = lambda v: v.get("id") if isinstance(v, dict) else v
+_child = {"job_id": str(_id(_ctx.get("jobId")) or ""), "run_id": str(_id(_ctx.get("currentRunId")) or _id(_ctx.get("runId")) or ""),
+          "org": str(_ctx.get("orgId") or ""), "error": _ctx.get("error", "")}
+_out = __STAGE__ + "/out/" + dbutils.widgets.get("shard")
+os.makedirs(_out, exist_ok=True)
+with open(_out + "/child.json", "w") as _f:
+    json.dump(_child, _f)
+print("chunk run:", _child)
+'''
+
+
+def start_source(plan: dict) -> str:
+    return START_SOURCE.replace("__STAGE__", repr(plan["stage"]))
+
+
 def build_notebook(plan: dict, pool: str) -> dict:
-    cells = [cell(header_md(plan, pool), "markdown")]
+    cells = [cell(header_md(plan, pool), "markdown"), cell(start_source(plan))]
     if not plan["serverless"]:  # a Serverless job installs from the environment spec; %pip is not allowed there
         cells.append(cell(install_source(plan)))
     if plan["wheel"]["volume"]:
@@ -914,6 +1205,8 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
         out.append(f"- **stopped early: {plan['stopped_early']}**; the chunks it stopped or never ran are INCOMPLETE, and their times are lower bounds")
     if plan.get("fail_fast"):
         out.append(f"- fail fast: {fail_fast_text(plan['fail_fast'])}")
+    if plan.get("stopped_early") and not_run_line(rows):
+        out.append(f"- {not_run_line(rows)}")
     for pool, info in pool_info.items():
         out.append(f"- {pool}: cluster(s) {info.get('cluster_id', '-')} ({info.get('node_type', '-')}), job run {info.get('job_run', '-')}; {speedup_line(info)}")
         out += ["  - " + x.strip() for x in schedule_lines(info)]
@@ -1093,7 +1386,7 @@ def main(argv=None) -> int:
     all_shards = ts.load(REPO_ROOT)
     changed = None
     aff_shards, aff_lines = None, []
-    if "affected" in a.shards:
+    if "affected" in a.shards and not a.rerun_failed:
         try:
             changed = ts.changed_files(REPO_ROOT, a.base, sha)
         except subprocess.CalledProcessError as exc:
@@ -1108,10 +1401,16 @@ def main(argv=None) -> int:
             if broad:
                 print(f"\nWARNING: {broad}; running it (--allow-broad).", file=sys.stderr)
     try:
-        shards = ts.select(all_shards, a.shards, changed, REPO_ROOT, aff_shards)
+        shards = [] if a.rerun_failed else ts.select(all_shards, a.shards, changed, REPO_ROOT, aff_shards)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    if a.rerun_failed:  # only the tests that failed in that run, a chunk per file, each stopping at its first failure
+        shards = rerun_shards(REPO_ROOT / "test-logs/databricks-tests" / a.rerun_failed, REPO_ROOT)
+        print(f"--rerun-failed {a.rerun_failed}: {sum(len(s.paths) for s in shards)} failed test(s) in {len(shards)} file(s)")
+        if not shards:
+            print(f"No failed test in test-logs/databricks-tests/{a.rerun_failed}/*/junit.xml: nothing to run.")
+            return 0
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
@@ -1123,9 +1422,9 @@ def main(argv=None) -> int:
     fsolo = tm.seconds(hist, time_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
     hot = set() if a.serverless else tm.contended(hist)  # contention-heavy units: they join the heavy gate
     lower = tm.lower_bounds(hist, time_slots)
-    if a.split == "auto" and shards:
+    if a.split == "auto" and shards and not a.rerun_failed:
         n_slots = plan_slots(a) * (1 if a.serverless else max(1, a.clusters))
-        lo, hi = SERVERLESS_TARGET if a.serverless else (3.5, 10.0)
+        lo, hi = SERVERLESS_TARGET if a.serverless else POOL_TARGET
         target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots, lo=lo, hi=hi)
         shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower, hot)
         split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)"
@@ -1181,6 +1480,31 @@ def main(argv=None) -> int:
         print("\nexplain-only: nothing staged or started.")
         return 0
     return launch(a, plan, shards)
+
+
+def rerun_shards(run_dir: Path, root: Path) -> List[ts.Shard]:
+    """``--rerun-failed``: one chunk per test file that had a failed or erroring test in the earlier run's junit files, holding just
+    those test ids (``file::[Class::]name[params]``). Empty when the run left no failures (or no results here)."""
+    by_file: Dict[str, List[str]] = {}
+    for junit in sorted(Path(run_dir).glob("*/junit.xml")):
+        try:
+            cases = list(ET.parse(junit).getroot().iter("testcase"))
+        except (OSError, ET.ParseError):
+            continue
+        for c in cases:
+            if not any(ch.tag in ("failure", "error") for ch in c):
+                continue
+            cls = c.get("classname", "")
+            f = tm.file_of_case(cls, root)
+            if not f:
+                continue
+            inner = cls.split(".")[len(f[:-3].split("/")):]  # a class the test sits in
+            nid = "::".join([f] + inner + [c.get("name", "")])
+            if nid not in by_file.setdefault(f, []):
+                by_file[f].append(nid)
+    return [ts.Shard(name=f"rerun {f}", kind="scripts" if f.startswith("scripts/") else "light", paths=ids, est_min=ts.FIXED_MIN + 0.5 * len(ids),
+                     est_src="ci", marker="" if f.startswith("scripts/") else "not integration", subset=True)
+            for f, ids in sorted(by_file.items())]
 
 
 def affected_selection(a, sha: str, all_shards: List[ts.Shard]):
@@ -1368,7 +1692,8 @@ def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
     spec = plan["pools"][pool]
     before = list(spec["queue"])
     size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min,
-              {slug for slug in before if plan["shards"][slug].get("heavy")}, smoke=bool(spec.get("smoke")))
+              {slug for slug in before if plan["shards"][slug].get("heavy")}, smoke=spec.get("smoke") or "",
+              start=(plan.get("fail_fast") or {}).get("start_chunks", 0))
     assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"
 
 
@@ -1421,12 +1746,16 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         act = actual_s(r, busy)
         # a chunk pytest stopped at --maxfail did not run all its tests: its times are lower bounds, as a capped chunk's are
         verdict = "INCOMPLETE" if r.get("maxfail_hit") and r["verdict"] == "FAILED" else r["verdict"]
-        samples += tm.run_samples(chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "",
-                                  prefix=tm.SLS if sls else "")
+        got_s = [] if chunk.get("smoke") or chunk.get("select_k") else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
+            chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "")
+        n_parts = int(str(chunk.get("test_part") or "0/1").split("/")[1])
+        for x in got_s:  # a test part ran about 1/n of its unit: the unit's time is n times the part's
+            x["s"] = x["s"] * n_parts
+        samples += got_s
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
         r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
-        if verdict in ("ok", "FAILED", "INCOMPLETE") and not sls:
+        if verdict in ("ok", "FAILED", "INCOMPLETE") and not sls and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k"):
             cont += tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
                                           incomplete=verdict == "INCOMPLETE")
     run = {"run": plan["run_id"], "sha": plan["sha"][:10], "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)}
@@ -1488,6 +1817,9 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
             finished: set = set()
             with cancel_on_error(w, runs, finished):  # inside the leases: a failed launch cancels its runs before the clusters are given back
                 w.workspace.mkdirs(base_dir)
+                if plan["fail_fast"].get("max_wall_min"):  # the runners stop claiming at this time even when the launcher is gone
+                    plan["fail_fast"]["deadline"] = time.time() + plan["fail_fast"]["max_wall_min"] * 60
+                    put_text(w, plan["plan_file"], json.dumps(plan))
                 for pool in plan["pools"]:
                     pool_leases = []
                     if pool != "serverless":
@@ -1552,6 +1884,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 if plan.get("stopped_early"):
                     print(f"\nstopped early: {plan['stopped_early']} (the summary and the timing history record it; the chunks it stopped "
                           "leave lower bounds)", file=sys.stderr)
+                    if not_run_line(rows):
+                        print(not_run_line(rows), file=sys.stderr)
                 print(f"\nWrote {local_out / 'summary.md'}")
                 doubled = [r["name"] for r in rows if r.get("claims", 0) > 1]
                 if doubled:
@@ -1622,16 +1956,28 @@ def verdict_of(line: dict) -> str:
     return "FAILED" if line.get("failed") else "ERRORS"
 
 
-def live_row(line: dict, plan: dict, elapsed_s: float) -> str:
-    """One row of the live table: when the launcher saw the chunk end, its verdict, counts and time, and its first failure."""
+def child_url(child: Optional[dict], host: str = "") -> str:
+    """The page of a chunk's own notebook run (a child run of its runner task), from the ids it recorded; "" without them."""
+    child = child or {}
+    if not (child.get("job_id") and child.get("run_id")):
+        return ""
+    org = f"?o={child['org']}" if child.get("org") else ""
+    return f"{host.rstrip('/')}/{org}#job/{child['job_id']}/run/{child['run_id']}"
+
+
+def live_row(line: dict, plan: dict, elapsed_s: float, host: str = "") -> str:
+    """One row of the live table: when the launcher saw the chunk end, its verdict, counts and time, its own run's page, and its
+    first failure."""
     name = plan["shards"].get(line.get("slug"), {}).get("name", line.get("slug"))
     took = int(float(line.get("end") or 0) - float(line.get("start") or 0)) if line.get("end") and line.get("start") else 0
     ff = line.get("first_failure") or {}
     tail = f"  first: {ff.get('id') or ''} {ff.get('msg') or ''}".rstrip() if line.get("failed_chunk") and (ff.get("id") or ff.get("msg")) else ""
+    url = child_url(line.get("child"), host)
     return (f"  +{int(elapsed_s) // 60:3d}m{int(elapsed_s) % 60:02d}s  {verdict_of(line):<10} {name[:30]:<30} "
             f"passed {line.get('passed', 0):>4} failed {line.get('failed', 0):>3} errors {line.get('errors', 0):>3} "
             f"skipped {line.get('skipped', 0):>3}  {took:>5} s" + (" (smoke)" if line.get("smoke") else "")
-            + (" (--maxfail hit)" if line.get("maxfail_hit") else "") + tail)
+            + (" (--maxfail hit)" if line.get("maxfail_hit") else "") + (" (2x its estimate: stopped)" if line.get("overrun") else "")
+            + (f"  run {url}" if url else "") + tail)
 
 
 class Live:
@@ -1646,6 +1992,7 @@ class Live:
         self.lines: Dict[str, dict] = {}
         self.fetched: set = set()
         self.rule = ""
+        self.host = str(getattr(getattr(w, "config", None), "host", "") or "")
 
     def poll(self, now: Optional[float] = None) -> List[dict]:
         """Read the results that are new since the last poll; returns them (and prints a row each)."""
@@ -1664,13 +2011,34 @@ class Live:
                 continue  # being written: the next poll reads it
             if not self.lines:
                 self.out("  live results (a row per chunk the moment it ends; failures show their first test):")
+            self.explain_early_end(line)
             self.lines[slug] = line
             new.append(line)
-            self.out(live_row(line, self.plan, now - self.t0))
+            self.out(live_row(line, self.plan, now - self.t0, self.host))
             if self.local_out is not None and slug not in self.fetched:
                 mut.download_dir(self.w, f"{self.plan['stage']}/out/{slug}", self.local_out / slug)
                 self.fetched.add(slug)
         return new
+
+    def explain_early_end(self, line: dict) -> None:
+        """A chunk that ended without a result (its notebook failed before pytest, or was killed): its first failure becomes its own
+        run's error (``get_run_output``), not the platform's "Workload failed"."""
+        rid = (line.get("child") or {}).get("run_id")
+        if line.get("rc") is not None or not rid or "without a result" not in str(line.get("reason") or ""):
+            return
+        try:
+            err = (self.w.jobs.get_run_output(int(rid)).error or "").strip()
+        except Exception:  # noqa: BLE001 - the platform's message stands
+            return
+        if err:
+            line["first_failure"] = {"id": "(the chunk's run)", "msg": " ".join(err.split())[:300]}
+
+    def status(self) -> str:
+        """The one-line status: chunks done and failed, and the first failure's test id."""
+        done, bad = self.counts()
+        first = next((x for x in sorted(self.lines.values(), key=lambda x: float(x.get("end") or 0)) if x.get("failed_chunk")), None)
+        ff = (first or {}).get("first_failure") or {}
+        return f"{done} chunk(s) done, {bad} failed" + (f"; first failure: {ff.get('id') or ff.get('msg', '')[:80]}" if first else "")
 
     def check(self) -> str:
         """The fail-fast rule that fires now ("" when none does), against every result so far; once fired it stays."""
@@ -1692,6 +2060,18 @@ class Live:
                 out.append(f"  FAIL [{name}] {verdict_of(x)} ({x.get('failed', 0)} failed, {x.get('errors', 0)} errors): "
                            f"{ff.get('id') or ''} {ff.get('msg') or x.get('reason') or ''}".rstrip())
         return out
+
+
+def wall_rule(plan: dict, elapsed_s: float) -> str:
+    """The wall-budget rule ("" while the run is within --max-wall-min, or has no budget)."""
+    budget = float((plan.get("fail_fast") or {}).get("max_wall_min") or 0)
+    return f"the wall budget of {budget:g} min is spent (--max-wall-min)" if budget and elapsed_s > budget * 60 else ""
+
+
+def not_run_line(rows: List[dict]) -> str:
+    """The chunks a stop left unrun, by name ("" when it left none)."""
+    names = [r["name"] for r in rows if str(r.get("reason") or "").startswith("not run: stopped early")]
+    return f"not run ({len(names)} chunk(s)): " + ", ".join(names) if names else ""
 
 
 def stop_early(w, runs: Dict[str, int], plan: dict, live: Live, rule: str) -> None:
@@ -1726,8 +2106,8 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[L
         time.sleep(POLL_S)
         now = time.monotonic()
         live.poll(now)
-        if not plan.get("stopped_early") and live.check():
-            stop_early(w, runs, plan, live, live.rule)
+        if not plan.get("stopped_early") and (live.check() or wall_rule(plan, now - t0)):
+            stop_early(w, runs, plan, live, live.rule or wall_rule(plan, now - t0))
             rc = rc or EXIT_FAILED
         say = now - last_say >= STATUS_EVERY_S
         for pool, rid in runs.items():
@@ -1763,8 +2143,12 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[L
                 busy = sum(1 for r in recs if not r.get("done"))
                 ended = sum(1 for slug in live.lines if slug in spec["queue"])
                 failed_chunks = sum(1 for slug, x in live.lines.items() if slug in spec["queue"] and x.get("failed_chunk"))
-                print(f"  [{pool}] {life} {int(now - t0)} s: {busy} of {spec['runners']} runner(s) at work, {len(current)} shard(s) running, {ended}/{len(spec['queue'])} shards done "
-                      f"({failed_chunks} failed), {max(0, len(spec['queue']) - ended - len(current))} queued, {tot} tests finished, {bad} failing/erroring", flush=True)
+                print(f"  [{pool}] {life} {int(now - t0) // 60}m{int(now - t0) % 60:02d}s: {ended}/{len(spec['queue'])} chunks done ({failed_chunks} failed), "
+                      f"{len(current)} running, {max(0, len(spec['queue']) - ended - len(current))} queued; {busy} of {spec['runners']} runner(s) at work; "
+                      f"{tot} tests finished, {bad} failing; {live.status()}", flush=True)
+                runs_now = [f"{plan['shards'][slug]['name']} {child_url(b.get('child'), live.host)}" for slug, b in beats.items() if child_url(b.get("child"), live.host)]
+                if runs_now:
+                    print("    running: " + "; ".join(runs_now), flush=True)
             running = current
             if not started and now - t0 > c["start_min"] * 60:
                 print(f"No shard of {pool} has beaten {c['start_min']:g} min after the submit. Cancelling run {rid}.", file=sys.stderr)

@@ -67,6 +67,9 @@ class Shard:
     unit_max_min: float = 0.0  # the longest file or table of the chunk by its recorded time (0: not known)
     subset: bool = False  # the selected files or tables of a CI shard (``affected``): collecting nothing is no failure
     solo_min: float = 0.0  # est_min without the contention factors of its units (what it takes beside light neighbours)
+    test_part: str = ""  # "i/n": this chunk runs the tests of its one file or table whose node id hashes to part i of n (TEST_PART)
+    select_k: str = ""  # a pytest -k of function names: only the family harness rows of those functions (``affected``, row-level)
+    share: float = 1.0  # the part of its tables' recorded time a -k selection is expected to take
 
     @property
     def group(self) -> str:
@@ -280,6 +283,8 @@ def pytest_args(shard: Shard) -> List[str]:
         args.append(f"--ignore={p}")
     if shard.marker:
         args += ["-m", shard.marker]
+    if shard.select_k:
+        args += ["-k", shard.select_k]
     return args
 
 
@@ -345,8 +350,18 @@ def _items(shard: Shard, root: Path, file_seconds: Dict[str, float]):
             return None
         share = untimed_file_seconds(shard, len(keys))
         rest = 0.0
-    mins = {k: file_seconds.get(k, share) / 60.0 for k in keys}
-    return mins, sum(1 for k in keys if k in file_seconds), rest
+    n = part_count(shard) / max(1e-6, min(1.0, shard.share or 1.0))  # a test part runs about 1/n of its unit, a -k selection its share
+    mins = {k: file_seconds.get(k, share) / 60.0 / n for k in keys}
+    return mins, sum(1 for k in keys if k in file_seconds), rest / n
+
+
+def test_part_n(shard: Shard) -> str:
+    return shard.test_part.split("/")[1] if shard.test_part else ""
+
+
+def part_count(shard: Shard) -> int:
+    """How many test parts the chunk's unit is cut into (1 when it is not)."""
+    return int(shard.test_part.split("/")[1]) if shard.test_part else 1
 
 
 def estimate_src(shard: Shard, root: Path, file_seconds: Dict[str, float], lower: Optional[set] = None):
@@ -400,13 +415,17 @@ def pack(mins: Dict[str, float], target: float) -> List[List[str]]:
     small = [k for k in sorted(mins, key=lambda k: (-mins[k], k)) if mins[k] < work]
     out = [[k] for k in big]
     if small:
-        n = max(1, math.ceil(sum(mins[k] for k in small) / work - 1e-9))  # no chunk of them over the target
-        parts: List[List[str]] = [[] for _ in range(min(n, len(small)))]
-        load = [0.0] * len(parts)
-        for k in small:
-            i = load.index(min(load))
-            parts[i].append(k)
-            load[i] += mins[k]
+        n = max(1, math.ceil(sum(mins[k] for k in small) / work - 1e-9))
+        while True:  # the target is a hard cap: one chunk more until the longest-first fill leaves none of them over it
+            parts: List[List[str]] = [[] for _ in range(min(n, len(small)))]
+            load = [0.0] * len(parts)
+            for k in small:
+                i = load.index(min(load))
+                parts[i].append(k)
+                load[i] += mins[k]
+            if max(load) <= work + 1e-9 or n >= len(small):
+                break
+            n += 1
         out += [p for p in parts if p]
     return out
 
@@ -423,22 +442,29 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     hot = {k for k, m in mins.items() if is_heavy_key(k, m, contended)}
     # the heavy units are packed apart from the others: a chunk is heavy as a whole, so a light table beside one would wait for the gate
     groups = pack({k: m for k, m in mins.items() if k in hot}, target) + pack({k: m for k, m in mins.items() if k not in hot}, target)
-    if len(groups) <= 1:
+    if len(groups) <= 1 and not (len(mins) == 1 and FIXED_MIN + rest + max(mins.values()) > target):
         est, src = estimate_src(shard, root, file_seconds, lower)
         return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src, "heavy": bool(hot), "unit_max_min": round(max(mins.values()), 2)})]
+    # the hard cap: a unit longer than the target alone is cut into test parts (by node id) of about the target each
+    work = max(0.1, target - FIXED_MIN)
+    pieces = []
+    for g in groups:
+        n = math.ceil(mins[g[0]] / work - 1e-9) if len(g) == 1 and FIXED_MIN + rest + mins[g[0]] > target else 1
+        pieces += [(g, f"{j}/{n}" if n > 1 else "", n) for j in range(n)]
     out = []
-    for i, g in enumerate(groups, 1):
+    for i, (g, tpart, n) in enumerate(pieces, 1):
         timed = sum(1 for k in g if k in file_seconds)
         src = "lower bound" if lower and any(k in lower for k in g) else ("history" if timed == len(g) else "partial" if timed else "ci")
         common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src, subset=shard.subset,
-                      heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g), 2))
+                      heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g) / n, 2), test_part=tpart,
+                      select_k=shard.select_k, share=shard.share)
         if shard.oracle_tables:
-            out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
+            out.append(Shard(name=f"{shard.name} [{i}/{len(pieces)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
                              oracle_tables=",".join(k.split(":", 1)[1] for k in g), unsplittable=True,
-                             est_min=round(FIXED_MIN + rest + sum(mins[k] for k in g), 2), **common))
+                             est_min=round(FIXED_MIN + (rest + sum(mins[k] for k in g)) / n, 2), **common))
         else:
-            out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=sorted(g), ignore=[], part="", oracle_tables="",
-                             est_min=round(FIXED_MIN + sum(mins[k] for k in g), 2), **common))
+            out.append(Shard(name=f"{shard.name} [{i}/{len(pieces)}]", paths=sorted(g), ignore=[], part="", oracle_tables="",
+                             est_min=round(FIXED_MIN + sum(mins[k] for k in g) / n, 2), **common))
     return out
 
 
@@ -501,7 +527,8 @@ def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], 
     for s in shards:
         est, src = estimate_src(s, root, file_seconds, lower)
         whole = annotate(Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src}), root, file_seconds, contended)
-        if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min * 1.25:
+        # the target is a hard cap: a shard over it is cut (a unit over it alone into test parts), never kept whole
+        if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min:
             out.append(whole)
             continue
         out += cut(s, target_min, root, file_seconds, lower, contended)
@@ -525,7 +552,7 @@ def slots_for(cores: int, cores_per_task: int = CORES_PER_TASK) -> int:
 
 
 def auto_target_min(shards: List[Shard], root: Path, file_seconds: Dict[str, float], slots: int, chunks_per_slot: float = 3.5,
-                    lo: float = 3.5, hi: float = 10.0) -> float:
+                    lo: float = 3.0, hi: float = 5.0) -> float:
     """The length to cut shards to so that there are about ``chunks_per_slot`` x ``slots`` chunks of the same length: a slot that
     finishes early takes another, so the last chunk to start is a small one and the tail stays short. Kept above ``lo`` so a
     task's fixed cost (FIXED_MIN) stays about a fifth of it at most."""

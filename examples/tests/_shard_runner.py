@@ -117,7 +117,8 @@ class DirQueue:
 
 
 class DeltaQueue:
-    """The queue as a Delta table (slug, rank, expected_min, owner, claimed_at). ``sql`` runs one statement and returns its rows
+    """The queue as a Delta table (slug, rank, expected_min, owner, claimed_at, and the chunk's own notebook run: child_run_id,
+    child_job_id, which the chunk writes when it starts). ``sql`` runs one statement and returns its rows
     as tuples (``lambda q: [tuple(r) for r in spark.sql(q).collect()]`` on a cluster)."""
 
     def __init__(self, sql: Callable[[str], list], table: str, *, attempts: int = 60, sleep: Callable[[float], None] = time.sleep,
@@ -130,7 +131,8 @@ class DeltaQueue:
     def create_sql(table: str, order: List[str], expected: Dict[str, float]) -> str:
         rows = ", ".join(f"({_lit(s)}, {i}, {float(expected.get(s, 0.0))!r})" for i, s in enumerate(order))
         return (f"CREATE OR REPLACE TABLE {table} AS SELECT slug, CAST(rank AS INT) AS rank, CAST(expected_min AS DOUBLE) AS expected_min, "
-                f"CAST(NULL AS STRING) AS owner, CAST(NULL AS TIMESTAMP) AS claimed_at FROM VALUES {rows} AS v(slug, rank, expected_min)")
+                f"CAST(NULL AS STRING) AS owner, CAST(NULL AS TIMESTAMP) AS claimed_at, CAST(NULL AS STRING) AS child_run_id, "
+                f"CAST(NULL AS STRING) AS child_job_id FROM VALUES {rows} AS v(slug, rank, expected_min)")
 
     def claim(self, who: str, offset: int = 0, heavy_ok: bool = True):
         errors = 0
@@ -182,9 +184,23 @@ def heartbeat_watchdog(path: str) -> str:
         return ""
 
 
-def run_shard(run_notebook: Callable[[], str], timeout_s: int, watchdog: Optional[Callable[[], str]] = None) -> dict:
+def read_json_file(path: str):
+    """The JSON object in ``path``; None when it is absent or not (yet) whole."""
+    try:
+        with open(path) as f:
+            got = json.load(f)
+        return got if isinstance(got, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def run_shard(run_notebook: Callable[[], str], timeout_s: int, watchdog: Optional[Callable[[], str]] = None,
+              result: Optional[Callable[[], Optional[dict]]] = None) -> dict:
     """Run one shard's notebook and return its result (the JSON the shard notebook exits with). A run that fails, is killed by
     its watchdog or outlasts ``timeout_s`` comes back as a result with a reason, never as an exception.
+
+    A shard whose tests failed writes its result file and then fails its own notebook run, so that run's status tells the truth:
+    ``result()`` reads that file, and it is the result (``child_failed`` keeps the platform's message).
 
     ``watchdog()`` returns what the shard's own watchdog fired for ("" when it did not). The watchdog kills a process that does not stop (SIGKILL,
     exit 137), and Databricks reports any such kill as "Execution ran out of memory" or "kernel unresponsive": a run the watchdog
@@ -193,6 +209,9 @@ def run_shard(run_notebook: Callable[[], str], timeout_s: int, watchdog: Optiona
         out = run_notebook()
     except Exception as exc:  # noqa: BLE001 - the shard is over either way; the runner goes on
         msg = " | ".join(x.strip() for x in str(exc).strip().splitlines()[:3])[:400] or type(exc).__name__
+        got = _result(result)
+        if got is not None:
+            return dict(got, child_failed=msg)
         fired = _fired(watchdog)
         if fired:
             return {"rc": None, "reason": watchdog_reason(fired), "platform_message": msg}
@@ -211,6 +230,13 @@ def run_shard(run_notebook: Callable[[], str], timeout_s: int, watchdog: Optiona
     return {"rc": None, "reason": f"the shard's notebook returned no result ({str(out)[:120]!r})"}
 
 
+def _result(result: Optional[Callable[[], Optional[dict]]]) -> Optional[dict]:
+    try:
+        return result() if result else None
+    except Exception:  # noqa: BLE001 - no file: the platform's message stands
+        return None
+
+
 def _fired(watchdog: Optional[Callable[[], str]]) -> str:
     try:
         return (watchdog() if watchdog else "") or ""
@@ -221,7 +247,8 @@ def _fired(watchdog: Optional[Callable[[], str]]) -> str:
 def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable[[], float] = time.time, offset: int = 0,
              on_change: Optional[Callable[[dict], None]] = None, heavy: Iterable[str] = (), gate: Optional[HeavyGate] = None,
              wait_s: float = 10.0, sleep: Callable[[float], None] = time.sleep, stop: Optional[Callable[[], str]] = None,
-             on_result: Optional[Callable[[str, dict, float, float], None]] = None, limit: int = 0) -> dict:
+             on_result: Optional[Callable[[str, dict, float, float], None]] = None, limit: int = 0,
+             hold: Optional[Callable[[], bool]] = None, hold_s: float = 15.0) -> dict:
     """Claim and run shards until the queue is empty. ``execute(slug)`` runs one shard and returns its result; an exception
     from it is recorded as the shard's reason and the loop goes on. Returns the runner's record: when it started and ended,
     and per shard the claim time, the start, the end, rc and reason.
@@ -232,14 +259,24 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
 
     ``stop()`` is asked before each claim: a reason ("" to go on) ends the loop and is kept as the record's ``stopped``.
     ``on_result(slug, result, start, end)`` is called the moment a shard ends (the one-line result the launcher polls). ``limit``
-    caps the shards this runner takes (the smoke task takes one)."""
+    caps the shards this runner takes (the smoke task takes one). ``hold()``, asked before the first claim every ``hold_s``,
+    keeps the runner waiting while it says True (the ramp: the runners past the first few wait for clean results)."""
     note = on_change or (lambda rec: None)
     heavy = set(heavy)
     gated = bool(heavy and gate)
     rec = {"runner": who, "start": clock(), "end": None, "current": None, "done": False, "shards": [], "error": "", "stopped": ""}
     note(rec)
     first = True
-    while True:
+    while hold is not None and not rec["stopped"]:
+        why = _ask(stop)
+        if why:
+            rec["stopped"] = why
+        elif _held(hold):
+            sleep(hold_s)
+            continue
+        break
+    rec["held_s"] = round(clock() - rec["start"], 1)
+    while not rec["stopped"]:
         if limit and len(rec["shards"]) >= limit:
             break
         why = _ask(stop)
@@ -276,7 +313,8 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
         t1 = clock()
         rec["shards"].append({"slug": slug, "claim_s": round(t0 - t_claim, 3), "start": t0, "end": t1, "rc": out.get("rc"),
                               "reason": out.get("reason") or "", "pid": out.get("pid"), "isolation": out.get("isolation"),
-                              "heavy": slug in heavy, **{k: out.get(k) for k in ("passed", "failed", "errors", "skipped")}})
+                              "heavy": slug in heavy, "child": out.get("child") or {},
+                              **{k: out.get(k) for k in ("passed", "failed", "errors", "skipped")}})
         rec["current"] = None
         if on_result is not None:
             try:
@@ -289,6 +327,19 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
     return rec
 
 
+def _held(hold: Callable[[], bool]) -> bool:
+    try:
+        return bool(hold())
+    except Exception:  # noqa: BLE001 - a ramp check that cannot read its inputs lets the runner go
+        return False
+
+
+def ramp_open(results: List[dict], need: int, queued: int) -> bool:
+    """Whether a runner held back by the ramp may start: ``need`` chunks have passed, or no chunk is left to wait for."""
+    passed = sum(1 for r in results if r and not r.get("failed_chunk"))
+    return passed >= need or queued <= 0
+
+
 def _ask(stop: Optional[Callable[[], str]]) -> str:
     try:
         return str((stop() if stop else "") or "")
@@ -298,9 +349,10 @@ def _ask(stop: Optional[Callable[[], str]]) -> str:
 
 # ---------------------------------------------------------------------------------------------- fail fast
 
-# The default policy (``--first-failed``, ``--max-failed-chunks``, ``--max-failures``, ``--maxfail``): stop the run when the first 3
-# chunks to end all failed, or 5 chunks failed, or 20 tests failed; and stop each chunk's pytest at its 3rd failure.
-POLICY = {"first_k": 3, "max_failed_chunks": 5, "max_failures": 20, "maxfail": 3, "off": False}
+# The default policy (``--first-failed``, ``--max-failed-chunks``, ``--max-failures``, ``--maxfail``, ``--start-chunks``): stop the run
+# when the first 2 chunks to end both failed, or 3 chunks failed, or 20 tests failed; stop each chunk's pytest at its 3rd failure; and
+# start 2 runners only, the others once 2 chunks have passed.
+POLICY = {"first_k": 2, "max_failed_chunks": 3, "max_failures": 20, "maxfail": 3, "off": False, "start_chunks": 2}
 
 
 def chunk_failed(res: dict) -> bool:
@@ -308,8 +360,10 @@ def chunk_failed(res: dict) -> bool:
     the chunk ended without finishing (a watchdog stop, no result). A chunk that collected nothing (rc 5) is not a failure here."""
     if not res:
         return True
-    if res.get("rc") == 5 and not (res.get("failed") or res.get("errors")):
+    if res.get("rc") == 5 and not (res.get("failed") or res.get("errors") or res.get("reason")):
         return False
+    if res.get("overrun") and not (res.get("failed") or res.get("errors")):
+        return False  # stopped at 2x its estimate: a timing miss (a lower bound for the next plan), not a test failure
     return bool(res.get("reason")) or res.get("rc") not in (0,) or bool(res.get("failed")) or bool(res.get("errors"))
 
 
@@ -321,7 +375,7 @@ def result_line(slug: str, res: dict, start: float, end: float, runner: str = ""
         first = {"id": "", "msg": str(res.get("reason"))[:300]}
     return {"slug": slug, "runner": runner, "start": start, "end": end, "rc": res.get("rc"), "reason": res.get("reason") or "",
             "failed_chunk": chunk_failed(res), "maxfail_hit": bool(res.get("maxfail_hit")), "smoke": bool(res.get("smoke")),
-            "first_failure": first, **{k: int(res.get(k) or 0) for k in ("passed", "failed", "errors", "skipped", "total")}}
+            "overrun": bool(res.get("overrun")), "child": res.get("child") or {}, "first_failure": first, **{k: int(res.get(k) or 0) for k in ("passed", "failed", "errors", "skipped", "total")}}
 
 
 def stop_rule(results: List[dict], policy: Optional[dict] = None) -> str:

@@ -24,7 +24,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--max-parallel <n>` - runners per cluster, so shards side by side. Default: the node's cores / 8 (4 on 32 vCPU); 8 runner tasks on Serverless.
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards. The cut sets the queue's order and grain, not which slot runs a part.
-- `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min (3 and 6 min on Serverless). A task spends about 0.7 min before its first test.
+- `--target-min <n>` - the most minutes a chunk is planned at: a hard cap. Default: chosen from the history for about 3.5 chunks per slot, between 3 and 5 min. A file or table longer than it alone is cut into test parts.
 - `--timings <path>` - the timing history of every run. Default: `test-logs/databricks-tests/timings-history.json`. The run cuts and orders the queue by it, then merges its own times in.
 - `--serverless` - run the light shards on Serverless env 6, in small chunks (see "Serverless"). Pass a `--wheel` built at `--sha`: a Spark test's UDFs run the wheel, not the checkout.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
@@ -34,10 +34,15 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--stall-min <n>` - stop a shard when no test finished for n minutes; its runner takes the next. Default: 10.
 - `--start-cap-min <n>` - cancel when no shard has beaten n minutes after the submit. Default: 25.
 - `--pool-wait-min <n>` - wait up to n minutes for a free pool cluster. Default: 30.
-- `--first-failed <k>` - stop the run when the first k chunks to finish all failed. Default: 3. 0 turns it off.
-- `--max-failed-chunks <n>` - stop the run when n chunks have failed. Default: 5. 0 turns it off.
+- `--first-failed <k>` - stop the run when the first k chunks to finish all failed. Default: 2. 0 turns it off.
+- `--max-failed-chunks <n>` - stop the run when n chunks have failed. Default: 3. 0 turns it off.
 - `--max-failures <n>` - stop the run when n tests have failed or errored. Default: 20. 0 turns it off.
-- `--maxfail <n>` - pytest's `--maxfail` in each chunk, so a broken chunk stops early. Default: 3. 0 turns it off.
+- `--maxfail <n>` - pytest's `--maxfail` in each chunk, so a broken chunk stops early. Default: 3, and 1 with `--rerun-failed`. 0 turns it off.
+- `--test-timeout <s>` - fail a test whose call runs longer than s seconds (setup and teardown get 3x). Default: 120. 0 turns it off.
+- `--overrun-x <x>` - stop a chunk at x times its estimate, never under 3 min. Its times become lower bounds. Default: 2. 0 turns it off.
+- `--max-wall-min <n>` - stop the run at n minutes of wall after the submit. Default: 20. 0 turns it off.
+- `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all.
+- `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.
 - `--no-fail-fast` - run every chunk to its end: no stop rule and no `--maxfail`. The smoke chunk stays.
 - `--no-smoke` - start the whole queue at once, without the smoke chunk first.
 - `--pip-extra "<reqs>"` - more pip requirements the tests import.
@@ -102,29 +107,46 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## Fail fast
 
-- Each chunk writes a one-line result the moment it ends: `<stage>/results/<shard>.json`. It holds the counts and the first failure (test id and a short message).
-- The launcher reads those every 15 s and prints a row per chunk: when it ended, the verdict, the counts and the first failure. It downloads the chunk's files at once.
+- Each chunk writes a one-line result the moment it ends: `<stage>/results/<shard>.json`. It holds the counts, the first failure (test id and a short message) and the chunk's own run ids.
+- The launcher reads those every 15 s and prints a row per chunk: when it ended, the verdict, the counts, the page of the chunk's run and the first failure. It downloads the chunk's files at once.
+- Every 2 min it prints a status line per pool: chunks done, failed, running and queued, the first failure's test id, and the pages of the running chunks.
 - The run stops at the first rule that fires:
   - the smoke chunk failed;
-  - the first 3 chunks to finish all failed (`--first-failed`);
-  - 5 chunks failed (`--max-failed-chunks`);
-  - 20 tests failed or errored over the chunks (`--max-failures`).
-- A failed chunk is one with a failed or erroring test (an import error at collection included), or one that ended without a result. A part that collects nothing is not one.
-- To stop, the launcher writes `<stage>/stop.json` and cancels every pool's job: the running chunks and the queue.
-- Each runner also checks the rules and the marker before it claims. It claims nothing more once one fires, even when the launcher is gone.
-- It prints `stopped early: <rule>` and the first failure of each failed chunk so far. `summary.md` and the run entry of the timing history record the rule.
-- A chunk the stop cut short, or that pytest stopped at `--maxfail`, leaves lower bounds for the files it did not finish, flagged with the rule.
-- The smoke chunk is the shortest chunk that is not heavy. It heads the queue and runs alone, as a task the runners depend on.
-  - It fails the job before the queue starts, so a bad wheel, an import error or a missing native library shows in about 1-3 min.
-  - A run of one chunk has no smoke.
-  - `--no-smoke` starts the whole queue at once.
+  - the first 2 chunks to finish both failed (`--first-failed`);
+  - 3 chunks failed (`--max-failed-chunks`);
+  - 20 tests failed or errored over the chunks (`--max-failures`);
+  - the wall reached 20 min (`--max-wall-min`). The summary lists the chunks that did not run.
+- A failed chunk has a failed or erroring test (an import error at collection included), or it ended without a result. A part that collects nothing is not a failed chunk, and neither is a chunk stopped at 2x its estimate with no test failed.
+- To stop, the launcher writes `<stage>/stop.json` and cancels every pool's job: the running chunks and the queue. Each runner also checks the rules, the marker and the wall before it claims.
+- It prints `stopped early: <rule>` and the first failure of each failed chunk. `summary.md` and the run entry of the timing history record the rule.
+- A chunk the stop cut short, or that pytest stopped at `--maxfail`, leaves lower bounds for what it did not finish, flagged with the rule.
+- Job status tells the truth. A chunk with a failed test fails its own notebook run. A runner task that ran one fails too.
+- Each chunk names its run first (`<stage>/out/<shard>/child.json`) and in the queue table (`child_run_id`, `child_job_id`). When it dies before pytest, its row shows that run's own error.
+- Each launch has its own scratch folder on the node (run id and attempt), so a relaunch under the same run id meets no files of the last one.
+
+## The smoke chunk
+
+- It runs alone first, as a task the runners depend on. A failure stops the job before the queue, in about 1-3 min.
+- It collects every test file the pool's chunks run, so an import error anywhere shows.
+- It then runs the first 2 tests of the fastest chunk that collects any, with that chunk's env, `-k`, markers and test part. It tries the 3 fastest chunks in turn.
+- When none of them collects a test, the smoke fails as a selection error, and says so.
+- A pool that runs only `scripts/ci`, or a run of one chunk, has no smoke. `--no-smoke` starts the queue at once.
+
+## The ramp and the caps
+
+- Only 2 runners start after the smoke (`--start-chunks`). The others start once 2 chunks have passed, or once nothing is left to wait for.
+- No chunk is planned over `--target-min`. A file or table longer than that alone is cut into test parts: each part runs the tests whose node id hashes to it.
+- A part's times count for its whole file or table (times the parts).
+- A test that runs past `--test-timeout` fails, and the chunk goes on. The shard raises an exception inside the test. pytest-timeout does it where the env has it. A test that does not stop stops its chunk 60 s later.
+- A chunk past 2x its estimate stops (`--overrun-x`). Its times are lower bounds, so the next plan cuts it finer.
+- `--rerun-failed <run id>` runs only the tests that failed in that run, a chunk per file, each stopping at its first failure.
 - Run `--no-fail-fast` for a full list of failures, for example before a fix that touches many tests.
 
 ## Serverless
 
 - `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
 - Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
-- The cut aims at 3-6 min per chunk, by test file or oracle table. A table that takes longer alone gets a chunk of its own.
+- The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.
 - A Serverless run records its times under `sls:<key>` in the timing history. A Serverless plan uses them, else the pools' solo times; a pool plan never reads them.
 - Run `t26-eq-sls3` (2026-11-11) planned 26 chunks of 30-76 min each from the pools' contention factors. The same selection now plans 22 chunks of 2-16 min.
 
@@ -140,6 +162,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A changed manifest row maps to its oracle table and to the tests that name the row. A function whose light code (its row's `module:symbol` references) the change reaches maps the same way.
 - `scripts/**` and `examples/tests/**` map to the `scripts/ci` tests that name the file, or that name a file that names it.
 - The CI workflow and actions, the package's `pyproject.toml`, its requirements and `envs/` select the whole bank.
+- A table reached only through changed manifest rows, or their light code, runs just those functions' rows: `-k <names>` on its chunk. Its estimate is the rows' share of the table. `--explain-only` marks it (`[only the rows of ...: -k]`, `, -k ...`). A table whose own module changed runs whole.
 - The selected files run as one chunk set per CI shard group (`pyrx affected`, `manager family 2/3 affected`), with that shard's marker, pool and options; `--split auto` cuts them as usual. A part that collects nothing (only integration tests) does not fail the run.
 - `--explain-only` prints, per selected file and table, the changed file and the import chain (`test.pyvx.test_tin_mode_arg -> pyvx.functions -> pyvx._tin`).
 - A selection over 25% of the light bank's units (files, and the family file as its tables) is refused unless `--allow-broad` is given. The message is loud and names why the selection is so broad.
@@ -175,7 +198,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A key is a test file, or an oracle table of `test_family_cross_tier.py` (`table:<TABLE>`). The family file's other tests are `table:*`.
 - A sample is normalized to a chunk running alone, so runs at different slot counts pool. An estimate is the median of a key's last 5 samples.
 - A chunk stopped by `--shard-cap-min`, `--stall-min` or a crash leaves lower bounds for the files it did not finish.
-  - The next plan gives such a file a chunk of its own and puts it first. A later full run replaces the bound.
+  - The next plan plans such a file at its bound at least, cut into test parts when that passes the target. A later full run replaces the bound.
 - History wins over CI's minutes from a key's first sample. A file with no sample takes its share of CI's minutes.
 - The cut uses the history too. A file or table longer than `--target-min` gets a chunk of its own; the family file is cut by table.
 - `--explain-only` marks each chunk's estimate: `h` history, `p` partly history, `lb` a lower bound, `ci` CI's minutes.

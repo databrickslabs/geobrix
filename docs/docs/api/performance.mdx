@@ -98,7 +98,7 @@ A raster accessor that returns one value (a number, a string or a WKB polygon) r
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 
-The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. These run the JVM first: the BNG, custom-grid and H3 cell scalars that have a JVM form, `gbx_rst_frombands`, `gbx_st_crs` and `gbx_st_setcrs`.
+The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. These run the JVM first: the BNG and custom-grid cell scalars that have a JVM form.
 
 #### The Rust kernel for BNG cells
 

@@ -331,7 +331,7 @@ The PMTiles writer packages a tile pyramid into one `.pmtiles` archive. The `pmt
 
 The writer has two phases. Executors write intermediates, then the driver assembles the archive. The intermediates sit on a shared filesystem, not on node-local disk.
 
-The `pmtiles_agg` aggregate folds a group of `(tile, z, x, y)` rows into one archive per key. It runs at about 1.07x the JVM aggregate's time (0.74 s against 0.70 s for 1,000 tiles), inside run-to-run noise. Both produce spec-valid PMTiles v3 archives that decode to the same tile set. The bytes differ: the Python archive GZIP-compresses its directories.
+The `pmtiles_agg` aggregate folds a group of `(tile, z, x, y)` rows into one archive per key. On a dedicated cluster a JVM aggregate ran at 0.81x to 0.91x the speed of the Python one, with the same tiles. So the JAR holds no JVM form of it.
 
 ### Vector readers
 

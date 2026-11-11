@@ -173,7 +173,7 @@ def test_the_python_setting_refuses_a_pixel_function_even_when_the_process_allow
     tmp_path,
 ):
     """GDAL's default refuses inline Python already, so the setting is the barrier only where the process allows it
-    (the JVM's withVrtPython does, for a few calls). Removed from ENGINE_SETTINGS, this row would read the function.
+    (a caller's own GDAL code can turn it on). Removed from ENGINE_SETTINGS, this row would read the function.
     """
     _skip_without_gdal()
     gdal = run._gdal()

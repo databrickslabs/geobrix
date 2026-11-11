@@ -75,6 +75,9 @@ def test_the_payload_is_used_only_where_it_can_load(tmp_path, monkeypatch):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setattr(_native, "_SYSTEM_CA", [str(bundle)])
     monkeypatch.setattr(_native, "_activated_by", None)
+    # no startup hook in this process: a pool node's shard runner activates the payload at interpreter start (its
+    # sitecustomize imports _gbx_native_path), which would make the activation read "pth"
+    monkeypatch.delitem(sys.modules, "_gbx_native_path", raising=False)
     monkeypatch.setattr(sys, "platform", "linux")
     r = str(root)
 

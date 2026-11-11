@@ -403,10 +403,11 @@ _PROMOTED_BY_THE_JVM_PASS = (
 )
 
 
-def test_tilexyz_keeps_light_first_until_it_is_measured_against_the_arrow_light_form():
-    """The JVM tilexyz was 2.8x faster at 4x tiles, against the light form that crossed into Python as pickled rows:
-    it stays light first until it is measured again."""
-    assert "L1" not in levels.order(MAN.functions["gbx_rst_tilexyz"])
+def test_tilexyz_runs_the_jvm_first_after_its_measure_against_the_arrow_light_form():
+    """Against the light form that carries tiles as Arrow batches, the JVM tilexyz took 1.25x less time at 4x tiles and
+    1.22x less at 16x (dedicated DBR 19, 5 iterations, equal output): it runs first, light behind it.
+    """
+    assert levels.order(MAN.functions["gbx_rst_tilexyz"])[:2] == ("L1", "L3")
 
 
 def test_tilexyz_sends_only_a_tile_with_bytes_to_the_jvm():

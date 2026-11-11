@@ -32,13 +32,19 @@ def test_the_set_holds_every_jvm_level_not_proven_and_nothing_else():
     assert len(FNS) == len(set(FNS))
 
 
-def test_the_set_covers_both_halves_of_the_list():
+def test_the_set_covers_the_jvm_levels_ordered_first_and_never():
     rows = manifest.load().functions
     never = {fn for fn in FNS if "L1" not in levels.order(rows[fn])}
     first = {fn for fn in FNS if levels.order(rows[fn])[0] == "L1"}
     assert never | first == set(FNS)
-    assert never  # a JVM level the level order never picks
-    assert {"gbx_rst_crs", "gbx_bng_aswkb", "gbx_rst_h3_rasterize_agg"} <= first
+    # the last JVM level the level order never picked (tilexyz) runs first since its Arrow re-measure
+    assert not never
+    assert {
+        "gbx_rst_crs",
+        "gbx_bng_aswkb",
+        "gbx_rst_h3_rasterize_agg",
+        "gbx_rst_tilexyz",
+    } <= first
 
 
 @pytest.mark.parametrize("fn", FNS)

@@ -377,6 +377,7 @@ def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
         in rows
     )
     # an L1 block the level table orders after L3 (or leaves out), and a function with no JVM form, are not listed
+    # (since tilexyz was promoted, every L1 block is ordered first: `never` may be empty)
     from databricks.labs.gbx.manager import levels
 
     never = [
@@ -384,7 +385,12 @@ def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
         for f in manifest.load().functions.values()
         if "L1" in f.levels and "L1" not in levels.order(f)
     ]
-    assert never
+    jvm_first = {
+        f.sql_name
+        for f in manifest.load().functions.values()
+        if "L1" in f.levels and levels.order(f)[0] == "L1"
+    }
+    assert {r.split("`")[1] for r in rows} == jvm_first
     assert not any(
         f"`{n}`" in out for n in (*never, "gbx_rst_merge", "gbx_rst_maketiles")
     )

@@ -96,10 +96,11 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_custom_rasterize_agg": ("L1", "L3"),
     "gbx_rst_quadbin_rasterize_agg": ("L1", "L3"),
     "gbx_rst_h3_rasterize_agg": ("L1", "L3"),
-    # The web tile is light by family. Its JVM form was 2.54x and 2.84x faster at 1x and 4x tiles (Task 25), against the
-    # light form that crossed into Python as pickled rows; it is measured again against the Arrow light form before it
-    # runs first. Its dispatch wrapper is ready (manifest L1 dispatch "bytes_to_jvm"): only a tile with bytes goes to
-    # the JVM, and a virtual, NULL or error tile goes to light, which gives the transparent image for it.
+    # The web tile runs on the JVM first. Against the light form that carries tiles as Arrow batches, its JVM form took
+    # 1.25x less time at 4x tiles and 1.22x less at 16x (dedicated DBR 19, 5 iterations, equal output; it was 2.84x
+    # against the pickled light form). Its dispatch wrapper (manifest L1 dispatch "bytes_to_jvm") sends only a tile with
+    # bytes to the JVM; a virtual, NULL or error tile goes to light, which gives the transparent image for it.
+    "gbx_rst_tilexyz": ("L1", "L3"),
     # The rasterize family is light: gridfrompoints measured 1.78x and 1.91x slower on the JVM than on light at 4x and 16x
     # rows (3 iterations, equal output), and binpoints 1.85x and 1.68x slower, so neither keeps a Catalyst expression.
     # The terrain model is 18x faster on light, and rasterize is 15x faster in the pure-core timing (no cluster number;

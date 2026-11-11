@@ -106,7 +106,13 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 | `gbx_custom_cellfill` | 0.91 / 1.59 | 1.54 / 3.33 | 1.7x / 2.1x |
 | `gbx_bng_kloop` | 2.04 / 6.69 | 3.81 / 11.30 | 1.9x / 1.7x |
 
-The JVM `gbx_rst_tilexyz` was 2.5x and 2.8x faster at 1x and 4x tiles. That measurement used a lightweight form that passed tiles to Python as pickled rows. `gbx_rst_tilexyz` runs the lightweight form first until it is measured against the Arrow form.
+`gbx_rst_tilexyz` runs on the JVM by default too. It was measured against the lightweight form that moves tiles in Arrow batches, with the same decoded output:
+
+| Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
+|---|---|---|---|
+| `gbx_rst_tilexyz` | 1.71 / 4.75 | 2.14 / 5.80 | 1.25x / 1.22x |
+
+A virtual, NULL or error tile goes to the lightweight form, which returns a transparent image for it.
 
 The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. See the [release notes](../release-notes-0-6).
 

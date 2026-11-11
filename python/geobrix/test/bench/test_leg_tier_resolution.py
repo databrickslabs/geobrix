@@ -158,10 +158,22 @@ def _record_checks(monkeypatch):
     return calls
 
 
+# the function each vector and PMTiles leg times, so the manifest says whether it has a heavyweight row
+_VECTOR_LEG_FNS = {
+    "run_triangulate": "gbx_st_triangulate",
+    "run_interp_bbox": "gbx_st_interpolateelevationbbox",
+    "run_interp_geom": "gbx_st_interpolateelevationgeom",
+    "run_legacy_aswkb": "gbx_st_legacyaswkb",
+    "run_pmtiles_agg": "gbx_pmtiles_agg",
+}
+
+
 def _sql_name(leg, kwargs):
     """The gbx_* SQL name a grid or fan-out leg times, or None for a leg that times several."""
     if leg == "run_fanout_udtf":
         return f"gbx_{kwargs['fn']}"
+    if leg in _VECTOR_LEG_FNS:
+        return _VECTOR_LEG_FNS[leg]
     for family in ("quadbin", "bng", "custom"):
         if leg.startswith(f"run_{family}_"):
             return f"gbx_{family}_{leg[len(f'run_{family}_'):]}"

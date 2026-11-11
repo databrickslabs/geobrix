@@ -858,3 +858,26 @@ def test_an_ewkt_geometry_column_is_read_with_st_geomfromewkt_on_uc():
         oracles._projection(case, params, [(None, "SRID=4326;POINT(1 2)")], "session")
         == "c0, c1"
     )
+
+
+def test_a_uc_row_mirrored_from_a_named_session_row_carries_its_geometrys_srid():
+    """A row named in ``null``/``refused`` builds its UC GEOMETRY as a promoted row does: the SRID of its EWKT, else 0
+    (the session reads a plain WKT in the tile's CRS), never the 4326 default; one UC cannot be handed raises.
+    """
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.oracle_tables import spec_analysis
+
+    uc = {c.cid: c for c in spec_analysis.SPEC_ANALYSIS}
+    # a UTM point: read as lon/lat its NULL would come from the wrong input
+    assert uc["uc_viewshed_outside_dem_out_of_reach"].geom_srid == 0
+    vs = "gbx_rst_viewshed"
+    ewkt = oracles.Case(
+        "vs_ewkt", vs, (b"II*\x00", "SRID=27700;POINT(1 2)", 2.0), "error_tile_has", "x"
+    )
+    got = {c.cid: c for c in oracles.mirror((ewkt,), null=("vs_ewkt",))}
+    assert got["uc_vs_ewkt"].geom_srid == 27700 and got["uc_vs_ewkt"].kind == "null"
+    wkb = dataclasses.replace(
+        ewkt, cid="vs_wkb", args=(b"II*\x00", b"\x01\x01\x00\x00\x00" + bytes(16), 2.0)
+    )
+    with pytest.raises(AssertionError, match="vs_wkb"):
+        oracles.mirror((wkb,), refused=("vs_wkb",))

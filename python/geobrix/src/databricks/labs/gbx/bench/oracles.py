@@ -307,7 +307,8 @@ def mirror(rows, null=(), refused=()):
     - a GEOMETRY argument carries the SRID of its EWKT on UC, else none (0), as the session reads a plain WKT;
     - a row named in ``null`` is a data error, an error tile in the session: on UC it is NULL (row ``uc_<cid>``);
     - a row named in ``refused`` is refused on UC with a Fix (row ``uc_<cid>``): a CRS form UC does not take, or a call
-      over the decoded size a UC function holds.
+      over the decoded size a UC function holds. A named row builds its GEOMETRY as a promoted row does, and one whose
+      GEOMETRY UC cannot be handed raises.
 
     A named row that is no such session row raises, so the lists cannot go stale."""
     named = {**{c: "null" for c in null}, **{c: "uc_refused" for c in refused}}
@@ -318,6 +319,12 @@ def mirror(rows, null=(), refused=()):
             continue
         if c.cid in named:
             seen.add(c.cid)
+            # the UC row runs the primary args alone, and builds its GEOMETRY as a promoted row does
+            geoms = _geometry_args(c.fn, c.args)
+            srids = {_ewkt_srid(g) for g in geoms if isinstance(g, str)}
+            assert (
+                all(_uc_geometry_text(g) for g in geoms) and len(srids) <= 1
+            ), f"{c.cid}: a GEOMETRY argument UC cannot be handed (WKB, no geometry, or two SRIDs)"
             out.append(c)
             out.append(
                 replace(
@@ -327,6 +334,7 @@ def mirror(rows, null=(), refused=()):
                     expect=None,
                     surfaces=("uc",),
                     variants=(),
+                    geom_srid=next(iter(srids), 0),
                 )
             )
             continue

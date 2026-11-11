@@ -56,8 +56,9 @@ echo -e "${CYAN}Running generator inside Docker (function manifest → function-
 show_separator
 
 # The checkout as mounted in the container (GBX_CONTAINER_ROOT, default /root/geobrix): check_docker has already
-# refused a container that mounts another tree, so the generator reads and writes this checkout.
-docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd \"$GBX_CONTAINER_ROOT\" && unset JAVA_TOOL_OPTIONS && python3 scripts/manifest/gen_surfaces.py --write --only function-info"
+# refused a container that mounts another tree, so the generator reads and writes this checkout. The generator imports
+# the package from this checkout's source: a new container (a worktree's) has no editable install of it.
+docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "cd \"$GBX_CONTAINER_ROOT\" && unset JAVA_TOOL_OPTIONS && PYTHONPATH=python/geobrix/src\${PYTHONPATH:+:\$PYTHONPATH} python3 scripts/manifest/gen_surfaces.py --write --only function-info"
 EXIT=$?
 
 show_separator

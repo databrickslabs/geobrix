@@ -3518,3 +3518,16 @@ def test_an_env5_wheel_on_serverless_gpu_is_warned_about_the_env6_workers(runner
     assert note and "env6" in note and "--env-version 6" in note
     assert runner.gpu_wheel_warning(ENV6, "GPU_1xA10") is None
     assert runner.gpu_wheel_warning(ENV5, None) is None  # CPU Serverless env 5 is unchanged
+
+
+# ------------------------------------------------- docs:function-info: a new container
+
+
+def test_function_info_imports_the_checkouts_source_in_a_new_container(sandbox):
+    # A worktree's new container has no editable install of geobrix: the generator failed there with
+    # ModuleNotFoundError: databricks. It must import the package from the checkout it writes.
+    res = sandbox.run("gbx-docs-function-info.sh")
+    gen = [c[-1] for c in sandbox.execs() if "gen_surfaces.py" in c[-1]]
+    assert len(gen) == 1, res.output
+    assert "PYTHONPATH=python/geobrix/src" in gen[0]
+    assert gen[0].index("PYTHONPATH=") < gen[0].index("python3 scripts/manifest/gen_surfaces.py")

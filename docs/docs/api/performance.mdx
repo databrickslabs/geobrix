@@ -127,14 +127,13 @@ The functions not listed above have no cluster measurement of the heavy level. M
 
 #### The Rust kernel for BNG cells
 
-`gbx_bng_eastnorthasbng` also has a Rust kernel in the env wheel. It beats the Python form by more than 2x on dedicated and Serverless, so it stays. The ratios below compare the Python form with the Rust form within one compute.
+`gbx_bng_eastnorthasbng` also has a Rust kernel in the env wheel. It beats the Python form by more than 2x on dedicated compute, so it stays. The ratios below compare the Python form with the Rust form.
 
 | Compute | 1 million rows | 4 million rows | 16 million rows |
 |---|---|---|---|
 | Dedicated | 8.0x | 12.4x | 12.3x |
-| Serverless | 7.6x | 20.3x | 16.8x |
 
-The Rust form runs at the cost of moving the rows, so these ratios are a lower bound on the kernel gain. Rust did not clear its bar for raster decode: the Python decode ran at 1.03x on dedicated, 0.97x on standard and 0.90x on Serverless.
+The Rust form runs at the cost of moving the rows, so these ratios are a lower bound on the kernel gain. Rust did not clear its bar for raster decode: the Python decode ran at 1.03x on dedicated and 0.97x on standard.
 
 #### The Rust kernel for TIN triangulation
 

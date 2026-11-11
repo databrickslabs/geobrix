@@ -152,3 +152,93 @@ def test_the_custom_aggregates_take_the_grid_as_a_constant():
     assert (
         jv._GRID_SQL.count("CAST(") == 8
     )  # the column form of the same grid (the scalars and explodes read it)
+
+
+# --- the cull check: the tile ops whose JVM level was removed, timed light only on the spec of their old JVM verdict ---
+CULLED = ("gbx_rst_band", "gbx_rst_getsubdataset", "gbx_rst_setcrs", "gbx_rst_setsrid")
+
+
+@pytest.mark.parametrize("fn", CULLED)
+def test_a_culled_tile_op_keeps_its_light_forms_and_a_floor_with_no_jvm_form(fn):
+    """Its L1 level is gone, so only the light forms (and the floor) are timed, to check the cull against the old L1."""
+    row = manifest.load().functions[fn]
+    assert "L1" not in row.levels
+    assert fn not in FNS  # not a JVM level whose fate is open
+    spec = jv.spec_of(fn)
+    forms = _of(fn)
+    light = list((row.levels["L3"].get("variants") or {})) or ["l3"]
+    names = [f.variant for f in forms]
+    assert names == [f"{v}@{spec.tag}" for v in light] + [f"floor@{spec.tag}"]
+    assert all(f.level == "L3" for f in forms)
+    assert all(f.vsql and f.nullsql for f in forms[:-1])
+    assert jv.part_forms([fn]) == [f"{fn}:{n}" for n in names]
+
+
+def test_the_cull_check_times_the_calls_and_inputs_of_the_old_jvm_verdict():
+    """The same spec as the t25f re-measure (the old L1 medians it is compared with, cross-run)."""
+    want = {
+        "gbx_rst_band": ("dem_1024_mem", "{fn}(tile, 1)"),
+        "gbx_rst_getsubdataset": ("jv_nc_512_mem", "{fn}(tile, 'Band2')"),
+        "gbx_rst_setcrs": ("dem_1024_mem", "{fn}(tile, 'EPSG:32633')"),
+        "gbx_rst_setsrid": ("dem_1024_mem", "{fn}(tile, 32633)"),
+    }
+    assert {fn: (jv.spec_of(fn).inp, jv.spec_of(fn).call) for fn in CULLED} == want
+    assert jv.BASE_ROWS["jv_nc_512_mem"] == 128
+    assert "jv_nc_512_mem" in lf.INPUTS
+
+
+# --- the transport a light tile form took: the row's `path` says it -------------------------------------------------
+_ACCESSORS = tuple(
+    s.fn for s in jv.SPECS if s.fn.startswith("gbx_rst_") and s.shape == "scalar"
+)
+TILE_UDF_FNS = _ACCESSORS + CULLED + ("gbx_rst_tri",)
+
+
+def test_the_tile_udf_functions_are_the_accessors_tilexyz_the_culls_and_tri():
+    assert len(_ACCESSORS) == 20 and "gbx_rst_tilexyz" in _ACCESSORS
+
+
+@pytest.mark.parametrize("fn", TILE_UDF_FNS)
+def test_a_light_tile_form_records_the_transport_the_session_chose(fn, monkeypatch):
+    from databricks.labs.gbx.bench import levels as bl
+    from databricks.labs.gbx.manager import capabilities
+
+    assert bl.PATH_OPS[(fn, "L3")] == "tile_udf"
+    monkeypatch.setattr(capabilities, "path", lambda spark, op: f"{op}:arrow")
+    form = next(
+        f
+        for f in lf.FORMS["DEM" if fn == "gbx_rst_tri" else jv.MVP]
+        if f.fn == fn and f.level == "L3"
+    )
+    assert bl._path_of(object(), form) == "tile_udf:arrow"
+
+
+@pytest.mark.parametrize("fn", [f for f in TILE_UDF_FNS if f != "gbx_rst_tri"])
+def test_the_light_variant_behind_a_tile_udf_path_is_a_session_tile_udf(fn):
+    """The label is the session's choice, so it is true only of a UDF whose transport the session chooses."""
+    from databricks.labs.gbx._transport import SessionTileUdf
+    from databricks.labs.gbx.manifest import resolve_ref
+
+    variants = manifest.load().functions[fn].levels["L3"]["variants"]
+    assert variants
+    for ref in variants.values():
+        obj = resolve_ref(ref)
+        obj = getattr(
+            obj, "_f", obj
+        )  # the Column API wraps it to carry the session's read cap
+        assert isinstance(obj, SessionTileUdf), (fn, ref)
+
+
+def test_a_floor_form_records_no_transport(monkeypatch):
+    """A floor is the bench's own pandas UDF, not the function's light UDF: no path label."""
+    from databricks.labs.gbx.bench import levels as bl
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.setattr(capabilities, "path", lambda spark, op: f"{op}:arrow")
+    for fn, mvp in (
+        ("gbx_rst_band", jv.MVP),
+        ("gbx_rst_crs", jv.MVP),
+        ("gbx_rst_tri", "DEM"),
+    ):
+        floor = [f for f in lf.FORMS[mvp] if f.fn == fn and "floor" in f.variant]
+        assert floor and all(bl._path_of(object(), f) == "" for f in floor)

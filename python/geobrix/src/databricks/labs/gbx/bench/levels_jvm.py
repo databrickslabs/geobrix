@@ -15,6 +15,9 @@ Every non-floor form carries a value fingerprint (`vsql`: the decoded pixels, th
 the sorted arrays) and a NULL report (`nullsql`), so the levels are compared by what they return, and an error tile under
 load is a counted, named NULL, not a fast wrong row. A run picks one function with `--levels-forms <fn>:<variant>,...`
 (`levels_forms.select_forms`), and the local pass with the `JV-<name>` sets of `bench.local_timing`.
+
+`CULLED_SPECS` keeps the tile ops whose JVM level was removed (Task 25) on the spec of their old JVM verdict, light forms
+and a floor only, so a cull can be checked again against the old L1 medians when the light transport changes.
 """
 
 from __future__ import annotations
@@ -67,6 +70,7 @@ _VALUE = {
 _REPLICATED = {
     "dem_1024_mem": "xxhash64(tile.raster)",
     "se_pair_512_mem": "xxhash64(tiles[0].raster, tiles[1].raster)",
+    "jv_nc_512_mem": "xxhash64(tile.raster)",
 }
 # the few corpus tiles a decode reads: those whose path hashes to 0 mod 8 (every form reads the same tiles; no sort of
 # 16 MiB rows)
@@ -246,9 +250,19 @@ SPECS: List[Spec] = [
 
 FUNCTIONS: Tuple[str, ...] = tuple(s.fn for s in SPECS)
 
+# The tile ops whose JVM level was culled (no L1 left): their light forms and a floor, on the calls and inputs of the old
+# JVM verdict (the t25f re-measure), so a change of the light transport can be checked against the old L1 medians.
+CULLED_SPECS: List[Spec] = [
+    Spec("gbx_rst_band", "dem_1024_mem", "dem", "tile", "{fn}(tile, 1)", "raster", "tile"),
+    Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
+    Spec("gbx_rst_setcrs", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'EPSG:32633')", "raster", "tile"),
+    Spec("gbx_rst_setsrid", "dem_1024_mem", "dem", "tile", "{fn}(tile, 32633)", "raster", "tile"),
+]  # fmt: skip
+
 
 # --- the inputs ------------------------------------------------------------------------------------------------------
 BASE_ROWS = {
+    "jv_nc_512_mem": 128,
     "jv_bng_cells_gen": 250_000,
     "jv_bng_points_wkt": 1_000_000,
     "jv_bng_chips": 250_000,
@@ -271,6 +285,35 @@ _GRID_SQL = (
 
 def _key(F, seed):
     return F.floor(F.rand(seed) * _KEYS).cast("string").alias("key")
+
+
+def _nc_tile(size: int, seed: int) -> dict:
+    """The bytes of a NetCDF file whose three variables `Band1` to `Band3` are three DEM surfaces (a materialized tile)."""
+    import os
+    import shutil
+    import tempfile
+
+    import numpy as np
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.levels_forms import _se_dem_tile
+
+    def surface(k):
+        with open_bytes(_se_dem_tile(size, seed + k)["raster"]) as ds:
+            return ds.read(1)
+
+    bands = np.stack([surface(k) for k in range(3)])
+    d = tempfile.mkdtemp(prefix="gbx-jv-nc-")
+    try:
+        tif, nc = os.path.join(d, "b.tif"), os.path.join(d, "b.nc")
+        with open(tif, "wb") as fh:
+            fh.write(oracles._gtiff(bands, "EPSG:3857"))
+        oracles.to_netcdf(tif, nc)
+        with open(nc, "rb") as fh:
+            return oracles._tile(fh.read())
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def _bng_points_wkt(spark, n, corpus, schema):
@@ -680,22 +723,27 @@ def _floor(s: Spec, common) -> Form:
 
 
 def jv_forms() -> List[Form]:
-    """The forms of every function of `SPECS`: `l1@<tag>`, each light variant, then `floor@<tag>`."""
+    """The forms of every function of `SPECS`: `l1@<tag>`, each light variant, then `floor@<tag>`; for `CULLED_SPECS` the
+    light variants and the floor only."""
     from databricks.labs.gbx.manifest import load
 
     rows = load().functions
     out: List[Form] = []
-    for s in SPECS:
+    for s in SPECS + CULLED_SPECS:
         row = rows.get(s.fn)
-        if row is None or "L1" not in row.levels:
-            continue  # culled since (the manifest-pin test names the drift)
+        if row is None:
+            continue
+        culled = s in CULLED_SPECS
+        if culled == ("L1" in row.levels):
+            continue  # a JV row culled since, or a culled one given back its JVM level (the tests name the drift)
         common = dict(mvp=MVP, fn=s.fn, input=s.inp)
-        out.append(
-            Form(
-                level="L1", variant=f"l1@{s.tag}", sql=_sql(s, s.fn), vsql=_vsql(s, s.fn),
-                nullsql=_nullsql(s, s.fn), computes=("dedicated",), allows_null=True, **common,
-            )
-        )  # fmt: skip
+        if not culled:
+            out.append(
+                Form(
+                    level="L1", variant=f"l1@{s.tag}", sql=_sql(s, s.fn), vsql=_vsql(s, s.fn),
+                    nullsql=_nullsql(s, s.fn), computes=("dedicated",), allows_null=True, **common,
+                )
+            )  # fmt: skip
         for v in _l3_variants(row):
             out.append(
                 Form(
@@ -713,13 +761,14 @@ def variants_of(fn: str) -> Tuple[str, ...]:
 
 
 def spec_of(fn: str) -> Optional[Spec]:
-    return next((s for s in SPECS if s.fn == fn), None)
+    return next((s for s in SPECS + CULLED_SPECS if s.fn == fn), None)
 
 
 def install(lf) -> None:
     """Add the JV inputs and `FORMS["JV"]` to `levels_forms` (called once, at its import)."""
     lf.INPUTS.update(
         {
+            "jv_nc_512_mem": lf._se_dems_replicated(512, _nc_tile, "jvnc", parts=32),
             "jv_bng_cells_gen": _bng_cells_gen,
             "jv_bng_points_wkt": _bng_points_wkt,
             "jv_bng_chips": _bng_chips,

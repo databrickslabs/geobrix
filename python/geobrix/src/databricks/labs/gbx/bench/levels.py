@@ -88,14 +88,30 @@ class Form:
 
 
 # (fn, level) of a form -> the operation whose code path a capability chooses (`manager.capabilities.path`): the row's
-# `path` says which one the form took, so the same compute can be compared path against path.
-PATH_OPS = {("gbx_rst_merge_agg", "L3"): "merge_agg"}
+# `path` says which one the form took, so the same compute can be compared path against path. `tile_udf`: the light
+# UDF is a `SessionTileUdf`, whose rows cross as Arrow batches or pickles by the session (`arrow_tile_transport`).
+_TILE_UDF_FNS = (
+    *(
+        f"gbx_rst_{n}"
+        for n in (
+            "crs", "format", "height", "memsize", "numbands", "pixelheight", "pixelwidth", "rotation", "scalex",
+            "scaley", "skewx", "skewy", "srid", "upperleftx", "upperlefty", "rastertoworldcoordx",
+            "rastertoworldcoordy", "worldtorastercoordx", "worldtorastercoordy", "tilexyz", "band", "getsubdataset",
+            "setcrs", "setsrid", "tri",
+        )
+    ),
+)  # fmt: skip
+PATH_OPS = {
+    ("gbx_rst_merge_agg", "L3"): "merge_agg",
+    **{(fn, "L3"): "tile_udf" for fn in _TILE_UDF_FNS},
+}
 
 
 def _path_of(spark, form: "Form") -> str:
-    """The code path the session takes for *form* (``merge_agg:arrow_iter``), "" when no capability chooses one."""
+    """The code path the session takes for *form* (``merge_agg:arrow_iter``), "" when no capability chooses one (a
+    floor is the bench's own UDF, not the function's)."""
     op = PATH_OPS.get((form.fn, form.level))
-    if op is None:
+    if op is None or form.variant.startswith("floor"):
         return ""
     try:
         from databricks.labs.gbx.manager import capabilities

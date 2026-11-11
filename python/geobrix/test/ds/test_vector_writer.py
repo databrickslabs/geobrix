@@ -1020,3 +1020,56 @@ def test_a_one_dimension_format_refuses_a_mix_of_2d_and_3d_geometries(tmp_path):
     high = Polygon([(12, 50, 4.0), (13, 50, 5.0), (13, 51, 6.0), (12, 50, 4.0)])
     with pytest.raises(ValueError, match="mix 2D and 3D.*Fix: write one dimension"):
         _write_layer(tmp_path, "ESRI Shapefile", "o.shp", [[flat], [high]])
+
+
+@pytest.mark.parametrize("before", [None, "WAL"], ids=["unset", "user-set"])
+def test_a_geopackage_write_and_read_leave_the_sqlite_journal_option_as_they_found_it(
+    volume_like_tmp, before
+):
+    """A GPKG is written (and read) with OGR_SQLITE_JOURNAL=DELETE so no WAL is left for a reader on a read-only Volume
+    to checkpoint. The option is process-wide in GDAL: it is set for the write or read only, and the session's own
+    value (or none) comes back after it."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds.vector import VectorGbxDataSource
+
+    key = "OGR_SQLITE_JOURNAL"
+    pyogrio.set_gdal_config_options({key: before})
+    seen = []
+    real = pyogrio.write_arrow
+
+    def spy(*a, **k):
+        seen.append(pyogrio.get_gdal_config_option(key))
+        return real(*a, **k)
+
+    pyogrio.write_arrow, saved = spy, pyogrio.write_arrow
+    try:
+        schema = StructType(
+            [
+                StructField("id", IntegerType()),
+                StructField("geom_0", BinaryType()),
+                StructField("geom_0_srid", StringType()),
+            ]
+        )
+        # the writer assembles on local disk and copies over: it writes under a Volume-like tmp_path
+        w = VectorGbxWriter(str(volume_like_tmp / "j.gpkg"), schema, "GPKG", {}, True)
+        w.commit([w.write(iter([(1, bytearray(to_wkb(Point(1, 2))), "4326")]))])
+        assert seen and set(seen) == {"DELETE"}  # the writes
+        assert pyogrio.get_gdal_config_option(key) == before
+        real_info = pyogrio.read_info
+
+        def info_spy(*a, **k):
+            seen.append(("read", pyogrio.get_gdal_config_option(key)))
+            return real_info(*a, **k)
+
+        pyogrio.read_info = info_spy
+        try:
+            VectorGbxDataSource({"path": w.path, "driverName": "GPKG"}).schema()
+        finally:
+            pyogrio.read_info = real_info
+        assert ("read", "DELETE") in seen
+        assert pyogrio.get_gdal_config_option(key) == before
+        assert pyogrio.read_info(w.path)["features"] == 1
+    finally:
+        pyogrio.write_arrow = saved
+        pyogrio.set_gdal_config_options({key: None})

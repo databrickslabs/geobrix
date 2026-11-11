@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import inspect
 import os
 import shutil
 import uuid
@@ -1171,6 +1172,51 @@ def _copy_tree_to_fuse(src, dst):
 _UNREADABLE_WKB = _quarantine.UNREADABLE_WKB
 
 
+_SQLITE_JOURNAL = "OGR_SQLITE_JOURNAL"
+
+
+def _sqlite_delete_journal(fn):
+    """Run ``fn`` (a function, or a generator to its end) with ``OGR_SQLITE_JOURNAL=DELETE``, then put back the value
+    the session had (none included).
+
+    A GeoPackage (SQLite) written with a WAL journal leaves a WAL for its first reader to checkpoint, a write that a
+    read-only Volume refuses; DELETE leaves none, and a read with it attempts no journal write. The option is
+    process-wide in GDAL, so it is held only for the GDAL work of one call: set for good, it changed every SQLite open
+    of the user's session. Harmless for the drivers that are not SQLite.
+    """
+
+    def _set(value):
+        _gdal_policy.pyogrio().set_gdal_config_options({_SQLITE_JOURNAL: value})
+
+    def _held():
+        v = _gdal_policy.pyogrio().get_gdal_config_option(_SQLITE_JOURNAL)
+        return ("ON" if v else "OFF") if isinstance(v, bool) else v
+
+    if inspect.isgeneratorfunction(fn):
+
+        @functools.wraps(fn)
+        def gen(*a, **k):
+            before = _held()
+            _set("DELETE")
+            try:
+                yield from fn(*a, **k)
+            finally:
+                _set(before)
+
+        return gen
+
+    @functools.wraps(fn)
+    def call(*a, **k):
+        before = _held()
+        _set("DELETE")
+        try:
+            return fn(*a, **k)
+        finally:
+            _set(before)
+
+    return call
+
+
 class _ChunkPartition(InputPartition):
     """One contiguous feature slice of one layer (picklable)."""
 
@@ -1295,14 +1341,6 @@ class VectorGbxReader(DataSourceReader):
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
 
-    @staticmethod
-    def _gdal_readonly_safe() -> None:
-        # Reading a GeoPackage (SQLite) from read-only object storage (a Volume) must
-        # not attempt a journal/checkpoint write. DELETE journal mode avoids that.
-        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
-
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
-
     def _members(self) -> List[str]:
         """Member paths to read.  A ``.gdb`` directory is a single FileGDB
         dataset (returned as-is); a regular file returns ``[self.path]``; a plain
@@ -1376,6 +1414,7 @@ class VectorGbxReader(DataSourceReader):
             self._prefix[path] = self._resolve_prefix(path, local)
         return _with_prefix(local, self._prefix[path])
 
+    @_sqlite_delete_journal
     def _resolve_prefix(self, path: str, local: str) -> str:
         # A missing file is left to the open, which reports it as missing.
         if (
@@ -1389,7 +1428,6 @@ class VectorGbxReader(DataSourceReader):
             # / quoted GPKG path), so a detection open could only end in "" or in
             # the error _info_for raises from the same open at schema time.
             return ""
-        self._gdal_readonly_safe()
         pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
         from pyogrio.errors import DataLayerError, DataSourceError
 
@@ -1438,6 +1476,7 @@ class VectorGbxReader(DataSourceReader):
                 raise _driver_error(path, self.driver, None, e) from e
             raise
 
+    @_sqlite_delete_journal
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path (once per reader). Random-access
         formats are staged to local temp first (see _staged) so the open does not
@@ -1445,7 +1484,6 @@ class VectorGbxReader(DataSourceReader):
         the reader's family is rejected here."""
         if path in self._infos:
             return self._infos[path]
-        self._gdal_readonly_safe()
         with self._staged(path) as _p:
             name = self._source_name(path, _p)
             with _naming(path):
@@ -1519,10 +1557,10 @@ class VectorGbxReader(DataSourceReader):
                 out[f.name] = None
         return out
 
+    @_sqlite_delete_journal
     def _description_schema_fields(self, path: str) -> Dict[str, Optional[list]]:
         """_description_fields for schema(): field domain metadata comes from a
         zero-feature Arrow read (pyogrio.read_info does not expose it)."""
-        self._gdal_readonly_safe()
         pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         with self._staged(path) as _p, _naming(path):
@@ -1613,6 +1651,7 @@ class VectorGbxReader(DataSourceReader):
             for member in self._members()
         ]
 
+    @_sqlite_delete_journal
     def read(self, partition: "_ChunkPartition"):
         """Arrow-native streaming read: pyogrio.open_arrow yields the layer in batches of
         ``chunkSize`` features; each batch is cut into byte-bounded slices
@@ -1633,7 +1672,6 @@ class VectorGbxReader(DataSourceReader):
 
         import pyarrow as pa
 
-        self._gdal_readonly_safe()
         pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
 
         kw: Dict = {
@@ -2116,6 +2154,7 @@ class VectorGbxWriter(DataSourceWriter):
             kw["layer_options"] = {"GEOMETRY": "AS_WKT"}
         return kw
 
+    @_sqlite_delete_journal
     def _write_streaming(self, frags, local_out, geom_type, crs) -> None:
         """Assemble the output by streaming the fragment batches into ONE
         write_arrow (bounded driver memory, single pass) for GeoJSON / Shapefile /
@@ -2141,9 +2180,6 @@ class VectorGbxWriter(DataSourceWriter):
             if f.name not in drop
         ]
         stream_schema = pa.schema(fields)
-        # GPKG: DELETE journal (no WAL/-shm sidecars) so the output reads back from
-        # read-only object storage; harmless for non-SQLite drivers.
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
         kw = self._write_kw(geom_type, crs)
         try:
             reader = pa.RecordBatchReader.from_batches(
@@ -2173,6 +2209,7 @@ class VectorGbxWriter(DataSourceWriter):
             tables_gen = (feather.read_table(f) for f in frags)
             self._write_local(tables_gen, local_out, geom_type, crs)
 
+    @_sqlite_delete_journal
     def _write_local(self, tables, local_out, geom_type, crs) -> None:
         """Write the merged tables to a local path. Use the fast Arrow path; if the
         driver lacks Arrow-write support, fall back to the classic feature-based path.
@@ -2181,7 +2218,7 @@ class VectorGbxWriter(DataSourceWriter):
         Accepts tables as an iterable (list or generator). For generators, the first
         table is read explicitly to detect Arrow-write support, then remaining tables
         are streamed to avoid whole-dataset materialization (bounded memory)."""
-        pyogrio = _gdal_policy.pyogrio()  # the driver policy is active first
+        _gdal_policy.pyogrio()  # the driver policy is active first
 
         # Convert to iterator so we can pull the first table explicitly
         it = iter(tables)
@@ -2190,11 +2227,6 @@ class VectorGbxWriter(DataSourceWriter):
         except StopIteration:
             return  # no tables, nothing to write
 
-        # Write SQLite-backed formats (GPKG) with a DELETE journal -- no WAL/-shm
-        # sidecars -- so the output reads back from read-only object storage (a
-        # Volume) without the reader attempting a checkpoint (write). Harmless for
-        # non-SQLite drivers. (GDAL config is process-global; set per write.)
-        pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
         kw = self._write_kw(geom_type, crs)
         out_geom = _output_geom_name(self.driver, self.geom_col)
 

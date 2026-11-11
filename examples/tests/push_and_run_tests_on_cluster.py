@@ -244,14 +244,18 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         key = "serverless" if a.serverless else pool_of(s, a)
         by_pool.setdefault(key, []).append(s)
     pools = {}
-    slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
+    slots = plan_slots(a)
+    ff = fail_fast(a)
     for name, items in by_pool.items():
         jar_pool = bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless)
         kind = "serverless" if name == "serverless" else ("jar" if jar_pool else "light")
         pools[name] = {"jar": jar_pool, "table": queue_table(volroot, run_id, kind)}
-        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, max(1, a.clusters), a.shard_cap_min, {s.slug for s in items if s.heavy})
+        # Serverless: every runner task has compute of its own, so no chunk is heavy for its neighbours (no gate)
+        heavy = set() if a.serverless else {s.slug for s in items if s.heavy}
+        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, 1 if a.serverless else max(1, a.clusters), a.shard_cap_min, heavy,
+                  smoke=ff["smoke"])
     return {
-        "run_id": run_id, "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps,
+        "run_id": run_id, "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps, "fail_fast": ff,
         "wheel": {"local": str(wheel) if wheel else "", "name": wheel.name if wheel else "",
                   "built_from": mut.wheel_git_sha(wheel) if wheel else "",
                   "sha256": wheel_sha,
@@ -263,7 +267,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "shards": {
             s.slug: {
                 "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": {**ts.shard_env(s), **extra_env(a)}, "spark_conf": spark_confs(a), "expected_min": round(s.expected_min, 1),
-                "est_src": s.est_src or "ci", "heavy": bool(s.heavy), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
+                "est_src": s.est_src or "ci", "heavy": bool(s.heavy and not a.serverless), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
                 "solo_min": round(s.solo_min or s.expected_min, 1),
                 "contention": round(s.expected_min / s.solo_min, 2) if s.solo_min else 1.0,
                 "unit_solo_s": unit_solo(s, root, fsolo or {}),
@@ -278,6 +282,17 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
 
 
 SRC_MARK = {"history": "h", "partial": "p", "lower bound": "lb", "ci": "ci"}
+# Serverless: runners side by side by default. Each runner task has its own compute (no shared driver JVM, unlike a pool node's
+# slots), so the count is a cost and quota choice, not a contention one.
+SERVERLESS_SLOTS = 8
+SERVERLESS_TARGET = (3.0, 6.0)  # the chunk length a Serverless cut aims at, in minutes: a few minutes, so failures show early
+
+
+def plan_slots(a) -> int:
+    """Runners per cluster (per pool on Serverless): --max-parallel, else SERVERLESS_SLOTS on Serverless, else the node's cores / 8."""
+    if a.max_parallel:
+        return a.max_parallel
+    return SERVERLESS_SLOTS if a.serverless else ts.slots_for(mut.cores_of(a.node_type) or 32)
 
 
 def unit_solo(s: ts.Shard, root: Path, fsolo: Dict[str, float]) -> Dict[str, float]:
@@ -388,6 +403,12 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
     if plan["jar"]:
         lines.append(f"  JAR: {plan['jar']['name']} sha256 {plan['jar']['sha256'][:16]} -> {plan['jar']['volume']} (the pool reinstalls only when it differs)")
     lines.append(f"  caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test, {c['start_min']:g} min to the first beat")
+    if plan.get("fail_fast"):
+        lines.append(f"  fail fast: {fail_fast_text(plan['fail_fast'])}")
+    for pool, spec in plan["pools"].items():
+        if spec.get("smoke"):
+            lines.append(f"  smoke ({pool}): {plan['shards'][spec['smoke']]['name']} (~{plan['shards'][spec['smoke']]['expected_min']:g} min) runs alone first; "
+                         "the runners start when it passes")
     lines.append(f"  results: {plan['local_out']}/ (junit.xml + pytest.log per shard, summary.md)")
     for s in local_only:
         lines.append(f"  local only: {s.name}: {s.local_only}")
@@ -408,7 +429,9 @@ def header_md(plan: dict, pool: str) -> str:
         f"(recorded or CI's times); {spec['runners']} runner(s) take the shards from one queue, longest first; the run about {spec['expected_min']} min after the start, "
         f"at most {spec['cap_min']} min.  \n"
         f"**Monitoring:** caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test (the shard then dumps its stacks and stops; its runner "
-        f"takes the next); heartbeats `{plan['stage']}/hb/<shard>.json` and `{plan['stage']}/runners/<runner>.json` (the launcher cancels a run whose shards are all stale). "
+        f"takes the next); heartbeats `{plan['stage']}/hb/<shard>.json` and `{plan['stage']}/runners/<runner>.json` (the launcher cancels a run whose shards are all stale); "
+        f"a one-line result per chunk the moment it ends, `{plan['stage']}/results/<shard>.json`. "
+        f"Fail fast: {fail_fast_text(plan.get('fail_fast') or {}) if plan.get('fail_fast') else 'off'}. "
         f"Cancel: `databricks jobs cancel-run <run id> --profile <profile>` (the id is printed at submit)."
     )
 
@@ -614,6 +637,7 @@ print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| spark conf"
 # a test's tmp_path holds the files its virtual tiles name; on Serverless the Python workers are other machines that
 # cannot see the driver's disk, so there tmp_path is under the run's Volume folder, which every worker reads
 basetemp = root + "/tmp" if scratch == "/local_disk0/gbxtest" else STAGE + "/tmp/" + SLUG
+os.makedirs(os.path.dirname(basetemp), exist_ok=True)  # pytest makes basetemp itself, not its parent
 args = S["args"] + ["-p", "no:cacheprovider", "-v", "--tb=short", "-rfE", "--durations=15", "--basetemp=" + basetemp,
                     "--junitxml=" + root + "/out/junit.xml"] + (["--maxfail=" + str(MAXFAIL)] if MAXFAIL else [])
 try:
@@ -880,6 +904,10 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
     out = [f"# Test shards on Databricks: {plan['run_id']}", "",
            f"- commit `{plan['sha'][:10]}`; wheel `{plan['wheel']['name']}` (built from `{plan['wheel']['built_from'][:10]}`)",
            f"- purpose: {plan['purpose']}"]
+    if plan.get("stopped_early"):
+        out.append(f"- **stopped early: {plan['stopped_early']}**; the chunks it stopped or never ran are INCOMPLETE, and their times are lower bounds")
+    if plan.get("fail_fast"):
+        out.append(f"- fail fast: {fail_fast_text(plan['fail_fast'])}")
     for pool, info in pool_info.items():
         out.append(f"- {pool}: cluster(s) {info.get('cluster_id', '-')} ({info.get('node_type', '-')}), job run {info.get('job_run', '-')}; {speedup_line(info)}")
         out += ["  - " + x.strip() for x in schedule_lines(info)]
@@ -1081,17 +1109,21 @@ def main(argv=None) -> int:
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
-    hist = history_for(REPO_ROOT / a.timings)
-    plan_slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
-    fsec = tm.seconds(hist, plan_slots)  # per file / per oracle table, at this run's slots, times its contention factor
-    fsolo = tm.seconds(hist, plan_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
-    hot = tm.contended(hist)  # contention-heavy units: they join the heavy gate
-    lower = tm.lower_bounds(hist, plan_slots)
+    # Serverless reads its own samples (``sls:<key>``), else the pool's solo times: a runner there has compute of its own, so it is
+    # timed as a chunk alone (slots 1) and carries no contention factor
+    hist = tm.view(history_for(REPO_ROOT / a.timings), serverless=a.serverless)
+    time_slots = 1 if a.serverless else plan_slots(a)
+    fsec = tm.seconds(hist, time_slots, adjust=not a.serverless)  # per file / per oracle table, at this run's slots, times its contention factor
+    fsolo = tm.seconds(hist, time_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
+    hot = set() if a.serverless else tm.contended(hist)  # contention-heavy units: they join the heavy gate
+    lower = tm.lower_bounds(hist, time_slots)
     if a.split == "auto" and shards:
-        n_slots = (a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)) * max(1, a.clusters)
-        target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots)
+        n_slots = plan_slots(a) * (1 if a.serverless else max(1, a.clusters))
+        lo, hi = SERVERLESS_TARGET if a.serverless else (3.5, 10.0)
+        target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots, lo=lo, hi=hi)
         shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower, hot)
-        split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)")
+        split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)"
+                           + (" (Serverless: its own timings where it has them, else the pools' solo times)" if a.serverless else ""))
     elif shards:
         shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec, hot)
                   for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
@@ -1254,14 +1286,20 @@ def job_tasks(plan: dict, pool: str, nb_paths: dict, cluster_ids: List[str]) -> 
         return t
 
     tasks = [task("q_seed", {"role": "seed"}, 15 * 60, 0)]
+    first = ["q_seed"]
+    if spec.get("smoke"):  # the smoke chunk runs alone first; the runners depend on it, so its failure stops the job before the queue
+        tasks.append(task("smoke", {"role": "smoke", "runner": "smoke", "index": "0", "shard_nb": nb_paths["shard"]},
+                          int(spec["smoke_cap_min"] * 60), 0, depends=["q_seed"]))
+        first = ["smoke"]
     for i in range(spec["runners"]):
         tasks.append(task(f"r_{i}", {"role": "run", "runner": f"r{i}", "index": str(i), "shard_nb": nb_paths["shard"]},
-                          int(spec["cap_min"] * 60), i, depends=["q_seed"]))
+                          int(spec["cap_min"] * 60), i, depends=first))
     return tasks
 
 
 def submit_pool_job(w, plan: dict, pool: str, nb_paths: dict, leases: list):
-    """Submit the pool's job (``job_tasks``); the run id. A runner depends on the seed with ALL_SUCCESS: no queue, no runner."""
+    """Submit the pool's job (``job_tasks``); the run id. A runner depends on the seed (or the smoke task) with ALL_SUCCESS: no queue,
+    or a failed smoke chunk, and no runner starts."""
     from databricks.sdk.service import compute, jobs
     from _job_submit import submit_once
 
@@ -1281,7 +1319,8 @@ def submit_pool_job(w, plan: dict, pool: str, nb_paths: dict, leases: list):
         for t in tasks:
             t.disable_auto_optimization = True
     name = f"gbx-tests-{plan['run_id']} | {pool} | {plan['purpose'][:70]} | {plan['sha'][:10]}"
-    waiter = submit_once(w, run_name=name, timeout_seconds=int(plan["caps"]["start_min"] * 60 + spec["cap_min"] * 60), tasks=tasks, **extra)
+    waiter = submit_once(w, run_name=name, timeout_seconds=int(plan["caps"]["start_min"] * 60 + (spec["cap_min"] + spec.get("smoke_cap_min", 0)) * 60),
+                         tasks=tasks, **extra)
     return waiter.run_id
 
 
@@ -1363,22 +1402,33 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
     the result carries the peak per cluster of each pool (``peaks``)."""
     busy = chunk_busy(records or {})
     fn_table = tm.table_of_function(REPO_ROOT)
-    per, peaks = tm.neighbours(records or {}, {pool: spec.get("clusters", 1) for pool, spec in plan["pools"].items()})
+    sls = bool(plan.get("serverless"))
+    stop = plan.get("stopped_early") or ""
+    # on Serverless each runner task has compute of its own: no chunk has neighbours (one "cluster" per runner)
+    per, peaks = tm.neighbours(records or {}, {pool: (max(1, len(recs)) if sls else plan["pools"].get(pool, {}).get("clusters", 1))
+                                               for pool, recs in (records or {}).items()})
     samples, cont = [], []
     for r in rows:
         chunk = plan["shards"].get(r["slug"], {})
-        slots = plan["pools"].get(chunk.get("pool"), {}).get("slots", 1)
+        slots = 1 if sls else plan["pools"].get(chunk.get("pool"), {}).get("slots", 1)
         junit = local_out / r["slug"] / "junit.xml"
         act = actual_s(r, busy)
-        samples += tm.run_samples(chunk, r["verdict"], act, junit, REPO_ROOT, slots, fn_table)
+        # a chunk pytest stopped at --maxfail did not run all its tests: its times are lower bounds, as a capped chunk's are
+        verdict = "INCOMPLETE" if r.get("maxfail_hit") and r["verdict"] == "FAILED" else r["verdict"]
+        samples += tm.run_samples(chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "",
+                                  prefix=tm.SLS if sls else "")
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
         r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
-        if r["verdict"] in ("ok", "FAILED", "INCOMPLETE"):
+        if verdict in ("ok", "FAILED", "INCOMPLETE") and not sls:
             cont += tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
-                                          incomplete=r["verdict"] == "INCOMPLETE")
-    got = tm.merge(path, samples, {"run": plan["run_id"], "sha": plan["sha"][:10],
-                                   "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)}, cont)
+                                          incomplete=verdict == "INCOMPLETE")
+    run = {"run": plan["run_id"], "sha": plan["sha"][:10], "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)}
+    if sls:
+        run["serverless"] = True
+    if stop:
+        run["stopped_early"] = stop
+    got = tm.merge(path, samples, run, cont)
     print(f"Timings: {got['keys']} sample(s), {got['lower_bounds']} lower bound(s) and {got['contention']} contention record(s) from this run merged into {path}")
     return dict(got, peaks=peaks)
 
@@ -1460,10 +1510,15 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     except Exception:  # noqa: BLE001
                         pass
                 print(f"  heartbeats: {stage}/hb/ and {stage}/runners/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
-                rc = watch(w, runs, plan, pool_info)
+                live = Live(w, plan, local_out)
+                rc = watch(w, runs, plan, pool_info, live)
                 finished.update(runs)
+                live.poll()  # the chunks that ended between the last poll and the end of the jobs
+                if not plan.get("stopped_early") and live.check():  # e.g. a failed smoke ended the job before the next poll
+                    plan["stopped_early"] = live.rule
+                    rc = rc or EXIT_FAILED
                 records = runner_records(w, plan, local_out)
-                rows = collect(w, plan, runs, local_out, records)
+                rows = collect(w, plan, runs, local_out, records, live.fetched)
                 for pool, info in pool_info.items():
                     walls = [r["wall_s"] for r in rows if r["pool"] == pool and isinstance(r["wall_s"], int)]
                     info["longest_s"] = max(walls) if walls else "-"
@@ -1488,6 +1543,9 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 for r in rows:
                     for n, m in r["failures"][:5]:
                         print(f"  FAIL [{r['name']}] {n}: {m}")
+                if plan.get("stopped_early"):
+                    print(f"\nstopped early: {plan['stopped_early']} (the summary and the timing history record it; the chunks it stopped "
+                          "leave lower bounds)", file=sys.stderr)
                 print(f"\nWrote {local_out / 'summary.md'}")
                 doubled = [r["name"] for r in rows if r.get("claims", 0) > 1]
                 if doubled:
@@ -1547,11 +1605,111 @@ def runner_records(w, plan: dict, local_out: Path) -> Dict[str, List[dict]]:
     return out
 
 
-def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
+def verdict_of(line: dict) -> str:
+    """The verdict word of a chunk's one-line result (as ``shard_verdict`` names the rows of the summary)."""
+    if line.get("rc") == 5 and not line.get("failed_chunk"):
+        return "EMPTY"
+    if not line.get("failed_chunk"):
+        return "ok"
+    if line.get("reason") or line.get("rc") is None:
+        return "INCOMPLETE"
+    return "FAILED" if line.get("failed") else "ERRORS"
+
+
+def live_row(line: dict, plan: dict, elapsed_s: float) -> str:
+    """One row of the live table: when the launcher saw the chunk end, its verdict, counts and time, and its first failure."""
+    name = plan["shards"].get(line.get("slug"), {}).get("name", line.get("slug"))
+    took = int(float(line.get("end") or 0) - float(line.get("start") or 0)) if line.get("end") and line.get("start") else 0
+    ff = line.get("first_failure") or {}
+    tail = f"  first: {ff.get('id') or ''} {ff.get('msg') or ''}".rstrip() if line.get("failed_chunk") and (ff.get("id") or ff.get("msg")) else ""
+    return (f"  +{int(elapsed_s) // 60:3d}m{int(elapsed_s) % 60:02d}s  {verdict_of(line):<10} {name[:30]:<30} "
+            f"passed {line.get('passed', 0):>4} failed {line.get('failed', 0):>3} errors {line.get('errors', 0):>3} "
+            f"skipped {line.get('skipped', 0):>3}  {took:>5} s" + (" (smoke)" if line.get("smoke") else "")
+            + (" (--maxfail hit)" if line.get("maxfail_hit") else "") + tail)
+
+
+class Live:
+    """The run's results as they come: each chunk's one-line result (``results/<slug>.json``) is read once, printed as a row of the
+    live table, and its files (junit.xml, pytest.log, result.json) are downloaded at once; the fail-fast policy is checked against
+    every result so far (``_shard_runner.stop_rule``)."""
+
+    def __init__(self, w, plan: dict, local_out: Optional[Path] = None, t0: Optional[float] = None, out=print):
+        self.w, self.plan, self.local_out, self.out = w, plan, local_out, out
+        self.t0 = time.monotonic() if t0 is None else t0
+        self.lines: Dict[str, dict] = {}
+        self.fetched: set = set()
+        self.rule = ""
+
+    def poll(self, now: Optional[float] = None) -> List[dict]:
+        """Read the results that are new since the last poll; returns them (and prints a row each)."""
+        now = time.monotonic() if now is None else now
+        try:
+            entries = [e for e in self.w.files.list_directory_contents(f"{self.plan['stage']}/results") if not e.is_directory]
+        except Exception:  # noqa: BLE001 - no folder until the first chunk ends
+            return []
+        new = []
+        for e in sorted(entries, key=lambda e: e.name):
+            slug = e.name[:-5] if e.name.endswith(".json") else ""
+            if not slug or slug in self.lines:
+                continue
+            line = mut.read_json(self.w, e.path)
+            if not isinstance(line, dict):
+                continue  # being written: the next poll reads it
+            if not self.lines:
+                self.out("  live results (a row per chunk the moment it ends; failures show their first test):")
+            self.lines[slug] = line
+            new.append(line)
+            self.out(live_row(line, self.plan, now - self.t0))
+            if self.local_out is not None and slug not in self.fetched:
+                mut.download_dir(self.w, f"{self.plan['stage']}/out/{slug}", self.local_out / slug)
+                self.fetched.add(slug)
+        return new
+
+    def check(self) -> str:
+        """The fail-fast rule that fires now ("" when none does), against every result so far; once fired it stays."""
+        if not self.rule:
+            self.rule = sr.stop_rule(list(self.lines.values()), self.plan.get("fail_fast"))
+        return self.rule
+
+    def counts(self) -> tuple:
+        bad = [x for x in self.lines.values() if x.get("failed_chunk")]
+        return len(self.lines), len(bad)
+
+    def failures(self) -> List[str]:
+        """The failures seen so far, a line per failed chunk (its first failure)."""
+        out = []
+        for slug, x in sorted(self.lines.items(), key=lambda kv: float(kv[1].get("end") or 0)):
+            if x.get("failed_chunk"):
+                ff = x.get("first_failure") or {}
+                name = self.plan["shards"].get(slug, {}).get("name", slug)
+                out.append(f"  FAIL [{name}] {verdict_of(x)} ({x.get('failed', 0)} failed, {x.get('errors', 0)} errors): "
+                           f"{ff.get('id') or ''} {ff.get('msg') or x.get('reason') or ''}".rstrip())
+        return out
+
+
+def stop_early(w, runs: Dict[str, int], plan: dict, live: Live, rule: str) -> None:
+    """Stop the whole run: the stop marker for the runners (they claim nothing more), then cancel every pool's job (the running
+    chunks and the queue). Prints the failures seen so far."""
+    plan["stopped_early"] = rule
+    print(f"\nstopped early: {rule}. {len(live.lines)} chunk(s) ended, {live.counts()[1]} failed; cancelling the queue and the running chunks.",
+          file=sys.stderr, flush=True)
+    for ln in live.failures():
+        print(ln, file=sys.stderr, flush=True)
+    try:
+        put_text(w, f"{plan['stage']}/stop.json", json.dumps({"rule": rule, "ts": time.time()}))
+    except Exception as exc:  # noqa: BLE001 - the cancel below stops the runners anyway
+        print(f"  (could not write the stop marker: {type(exc).__name__})", file=sys.stderr)
+    for rid in runs.values():
+        _cancel(w, rid)
+
+
+def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict, live: Optional[Live] = None) -> int:
     """Poll the pool jobs and the shard heartbeats until every job is over. One status line per pool about every 2-3 min.
-    Cancels the runs of the pool whose shards are all stale (10 min), or none has begun in start_min."""
+    Cancels the runs of the pool whose shards are all stale (10 min), or none has begun in start_min. Every poll reads the chunks'
+    one-line results (``Live``): a row per chunk as it ends, and the fail-fast policy, which stops the whole run when it fires."""
     c = plan["caps"]
     t0 = time.monotonic()
+    live = live or Live(w, plan, t0=t0)
     last_say = 0.0
     over: Dict[str, str] = {}
     last_beat: Dict[str, float] = {}
@@ -1560,6 +1718,10 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
     while len(over) < len(runs):
         time.sleep(POLL_S)
         now = time.monotonic()
+        live.poll(now)
+        if not plan.get("stopped_early") and live.check():
+            stop_early(w, runs, plan, live, live.rule)
+            rc = rc or EXIT_FAILED
         say = now - last_say >= STATUS_EVERY_S
         for pool, rid in runs.items():
             if pool in over:
@@ -1578,7 +1740,8 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
                 continue
             last_beat[pool] = now
             spec = plan["pools"][pool]
-            recs = [r for r in (mut.read_json(w, f"{plan['stage']}/runners/{pool}/r{i}.json") for i in range(spec["runners"])) if r]
+            names = (["smoke"] if spec.get("smoke") else []) + [f"r{i}" for i in range(spec["runners"])]
+            recs = [r for r in (mut.read_json(w, f"{plan['stage']}/runners/{pool}/{n}.json") for n in names) if r]
             current = [r["current"] for r in recs if r.get("current") and not r.get("done")]  # the shards the runners are on now
             beats = {}
             for slug in current:
@@ -1590,9 +1753,11 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
             if say:
                 tot = sum(x.get(k) or 0 for x in ran for k in ("passed", "failed", "skipped")) + sum(b.get("passed", 0) + b.get("failed", 0) + b.get("skipped", 0) for b in beats.values())
                 bad = sum(x.get(k) or 0 for x in ran for k in ("failed", "errors")) + sum(b.get("failed", 0) + b.get("errors", 0) for b in beats.values())
-                live = sum(1 for r in recs if not r.get("done"))
-                print(f"  [{pool}] {life} {int(now - t0)} s: {live} of {spec['runners']} runner(s) at work, {len(current)} shard(s) running, {len(ran)}/{len(spec['queue'])} shards done, "
-                      f"{len(spec['queue']) - len(ran) - len(current)} queued, {tot} tests finished, {bad} failing/erroring", flush=True)
+                busy = sum(1 for r in recs if not r.get("done"))
+                ended = sum(1 for slug in live.lines if slug in spec["queue"])
+                failed_chunks = sum(1 for slug, x in live.lines.items() if slug in spec["queue"] and x.get("failed_chunk"))
+                print(f"  [{pool}] {life} {int(now - t0)} s: {busy} of {spec['runners']} runner(s) at work, {len(current)} shard(s) running, {ended}/{len(spec['queue'])} shards done "
+                      f"({failed_chunks} failed), {max(0, len(spec['queue']) - ended - len(current))} queued, {tot} tests finished, {bad} failing/erroring", flush=True)
             running = current
             if not started and now - t0 > c["start_min"] * 60:
                 print(f"No shard of {pool} has beaten {c['start_min']:g} min after the submit. Cancelling run {rid}.", file=sys.stderr)
@@ -1683,15 +1848,19 @@ def claims_of(records: Dict[str, List[dict]]) -> Dict[str, List[dict]]:
     return out
 
 
-def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optional[Dict[str, List[dict]]] = None) -> List[dict]:
-    """Download each shard's files, and read its verdict; one row per shard, in queue order. A shard with no result takes its
-    reason from the runner that ran it, or (never claimed) from the tasks that did not succeed."""
+def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optional[Dict[str, List[dict]]] = None,
+            fetched: Optional[set] = None) -> List[dict]:
+    """Download each shard's files (not again for one ``fetched`` live), and read its verdict; one row per shard, in queue order. A
+    shard with no result takes its reason from the runner that ran it, or (never claimed) from the tasks that did not succeed, or
+    from the fail-fast rule that stopped the run."""
     rows = []
     claims = claims_of(records or {})
     failed_tasks = task_failures(w, runs)
+    stopped = plan.get("stopped_early") or ""
+    smokes = {spec.get("smoke") for spec in plan["pools"].values() if spec.get("smoke")}
     for slug, s in plan["shards"].items():
         d = local_out / slug
-        got = mut.download_dir(w, f"{plan['stage']}/out/{slug}", d)
+        got = sorted(p.name for p in d.iterdir()) if fetched and slug in fetched and d.is_dir() else mut.download_dir(w, f"{plan['stage']}/out/{slug}", d)
         res = json.loads((d / "result.json").read_text()) if (d / "result.json").exists() else None
         junit = None
         if (d / "junit.xml").exists():
@@ -1705,6 +1874,10 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
         if res is None:
             if mine:
                 reason = mine[-1].get("reason") or f"runner {mine[-1]['runner']} ran it, but it left no result"
+                if stopped and not mine[-1].get("reason"):
+                    reason = f"stopped early ({stopped}) while it ran"
+            elif stopped:
+                reason = f"not run: stopped early ({stopped})"
             else:
                 reason = "never claimed: " + (failed_tasks.get(s["pool"]) or "the runners ended before it")
         if len(mine) > 1:
@@ -1718,7 +1891,7 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
             "wall_s": (res or {}).get("wall_s", "-"), "reason": reason, "claims": len(mine), "est_src": s.get("est_src", "ci"),
             "subset": bool(s.get("subset")),
             "actual_s": int(mine[-1]["end"] - mine[-1]["start"]) if mine and mine[-1].get("end") is not None else None,
-            "isolation": (res or {}).get("isolation"),
+            "isolation": (res or {}).get("isolation"), "maxfail_hit": bool((res or {}).get("maxfail_hit")), "smoke": slug in smokes,
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),
         })
         print(f"  downloaded {len(got)} file(s) for {s['name']}", flush=True)

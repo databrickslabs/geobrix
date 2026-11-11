@@ -904,6 +904,7 @@ def test_the_shard_cell_takes_its_checkout_from_the_runner_and_says_which(shards
     src = _cell_source(shards)
     assert "def node_checkout(" in src and "node_checkout(base," in src and "git clean -fdxq" in src
     assert 'checkout=CHECKOUT' in src, "the result says whether the chunk unpacked or reused the checkout"
+    assert src.index('"/checkout.json"') < src.index("run_guard("), "said before the wheel guard, which may fail the chunk"
     ns = {}
     exec(compile(src[: src.index("import faulthandler")], "head", "exec"), ns)  # noqa: S102 - the inlined helpers stand alone
     assert ns["chunk_failed"]({"rc": 1}) and callable(ns["node_checkout"])

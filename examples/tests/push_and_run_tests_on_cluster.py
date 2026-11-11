@@ -615,6 +615,11 @@ CHECKOUT, repo = node_checkout(base, RUNNER or SLUG, {"tarball": PLAN["tarball"]
                                _unpack, _reset)
 CHECKOUT_S = round(time.time() - t_co, 1)
 print("checkout:", CHECKOUT, "for runner", RUNNER or "-", "in", CHECKOUT_S, "s:", repo, flush=True)
+try:  # said at once, beside child.json: a chunk that fails later (the wheel guard, before pytest) still says how it got its tree
+    with open(STAGE + "/out/" + SLUG + "/checkout.json", "w") as _f:
+        json.dump({"checkout": CHECKOUT, "checkout_s": CHECKOUT_S, "runner": RUNNER, "repo": repo}, _f)
+except OSError:
+    pass
 pkg = repo + "/python/geobrix"
 if PLAN.get("jar") and not os.path.exists(pkg + "/lib/" + PLAN["jar"]["name"]):  # the heavy tests look for the JAR in lib/ (it is a cluster library as well)
     os.makedirs(pkg + "/lib", exist_ok=True)

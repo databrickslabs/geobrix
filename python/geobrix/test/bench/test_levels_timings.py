@@ -115,5 +115,24 @@ def test_the_bias_of_past_predictions_scales_the_estimates():
             "r4": {"predicted_min": 20.0},
         },
     }
-    assert lt.calibrate(t) == 0.6
-    assert lt.plan_parts(["p"], t, 4, 25.0)[0]["predicted_min"] == 11.0
+    # the work past the 5 min start-up against the modelled 15: 5/15, 7/15, 25/15
+    assert lt.calibrate(t) == 0.47
+    assert lt.plan_parts(["p"], t, 4, 25.0)[0]["predicted_min"] == 9.7
+
+
+def test_a_calibrated_plan_keeps_its_bias_when_the_runs_bear_it_out():
+    """A plan's predictions carry the bias already, so a run that takes what was predicted confirms the bias rather
+    than resetting it to 1; and the fixed start-up, which the bias never scales, stays out of the ratio.
+    """
+    t = {"fixed_min": 5.0, "functions": {"p": {"4": {"min": 10.0}}}, "parts": {}}
+    first = lt.plan_parts(["p"], t, 4, 25.0)[0]
+    assert (first["predicted_min"], first["bias"]) == (15.0, 1.0)
+    t["parts"]["r1"] = {**first, "actual_min": 25.0}  # the model was half the truth
+    assert lt.calibrate(t) == 2.0
+    second = lt.plan_parts(["p"], t, 4, 25.0)[0]
+    assert (second["predicted_min"], second["bias"]) == (25.0, 2.0)
+    t["parts"]["r2"] = {
+        **second,
+        "actual_min": 25.0,
+    }  # and the calibrated plan was right
+    assert lt.calibrate(t) == 2.0

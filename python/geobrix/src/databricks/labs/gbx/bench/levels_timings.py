@@ -11,7 +11,7 @@ Timings file (JSON)::
 
     {"fixed_min": 6.0,                       # a part's start-up: lease, cluster start, install, smoke
      "functions": {"<fn>": {"<scale>": {"min": <minutes of its forms>, "run": "<run id>"}}},
-     "parts": {"<run id>": {"scale": "<scale>", "fns": [...], "predicted_min": x, "actual_min": y}}}
+     "parts": {"<run id>": {"scale": "<scale>", "fns": [...], "predicted_min": x, "bias": b, "actual_min": y}}}
 
 `python -m databricks.labs.gbx.bench.levels_timings collect --rows <q.json> --scale-of <run>=<scale>,... --out <file>`
 adds the per-function minutes of the rows a `gbx:uc:sql` query of `bench_results` returned (the `|`-joined lines of
@@ -164,18 +164,33 @@ def plan_parts(
             merged.append([m, list(fs), [inp]])
     merged.sort(key=lambda b: -b[0])
     return [
-        {"fns": b[1], "inputs": b[2], "predicted_min": round(fixed + b[0], 1)}
+        {
+            "fns": b[1],
+            "inputs": b[2],
+            "predicted_min": round(fixed + b[0], 1),
+            "bias": bias,
+        }
         for b in merged
     ]
 
 
 def calibrate(timings: dict) -> float:
-    """Set `timings["calibration"]` to the median actual / predicted minutes of the parts that have both."""
-    ratios = sorted(
-        float(p["actual_min"]) / float(p["predicted_min"])
-        for p in timings.get("parts", {}).values()
-        if p.get("actual_min") and p.get("predicted_min")
-    )
+    """Set `timings["calibration"]` to the median ratio of actual to modelled minutes over the parts that have both.
+
+    The modelled minutes are a part's prediction without the bias its plan applied (the part's `bias`, recorded by
+    `plan_parts`; 1 for a part recorded without one), so a calibrated plan that the run bears out keeps its bias
+    instead of resetting it to 1. The fixed start-up is left out of both sides: the bias never scales it.
+    """
+    fixed = float(timings.get("fixed_min", 6.0))
+    ratios = []
+    for p in timings.get("parts", {}).values():
+        if not (p.get("actual_min") and p.get("predicted_min")):
+            continue
+        model = (float(p["predicted_min"]) - fixed) / float(p.get("bias") or 1.0)
+        work = float(p["actual_min"]) - fixed
+        if model > 0 and work > 0:
+            ratios.append(work / model)
+    ratios.sort()
     if ratios:
         timings["calibration"] = round(ratios[len(ratios) // 2], 2)
     return float(timings.get("calibration", 1.0))

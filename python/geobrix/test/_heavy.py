@@ -54,9 +54,23 @@ def _sql_name(fqn):
     raise AssertionError(f"{fqn}: no companion with a SQL name in src/main/scala")
 
 
+def _point_jvm_at_payload(spark):
+    """Name the wheel payload's natives to the JVM, as the registrar does (``manager.jvm``, which this helper does not
+    import: it loads rasterio, which the heavyweight env lacks). A node with no system GDAL JNI (a Databricks pool
+    cluster) has no other GDAL; a JVM already on ``GBX_NATIVE_ROOT``'s payload is pointed at that same one.
+    """
+    from databricks.labs.gbx import _native
+
+    d = _native.native_dir()
+    key = "spark.databricks.labs.gbx.native.dir"  # GDALManager.NativeDirKey
+    if d and spark.conf.get(key, None) != d:
+        spark.conf.set(key, d)
+
+
 def install_jvm_scalars(spark, prefixes, names=None):
     """Install the JAR's companions whose SQL name starts with one of ``prefixes`` (the scalar function registry),
     or, with ``names``, only those named; the SQL names installed."""
+    _point_jvm_at_payload(spark)
     installer = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
     installed = []
     for fqn in _companions():

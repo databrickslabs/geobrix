@@ -510,21 +510,24 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
             spark, rows, f"key string, tile {TILE_SQL}", what="virtual tile rows"
         )
     else:
-        from databricks.labs.gbx.bench.levels_family import family_partitions
+        from databricks.labs.gbx.bench.levels_family import (
+            family_partitions,
+            spread_evenly,
+        )
         from databricks.labs.gbx.rasterx import functions as rx
 
         # The path rows are a few KB, which one task would read file by file (the tiles are read where the rows are):
         # spread them so the n tiles are read, held and written by many tasks, as the family inputs are. The table
         # that results then has the same many input partitions for every form that reads it.
-        df = (
+        df = spread_evenly(
             client_dataframe(
                 spark, pairs, "key string, path string", what="tile path rows"
-            )
-            .repartition(family_partitions(spark, len(pairs)))
-            .select(
-                "key",
-                rx.rst_fromfile(F.col("path"), "GTiff", materialize=True).alias("tile"),
-            )
+            ),
+            family_partitions(spark, len(pairs)),
+            ("key", "path"),
+        ).select(
+            "key",
+            rx.rst_fromfile(F.col("path"), "GTiff", materialize=True).alias("tile"),
         )
     return df if keyed else df.select("tile")
 
@@ -548,7 +551,10 @@ def _grouped(recipe: str, virtual: bool):
         from pyspark.sql import functions as F
 
         from databricks.labs.gbx.bench import synth
-        from databricks.labs.gbx.bench.levels_family import family_partitions
+        from databricks.labs.gbx.bench.levels_family import (
+            family_partitions,
+            spread_evenly,
+        )
         from databricks.labs.gbx.rasterx import functions as rx
 
         corpus_guard("tiles_grouped", os.path.join(corpus, "rows"), len(sources), n)
@@ -590,7 +596,7 @@ def _grouped(recipe: str, virtual: bool):
                     "key string, path string",
                     what="group member paths",
                 )
-            return members.repartition(spread).select(
+            return spread_evenly(members, spread, ("key", "path")).select(
                 "key",
                 rx.rst_fromfile(F.col("path"), "GTiff", materialize=not virtual).alias(
                     "tile"

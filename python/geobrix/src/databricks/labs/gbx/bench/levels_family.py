@@ -46,6 +46,26 @@ def family_partitions(spark, n) -> int:
     )
 
 
+def spread_evenly(df, partitions, order_by):
+    """``df`` in ``partitions`` partitions of whole, equal share (they differ by at most one row).
+
+    ``repartition(k)`` deals the rows round robin from a random start in EACH input partition, so it is even only when
+    the rows sit in one or two input partitions (a local session: `createDataFrame` makes `defaultParallelism` of them).
+    On a cluster with many slots the n path rows are n one-row input partitions, each dealt to a place of its own, and
+    some tasks got three tiles where the cap is two. A row number over the whole (tiny) input, cut by range, gives each
+    partition its share on any compute. `order_by` names the columns that order the rows (the numbering only needs to
+    be unique, not stable).
+    """
+    from pyspark.sql import Window
+    from pyspark.sql import functions as F
+
+    k = int(partitions)
+    if k <= 1:
+        return df
+    numbered = df.withColumn("_gbx_row", F.row_number().over(Window.orderBy(*order_by)))
+    return numbered.repartitionByRange(k, "_gbx_row").drop("_gbx_row")
+
+
 # SQL shapes. Each answers one row (n, fp, n_out): the input rows processed, an order-independent fingerprint of the
 # output, and the rows with a non-NULL output (a NULL output is an error unless the form allows it).
 _SCALAR = (

@@ -38,6 +38,12 @@ def rst_apply(tile_col, fn, returnType: DataType = DoubleType()) -> Column:
 
     from databricks.labs.gbx._transport import SessionTileUdf
 
+    # a DDL string ('double'), as @udf takes it: the Arrow form needs the DataType
+    if isinstance(returnType, str):
+        from pyspark.sql.types import _parse_datatype_string
+
+        returnType = _parse_datatype_string(returnType)
+
     def _apply(tile):
         from databricks.labs.gbx.pyrx.core import open_tile as _ot
 

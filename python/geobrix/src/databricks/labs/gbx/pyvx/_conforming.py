@@ -391,8 +391,14 @@ def _constraints(lines):
     return cmap, seg_vertices, segments
 
 
-def _enforce(kdt, segments, split, stats: Optional[dict]) -> None:
-    """``enforceConstraints``: split every segment with an encroaching vertex, pass after pass, at most 99."""
+def _enforce(
+    kdt, segments, split, stats: Optional[dict], on_sites=None, base=0
+) -> None:
+    """``enforceConstraints``: split every segment with an encroaching vertex, pass after pass, at most 99.
+
+    ``on_sites(n)``, when given, is called after each pass with an upper bound of the vertices so far (``base`` plus
+    every split point): a caller that bounds its work raises there, before the next pass.
+    """
     count = 0
     total = 0
     while True:
@@ -414,6 +420,8 @@ def _enforce(kdt, segments, split, stats: Optional[dict]) -> None:
             segments += new_segments
         total += splits
         count += 1
+        if on_sites is not None and splits:
+            on_sites(base + total)
         if not (splits > 0 and count < MAX_SPLIT_ITER):
             break
     if stats is not None:
@@ -428,11 +436,13 @@ def conforming_vertices(
     merge_tolerance: float,
     finder: str = "NONENCROACHING",
     stats: Optional[dict] = None,
+    on_sites=None,
 ):
     """``(vertices, area envelope)``: the (x, y, z) of every vertex of the conforming triangulation, as an (N, 3) array
     in JTS's insertion order, and the envelope its incremental triangulation is framed in (None without vertices).
     ``points`` is (N, 3) and ``lines`` (M, 3) arrays, as ``_tin.prepare_sites`` leaves them. Raises
-    :class:`ConformingError` after 99 splitting passes."""
+    :class:`ConformingError` after 99 splitting passes. ``on_sites``: see :func:`_enforce`.
+    """
     split = _FINDERS[finder]
     cmap, seg_vertices, segments = _constraints(lines)
     sites = _unique_sites(points)
@@ -446,7 +456,7 @@ def conforming_vertices(
     if segments:
         kdt.insert_many(segv)
         try:
-            _enforce(kdt, segments, split, stats)
+            _enforce(kdt, segments, split, stats, on_sites, len(initial) + len(segv))
         except ConformingError:
             # JTS inserts every vertex into its triangulation as it goes, so a vertex it cannot locate stops it before
             # the 99th pass: the same vertices in the same order fail here first, with JTS's error
@@ -659,14 +669,15 @@ def triangulate(
     finder: str = "NONENCROACHING",
     delaunay: str = "hybrid",
     stats: Optional[dict] = None,
+    on_sites=None,
 ) -> List[np.ndarray]:
     """The conforming triangulation as a list of (3, 3) XYZ triangles. ``delaunay="hybrid"`` (the default) takes JTS's
     incremental triangulation from the Rust kernel when this process has it (faster than scipy on every input
     measured), else scipy's triangles when they are certified unique and the Python port otherwise; ``"jts"`` always
-    takes the incremental triangulation.
+    takes the incremental triangulation. ``on_sites``: see :func:`_enforce`.
     """
     verts, env = conforming_vertices(
-        points, lines, float(merge_tolerance), finder, stats
+        points, lines, float(merge_tolerance), finder, stats, on_sites
     )
     if len(verts) < 3:
         return []

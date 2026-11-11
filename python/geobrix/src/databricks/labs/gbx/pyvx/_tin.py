@@ -304,9 +304,11 @@ def triangulate(
     snap_tolerance: float,
     mode: str = "constrained",
     split_point_finder: str = "NONENCROACHING",
+    on_sites=None,
 ) -> List[np.ndarray]:
     """The triangulation of the XYZ points and break lines, as a list of (3, 3) XYZ triangles: the shared pre-step
     (:func:`prepare_sites`), then the mode. ``breaklines`` are (N, 2|3) polylines; empty -> plain Delaunay.
+    ``on_sites(n)`` sees the vertex count as the conforming mode adds split points (``_conforming._enforce``).
     """
     m = validate_mode(mode)
     finder = validate_finder(split_point_finder)
@@ -314,7 +316,9 @@ def triangulate(
     if m == "conforming":
         from . import _conforming
 
-        return _conforming.triangulate(pts, lines, float(merge_tolerance), finder)
+        return _conforming.triangulate(
+            pts, lines, float(merge_tolerance), finder, on_sites=on_sites
+        )
     return _triangulate_constrained(pts, lines)
 
 
@@ -761,9 +765,11 @@ def triangle_wkbs(
     mode="constrained",
     split_point_finder="NONENCROACHING",
     parsed=None,
+    on_sites=None,
 ):
     """The 2D WKB polygon of every triangle of the triangulation (:func:`triangulate`), one at a time. ``parsed`` is the
-    ``(coords, break lines)`` of :func:`sites` when the caller has them already."""
+    ``(coords, break lines)`` of :func:`sites` when the caller has them already; ``on_sites`` as for
+    :func:`triangulate`."""
     import shapely
 
     coords, bls = parsed or sites(points, breaklines)
@@ -776,6 +782,7 @@ def triangle_wkbs(
         float(snap_tolerance),
         mode,
         split_point_finder,
+        on_sites,
     )
     for s in range(0, len(tris), _CHUNK):
         part = np.asarray(tris[s : s + _CHUNK])[:, :, :2]

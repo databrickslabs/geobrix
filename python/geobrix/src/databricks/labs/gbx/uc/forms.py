@@ -1341,14 +1341,17 @@ def st_triangulate_rows(
     if coords is None:
         return None
     _tin_finder(fn, split_point_finder)
-    sites = len(coords) + sum(len(b) for b in bls)
-    _check_bytes(
-        fn,
-        2 * sites * _TRIANGLE_ROW_BYTES,
-        "the triangles it returns (an upper estimate, two for every point)",
-        lower="pass fewer points",
-        cap=DECODED_CAP,
-    )
+
+    def check(sites: int) -> None:
+        _check_bytes(
+            fn,
+            2 * sites * _TRIANGLE_ROW_BYTES,
+            "the triangles it returns (an upper estimate, two for every point)",
+            lower="pass fewer points",
+            cap=DECODED_CAP,
+        )
+
+    check(len(coords) + sum(len(b) for b in bls))
     return _tin_rows(
         fn,
         _tin.triangle_wkbs(
@@ -1359,6 +1362,8 @@ def st_triangulate_rows(
             mode,
             split_point_finder,
             parsed=parsed,
+            # the conforming mode adds split points: the same estimate, again as they are added
+            on_sites=check,
         ),
         "the triangles it returns",
     )

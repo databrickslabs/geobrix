@@ -71,11 +71,22 @@ def parse_rows(lines: Iterable[str]) -> List[dict]:
 def collect(
     timings: dict, rows: List[dict], scale_of: Dict[str, str], measured: int = 3
 ) -> dict:
-    """Add each function's minutes at the run's scale (projected to `measured` iterations) to `timings`."""
+    """Add each function's minutes at the run's scale (projected to `measured` iterations) to `timings`.
+
+    A run whose scale is ``auto`` (a run of several rungs) takes each row's scale from its rows over the function's
+    `base_rows` (its 1x rows, kept in the timings file)."""
     fns = timings.setdefault("functions", {})
+    base = timings.setdefault("base_rows", {})
+    for r in rows:
+        if scale_of.get(r["run"]) == "1":
+            base.setdefault(r["fn"], r["rows"])
     per: Dict[Tuple[str, str], Tuple[float, str]] = {}
     for r in rows:
         scale = scale_of.get(r["run"])
+        if scale == "auto":
+            if r["fn"] not in base:
+                continue
+            scale = str(round(r["rows"] / base[r["fn"]]))
         if scale is None:
             continue
         m = form_minutes(r["median"], r["setup"], r["warmup"], measured)

@@ -60,3 +60,17 @@ def test_collect_adds_the_minutes_of_the_rows_of_a_run():
     # (6 + 2*5)/60 + (4 + 4*5)/60 = 40 s
     assert t["functions"]["f"]["1"]["min"] == round(40 / 60, 2)
     assert "g" not in t["functions"]
+
+
+def test_a_run_of_several_rungs_takes_each_rows_scale_from_the_base_rows():
+    rows = lt.parse_rows(
+        [
+            "s|f|L1|l1@n|250|ok|1.0|1.0|0|0|1|v1:1|nulls=0",
+            "r|f|L1|l1@n|250|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+            "r|f|L1|l1@n|1000|ok|4.0|12.0|0|0|3|v1:1|nulls=0",
+        ]
+    )
+    t = lt.collect({}, rows, {"s": "1", "r": "auto"}, measured=3)
+    assert t["base_rows"] == {"f": 250}
+    assert set(t["functions"]["f"]) == {"1", "4"}
+    assert t["functions"]["f"]["4"]["min"] == round(4.0 * 5 / 60, 2)

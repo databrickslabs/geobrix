@@ -1979,37 +1979,6 @@ def test_docs_tab_gate_rejects_a_bad_tab(tmp_path, monkeypatch):
     assert not any("needs rst_slope_python_example in" in f for f in found)
 
 
-def test_since_gate_names_a_stable_row_without_a_release():
-    gates = _gates()
-    for bad in ("", "0.4", "v0.4.0"):
-        assert any(
-            "`since`" in f
-            for f in gates.since_findings([_row("gbx_rst_slope", since=bad)])
-        ), bad
-    probe = next((f for f in FNS if f.status != "stable"), None)
-    if probe is not None:
-        assert gates.since_findings([dataclasses.replace(probe, since="")]) == []
-
-
-# register() serves every manifest name: grouped fallback lines, the
-# FILE-reference wrapper, and capabilities detected once per session.
-
-
-def test_shared_fallback_reason_prints_once_with_a_count(capsys):
-    from databricks.labs.gbx.manager import messages
-
-    spark = object.__new__(type("S", (), {}))
-    line = "geobrix: heavy unavailable: Spark Connect session (Serverless); using light"
-    messages.say_grouped(spark, [(f"gbx_rst_f{i}", line) for i in range(40)])
-    out = capsys.readouterr().out.strip().splitlines()
-    assert len(out) == 1 and "40 functions" in out[0], out
-
-
-def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_name():
-    """The caller builds the FILE expression around the tile parameter's own name; the wrapper must not rewrite a
-    `tile.` inside a longer name (`raster_tile.` stays `raster_tile.`)."""
-    from types import SimpleNamespace as NS
-
 def test_docs_tab_gate_requires_an_example_block_for_each_section(
     tmp_path, monkeypatch
 ):
@@ -2056,6 +2025,37 @@ def test_every_section_on_a_function_page_has_an_example_block():
     found = [f for f in gates.docs_findings(FNS) if "has no <FunctionExamples" in f]
     assert found == []
 
+
+def test_since_gate_names_a_stable_row_without_a_release():
+    gates = _gates()
+    for bad in ("", "0.4", "v0.4.0"):
+        assert any(
+            "`since`" in f
+            for f in gates.since_findings([_row("gbx_rst_slope", since=bad)])
+        ), bad
+    probe = next((f for f in FNS if f.status != "stable"), None)
+    if probe is not None:
+        assert gates.since_findings([dataclasses.replace(probe, since="")]) == []
+
+
+# register() serves every manifest name: grouped fallback lines, the
+# FILE-reference wrapper, and capabilities detected once per session.
+
+
+def test_shared_fallback_reason_prints_once_with_a_count(capsys):
+    from databricks.labs.gbx.manager import messages
+
+    spark = object.__new__(type("S", (), {}))
+    line = "geobrix: heavy unavailable: Spark Connect session (Serverless); using light"
+    messages.say_grouped(spark, [(f"gbx_rst_f{i}", line) for i in range(40)])
+    out = capsys.readouterr().out.strip().splitlines()
+    assert len(out) == 1 and "40 functions" in out[0], out
+
+
+def test_file_ref_wrapper_leaves_the_file_expression_as_given_for_any_parameter_name():
+    """The caller builds the FILE expression around the tile parameter's own name; the wrapper must not rewrite a
+    `tile.` inside a longer name (`raster_tile.` stays `raster_tile.`)."""
+    from types import SimpleNamespace as NS
 
     from databricks.labs.gbx.manager import sqlwrap
 

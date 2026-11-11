@@ -74,3 +74,18 @@ def test_a_run_of_several_rungs_takes_each_rows_scale_from_the_base_rows():
     assert t["base_rows"] == {"f": 250}
     assert set(t["functions"]["f"]) == {"1", "4"}
     assert t["functions"]["f"]["4"]["min"] == round(4.0 * 5 / 60, 2)
+
+
+def test_the_bias_of_past_predictions_scales_the_estimates():
+    t = {
+        "fixed_min": 5.0,
+        "functions": {"p": {"4": {"min": 10.0}}},
+        "parts": {
+            "r1": {"predicted_min": 20.0, "actual_min": 10.0},
+            "r2": {"predicted_min": 20.0, "actual_min": 12.0},
+            "r3": {"predicted_min": 20.0, "actual_min": 30.0},
+            "r4": {"predicted_min": 20.0},
+        },
+    }
+    assert lt.calibrate(t) == 0.6
+    assert lt.plan_parts(["p"], t, 4, 25.0)[0]["predicted_min"] == 11.0

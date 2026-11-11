@@ -126,11 +126,13 @@ def plan_parts(
     across inputs (largest first) while the sum fits, so no part is mostly start-up."""
     fixed = float(timings.get("fixed_min", 6.0))
     room = max(target_min - fixed, 1.0)
+    # actual / predicted part minutes of past runs (`calibrate`): the model's bias, taken out of every estimate
+    bias = float(timings.get("calibration", 1.0))
     by_input: Dict[str, List[Tuple[float, str]]] = {}
     for fn in fns:
         inp = input_of(fn) if input_of else "-"
         by_input.setdefault(inp, []).append(
-            (fn_minutes(timings, fn, scale, default_fn_min), fn)
+            (bias * fn_minutes(timings, fn, scale, default_fn_min), fn)
         )
     bins: List[List] = []  # [minutes, [fns], input]
     for inp, items in by_input.items():
@@ -157,6 +159,18 @@ def plan_parts(
         {"fns": b[1], "inputs": b[2], "predicted_min": round(fixed + b[0], 1)}
         for b in merged
     ]
+
+
+def calibrate(timings: dict) -> float:
+    """Set `timings["calibration"]` to the median actual / predicted minutes of the parts that have both."""
+    ratios = sorted(
+        float(p["actual_min"]) / float(p["predicted_min"])
+        for p in timings.get("parts", {}).values()
+        if p.get("actual_min") and p.get("predicted_min")
+    )
+    if ratios:
+        timings["calibration"] = round(ratios[len(ratios) // 2], 2)
+    return float(timings.get("calibration", 1.0))
 
 
 def _input_of(fn: str) -> Optional[str]:
@@ -201,6 +215,7 @@ def main(argv=None) -> int:
             value = json.load(f)[a.cid]["value"]
         scale_of = dict(kv.split("=", 1) for kv in a.scale_of.split(",") if kv)
         collect(timings, parse_rows(str(value).split("\n")), scale_of)
+        calibrate(timings)
         with open(a.out, "w") as f:
             json.dump(timings, f, indent=1, sort_keys=True)
         return 0

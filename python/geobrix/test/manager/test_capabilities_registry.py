@@ -474,9 +474,14 @@ def test_the_udtf_probe_leaves_no_function_or_view_behind(spark):
         Exception, match="(?i)not found|UNRESOLVED_ROUTINE|cannot be found"
     ):
         spark.sql(f"DESCRIBE FUNCTION {names[0]}")
-    assert [
-        t.name for t in spark.catalog.listTables() if "gbx__probe_view" in t.name
-    ] == []
+    # the view by name: listing every table of the session's schema hung for over 10 min on a Databricks node
+    views = [
+        s.rsplit(" ", 1)[1]
+        for s in rec.statements
+        if s.startswith("DROP VIEW IF EXISTS gbx__probe_view")
+    ]
+    assert len(views) == 1
+    assert not spark.catalog.tableExists(views[0])
 
 
 class TaggedSpark(FakeSpark):

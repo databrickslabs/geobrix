@@ -609,7 +609,8 @@ def _protected(
     oldest)``.
 
     A version is still readable if it is at or after ``oldest``, the version that was live
-    at ``horizon`` (``None``: the table is younger than that, so every version is). If Delta
+    at ``horizon`` (``None``: the table is younger than that, so every version is), or the
+    data change it reads as when it changed no data itself (an OPTIMIZE, an auto compaction). If Delta
     no longer has the files of that version, ``oldest`` moves up to the first one it does:
     nothing older can be read, whatever GeoBrix still promised. The files of the readable
     versions are: the files of ``oldest`` itself; every file a later write put in its own
@@ -617,8 +618,6 @@ def _protected(
     committed it); and the files a later restore pointed the rows back at. Anything else
     was dereferenced before ``oldest`` and no readable version needs it.
     """
-    from pyspark.sql import functions as F
-
     files = files or M.file_layout(spark, table)
     select = M.file_select(files)
     rows = spark.sql(
@@ -633,14 +632,11 @@ def _protected(
         (tagged if is_tag else live).add(_rel(path_of(f), root))
     tagged -= live
 
-    history = [
-        (int(r["version"]), int(r["micros"]))
-        for r in spark.sql(f"DESCRIBE HISTORY {M._q(table)}")
-        .select("version", F.unix_micros("timestamp").alias("micros"))
-        .collect()
-    ]
+    # (version, micros, changes data); a version that changed no data reads as the one before it (M.snapshot)
+    history = M._history(spark, table)
     limit = (horizon - _EPOCH) // timedelta(microseconds=1)
-    oldest = max((v for v, t in history if t <= limit), default=None)
+    live_at = max((v for v, t, _ in history if t <= limit), default=None)
+    oldest = None if live_at is None else M._data_version(history, live_at)
     commits = commit_versions(spark, table)
     versions = {  # a commit whose version is unknown (None) is taken to be recent
         w: (None if v is None else int(v), m)
@@ -652,9 +648,11 @@ def _protected(
     }
     window = set()
     if oldest is not None:
-        for v in sorted(v for v, _ in history if v >= oldest):
-            try:
-                window |= _files_at(spark, table, v, root, files=files)
+        for v in sorted(v for v, _, changed in history if v >= oldest and changed):
+            try:  # read where the version reads: the last of the versions that change nothing after it
+                window |= _files_at(
+                    spark, table, M._read_version(history, v), root, files=files
+                )
             except ZarrVersionUnavailable:
                 continue  # Delta dropped its files: nobody can read it
             oldest = v
@@ -939,7 +937,7 @@ def gbx_zarr_tag(spark, table: str, name: str, *, version_as_of=None) -> None:
         root = _files_root(props)
         _require_exist(
             (
-                _files_at(spark, table, snap.version, root, tag=snap.tag, files=files)
+                _files_at(spark, table, snap.read_at, root, tag=snap.tag, files=files)
                 if root
                 else ()
             ),
@@ -962,7 +960,7 @@ MERGE INTO {sql_table} AS t
 USING (
   SELECT kind, array, key, shard_key, file, offset, length, checksum, origin, identity,
          write_id, {M._lit(name)} AS tag, meta
-  FROM {sql_table} VERSION AS OF {int(snap.version)}
+  FROM {sql_table} VERSION AS OF {int(snap.read_at)}
   WHERE {source} AND kind IN ('group', 'array', 'shard', 'chunk')
   UNION ALL
   {_commit_source_sql(write_id, meta)}

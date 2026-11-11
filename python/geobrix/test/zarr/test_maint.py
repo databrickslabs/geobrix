@@ -127,7 +127,13 @@ def _keys(rows):
 
 
 def _latest(spark, table):
-    return spark.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+    """The latest version that changed data: an OPTIMIZE or auto compaction after it does not count."""
+    return M._latest_version(spark, table)
+
+
+def _compact(spark, table):
+    """What Databricks does after every MERGE, auto compaction (an OPTIMIZE version that changes no data)."""
+    spark.sql(f"OPTIMIZE {table}").collect()
 
 
 def _commit_meta(spark, table, write_id):
@@ -197,6 +203,7 @@ def test_optimize_folds_chunk_rows_and_reads_same(
     assert (meta["mode"], meta["variables"], meta["shards"]) == ("optimize", ["t2m"], 2)
     assert meta["folded"] == 16
 
+    _compact(spark_delta, table)
     again = gbx_zarr_optimize(spark_delta, table)  # nothing left to fold
     assert again == version == _latest(spark_delta, table), H.history(
         spark_delta, table
@@ -493,11 +500,15 @@ def test_vacuum_keeps_what_the_version_at_the_horizon_still_needs(
     v2 = gbx_zarr_write(
         _blocks(spark_delta, ("u10", (0, 0, 0), new)), table, mode="overwrite"
     )
+    _compact(
+        spark_delta, table
+    )  # the horizon falls after it: v2 still reads, as itself
+    after_v2 = spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
     v3 = gbx_zarr_write(
         _blocks(spark_delta, ("t2m", (0, 0, 0), new)), table, mode="overwrite"
     )
     w1 = _first_write(spark_delta, table, v1)
-    t2, t3 = (_micros(spark_delta, table, v) for v in (v2, v3))
+    t2, t3 = (_micros(spark_delta, table, v) for v in (after_v2, v3))
     assert t3 > t2
     between = datetime.fromtimestamp((t2 + t3) / 2 / 1e6, timezone.utc)
     monkeypatch.setattr(_maint, "_utcnow", lambda: between + timedelta(days=7))
@@ -881,9 +892,10 @@ def test_restore_round_trip(spark_delta, drop, tmp_path, no_hooks):
         f"SELECT key FROM {table} WHERE kind = 'commit' AND meta LIKE '%\"restore\"%'"
     ).first()
     assert _commit_meta(spark_delta, table, row["key"])["from"] == v1
+    _compact(spark_delta, table)
     assert (
         gbx_zarr_restore(spark_delta, table, version_as_of=v1) == back
-    )  # already there
+    )  # already there: the version its data is at, not the compaction's
 
     stamp = (
         spark_delta.sql(f"DESCRIBE HISTORY {table}")

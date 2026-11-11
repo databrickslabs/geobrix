@@ -1140,6 +1140,7 @@ Every grid function follows one contract for its resolution and its input.
   - `gbx_zarr_restore` makes the store equal an older version again as a new commit.
   - `gbx_zarr_optimize` folds the small chunk rows that appends leave into shards.
   - `gbx_zarr_vacuum` deletes the files no readable version needs (`dry_run=True` lists them).
+  - A version that changes no data counts as the version before it. Examples are an `OPTIMIZE`, a property change, or Databricks' auto compaction after each `MERGE`. The version a write returns stays readable until the next data change passes the horizon. A write, optimize or restore with nothing to do returns the last version that changed data.
 - **A store's root belongs to exactly one table.** A managed store's data root and a writable registration's overlay root carry an ownership ledger. It is the small Delta table `_gbx_owner`, next to the `_gbx_store.json` marker.
   - A table that claims a root another table owns gets `ZarrOwnershipError`.
   - Leave `_gbx_owner` where it is. Delete it, with the marker, only when no store owns the root.

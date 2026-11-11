@@ -529,7 +529,8 @@ def test_snapshot_refuses_versions_older_than_the_vacuum_horizon(spark_delta, ta
     spark_delta.sql(
         f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.vacuum_horizon' = '{horizon}')"
     )
-    v_prop = M.snapshot(spark_delta, table).version  # the ALTER's own version
+    v_prop = M.snapshot(spark_delta, table).version
+    assert v_prop == v2  # the ALTER changes no data: the latest version is still v2
     v4 = M.commit(
         spark_delta,
         table,
@@ -553,14 +554,16 @@ def test_snapshot_refuses_versions_older_than_the_vacuum_horizon(spark_delta, ta
     tagged = M.snapshot(spark_delta, table, version_as_of="tag:keep")
     assert tagged == M.Snapshot(table=table, version=v_tag, tag="keep")
 
-    # a horizon in the future: only the version live at it (the latest) is readable
+    # a horizon in the future: only the version live at it (the latest) is readable. The
+    # ALTER that sets it changes no data, so the latest is still v_tag, which stays readable
     far = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     spark_delta.sql(
         f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.vacuum_horizon' = '{far}')"
     )
     latest = M.snapshot(spark_delta, table).version
+    assert latest == v_tag
     assert M.snapshot(spark_delta, table, version_as_of=latest).version == latest
-    for gone in (v2, v4, v_tag):
+    for gone in (v2, v4):
         with pytest.raises(ZarrVersionUnavailable):
             M.snapshot(spark_delta, table, version_as_of=gone)
 
@@ -1693,3 +1696,61 @@ def test_a_commit_reads_only_the_files_of_the_shards_it_touches(
         spark_delta.sparkContext.setJobGroup("", "")
         spark_delta.conf.unset("spark.sql.files.openCostInBytes")
     assert counts["pruned"] < counts["all"], counts
+
+
+# --- versions that change no data (OPTIMIZE, Databricks' auto compaction, a property change) ---------
+
+
+def test_a_version_with_no_data_change_reads_as_the_one_before():
+    """(version, micros, data change): Databricks compacts after every MERGE (auto = true),
+    so a commit is often followed by versions that read exactly as it does."""
+    history = [(0, 0, True), (1, 1, True), (2, 2, False), (3, 3, False), (4, 4, True)]
+    assert [M._data_version(history, v) for v in range(5)] == [0, 1, 1, 1, 4]
+    assert [M._read_version(history, v) for v in range(5)] == [0, 3, 3, 3, 4]
+    for op, changed in (
+        ("MERGE", True),
+        ("WRITE", True),
+        ("CREATE TABLE", True),
+        ("DELETE", True),
+        ("RESTORE", True),
+        ("OPTIMIZE", False),
+        ("REORG", False),
+        ("SET TBLPROPERTIES", False),
+        ("VACUUM END", False),
+    ):
+        assert M._changes_data(op) is changed, op
+
+
+def test_the_latest_version_is_the_last_commit_not_a_compaction(spark_delta, table):
+    (_, v1), (_, v2) = _commit_two(spark_delta, table)
+    spark_delta.sql(f"OPTIMIZE {table}")  # what Databricks runs after a MERGE
+    top = spark_delta.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+    assert top > v2
+    snap = M.snapshot(spark_delta, table)
+    assert (snap.version, snap.read_at) == (v2, top)
+    assert M._latest_version(spark_delta, table) == v2
+
+
+def test_a_commit_stays_readable_while_only_compactions_follow_it(spark_delta, table):
+    """The horizon falls after the compaction that followed v2, before any data change: v2
+    reads (at the compaction, whose files Delta keeps), and v1 is refused as before."""
+    (w1, v1), (w2, v2) = _commit_two(spark_delta, table)
+    spark_delta.sql(f"OPTIMIZE {table}")
+    time.sleep(1.0)
+    horizon = datetime.now(timezone.utc)
+    time.sleep(1.0)
+    spark_delta.sql(  # a property change after the horizon: no data change either
+        f"ALTER TABLE {table} SET TBLPROPERTIES ('{M.HORIZON_PROP}' = '{horizon.isoformat()}')"
+    )
+    check = "spark.databricks.delta.retentionDurationCheck.enabled"
+    spark_delta.conf.set(check, "false")
+    try:  # v2's own files are gone: only the compaction's remain
+        spark_delta.sql(f"VACUUM {table} RETAIN 0 HOURS").collect()
+    finally:
+        spark_delta.conf.set(check, "true")
+    snap = M.snapshot(spark_delta, table, version_as_of=v2)
+    assert snap.version == v2 and snap.read_at > v2
+    rows = M.read_rows(spark_delta, snap, kinds="commit").to_pylist()
+    assert {r["key"] for r in rows} == {w1, w2}
+    with pytest.raises(ZarrVersionUnavailable, match=f"version {v1} of"):
+        M.snapshot(spark_delta, table, version_as_of=v1)

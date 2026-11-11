@@ -2150,7 +2150,7 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
     rows = spark.sql(
         f"SELECT kind, array, key, shard_key, {M.file_select(plan.files)}, offset, length, "
         f"origin, identity, write_id "
-        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.read_at)} "
         "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
     ).where(F.col("array").isin(names))
     if parts is not None:
@@ -2373,7 +2373,7 @@ def _untouched_deletes(spark, plan: _Plan, rows: pa.Table, written: set) -> pa.T
 
     base = spark.sql(
         f"SELECT kind, array, key, shard_key, identity, write_id "
-        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
+        f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.read_at)} "
         "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
     ).where(F.col("array").isin(left))
     seen = touched.filter(

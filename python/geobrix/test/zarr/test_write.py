@@ -127,7 +127,10 @@ def _commit_meta(spark, table, write_id):
 
 
 def _latest(spark, table):
-    return spark.sql(f"DESCRIBE HISTORY {table} LIMIT 1").first()["version"]
+    """The latest version that changed data: an OPTIMIZE or auto compaction after it does not count."""
+    from databricks.labs.gbx.zarr import _manifest
+
+    return _manifest._latest_version(spark, table)
 
 
 def _files(root):

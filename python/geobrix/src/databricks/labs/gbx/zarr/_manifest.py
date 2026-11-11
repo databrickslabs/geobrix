@@ -248,6 +248,13 @@ class Snapshot:
     tag: str | None = None  # set when read via version_as_of="tag:<name>"
     # how the table keeps its files, read with the snapshot; None: ``read_rows`` looks it up
     files: FileLayout | None = field(default=None, compare=False, repr=False)
+    # the Delta version the rows are read at: the newest that reads as ``version`` (the versions after it
+    # that change no data, an OPTIMIZE or Databricks' auto compaction); None: ``version`` itself
+    at: int | None = field(default=None, compare=False)
+
+    @property
+    def read_at(self) -> int:
+        return self.version if self.at is None else self.at
 
 
 class ConcurrentCommit(Exception):
@@ -597,9 +604,88 @@ def read_props(spark, table: str, *, need_file: bool = False) -> StoreProps:
 # --- snapshots --------------------------------------------------------------------
 
 
+# Delta operations that change no row: their add and remove actions carry dataChange = false, or they change only
+# the table's metadata. Databricks runs one after every MERGE (auto compaction, an OPTIMIZE with auto = true, which
+# cannot be turned off: https://docs.databricks.com/aws/en/delta/tune-file-size), so a GeoBrix commit is often
+# followed by versions that read exactly as it does. Any other operation counts as a data change.
+_NO_DATA_CHANGE = frozenset(
+    {
+        "OPTIMIZE",
+        "REORG",
+        "VACUUM START",
+        "VACUUM END",
+        "SET TBLPROPERTIES",
+        "UNSET TBLPROPERTIES",
+        "UPGRADE PROTOCOL",
+        "ADD FEATURE",
+        "DROP FEATURE",
+    }
+)
+_HISTORY_PAGE = 64  # the latest version: the newest versions of the history, all of it when they change no data
+
+
+def _changes_data(operation) -> bool:
+    return str(operation or "").strip().upper() not in _NO_DATA_CHANGE
+
+
+def _history(
+    spark, table: str, limit: int | None = None
+) -> list[tuple[int, int, bool]]:
+    """``(version, commit time in microseconds, changes data)`` per version, oldest first."""
+    from pyspark.sql import functions as F
+
+    sql = f"DESCRIBE HISTORY {_q(table)}" + (f" LIMIT {int(limit)}" if limit else "")
+    rows = (
+        spark.sql(sql)
+        .select("version", F.unix_micros("timestamp").alias("micros"), "operation")
+        .collect()
+    )
+    return sorted((int(r[0]), int(r[1]), _changes_data(r[2])) for r in rows)
+
+
+def _data_version(history, version: int) -> int:
+    """The newest version at or before ``version`` that changed data: what ``version`` reads as."""
+    found = version
+    for v, _, changed in history:
+        if v > version:
+            break
+        if changed:
+            found = v
+    return found
+
+
+def _read_version(history, version: int) -> int:
+    """The newest version that reads as ``version``: it, or the last of the versions right after it that change no
+    data. Delta keeps that one's files longest (a compaction removes the files of the version before it).
+    """
+    at = version
+    for v, _, changed in history:
+        if v <= version:
+            continue
+        if changed:
+            break
+        at = v
+    return at
+
+
+def _latest(spark, table: str) -> tuple[int, int]:
+    """``(the latest version that changed data, the table's latest version)``."""
+    history = _history(spark, table, _HISTORY_PAGE)
+    if len(history) == _HISTORY_PAGE and not any(c for _, _, c in history):
+        history = _history(spark, table)  # a long run of compactions: read it all
+    top = history[-1][0]
+    return _data_version(history, top), top
+
+
 def _latest_version(spark, table: str) -> int:
-    row = spark.sql(f"DESCRIBE HISTORY {_q(table)} LIMIT 1").select("version").first()
-    return int(row[0])
+    """The latest version that changed data: a write or restore that has nothing to do returns it, and an OPTIMIZE
+    or auto compaction after it does not move it."""
+    return _latest(spark, table)[0]
+
+
+def _latest_snapshot(spark, table: str, files=None, tag=None) -> Snapshot:
+    version, top = _latest(spark, table)
+    return Snapshot(table=table, version=version, tag=tag, files=files, at=top)
 
 
 def _parse_horizon(text: str) -> datetime:
@@ -695,8 +781,13 @@ def snapshot(
     when it is older than the version that was live at the horizon, the later of the
     ``geobrix.zarr.vacuum_horizon`` property and ``now - retain``: its files may be gone.
     The version live at the horizon, everything after it and every tag stay readable.
-    Other versions on the table (OPTIMIZE, property changes) are not GeoBrix commits;
-    ``find_commit_version`` and the commit rows identify those.
+
+    A version that changed no data (an OPTIMIZE, Databricks' auto compaction after a MERGE,
+    a property change) reads as the version before it: ``Snapshot.version`` is that one, so
+    the latest version is the last data change, and a version stays readable while only such
+    versions follow it. The rows are read at the newest of them (``Snapshot.read_at``), whose
+    files Delta keeps longest. ``find_commit_version`` and the commit rows name the GeoBrix
+    commits.
 
     The snapshot carries how the table keeps its files (``Snapshot.files``): pass ``files``
     (``FileLayout.of(read_props(...))``) when the properties were read already, else one
@@ -727,13 +818,13 @@ def snapshot(
     from pyspark.sql import functions as F
 
     if version is None and timestamp_as_of is None:  # the latest, or a tag read there
-        latest = _latest_version(spark, table)
         if files is None:
             files = file_layout(spark, table)
+        latest = _latest_snapshot(spark, table, files=files, tag=tag)
         if tag is None:
-            return Snapshot(table=table, version=latest, files=files)
+            return latest
         present = (
-            spark.sql(f"SELECT tag FROM {_q(table)} VERSION AS OF {latest}")
+            spark.sql(f"SELECT tag FROM {_q(table)} VERSION AS OF {latest.read_at}")
             .where(F.col("tag") == F.lit(tag))
             .limit(1)
             .first()
@@ -743,32 +834,31 @@ def snapshot(
                 f"tag {tag!r} does not exist in {table}",
                 fix="pick an existing tag, or create it with gbx_zarr_tag",
             )
-        return Snapshot(table=table, version=latest, tag=tag, files=files)
+        return latest
 
     tp = _tblprops(spark, table)
     horizon = _effective_horizon(tp)
-    # (version, commit time in microseconds): read once, then decided here
-    history = [
-        (int(r["version"]), int(r["micros"]))
-        for r in spark.sql(f"DESCRIBE HISTORY {_q(table)}")
-        .select("version", F.unix_micros("timestamp").alias("micros"))
-        .collect()
-    ]
+    # (version, commit time in microseconds, changes data): read once, then decided here
+    history = _history(spark, table)
     if version is not None:
         wanted = f"version {version}"
-        picked = version if any(v == version for v, _ in history) else None
+        picked = version if any(v == version for v, _, _ in history) else None
     else:
         wanted = f"the version at {timestamp_as_of}"
         at = _timestamp_micros(spark, timestamp_as_of)
-        picked = max((v for v, t in history if t <= at), default=None)
+        picked = max((v for v, t, _ in history if t <= at), default=None)
     if picked is None:
         raise ZarrVersionUnavailable(
             f"{wanted} of {table} does not exist or is no longer in its history",
             fix=_UNAVAILABLE_FIX,
         )
+    # a version that changed no data reads as the commit before it, and both read at the last version of the run
+    picked = _data_version(history, picked)
+    read_at = _read_version(history, picked)
     if horizon is not None:
         limit = (horizon - _EPOCH) // timedelta(microseconds=1)
-        oldest = max((v for v, t in history if t <= limit), default=None)
+        live = max((v for v, t, _ in history if t <= limit), default=None)
+        oldest = None if live is None else _data_version(history, live)
         if oldest is not None and picked < oldest:
             raise ZarrVersionUnavailable(
                 f"version {picked} of {table} predates version {oldest}, the "
@@ -776,18 +866,22 @@ def snapshot(
                 "window), so its files may have been removed",
                 fix=_UNAVAILABLE_FIX,
             )
-    if picked != max(v for v, _ in history):
+    if read_at != history[-1][0]:
         # Delta may have dropped the files of an older version its log still lists
         try:
             spark.sql(
-                f"SELECT kind FROM {_q(table)} VERSION AS OF {picked} LIMIT 1"
+                f"SELECT kind FROM {_q(table)} VERSION AS OF {read_at} LIMIT 1"
             ).collect()
         except Exception as e:
             if files_gone(_error_text(e)):
                 raise _version_gone(table, picked) from e
             raise
     return Snapshot(
-        table=table, version=picked, tag=None, files=files or _layout_of(tp)
+        table=table,
+        version=picked,
+        tag=None,
+        files=files or _layout_of(tp),
+        at=read_at,
     )
 
 
@@ -843,7 +937,7 @@ def read_rows(
         file_select(layout) if c == "file" else c for c in MANIFEST_COLUMNS
     )
     df = spark.sql(
-        f"SELECT {cols} FROM {_q(snap.table)} VERSION AS OF {int(snap.version)}"
+        f"SELECT {cols} FROM {_q(snap.table)} VERSION AS OF {int(snap.read_at)}"
     )
     for column, values in (("array", arrays), ("shard_key", shard_keys), ("key", keys)):
         if values is None:
@@ -856,9 +950,7 @@ def read_rows(
     try:
         return _stored_files(df.where(cond).toArrow(), layout)
     except Exception as e:
-        if files_gone(_error_text(e)) and snap.version < _latest_version(
-            spark, snap.table
-        ):
+        if files_gone(_error_text(e)) and snap.read_at < _latest(spark, snap.table)[1]:
             raise _version_gone(snap.table, snap.version) from e
         raise
 
@@ -1051,7 +1143,7 @@ def _sharded_arrays(
             docs.setdefault(row["array"], None)
     missing = [n for n in names if n not in docs]
     if missing:
-        snap = Snapshot(table, _latest_version(spark, table), files=files)
+        snap = _latest_snapshot(spark, table, files=files)
         for row in read_rows(spark, snap, kinds="array", arrays=missing).to_pylist():
             if row["key"] == "zarr.json":
                 docs[row["array"]] = row["meta"]
@@ -1205,7 +1297,7 @@ def _write_conflict(
     """
     first = parse_cas_failure(text)
     try:
-        base = Snapshot(table, _latest_version(spark, table))
+        base = _latest_snapshot(spark, table)
         changed = changed_since(spark, table, base, source).to_pylist()
     except Exception:
         changed = []

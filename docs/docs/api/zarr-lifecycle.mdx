@@ -68,7 +68,12 @@ as the **horizon**. The horizon is the later of the horizon a vacuum recorded an
 A read by version number or by timestamp of a version older than the one that was live at the horizon
 raises `ZarrVersionUnavailable` with a `Fix:`. This holds even if no vacuum has ever run, because Delta's
 own maintenance may already have removed the files. The latest version and every tagged version are
-always readable. This store keeps its versions for two seconds so the example is quick (the default is
+always readable.
+
+A version that changes no data counts as the version before it. Such a version is an `OPTIMIZE`, a
+property change, or the auto compaction Databricks runs after every `MERGE`. So a version a write or a
+restore returned stays readable while only such versions follow it. GeoBrix reads it at the newest of
+them, whose files Delta keeps. This store keeps its versions for two seconds so the example is quick (the default is
 `"7 days"`):
 
 <CodeFromTest code={zarrExamples} language="python" functionName="time_travel_stops_at_retain"

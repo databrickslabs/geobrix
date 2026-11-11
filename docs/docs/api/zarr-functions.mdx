@@ -419,7 +419,8 @@ row per inner chunk they change. This keeps a write cheap but spreads a shard ov
 files. This copies each shard that has chunk rows, without decoding, into a new pack file as a standard
 Zarr v3 shard. It writes one shard row in place of the chunk rows. Chunks an all-fill write deleted (tombstones) are
 folded away. Run it after many small appends, especially on a Volume; it changes no cell. Returns the
-version the fold committed, or the current version when there was nothing to fold.
+version the fold committed, or the current version when there was nothing to fold. The current version is
+the last one that changed data, so an `OPTIMIZE` or an auto compaction after it does not change it.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -585,7 +586,7 @@ int or `"tag:<name>"`) or `timestamp_as_of`. The commit upserts the rows the ver
 lack or have changed. The commit also deletes the live rows the version did not have, under compare-and-swap. Nothing is
 copied and nothing is removed, so older versions stay readable and the restore can itself be undone. A
 chunk hidden by a tombstone since comes back when the version predates the tombstone. A version already
-equal to the live rows commits nothing and returns the current version. A commit that meets a concurrent
+equal to the live rows commits nothing and returns the current version: the last one that changed data. A commit that meets a concurrent
 one is retried like a write's, up to twenty attempts.
 
 | Parameter | Type | Description |

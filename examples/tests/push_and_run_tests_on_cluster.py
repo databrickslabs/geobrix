@@ -47,7 +47,7 @@ Options:
   --env KEY=VAL          an environment variable every shard sets before its tests (repeatable), e.g.
                          GBX_CAP_ARROW_TILE_TRANSPORT=0 to run the light tile UDFs with their pickled transport
   --spark-conf KEY=VAL   a Spark conf every shard's session sets before its tests (repeatable), e.g.
-                         spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled=false (Arrow tile rows on DBR 19)
+                         spark.sql.execution.arrow.maxBytesPerBatch=16m (smaller Arrow batches of tile rows)
   --run-id <id>          default tst-<date>-<time>-<4 hex>
   --keep-stage           leave the Volume folder, the notebooks and the queue table
   --explain-only         print the plan and exit; no network, nothing staged or started

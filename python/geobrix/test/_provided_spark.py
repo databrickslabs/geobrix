@@ -170,18 +170,19 @@ def _patch_start(writer_cls) -> None:
     _patch_paths(writer_cls, ("start",), local_write_uri)
 
 
-# a table named by its path in SQL text: delta.`<path>`, a backtick inside doubled
-_DELTA_PATH = re.compile(r"delta\.`((?:[^`]|``)+)`")
+# a table named by its path in SQL text: delta.`<path>` or `delta`.`<path>` (GeoBrix quotes each part of a
+# name), a backtick inside doubled
+_DELTA_PATH = re.compile(r"(\bdelta\.|`delta`\.)`((?:[^`]|``)+)`", re.IGNORECASE)
 
 
 def _qualify_sql(text):
     """``text`` with each ``delta.`<bare local path>``` given the writers' rule (``local_write_uri``)."""
-    if not isinstance(text, str) or "delta.`" not in text:
+    if not isinstance(text, str) or "delta" not in text.lower():
         return text
 
     def one(m):
-        path = m.group(1).replace("``", "`")
-        return "delta.`" + local_write_uri(path).replace("`", "``") + "`"
+        path = m.group(2).replace("``", "`")
+        return m.group(1) + "`" + local_write_uri(path).replace("`", "``") + "`"
 
     return _DELTA_PATH.sub(one, text)
 

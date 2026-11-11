@@ -198,7 +198,9 @@ def test_optimize_folds_chunk_rows_and_reads_same(
     assert meta["folded"] == 16
 
     again = gbx_zarr_optimize(spark_delta, table)  # nothing left to fold
-    assert again == version == _latest(spark_delta, table)
+    assert again == version == _latest(spark_delta, table), H.history(
+        spark_delta, table
+    )
 
 
 def test_optimize_folds_tombstones_and_overlay_shards(

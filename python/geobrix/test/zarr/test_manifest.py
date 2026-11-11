@@ -11,6 +11,7 @@ import time
 import types
 import uuid
 from datetime import datetime, timedelta, timezone
+from test.zarr import _helpers as H
 
 import pyarrow as pa
 import pytest
@@ -858,12 +859,27 @@ def test_commit_lookup_survives_delta_vacuuming_the_change_feed(spark_delta, tab
     assert M.commit(spark_delta, table, replay, write_id=w1, meta={}) == v1
 
 
+def _commit_files(spark, table, keys):
+    """The data file that holds each commit row of ``keys`` now."""
+    rows = spark.sql(
+        f"SELECT key, _metadata.file_path AS f FROM {table} WHERE kind = 'commit'"
+    ).collect()
+    return {r["key"]: r["f"] for r in rows if r["key"] in keys}
+
+
 def test_commit_versions_survive_file_rewrites(spark_delta, table):
     (w1, v1), (w2, v2) = _commit_two(spark_delta, table)
-    rewrote = spark_delta.sql(f"OPTIMIZE {table}").first()["metrics"]["numFilesRemoved"]
-    assert rewrote > 0  # the commits' files really were compacted into new ones
+    before = _commit_files(spark_delta, table, {w1, w2})
+    spark_delta.sql(f"OPTIMIZE {table}")
     spark_delta.sql(f"DELETE FROM {table} WHERE kind = 'chunk'")
     spark_delta.sql(f"REORG TABLE {table} APPLY (PURGE)")
+    # the precondition: both commit rows now sit in files written after them. Which statement rewrote them
+    # is Delta's choice: OPTIMIZE has nothing to compact where a MERGE copied its file instead of marking
+    # rows deleted (Databricks), and the purge then rewrites it
+    after = _commit_files(spark_delta, table, {w1, w2})
+    assert set(after) == {w1, w2} and all(
+        after[w] != before[w] for w in after
+    ), H.history(spark_delta, table)
     assert M.find_commit_version(spark_delta, table, w1) == v1
     assert M.find_commit_version(spark_delta, table, w2) == v2
 

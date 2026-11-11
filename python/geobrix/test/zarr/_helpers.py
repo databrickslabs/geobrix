@@ -117,6 +117,27 @@ def read_variable(spark, table, name, version_as_of=None):
 DIMS = ("time", "latitude", "longitude")
 
 
+def history(spark, table) -> str:
+    """The Delta history of ``table``, one ``version operation parameters`` line per version: a failure message that
+    names a version no GeoBrix call made (a platform's compaction, say) without another run to find it.
+    """
+    try:
+        rows = (
+            spark.sql(f"DESCRIBE HISTORY {table}")
+            .select("version", "operation", "operationParameters")
+            .orderBy("version")
+            .collect()
+        )
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 - a message must not hide the failure it explains
+        return f"(no history: {type(e).__name__}: {e})"
+    return "\n".join(
+        f"{r['version']} {r['operation']} {dict(r['operationParameters'] or {})}"
+        for r in rows
+    )
+
+
 def blocks_frame(spark, *blocks):
     """A blocks DataFrame of ``(variable, start, values)``; values are decoded values."""
     from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA

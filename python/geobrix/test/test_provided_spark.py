@@ -309,3 +309,20 @@ def test_the_class_of_the_session_given_is_covered_too(tmp_path):
     ps.cover(session)  # twice: still one wrapper
     session.sql(f"SELECT * FROM delta.`{ledger}`")
     assert seen == [("runtime", f"SELECT * FROM delta.`file:{ledger}`")]
+
+
+def test_a_delta_path_quoted_part_by_part_is_qualified_too(tmp_path):
+    """GeoBrix quotes every part of a table name (``_manifest._q``), so the ledger reaches Spark as
+    ```delta`.`<path>```; that spelling gets the same rule."""
+    from databricks.labs.gbx.zarr._manifest import _q
+    from databricks.labs.gbx.zarr._register import _ledger_table
+
+    root = tmp_path / "root_s"
+    root.mkdir()
+    name = _q(_ledger_table(str(root)))
+    assert ps._qualify_sql(f"DESCRIBE DETAIL {name}") == (
+        f"DESCRIBE DETAIL `delta`.`file:{root / '_gbx_owner'}`"
+    )
+    assert ps._qualify_sql("SELECT * FROM `delta`.`/Volumes/c/s/v/t`") == (
+        "SELECT * FROM `delta`.`/Volumes/c/s/v/t`"
+    )

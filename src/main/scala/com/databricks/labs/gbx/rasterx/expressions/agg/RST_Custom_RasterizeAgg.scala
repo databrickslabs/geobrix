@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
-import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, GroupArgs, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.custom.Custom_GridSpec
 import com.databricks.labs.gbx.gridx.grid.CustomGridSystem
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
@@ -19,7 +19,7 @@ import scala.collection.mutable.ArrayBuffer
 /** Mutable aggregation buffer for [[RST_Custom_RasterizeAgg]].
  *
  *  Accumulates `(cellId: Long, value: Double)` pairs streamed one per row.
- *  Serde format: `[count:Int][ cellId:Long, value:Double ]*N`.
+ *  Serde format: `[count:Int][ cellId:Long, value:Double ]*N`, then the captured arguments when there are any.
  */
 final class CustomRasterizeAcc(
     val cells: ArrayBuffer[(Long, Double)] = ArrayBuffer.empty
@@ -31,8 +31,12 @@ final class CustomRasterizeAcc(
         this
     }
 
+    /** The per-group arguments read from a row of the group ([[GroupArgs]]); null when none were captured. */
+    var args: Array[Byte] = null
+
     def merge(other: CustomRasterizeAcc): CustomRasterizeAcc = {
         cells ++= other.cells
+        args = GroupArgs.prefer(args, other.args)
         CustomRasterizeAcc.guardSize(cells.length.toLong)
         this
     }
@@ -45,6 +49,7 @@ final class CustomRasterizeAcc(
             out.writeLong(cellId)
             out.writeDouble(v)
         }
+        GroupArgs.write(out, args)
         bos.toByteArray
     }
 }
@@ -67,7 +72,9 @@ object CustomRasterizeAcc {
             buf += ((cellId, v))
             i += 1
         }
-        new CustomRasterizeAcc(buf)
+        val acc = new CustomRasterizeAcc(buf)
+        acc.args = GroupArgs.read(in)
+        acc
     }
 
     private[agg] def guardSize(currentRows: Long): Unit = {
@@ -84,7 +91,8 @@ object CustomRasterizeAcc {
  *
  *  Mirrors [[RST_H3_RasterizeAgg]], with the custom `grid` struct (from `gbx_custom_grid(...)`)
  *  inserted after `(cellid, value)` — where the H3 grid identity is implicit. Streams
- *  `(cellid LONG, value DOUBLE)` per row; the remaining eleven arguments are per-group constants.
+ *  `(cellid LONG, value DOUBLE)` per row; the grid and the remaining options are read from a row of the group
+ *  ([[GroupArgs]]), so they may be columns as well as constants.
  *  On `eval` the cells are burned into one raster by pixel-centroid mapping via
  *  [[RasterizeBurn.burn]] with the reconstructed [[CustomGridSystem]] — the inverse of
  *  [[com.databricks.labs.gbx.rasterx.expressions.grid.RST_Custom_RasterToGrid]].
@@ -138,10 +146,16 @@ case class RST_Custom_RasterizeAgg(
     override def withNewInputAggBufferOffset(n: Int): ImperativeAggregate =
         copy(inputAggBufferOffset = n)
 
+    // the grid and the eleven options: read from a row of the group, so any of them may be a column
+    private val groupArgs = new GroupArgs(Seq(
+        gridExpr, outSridExpr, pixelSizeExpr, xminExpr, yminExpr, xmaxExpr, ymaxExpr,
+        widthExpr, heightExpr, modeExpr, kringPadExpr))
+
     override def createAggregationBuffer(): CustomRasterizeAcc = CustomRasterizeAcc.empty
 
     /** Catalyst-facing update: extract cellid and value from the row, delegate to typed helper. */
     override def update(buffer: CustomRasterizeAcc, input: InternalRow): CustomRasterizeAcc = {
+        if (GroupArgs.lacksFirst(buffer.args)) buffer.args = GroupArgs.prefer(buffer.args, groupArgs.capture(input))
         val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
@@ -177,21 +191,21 @@ case class RST_Custom_RasterizeAgg(
 
         if (buffer.cells.isEmpty) return null
 
-        val empty = InternalRow.empty
-        val grid     = Custom_GridSpec.systemFromRow(gridExpr.eval(empty).asInstanceOf[InternalRow])
+        val (args, row) = groupArgs.bind(buffer.args)
+        val grid     = Custom_GridSpec.systemFromRow(args(0).eval(row).asInstanceOf[InternalRow])
         // out_srid wins; else the grid's own CRS; a grid with none needs the argument (the lightweight rule)
-        val srid     = evalIntOpt(outSridExpr, empty).getOrElse(grid.conf.crsID.getOrElse(
+        val srid     = evalIntOpt(args(1), row).getOrElse(grid.conf.crsID.getOrElse(
             throw new IllegalArgumentException(
                 s"${RST_Custom_RasterizeAgg.name}: grid has no CRS (srid=-1); supply out_srid explicitly.")))
-        val pixelOpt = evalDoubleOpt(pixelSizeExpr, empty)
-        val xminOpt  = evalDoubleOpt(xminExpr,  empty)
-        val yminOpt  = evalDoubleOpt(yminExpr,  empty)
-        val xmaxOpt  = evalDoubleOpt(xmaxExpr,  empty)
-        val ymaxOpt  = evalDoubleOpt(ymaxExpr,  empty)
-        val widthOpt = evalIntOpt(widthExpr,    empty)
-        val heightOpt= evalIntOpt(heightExpr,   empty)
-        val mode     = evalString(modeExpr,     empty, "mode", "centroids")
-        val kringPad = evalIntOpt(kringPadExpr, empty).getOrElse(1)
+        val pixelOpt = evalDoubleOpt(args(2), row)
+        val xminOpt  = evalDoubleOpt(args(3), row)
+        val yminOpt  = evalDoubleOpt(args(4), row)
+        val xmaxOpt  = evalDoubleOpt(args(5), row)
+        val ymaxOpt  = evalDoubleOpt(args(6), row)
+        val widthOpt = evalIntOpt(args(7),    row)
+        val heightOpt= evalIntOpt(args(8),    row)
+        val mode     = evalString(args(9),    row, "mode", "centroids")
+        val kringPad = evalIntOpt(args(10),   row).getOrElse(1)
 
         // Resolution from the cells; error on mixed (decoded from the custom cell-id bit layout).
         val resolution = RST_Custom_RasterizeAgg.resolutionOf(grid, buffer.cells.iterator.map(_._1))

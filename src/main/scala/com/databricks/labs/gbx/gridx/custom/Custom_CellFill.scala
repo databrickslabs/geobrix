@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.gridx.custom
 
-import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.expressions.{GroupArgs, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.{CellFill, CellFillAcc}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -40,9 +40,13 @@ case class Custom_CellFill(
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate = copy(mutableAggBufferOffset = n)
     override def withNewInputAggBufferOffset(n: Int): ImperativeAggregate = copy(inputAggBufferOffset = n)
 
+    // grid, k, method and power: read from a row of the group, so the grid may be a column (the first non-NULL grid)
+    private val groupArgs = new GroupArgs(Seq(gridExpr, kExpr, methodExpr, powerExpr))
+
     override def createAggregationBuffer(): CellFillAcc = CellFillAcc.empty
 
     override def update(buffer: CellFillAcc, input: InternalRow): CellFillAcc = {
+        if (GroupArgs.lacksFirst(buffer.args)) buffer.args = GroupArgs.prefer(buffer.args, groupArgs.capture(input))
         val id = CellFill.parseCellIdLong(cellidExpr.eval(input), Custom_CellFill.name)
         if (id == null) buffer else buffer.add(id, CellFill.parseValue(valueExpr.eval(input)))
     }
@@ -54,11 +58,13 @@ case class Custom_CellFill(
 
     override def eval(buffer: CellFillAcc): Any = {
         if (buffer.cells.isEmpty) return null
-        val row    = InternalRow.empty
-        val grid   = Custom_GridSpec.systemFromRow(gridExpr.eval(row).asInstanceOf[InternalRow])
-        val k      = CellFill.parseK(kExpr, row)
-        val method = CellFill.parseMethod(methodExpr, row)
-        val power  = CellFill.parsePower(powerExpr, row)
+        val (args, row) = groupArgs.bind(buffer.args)
+        val gridRow = args(0).eval(row)
+        if (gridRow == null) return null // no row of the group named a grid, as light
+        val grid   = Custom_GridSpec.systemFromRow(gridRow.asInstanceOf[InternalRow])
+        val k      = CellFill.parseK(args(1), row)
+        val method = CellFill.parseMethod(args(2), row)
+        val power  = CellFill.parsePower(args(3), row)
         CellFill.toBinary(CellFill.fill(grid, CellFill.largestPerCell(buffer.cells), k, method, power))
     }
 

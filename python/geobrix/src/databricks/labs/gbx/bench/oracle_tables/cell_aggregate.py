@@ -763,3 +763,65 @@ CELL_AGGREGATE += (
         _box_wkt(530000, 531000),
     ),
 )
+
+
+# --- the custom grid as a column ---------------------------------------------------------------------------------------
+# A grid held in a table is a column, not a constant: each group reads the grid of its own rows, at every level. Under a
+# grid of 2000 m root cells (500 to a row) the same ids are other cells: 180531 is the east neighbour of 180530, but
+# 181530 is two rows north, so the NULL cell takes 10 alone.
+def _grid_sql(grid):
+    """A custom grid struct as SQL text, typed as gbx_custom_grid builds it."""
+    longs = ("bound_x_min", "bound_x_max", "bound_y_min", "bound_y_max")
+    return "named_struct({})".format(
+        ", ".join(f"'{k}', {v}{'L' if k in longs else ''}" for k, v in grid.items())
+    )
+
+
+_CG_C, (_CG_R1A, _CG_R1B), _ = _cg_rings()
+_CG_COARSE = {**CUSTOM_GRID, "root_cell_size_x": 2000, "root_cell_size_y": 2000}
+
+
+def _cg_grid_rows(key, grid):
+    return ", ".join(
+        f"('{key}', {c}L, CAST({'NULL' if v is None else v} AS DOUBLE), {_grid_sql(grid)})"
+        for c, v in ((_CG_C, None), (_CG_R1A, 10.0), (_CG_R1B, 20.0))
+    )
+
+
+_CGF_GROUPS = (
+    "SELECT out FROM (SELECT key, {{q}}gbx_custom_cellfill(cellid, value, grid) AS out FROM VALUES {rows} "
+    "AS t(key, cellid, value, grid) GROUP BY key) WHERE key = '{key}'"
+)
+CELL_AGGREGATE += (
+    recipe(
+        "cgf_grid_column",
+        CGF,
+        "SELECT {{q}}gbx_custom_cellfill(cellid, value, grid) AS out FROM VALUES {rows} AS t(key, cellid, value, grid)".format(
+            rows=_cg_grid_rows("a", CUSTOM_GRID)
+        ),
+        "cellfill",
+        {_CG_C: 15.0, _CG_R1A: 10.0, _CG_R1B: 20.0},
+        ONLY,
+    ),
+    # two groups, two grids: each fills through its own
+    recipe(
+        "cgf_grid_column_per_group_fine",
+        CGF,
+        _CGF_GROUPS.format(
+            rows=_cg_grid_rows("a", _CG_COARSE) + ", " + _cg_grid_rows("b", CUSTOM_GRID), key="b"
+        ),
+        "cellfill",
+        {_CG_C: 15.0, _CG_R1A: 10.0, _CG_R1B: 20.0},
+        ONLY,
+    ),
+    recipe(
+        "cgf_grid_column_per_group_coarse",
+        CGF,
+        _CGF_GROUPS.format(
+            rows=_cg_grid_rows("a", _CG_COARSE) + ", " + _cg_grid_rows("b", CUSTOM_GRID), key="a"
+        ),
+        "cellfill",
+        {_CG_C: 10.0, _CG_R1A: 10.0, _CG_R1B: 20.0},
+        ONLY,
+    ),
+)

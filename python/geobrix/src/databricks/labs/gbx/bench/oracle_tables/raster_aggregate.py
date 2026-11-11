@@ -1147,6 +1147,61 @@ RASTER_AGGREGATE += (
     _offset_case("cgrt_derived_canvas_offset_padded", CGT, OFFSET_GRID_8KM, "cgrt_offset_8km", "centroids", 1, _OFFSET_8KM_CANVAS, _OFFSET_8KM_PIXELS, _surfaces(CGT)),
 )  # fmt: skip
 
+
+# --- the grid and the options as columns: each group reads its own --------------------------------------------------------
+# A grid held in a table is a column, not a constant. Two groups, the 4 km and the 8 km offset grids above, each with its
+# own kring_pad column, derive the canvas each does alone (the rows of cgr_derived_canvas_offset_edge_pad and _padded).
+def _grid_sql(grid):
+    """A custom grid struct as SQL text, typed as gbx_custom_grid builds it."""
+    longs = ("bound_x_min", "bound_x_max", "bound_y_min", "bound_y_max")
+    return "named_struct({})".format(
+        ", ".join(f"'{k}', {v}{'L' if k in longs else ''}" for k, v in grid.items())
+    )
+
+
+def _cgr_grid_rows(key, grid, cells, pad):
+    return ", ".join(f"('{key}', {c}L, {v}D, {_grid_sql(grid)}, {pad})" for c, v in cells)
+
+
+_CGR_COLUMNS = (
+    "SELECT out FROM (SELECT key, {{q}}gbx_rst_custom_rasterize_agg(cellid, value, grid, 27700, CAST(NULL AS DOUBLE), "
+    "CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS INT), "
+    "CAST(NULL AS INT), 'centroids', kring_pad) AS out FROM VALUES {rows} AS t(key, cellid, value, grid, kring_pad) "
+    "GROUP BY key) WHERE key = '{key}'"
+)
+# the judge reads the CRS from the out_srid argument: the session layout (group, grid, out_srid), the group left out
+_CGR_JUDGED_IN = (None, dict(OFFSET_GRID_4KM), 27700)
+_CGR_TWO_GRIDS = _cgr_grid_rows("a", OFFSET_GRID_4KM, _OFFSET_4KM, 1) + ", " + _cgr_grid_rows("b", OFFSET_GRID_8KM, _OFFSET_8KM, 1)
+RASTER_AGGREGATE += (
+    recipe(
+        "cgr_grid_column",
+        CGA,
+        _CGR_COLUMNS.format(rows=_cgr_grid_rows("a", OFFSET_GRID_4KM, _OFFSET_4KM, 0), key="a"),
+        "pixels_canvas",
+        {"canvas": _OFFSET_4KM_CANVAS, "pixels": _OFFSET_4KM_PIXELS},
+        ONLY,
+        args=_CGR_JUDGED_IN,
+    ),
+    recipe(
+        "cgr_grid_column_per_group_4km",
+        CGA,
+        _CGR_COLUMNS.format(rows=_CGR_TWO_GRIDS, key="a"),
+        "pixels_canvas",
+        {"canvas": _OFFSET_4KM_CANVAS, "pixels": _OFFSET_4KM_PIXELS},
+        ONLY,
+        args=_CGR_JUDGED_IN,
+    ),
+    recipe(
+        "cgr_grid_column_per_group_8km",
+        CGA,
+        _CGR_COLUMNS.format(rows=_CGR_TWO_GRIDS, key="b"),
+        "pixels_canvas",
+        {"canvas": _OFFSET_8KM_CANVAS, "pixels": _OFFSET_8KM_PIXELS},
+        ONLY,
+        args=_CGR_JUDGED_IN,
+    ),
+)  # fmt: skip
+
 # --- the BNG twin: the rows of br_dup_max and br_nan_beside_numbers, on the canvas of MVP_A -------------------------
 BNG_CELLS = [
     ("TQ3080", 3.0),

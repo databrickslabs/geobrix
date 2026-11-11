@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx
 
+import com.databricks.labs.gbx.expressions.GroupArgs
 import com.databricks.labs.gbx.gridx.grid.GridSystem
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Expression
@@ -27,8 +28,13 @@ final class CellFillAcc(
         this
     }
 
+    /** The per-group arguments of an aggregate that reads them from its rows ([[GroupArgs]]); null when none were
+      * captured. They follow the cells when serialized, so the fill payload (no arguments) keeps its layout. */
+    var args: Array[Byte] = null
+
     def merge(other: CellFillAcc): CellFillAcc = {
         cells ++= other.cells
+        args = GroupArgs.prefer(args, other.args)
         CellFillAcc.guardSize(cells.length.toLong)
         this
     }
@@ -42,6 +48,7 @@ final class CellFillAcc(
             out.writeBoolean(v.isDefined)
             if (v.isDefined) out.writeDouble(v.get)
         }
+        GroupArgs.write(out, args)
         bos.toByteArray
     }
 }
@@ -65,7 +72,9 @@ object CellFillAcc {
             buf += ((cellId, v))
             i += 1
         }
-        new CellFillAcc(buf)
+        val acc = new CellFillAcc(buf)
+        acc.args = GroupArgs.read(in)
+        acc
     }
 
     private[gridx] def guardSize(currentRows: Long): Unit = {

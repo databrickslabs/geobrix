@@ -5752,6 +5752,9 @@ def run_groups(
 
     A function that reads a table argument (`table_input` on its row) is called with `table_call_sql` when `shape_sql`
     is not given: the group is the partition of key `a`, a partition with no answer gives no row (NULL here).
+
+    A recipe row (`sql`) runs its own statement, which holds its groups: an argument a table holds as a column, or
+    several groups with their own arguments. The Python API leg runs it as SQL too.
     """
     from pyspark.sql.types import StructType
 
@@ -5762,6 +5765,9 @@ def run_groups(
     out = []
     for case in cases:
         if "session" not in case.surfaces:
+            continue
+        if case.sql is not None:  # a recipe: the statement holds its groups (a grid in a column, several keys)
+            out.append((case, run_recipe(spark, case, "", tmpdir)))
             continue
         fn = man.functions[case.fn]
         params = fn.params

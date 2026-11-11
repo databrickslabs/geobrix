@@ -365,7 +365,7 @@ EXPECTED_VIEW_SQL = (
 )
 
 
-def test_current_view_shows_each_files_latest_readable_version(spark, tmp_path):
+def test_current_view_shows_each_files_latest_readable_version(spark):
     """A version with no rows (its delivery was set aside, or never written) does
     not hide the file's last readable content; a revert to earlier content is
     current again; a file whose only version has no rows has none."""
@@ -374,13 +374,17 @@ def test_current_view_shows_each_files_latest_readable_version(spark, tmp_path):
     for t in (rows, versions):
         spark.sql(f"DROP TABLE IF EXISTS {t}")
     try:
-        spark.sql(f"""CREATE TABLE {rows} USING parquet LOCATION '{tmp_path / "r"}' AS
+        # managed tables in the session's default catalog and schema: a LOCATION on the local disk is refused where the
+        # default catalog is Unity Catalog ("Missing cloud file system scheme"); the table format is the session's default
+        spark.sql(
+            f"""CREATE TABLE {rows} AS
             SELECT * FROM VALUES
                 ('/a', 'h1', 1), ('/a', 'h2', 2), ('/a', 'h2', 3),
                 ('/b', 'h1', 4), ('/b', 'h2', 5)
-            AS t(_source_path, _source_hash, id)""")
+            AS t(_source_path, _source_hash, id)"""
+        )
         spark.sql(
-            f"""CREATE TABLE {versions} USING parquet LOCATION '{tmp_path / "v"}' AS
+            f"""CREATE TABLE {versions} AS
             SELECT * FROM VALUES
                 ('/a', 'h1', TIMESTAMP'2026-10-17 10:00:00'),
                 ('/a', 'h2', TIMESTAMP'2026-10-17 11:00:00'),

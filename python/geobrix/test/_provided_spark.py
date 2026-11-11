@@ -11,11 +11,14 @@ shard of the node shares.
 * ``Builder.master``, ``Builder.appName``, ``Builder.config`` and ``Builder.enableHiveSupport`` return the builder
   unchanged (the settings are recorded in ``IGNORED``), so ``getOrCreate()`` returns the provided session as it is;
 * ``SparkSession.stop`` does nothing;
-* ``DataFrameReader.load`` and ``DataStreamReader.load`` read a bare local path (a test's ``tmp_path``) as a ``file:`` URI. On Databricks Spark
-  resolves a bare path on DBFS (``dbfs:/local_disk0/...``: PATH_NOT_FOUND); a local session resolves it on the local
-  disk. A path that exists on the local disk and is not ``/Volumes``, ``/dbfs`` or ``/Workspace`` is qualified, so the
-  read finds what the test wrote, as it does on a local session. The test clusters are single node: the driver's disk
-  is the executor's.
+* the readers (``DataFrameReader`` and ``DataStreamReader``: ``load``, ``parquet``, ``csv``, ``json``, ``orc``, ``text``) read a bare
+  local path (a test's ``tmp_path``) as a ``file:`` URI, and the writers (``DataFrameWriter``: ``save``, ``parquet``, ``csv``,
+  ``json``, ``orc``, ``text``; ``DataStreamWriter.start``) write one as a ``file:`` URI. On Databricks Spark resolves a bare
+  path on DBFS (``dbfs:/local_disk0/...``: PATH_NOT_FOUND on a read, a write that lands in DBFS); a local session
+  resolves it on the local disk. A path that is not ``/Volumes``, ``/dbfs`` or ``/Workspace`` is qualified when it exists
+  (a read) or when the folder it goes in exists (a write), so the read finds what the test wrote, and what the test
+  wrote through Spark is where the test (and the Python workers) look for it, as on a local session. The test clusters
+  are single node: the driver's disk is the executor's.
 
 It applies when ``DATABRICKS_RUNTIME_VERSION`` is set, or when ``GBX_TEST_PROVIDED_SPARK`` is a true value (a way to
 try it off Databricks); ``GBX_TEST_PROVIDED_SPARK=0`` turns it off on Databricks. Without either, a run is exactly
@@ -76,36 +79,86 @@ def _patch_stop(session_cls) -> None:
 _PLATFORM_ROOTS = ("/Volumes/", "/dbfs/", "/Workspace/")
 
 
+def _bare_local(path) -> bool:
+    return (
+        isinstance(path, str)
+        and path.startswith("/")
+        and not path.startswith(_PLATFORM_ROOTS)
+    )
+
+
 def local_uri(path):
     """``file:<path>`` for a bare absolute path on the local disk; any other path (a URI, a platform path, a path that
     does not exist here) as it is."""
     if isinstance(path, os.PathLike):
         path = os.fspath(path)
-    if (
-        isinstance(path, str)
-        and path.startswith("/")
-        and not path.startswith(_PLATFORM_ROOTS)
-        and os.path.exists(path)
-    ):
+    if _bare_local(path) and os.path.exists(path):
         return "file:" + path
     return path
 
 
-def _patch_load(reader_cls) -> None:
-    load = getattr(reader_cls, "load", None)
-    if load is None or getattr(load, "_gbx_provided", False):
-        return
+def local_write_uri(path):
+    """``file:<path>`` for a bare absolute path a write goes to: the path may not exist yet, so the folder it goes in
+    (the nearest one that exists, and not ``/`` itself) decides. Any other path as it is.
+    """
+    if isinstance(path, os.PathLike):
+        path = os.fspath(path)
+    if not _bare_local(path):
+        return path
+    parent = os.path.dirname(path.rstrip("/"))
+    while parent not in ("", "/") and not os.path.exists(parent):
+        parent = os.path.dirname(parent)
+    return "file:" + path if parent not in ("", "/") else path
 
-    def call(self, path=None, *args, **kwargs):
-        if isinstance(path, (list, tuple)):
-            path = [local_uri(p) for p in path]
-        elif path is not None:
-            path = local_uri(path)
-        return load(self, path, *args, **kwargs)
 
-    call.__name__ = "load"
+def _qualify(rewrite, path):
+    if isinstance(path, (list, tuple)):
+        return [rewrite(p) for p in path]
+    if isinstance(path, (str, os.PathLike)):
+        return rewrite(path)
+    return path  # None, an RDD ...
+
+
+def _wrap_paths(fn, name, rewrite, every_arg):
+    def call(self, *args, **kwargs):
+        if args:
+            head = args if every_arg else args[:1]
+            args = tuple(_qualify(rewrite, a) for a in head) + args[len(head) :]
+        for key in ("path", "paths"):
+            if key in kwargs:
+                kwargs[key] = _qualify(rewrite, kwargs[key])
+        return fn(self, *args, **kwargs)
+
+    call.__name__ = name
     call._gbx_provided = True  # type: ignore[attr-defined]
-    reader_cls.load = call
+    return call
+
+
+def _patch_paths(cls, names, rewrite, every=()) -> None:
+    """Each of ``names`` that ``cls`` has: its path argument (the first positional one; every positional one of the methods
+    in ``every``, ``DataFrameReader.parquet(*paths)``) goes through ``rewrite``. A method already changed stays as it is.
+    """
+    for name in names:
+        fn = getattr(cls, name, None)
+        if fn is None or getattr(fn, "_gbx_provided", False):
+            continue
+        setattr(cls, name, _wrap_paths(fn, name, rewrite, every_arg=name in every))
+
+
+_READ_METHODS = ("load", "parquet", "csv", "json", "orc", "text", "xml")
+_WRITE_METHODS = ("save", "parquet", "csv", "json", "orc", "text", "xml")
+
+
+def _patch_load(reader_cls) -> None:
+    _patch_paths(reader_cls, _READ_METHODS, local_uri, every=("parquet",))
+
+
+def _patch_save(writer_cls) -> None:
+    _patch_paths(writer_cls, _WRITE_METHODS, local_write_uri)
+
+
+def _patch_start(writer_cls) -> None:
+    _patch_paths(writer_cls, ("start",), local_write_uri)
 
 
 def install(env=None) -> bool:
@@ -126,7 +179,9 @@ def install(env=None) -> bool:
         from pyspark.sql.streaming import readwriter as streaming
 
         _patch_load(readwriter.DataFrameReader)
+        _patch_save(readwriter.DataFrameWriter)
         _patch_load(streaming.DataStreamReader)
+        _patch_start(streaming.DataStreamWriter)
     except ImportError:
         pass
     try:  # Spark Connect (a Serverless or shared cluster): the same changes on the client classes
@@ -137,7 +192,9 @@ def install(env=None) -> bool:
         _patch_builder(connect.SparkSession.Builder)
         _patch_stop(connect.SparkSession)
         _patch_load(connect_rw.DataFrameReader)
+        _patch_save(connect_rw.DataFrameWriter)
         _patch_load(connect_stream.DataStreamReader)
+        _patch_start(connect_stream.DataStreamWriter)
     except Exception:  # noqa: BLE001 - the client deps are optional
         pass
     _installed = True

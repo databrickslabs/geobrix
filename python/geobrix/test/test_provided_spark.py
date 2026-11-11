@@ -148,3 +148,87 @@ def test_the_reader_qualifies_one_path_or_a_list(monkeypatch, tmp_path):
         ["file:" + str(f), "/Volumes/c/s/v/b.tif"],
         None,
     ]
+
+
+def test_the_reader_formats_qualify_their_path_too(tmp_path):
+    """`spark.read.parquet(p)` does not go through `load` in the classic API, so each format method is changed."""
+    seen = {}
+
+    class Reader:
+        def parquet(self, *paths, **options):
+            seen["parquet"] = paths
+            return "df"
+
+        def csv(self, path, schema=None, **options):
+            seen["csv"] = (path, schema)
+            return "df"
+
+        def json(self, path, **options):
+            seen["json"] = path
+            return "df"
+
+    d = tmp_path / "d"
+    d.mkdir()
+    ps._patch_load(Reader)
+    Reader().parquet(
+        str(d), "/Volumes/c/s/v/x"
+    )  # every positional argument of parquet(*paths)
+    Reader().csv([str(d)], "a INT")  # the schema is not a path
+    Reader().json(path=str(d))
+    assert seen == {
+        "parquet": ("file:" + str(d), "/Volumes/c/s/v/x"),
+        "csv": (["file:" + str(d)], "a INT"),
+        "json": "file:" + str(d),
+    }
+
+
+def test_a_write_to_a_bare_local_path_lands_on_the_local_disk(tmp_path):
+    """The path need not exist yet: the folder it goes in decides. Platform paths, URIs and the root are left alone."""
+    out = tmp_path / "new" / "out"  # neither "new" nor "out" exists: tmp_path does
+    assert ps.local_write_uri(str(out)) == "file:" + str(out)
+    assert ps.local_write_uri(out) == "file:" + str(out)  # a Path too
+    for kept in (
+        "/Volumes/c/s/v/out",
+        "/dbfs/x",
+        "/Workspace/x",
+        "dbfs:/x",
+        "file:/x",
+        "s3://b/k",
+        "rel/out",
+        "/out",  # its folder is the root: not a place a test writes
+    ):
+        assert ps.local_write_uri(kept) == kept
+
+
+def test_the_writers_qualify_save_the_formats_and_start(tmp_path):
+    seen = []
+
+    class Writer:
+        def save(self, path=None, format=None, mode=None, **options):
+            seen.append(("save", path))
+
+        def parquet(self, path, mode=None, partitionBy=None, compression=None):
+            seen.append(("parquet", path, mode))
+
+        def start(self, path=None, format=None, **options):
+            seen.append(("start", path))
+
+    ps._patch_save(Writer)
+    ps._patch_start(Writer)
+    ps._patch_save(Writer)  # twice: still one wrapper
+    out = str(tmp_path / "w")
+    Writer().save(out, "delta", "append")
+    Writer().save(path=out)
+    Writer().parquet(out, "overwrite")
+    Writer().start(out)
+    Writer().save()  # a writer with the path in its options
+    Writer().save("/Volumes/c/s/v/w")
+    uri = "file:" + out
+    assert seen == [
+        ("save", uri),
+        ("save", uri),
+        ("parquet", uri, "overwrite"),
+        ("start", uri),
+        ("save", None),
+        ("save", "/Volumes/c/s/v/w"),
+    ]

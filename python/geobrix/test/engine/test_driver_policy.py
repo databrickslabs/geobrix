@@ -417,6 +417,13 @@ def _partial_env() -> dict:
     return env
 
 
+# The skip of a partial-mode row where no rasterio exists outside the payload (an env wheel): the meta-row allows it,
+# since the payload being present is exactly why the partial mode has nothing to run on.
+_PARTIAL_SKIP = (
+    "PRECONDITION MISSING: no bindings outside the payload for the partial mode"
+)
+
+
 @functools.lru_cache(maxsize=1)
 def _partial_bindings_missing() -> str:
     """Why a process with the payload off cannot import rasterio and pyogrio, or "" when it can. Where the only copies
@@ -442,7 +449,7 @@ def _partial_run(code: str) -> str:
     skip, since the partial mode has nothing to run on there."""
     missing = _partial_bindings_missing()
     if missing:
-        pytest.skip(f"PRECONDITION MISSING: {missing}; the partial-mode row is not run")
+        pytest.skip(f"{_PARTIAL_SKIP}: {missing}; the partial-mode row is not run")
     env = _partial_env()
     proc = subprocess.run(
         [sys.executable, "-c", code],
@@ -772,7 +779,10 @@ def test_no_security_row_was_skipped_where_the_payload_is_present(request):
         if "gdal_policy" in it.keywords and "policy_meta" not in it.keywords
     ]
     skipped = sorted(
-        it.nodeid for it in rows if getattr(it, "gbx_policy_outcome", None) == "skipped"
+        it.nodeid
+        for it in rows
+        if getattr(it, "gbx_policy_outcome", None) == "skipped"
+        and _PARTIAL_SKIP not in getattr(it, "gbx_policy_skip_reason", "")
     )
     not_run = sorted(it.nodeid for it in rows if not hasattr(it, "gbx_policy_outcome"))
     assert (

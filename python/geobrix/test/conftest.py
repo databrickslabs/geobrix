@@ -196,13 +196,18 @@ def _importable(name):
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
-    """Keep the outcome of each GDAL driver-policy row on the item (``gbx_policy_outcome``) for the meta-row."""
+    """Keep the outcome of each GDAL driver-policy row on the item (``gbx_policy_outcome``, and a skip's reason in
+    ``gbx_policy_skip_reason``) for the meta-row."""
     outcome = yield
     rep = outcome.get_result()
     if "gdal_policy" in item.keywords and (
         rep.when == "call" or (rep.when == "setup" and rep.skipped)
     ):
         item.gbx_policy_outcome = rep.outcome
+        if rep.skipped and isinstance(
+            rep.longrepr, tuple
+        ):  # (path, line, "Skipped: <reason>")
+            item.gbx_policy_skip_reason = str(rep.longrepr[2])
 
 
 def shard_of(relpath, n):

@@ -307,6 +307,19 @@ _session_accessor_rows = (
         "exact",
         (-1, -1),
     ),
+    # a NULL coordinate gives NULL on every level (the JVM's NULL-in, NULL-out), never an error
+    *(
+        _c(f"{short}_null_{axis}", short, args, "null")
+        for short, xy in (
+            ("rastertoworldcoord", (1, 2)),
+            ("rastertoworldcoordx", (1, 2)),
+            ("rastertoworldcoordy", (1, 2)),
+            ("worldtorastercoord", (400015.0, 5759975.0)),
+            ("worldtorastercoordx", (400015.0, 5759975.0)),
+            ("worldtorastercoordy", (400015.0, 5759975.0)),
+        )
+        for axis, args in (("x", (STATS, None, xy[1])), ("y", (STATS, xy[0], None)))
+    ),
     # the error contract: a NULL tile, an error tile and unreadable bytes give NULL, never an error
     _c("width_null_tile", "width", (None,), "null"),
     _c("width_error_tile", "width", (ERR,), "null"),
@@ -465,6 +478,11 @@ _session_stat_rows = (
 )
 
 
+_COORDS = (
+    "rastertoworldcoord", "rastertoworldcoordx", "rastertoworldcoordy",
+    "worldtorastercoord", "worldtorastercoordx", "worldtorastercoordy",
+)  # fmt: skip
+
 # Unity Catalog: a materialized tile gives the session's value; a virtual tile is refused with a Fix and a corrupt tile
 # is NULL (the first row of each function below shares its session value row).
 RASTER_ACCESSOR = share(
@@ -475,7 +493,8 @@ RASTER_ACCESSOR = share(
     "rotation_rotated", "georeference", "boundingbox", "format", "format_hfa", "type", "type_two_band", "getnodata",
     "getnodata_none", "metadata", "bandmetadata", "bandmetadata_none", "subdatasets", "rastertoworldcoord",
     "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoord", "worldtorastercoordx",
-    "worldtorastercoordy", "worldtorastercoord_edge", "worldtorastercoord_outside", "width_null_tile",
+    "worldtorastercoordy", "worldtorastercoord_edge", "worldtorastercoord_outside",
+    *(f"{s}_null_{a}" for s in _COORDS for a in "xy"), "width_null_tile",
     "width_error_tile", "width_corrupt_tile", "bandmetadata_null_band", "memsize",
 ) + edges(
     width=(), height=(), numbands=(), srid=(), crs=(), pixelwidth=(), pixelheight=(), scalex=(), scaley=(),

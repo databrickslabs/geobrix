@@ -723,7 +723,8 @@ _BBOX_SCHEMA = StructType(
 
 @_tile_udf(returns=_R2W_COORD_SCHEMA)
 def _rastertoworldcoord_udf(tile, x, y):
-    if _tile_is_empty(tile):
+    # a NULL coordinate is NULL, as the JVM gives
+    if _tile_is_empty(tile) or x is None or y is None:
         return None
     from databricks.labs.gbx.pyrx import _env
 
@@ -734,7 +735,8 @@ def _rastertoworldcoord_udf(tile, x, y):
 
 @_tile_udf(returns=_W2R_COORD_SCHEMA)
 def _worldtorastercoord_udf(tile, x, y):
-    if _tile_is_empty(tile):
+    # a NULL coordinate is NULL, as the JVM gives
+    if _tile_is_empty(tile) or x is None or y is None:
         return None
     from databricks.labs.gbx.pyrx import _env
 

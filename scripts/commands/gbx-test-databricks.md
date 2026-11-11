@@ -116,8 +116,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 ## Fail fast
 
 - Each chunk writes a one-line result the moment it ends: `<stage>/results/<shard>.json`. It holds the counts, the first failure (test id and a short message) and the chunk's own run ids.
-- The launcher reads those every 15 s and prints a row per chunk: when it ended, the verdict, the counts, the page of the chunk's run and the first failure. It downloads the chunk's files at once.
-- Every 2 min it prints a status line per pool: chunks done, failed, running and queued, the first failure's test id, and the pages of the running chunks.
+- The launcher reads those every 15 s and prints a row per chunk. The row shows when it ended, the verdict, the counts, the chunk's run page and the first failure. It downloads the chunk's files at once.
+- Every 2 min it prints a status line per pool. The line counts chunks done, failed, running and queued. It also names the first failure's test id and the running chunks' pages.
 - The run stops at the first rule that fires:
   - the smoke chunk failed;
   - the first 2 chunks to finish both failed (`--first-failed`);
@@ -135,7 +135,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A chunk the stop cut short, or that pytest stopped at `--maxfail`, leaves lower bounds for what it did not finish, flagged with the rule.
 - Job status tells the truth. A chunk with a failed test fails its own notebook run. A runner task that ran one fails too.
 - Each chunk names its run first (`<stage>/out/<shard>/child.json`) and in the queue table (`child_run_id`, `child_job_id`). When it dies before pytest, its row shows that run's own error.
-- Each launch has its own scratch folder on the node (run id and attempt), so a relaunch under the same run id meets no files of the last one.
+- Each launch has its own scratch folder on the node, named by run id and attempt. So a relaunch under the same run id meets no files of the last one.
 
 ## The smoke chunk
 

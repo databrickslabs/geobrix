@@ -200,7 +200,7 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_avg — per-band average pixel values (heavy tier)
+# rst_avg — per-band average pixel values
 # Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
@@ -224,7 +224,7 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_bandmetadata — per-band metadata map (heavy tier)
+# rst_bandmetadata — per-band metadata map
 # Fixture: MULTIBAND (rgb_nir_small.tif — has per-band GDAL metadata tags)
 # ---------------------------------------------------------------------------
 
@@ -236,19 +236,19 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_georeference — georeference parameters map (heavy tier)
+# rst_georeference — georeference parameters map
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_getnodata — NoData values per band (heavy tier)
+# rst_getnodata — NoData values per band
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_getsubdataset — extract named subdataset (heavy tier)
+# rst_getsubdataset — extract named subdataset
 # Fixture: NETCDF (prAdjust_day_HadGEM2-CC_*.nc — has time_bnds and prAdjust)
 # ---------------------------------------------------------------------------
 
@@ -260,13 +260,13 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_max — maximum pixel values per band (heavy tier)
+# rst_max — maximum pixel values per band
 # Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_median — median pixel values per band (heavy tier)
+# rst_median — median pixel values per band
 # Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
@@ -278,19 +278,19 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_metadata — raster metadata map (heavy tier)
+# rst_metadata — raster metadata map
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_min — minimum pixel values per band (heavy tier)
+# rst_min — minimum pixel values per band
 # Fixture: MULTIBAND (rgb_nir_small.tif — single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_pixelcount — total pixel count (heavy tier)
+# rst_pixelcount — total pixel count
 # Fixture: MULTIBAND (rgb_nir_small.tif — 8x8=64 valid pixels per band)
 # ---------------------------------------------------------------------------
 
@@ -350,19 +350,19 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_subdatasets — list of subdataset names (heavy tier)
+# rst_subdatasets — list of subdataset names
 # Fixture: NETCDF (prAdjust_day_HadGEM2-CC_*.nc — has time_bnds and prAdjust)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_summary — statistical summary as JSON string (heavy tier)
+# rst_summary — statistical summary as JSON string
 # Fixture: MULTIBAND (rgb_nir_small.tif — 8x8, 3 bands; single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_type — data type per band (heavy tier)
+# rst_type — data type per band
 # Fixture: MULTIBAND (rgb_nir_small.tif — UInt16 per band)
 # ---------------------------------------------------------------------------
 
@@ -380,42 +380,42 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_isempty — check if raster is empty (heavy tier)
+# rst_isempty — check if raster is empty
 # Fixture: MULTIBAND (rgb_nir_small.tif — has real pixel data, not empty)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_tryopen — validate raster can be opened (heavy tier)
+# rst_tryopen — validate raster can be opened
 # Fixture: MULTIBAND (rgb_nir_small.tif — committed, always openable)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_histogram — per-band histogram (heavy tier)
+# rst_histogram — per-band histogram
 # Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands with real pixel data)
 # ---------------------------------------------------------------------------
 
 
 # ===========================================================================
-# Tile ops & constructors family (heavy tier)
+# Tile ops & constructors family
 # ===========================================================================
 
 
 # ---------------------------------------------------------------------------
-# rst_asformat — convert a raster to another GDAL format (heavy tier)
+# rst_asformat — convert a raster to another GDAL format
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_band — extract a single band from a multi-band raster (heavy tier)
+# rst_band — extract a single band from a multi-band raster
 # Fixture: MULTIBAND (rgb_nir_small.tif — 3 bands)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_buildoverviews — add internal overview pyramid (heavy tier)
+# rst_buildoverviews — add internal overview pyramid
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
@@ -425,14 +425,14 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_clip — clip a raster to a geometry cutline (heavy tier)
+# rst_clip — clip a raster to a geometry cutline
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif, EPSG:32618)
 # Clip geometry: EWKT EPSG:4326 lon/lat over NYC area (auto-reprojected)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_cog_convert — re-layout tile as Cloud Optimized GeoTIFF (heavy tier)
+# rst_cog_convert — re-layout tile as Cloud Optimized GeoTIFF
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
@@ -442,26 +442,26 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_convolve — apply a convolution kernel (heavy tier)
+# rst_convolve — apply a convolution kernel
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # Kernel: 3x3 identity
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_fillnodata — fill NoData pixels via inverse-distance interpolation (heavy tier)
+# rst_fillnodata — fill NoData pixels via inverse-distance interpolation
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_filter — spatial filter (heavy tier)
+# rst_filter — spatial filter
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_frombands — stack band tiles into a multi-band tile (heavy tier, constructor)
+# rst_frombands — stack band tiles into a multi-band tile (constructor)
 # Fuller example: extract per-band tiles, re-stack them.
 # ---------------------------------------------------------------------------
 
@@ -471,59 +471,59 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_initnodata — initialize NoData values (heavy tier)
+# rst_initnodata — initialize NoData values
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_resample — resample by a multiplicative factor (heavy tier)
+# rst_resample — resample by a multiplicative factor
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 236x161 px)
 # factor=2.0 bilinear → 472x322 px
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_resample_to_res — resample to an explicit ground resolution (heavy tier)
+# rst_resample_to_res — resample to an explicit ground resolution
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — 10 m pixels)
 # target res=20.0 m → 118 px wide
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_resample_to_size — resample to an explicit pixel grid size (heavy tier)
+# rst_resample_to_size — resample to an explicit pixel grid size
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # target 100x100 px
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_setcrs — stamp a CRS string onto a raster without reprojecting (heavy tier)
+# rst_setcrs — stamp a CRS string onto a raster without reprojecting
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_setsrid — stamp an EPSG SRID integer onto a raster (heavy tier)
+# rst_setsrid — stamp an EPSG SRID integer onto a raster
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — SRID=32618)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_threshold — binarize a raster (heavy tier)
+# rst_threshold — binarize a raster
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_transform — reproject to a target EPSG SRID (heavy tier)
+# rst_transform — reproject to a target EPSG SRID
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — EPSG:32618)
 # Reproject to EPSG:4326
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_updatetype — convert the raster data type (heavy tier)
+# rst_updatetype — convert the raster data type
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
 
@@ -791,28 +791,28 @@ def _custom_grid_col():
 
 
 # ---------------------------------------------------------------------------
-# rst_align_to — warp a tile onto a reference tile's grid (heavy tier)
+# rst_align_to — warp a tile onto a reference tile's grid
 # Fixture: DEM used for both tile and reference_tile (no-op warp)
 # Output: tile struct (warped to reference grid)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_chm — Canopy Height Model = clamp(align(DSM→DEM) - DEM, min=0) (heavy tier)
+# rst_chm — Canopy Height Model = clamp(align(DSM→DEM) - DEM, min=0)
 # Fixture: DEM used as both DSM and DEM (degenerate CHM = 0 everywhere)
 # Output: tile struct (Float32 CHM tile)
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# rst_isoband — reclassify a raster band into elevation bands → polygons (heavy tier)
+# rst_isoband — reclassify a raster band into elevation bands → polygons
 # Fixture: DEM (dem_small.tif, 0–311 m elevation range, EPSG:32618)
 # Output: ARRAY<struct(geom_wkb, band, lower, upper)>
 # ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------
-# pmtiles_agg -- fold (z, x, y, bytes) tile rows into a PMTiles v3 archive (heavy tier)
+# pmtiles_agg -- fold (z, x, y, bytes) tile rows into a PMTiles v3 archive
 # Fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2])
 # Output: BINARY (PMTiles v3 archive bytes)
 # ---------------------------------------------------------------------------

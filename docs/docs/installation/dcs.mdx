@@ -157,15 +157,20 @@ base image's package versions as they are, except `idna`. The build fails rather
    spark.databricks.unityCatalog.volumes.enabled true
    ```
 
-5. **Start the cluster.** The first start pulls the image, about 7 GB, which takes several
-   minutes. An earlier image took about 9 minutes in testing.
+5. **Start the cluster.** The first start pulls the image, about 7 GB.
 
 There is **no library to attach**. Do **not** attach the GeoBrix JAR as a cluster library.
 The image already carries it, and a cluster should have only one GeoBrix JAR.
 
+### What to expect
+
+An on-demand cluster from the image starts in about 10-11 minutes on DBR 19. About 7 minutes go to
+the runtime, and about 3 minutes go to pulling the image and starting the container. Spot nodes can
+wait longer for capacity, so use on-demand for the driver.
+
 ## Verify the install
 
-Register GeoBrix, then list the raster functions. There is no install step: the wheel and the JAR
+Register GeoBrix, then describe one raster function. There is no install step: the wheel and the JAR
 ship in the image. The check below also runs the Python check from
 [Verify the install](../installation.mdx#verify-the-install).
 
@@ -179,7 +184,7 @@ ship in the image. The check below also runs the Python check from
   outputConstant="VERIFY_PYTHON_INSTALLATION_output"
 />
 
-If the list shows `gbx_rst_*` functions, the install is ready. The line `register` prints names the level it picked for each function.
+If `gbx_rst_width` shows a level and a signature, the install is ready. The line `register` prints names the level it picked for each function.
 
 ## Reading `/Volumes` data {#volumes-heavyweight}
 

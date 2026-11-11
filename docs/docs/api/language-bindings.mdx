@@ -57,7 +57,7 @@ register(spark)
 SELECT gbx_rst_width(tile) FROM rasters;
 ```
 
-Use `SHOW USER FUNCTIONS LIKE 'gbx_*'` to list what is registered. Use `DESCRIBE FUNCTION EXTENDED gbx_rst_clip` for a signature.
+`gbx.register(spark)` returns the registered names with their levels. Use `DESCRIBE FUNCTION EXTENDED gbx_rst_clip` for a signature.
 
 SQL binds arguments by position. A call with an extra argument drops it silently, so check a function's signature on its reference page. Generators are table functions: write `FROM t, LATERAL gbx_...(args)`.
 
@@ -71,7 +71,7 @@ A name such as `gbx_bng_aswkb` can exist twice: as a session function and as a U
 - GeoBrix never changes your path. `SET PATH` is your choice. The [Unity Catalog page](./uc-functions) gives the statement.
 - Nothing warns you when a session function shadows a Unity Catalog one.
 
-To see which one a name resolves to, run `DESCRIBE FUNCTION EXTENDED`. A session function shows a bare name. A Unity Catalog function shows the three-part name. `SHOW USER FUNCTIONS` shows the same difference.
+To see which one a name resolves to, run `DESCRIBE FUNCTION EXTENDED`. A session function shows a bare name. A Unity Catalog function shows the three-part name.
 
 `register(spark, catalog="main", schema="geobrix")` checks that the schema's GeoBrix version matches the wheel. It prints one line when it does not. `register(spark, target="uc", ...)` registers no session function, so a notebook behaves as a SQL warehouse does.
 

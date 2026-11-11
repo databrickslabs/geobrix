@@ -57,7 +57,7 @@ def test_quickstart_display_constants_exist():
         "READ_GEOJSON",
         "READ_GEOTIFF_LIGHT", "READ_SHAPEFILE_LIGHT", "USE_QUADBIN",
         "USE_RASTERX", "USE_BNG", "USE_VECTORX",
-        "SQL_LIST_FUNCTIONS", "SQL_DESCRIBE", "SQL_READ_AND_USE",
+        "SQL_DESCRIBE", "SQL_READ_AND_USE",
     ):
         assert hasattr(examples, name), f"Missing display constant: {name}"
         snippet = getattr(examples, name)
@@ -70,7 +70,7 @@ def test_quickstart_output_constants_exist():
         "READ_GEOJSON_output",
         "READ_GEOTIFF_LIGHT_output", "READ_SHAPEFILE_LIGHT_output", "USE_QUADBIN_output",
         "USE_RASTERX_output", "USE_BNG_output", "USE_VECTORX_output",
-        "SQL_LIST_FUNCTIONS_output", "SQL_DESCRIBE_output", "SQL_READ_AND_USE_output",
+        "SQL_DESCRIBE_output", "SQL_READ_AND_USE_output",
     ):
         assert hasattr(examples, name), f"Missing output constant: {name}"
         out = getattr(examples, name)
@@ -202,18 +202,6 @@ def test_use_vectorx_returns_one_row_with_wkb(spark):
     assert len(rows) == 1, "Expected one row from legacy point example"
     assert "wkb" in result.columns, "Expected wkb column"
     assert rows[0]["wkb"] is not None, "WKB bytes should be non-null"
-
-
-def test_exec_sql_list_functions_snippet(spark):
-    """Quick-start SQL_LIST_FUNCTIONS runs (after register); executes SHOW FUNCTIONS."""
-    examples.register_functions(spark)
-    examples.register_gridx_functions(spark)
-    examples.register_vectorx_functions(spark)
-    for stmt in examples.SQL_LIST_FUNCTIONS.strip().split(";"):
-        stmt = stmt.strip()
-        if not stmt or stmt.startswith("--"):
-            continue
-        spark.sql(stmt).show()
 
 
 def test_exec_sql_describe_snippet(spark):
@@ -447,7 +435,6 @@ def test_sql_constants_are_valid_strings():
     - Contain expected SQL keywords
     """
     # Validate they exist and are strings
-    assert isinstance(examples.SQL_LIST_FUNCTIONS, str)
     # These constants may not exist in examples.py, check if they do
     if hasattr(examples, 'SQL_DESCRIBE_FUNCTION'):
         assert isinstance(examples.SQL_DESCRIBE_FUNCTION, str)
@@ -457,9 +444,6 @@ def test_sql_constants_are_valid_strings():
         assert isinstance(examples.SQL_CONVERSION, str)
     
     # Validate content
-    assert len(examples.SQL_LIST_FUNCTIONS) > 0
-    assert "SHOW FUNCTIONS" in examples.SQL_LIST_FUNCTIONS
-    assert "gbx_rst_*" in examples.SQL_LIST_FUNCTIONS
     
     if hasattr(examples, 'SQL_DESCRIBE_FUNCTION'):
         assert "DESCRIBE FUNCTION" in examples.SQL_DESCRIBE_FUNCTION

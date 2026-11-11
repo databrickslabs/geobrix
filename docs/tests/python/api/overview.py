@@ -42,24 +42,19 @@ def register_packages_python(spark):
 
 
 # SQL registration constant
-SQL_SHOW_FUNCTIONS = """-- No registration needed in SQL
+SQL_DESCRIBE_FUNCTION = """-- No registration needed in SQL
 -- Functions are available after Python/Scala registration
 
-SHOW FUNCTIONS LIKE 'gbx_*';"""
+DESCRIBE FUNCTION gbx_rst_width;"""
 
 # Example output (show-type result for docs, same style as quick-start)
 register_packages_python_output = """
 Registered RasterX, GridX, and VectorX functions.
 """
 
-SQL_SHOW_FUNCTIONS_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-+--------------------+
+SQL_DESCRIBE_FUNCTION_output = """
+Function: gbx_rst_width
+Type: ...
 """
 
 
@@ -136,15 +131,11 @@ def pattern_chaining_operations(spark):
 
 def error_check_function_availability(spark):
     """Check Function Availability."""
-    # List registered functions
-    functions_df = spark.sql("SHOW FUNCTIONS LIKE 'gbx_*'")
-    functions_df.limit(3).show()
-    
     # Describe a specific function
     desc_df = spark.sql("DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox")
     desc_df.show(vertical=True)
-    
-    return functions_df, desc_df
+
+    return desc_df
 
 
 def error_functions_not_registered(spark):
@@ -221,15 +212,6 @@ def performance_batch_operations(spark):
 # ============================================================================
 
 error_check_function_availability_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-+--------------------+
-Only showing top 3 rows
-
 -DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox
 Function: gbx_rst_boundingbox
 ...

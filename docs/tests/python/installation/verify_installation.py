@@ -33,42 +33,31 @@ gbx.uc.install("<catalog>", "<schema>", "/Volumes/<catalog>/<schema>/<volume>/ge
 
 VERIFY_PYTHON_INSTALLATION = """from databricks.labs import gbx
 
-# Register functions and the lightweight readers
-gbx.register(spark)
+# Register the functions and the lightweight readers
+registered = gbx.register(spark)
 
-# List registered functions
-spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_*'").show()"""
+# Each name maps to the level it runs at
+print(len(registered), "functions registered")
+print("gbx_rst_width runs at level", registered["gbx_rst_width"].level)
 
-VERIFY_SQL_FUNCTIONS = """-- List all GeoBrix functions
-SHOW FUNCTIONS LIKE 'gbx_*';
+# Read the signature of one function
+spark.sql("DESCRIBE FUNCTION gbx_rst_width").show(truncate=False)"""
 
--- Describe a specific function
+VERIFY_SQL_FUNCTIONS = """-- Read the signature of one function
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 
 # Example output (displayed under code via CodeFromTest outputConstant)
 VERIFY_PYTHON_INSTALLATION_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-|gbx_rst_boundingbox |
-|...                 |
-+--------------------+"""
+<N> functions registered
+gbx_rst_width runs at level L1
++------------------------------------+
+|function_desc                       |
++------------------------------------+
+|Function: gbx_rst_width             |
+|...                                 |
++------------------------------------+"""
 
 VERIFY_SQL_FUNCTIONS_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_boundingbox |
-|gbx_bng_cellarea    |
-|...                 |
-+--------------------+
-
--DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox
 Function: gbx_rst_boundingbox
 Type: ...
 """

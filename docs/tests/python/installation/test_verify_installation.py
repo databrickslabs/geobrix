@@ -15,14 +15,22 @@ def test_verify_python_installation_constant():
     assert hasattr(verify_installation, "VERIFY_PYTHON_INSTALLATION")
     s = verify_installation.VERIFY_PYTHON_INSTALLATION
     assert "gbx.register(spark)" in s
-    assert "SHOW FUNCTIONS" in s and "gbx_rst_*" in s
+    assert "DESCRIBE FUNCTION gbx_rst_width" in s and "SHOW" not in s
+
+
+def test_verify_python_snippet_runs(spark):
+    """Installation doc: the verify snippet runs and reports gbx_rst_width at a level."""
+    s = verify_installation.VERIFY_PYTHON_INSTALLATION
+    ns = {"spark": spark}
+    exec(compile(s, "VERIFY_PYTHON_INSTALLATION", "exec"), ns)
+    assert ns["registered"]["gbx_rst_width"].level in ("L0", "L1", "L3")
 
 
 def test_verify_sql_functions_constant():
     """Installation doc: SQL verification snippet is defined."""
     assert hasattr(verify_installation, "VERIFY_SQL_FUNCTIONS")
     s = verify_installation.VERIFY_SQL_FUNCTIONS
-    assert "SHOW FUNCTIONS LIKE 'gbx_*'" in s
+    assert "SHOW" not in s
     assert "DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox" in s
 
 
@@ -30,7 +38,7 @@ def test_verify_output_constants():
     """Installation doc: example output constants for Verification section."""
     assert hasattr(verify_installation, "VERIFY_PYTHON_INSTALLATION_output")
     assert hasattr(verify_installation, "VERIFY_SQL_FUNCTIONS_output")
-    assert "function" in verify_installation.VERIFY_PYTHON_INSTALLATION_output
+    assert "functions registered" in verify_installation.VERIFY_PYTHON_INSTALLATION_output
     assert "gbx_rst" in verify_installation.VERIFY_SQL_FUNCTIONS_output
 
 
@@ -39,7 +47,7 @@ def test_register_snippet_runs(spark):
     s = verify_installation.REGISTER_PYTHON_INSTALLATION
     assert "gbx.register(spark)" in s
     exec(compile(s, "REGISTER_PYTHON_INSTALLATION", "exec"), {"spark": spark})
-    assert spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_width'").count() >= 1
+    assert spark.sql("DESCRIBE FUNCTION gbx_rst_width").count() >= 1
 
 
 def test_stage_jar_snippet_copies_the_jar_and_refuses_a_second(tmp_path, monkeypatch):
@@ -82,5 +90,5 @@ def test_jvm_job_snippet_registers_then_hands_the_session_to_scala(spark):
     # run everything up to the Scala call; the JVM class is the user's own
     head = s[:call].replace("spark = SparkSession.builder.getOrCreate()", "")
     exec(compile(head, "JVM_JOB_PYTHON", "exec"), {"spark": spark})
-    assert spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_width'").count() >= 1
+    assert spark.sql("DESCRIBE FUNCTION gbx_rst_width").count() >= 1
     assert spark._jsparkSession is not None

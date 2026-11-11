@@ -111,11 +111,6 @@ row = Row(geom_legacy=(1, 0, [[[30.0, 10.0]]], []))
 shapes = spark.createDataFrame([row], StructType([StructField("geom_legacy", legacy_schema)]))
 shapes.select(vx.st_legacyaswkb("geom_legacy").alias("wkb")).show()'''
 
-SQL_LIST_FUNCTIONS = """-- List GeoBrix functions
-SHOW FUNCTIONS LIKE 'gbx_rst_*';
-SHOW FUNCTIONS LIKE 'gbx_bng_*';
-SHOW FUNCTIONS LIKE 'gbx_st_*';"""
-
 SQL_DESCRIBE = """-- Describe a function
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 
@@ -183,16 +178,6 @@ USE_VECTORX_output = """
 +-----------+
 |[BINARY]   |
 +-----------+
-"""
-
-SQL_LIST_FUNCTIONS_output = """
-+--------------------+
-|function            |
-+--------------------+
-|gbx_rst_asformat    |
-|gbx_rst_avg         |
-|gbx_rst_bandmetadata|
-...
 """
 
 SQL_DESCRIBE_output = """
@@ -756,20 +741,6 @@ def pattern_batch_processing(spark, path="/data/many_rasters"):
 
 
 # SQL Examples (as constants for documentation)
-SQL_LIST_FUNCTIONS = """
--- List all RasterX functions
-SHOW FUNCTIONS LIKE 'gbx_rst_*';
-
--- List all GridX functions
-SHOW FUNCTIONS LIKE 'gbx_bng_*';
-
--- List all VectorX functions
-SHOW FUNCTIONS LIKE 'gbx_st_*';
-
--- List ALL GeoBrix functions
-SHOW FUNCTIONS LIKE 'gbx_*';
-"""
-
 SQL_DESCRIBE_FUNCTION = """
 -- Get function description
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;

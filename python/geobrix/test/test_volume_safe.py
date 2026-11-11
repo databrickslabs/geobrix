@@ -10,8 +10,10 @@ from test._volume_safe import open_raster, written_locally
 
 import numpy as np
 import pytest
-import rasterio
-from rasterio.transform import from_origin
+
+# The heavy CI job has no rasterio; the guard and the builders are light-only.
+rasterio = pytest.importorskip("rasterio")
+from rasterio.transform import from_origin  # noqa: E402
 
 _PROF = dict(
     driver="GTiff",

@@ -808,7 +808,10 @@ CELL_AGGREGATE += (
         "cgf_grid_column_per_group_fine",
         CGF,
         _CGF_GROUPS.format(
-            rows=_cg_grid_rows("a", _CG_COARSE) + ", " + _cg_grid_rows("b", CUSTOM_GRID), key="b"
+            rows=_cg_grid_rows("a", _CG_COARSE)
+            + ", "
+            + _cg_grid_rows("b", CUSTOM_GRID),
+            key="b",
         ),
         "cellfill",
         {_CG_C: 15.0, _CG_R1A: 10.0, _CG_R1B: 20.0},
@@ -818,7 +821,10 @@ CELL_AGGREGATE += (
         "cgf_grid_column_per_group_coarse",
         CGF,
         _CGF_GROUPS.format(
-            rows=_cg_grid_rows("a", _CG_COARSE) + ", " + _cg_grid_rows("b", CUSTOM_GRID), key="a"
+            rows=_cg_grid_rows("a", _CG_COARSE)
+            + ", "
+            + _cg_grid_rows("b", CUSTOM_GRID),
+            key="a",
         ),
         "cellfill",
         {_CG_C: 10.0, _CG_R1A: 10.0, _CG_R1B: 20.0},

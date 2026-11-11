@@ -222,7 +222,11 @@ def test_a_wrong_k_or_method_raises_whatever_the_cells_are():
 def _recipes():
     from databricks.labs.gbx.bench import oracles
 
-    return [c for c in oracles.TABLES["CELL_AGGREGATE"] if c.sql is not None]
+    return [
+        c
+        for c in oracles.TABLES["CELL_AGGREGATE"]
+        if c.sql is not None and "uc" in c.surfaces
+    ]
 
 
 def test_the_h3_fill_recipes_run_on_the_host_and_give_the_functions_answer(

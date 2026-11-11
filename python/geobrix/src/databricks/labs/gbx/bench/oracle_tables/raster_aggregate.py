@@ -1160,7 +1160,9 @@ def _grid_sql(grid):
 
 
 def _cgr_grid_rows(key, grid, cells, pad):
-    return ", ".join(f"('{key}', {c}L, {v}D, {_grid_sql(grid)}, {pad})" for c, v in cells)
+    return ", ".join(
+        f"('{key}', {c}L, {v}D, {_grid_sql(grid)}, {pad})" for c, v in cells
+    )
 
 
 _CGR_COLUMNS = (
@@ -1171,7 +1173,11 @@ _CGR_COLUMNS = (
 )
 # the judge reads the CRS from the out_srid argument: the session layout (group, grid, out_srid), the group left out
 _CGR_JUDGED_IN = (None, dict(OFFSET_GRID_4KM), 27700)
-_CGR_TWO_GRIDS = _cgr_grid_rows("a", OFFSET_GRID_4KM, _OFFSET_4KM, 1) + ", " + _cgr_grid_rows("b", OFFSET_GRID_8KM, _OFFSET_8KM, 1)
+_CGR_TWO_GRIDS = (
+    _cgr_grid_rows("a", OFFSET_GRID_4KM, _OFFSET_4KM, 1)
+    + ", "
+    + _cgr_grid_rows("b", OFFSET_GRID_8KM, _OFFSET_8KM, 1)
+)
 RASTER_AGGREGATE += (
     recipe(
         "cgr_grid_column",

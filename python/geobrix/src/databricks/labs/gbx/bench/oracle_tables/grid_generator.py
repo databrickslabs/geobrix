@@ -184,8 +184,20 @@ GRID_GENERATOR = (
         "sideways",
     ),
     # at the grid's east edge and north-east corner the explodes keep to the cells of the grid, as the arrays do
-    Case("cg_geomkringx_east_edge", CGKR, (CG_EAST_PT, G, 0, 1), "cell_rows", _cg_block((998, 999), (499, 500, 501))),
-    Case("cg_geomkloopx_ne_corner", CGKL, (CG_CORNER_PT, G, 0, 1), "cell_rows", _cg_block((998, 999), (998, 999), CG_CORNER)),
+    Case(
+        "cg_geomkringx_east_edge",
+        CGKR,
+        (CG_EAST_PT, G, 0, 1),
+        "cell_rows",
+        _cg_block((998, 999), (499, 500, 501)),
+    ),
+    Case(
+        "cg_geomkloopx_ne_corner",
+        CGKL,
+        (CG_CORNER_PT, G, 0, 1),
+        "cell_rows",
+        _cg_block((998, 999), (998, 999), CG_CORNER),
+    ),
     # ---------------------------------------------------------------------------------------------- H3
     Case("h3_geomkringx_point_k1", HGKR, (QB_PT, 8, 1), "cell_rows", H3_RING1),
     Case("h3_geomkringx_digit_res", HGKR, (QB_PT, "8", 1), "cell_rows", H3_RING1),

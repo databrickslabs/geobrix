@@ -5766,7 +5766,9 @@ def run_groups(
     for case in cases:
         if "session" not in case.surfaces:
             continue
-        if case.sql is not None:  # a recipe: the statement holds its groups (a grid in a column, several keys)
+        if (
+            case.sql is not None
+        ):  # a recipe: the statement holds its groups (a grid in a column, several keys)
             out.append((case, run_recipe(spark, case, "", tmpdir)))
             continue
         fn = man.functions[case.fn]

@@ -90,9 +90,9 @@ def test_a_wide_geometry_with_a_short_outline_is_not_refused_for_its_area(monkey
     assert H.bng_geomkring(uk, 4, 1) == ["TQ3080"] and seen
 
 
-def test_a_custom_ring_bound_is_not_cut_to_a_grid_the_kernel_does_not_cut_to():
-    """In a corner the custom ring runs to the last position inclusive (one past the grid), so a bound cut to the grid was
-    under the cells the kernel makes (36 against 47)."""
+def test_a_custom_ring_in_a_corner_stays_in_the_grid_and_under_its_bound():
+    """In a corner the custom ring holds only the cells of the grid, so the bound cut to the grid covers the cells the
+    kernel makes."""
     conf = _custom.CustomGridConf(
         bound_x_min=0,
         bound_x_max=100000,
@@ -104,7 +104,7 @@ def test_a_custom_ring_bound_is_not_cut_to_a_grid_the_kernel_does_not_cut_to():
         srid=-1,
     )
     g = shapely.box(90000, 50000, 100000, 60000)
-    made = len(_custom.geometry_k_ring(conf, g, 2, 2))
-    assert H._custom_cells_bound(conf, g, 2, 2, interior=False, clip=False) >= made
-    # the fill drops the cells past the grid, so its bound stays cut to it
-    assert H._custom_cells_bound(conf, g, 2, 2, interior=False) < made
+    made = _custom.geometry_k_ring(conf, g, 2, 2)
+    nx, ny = _custom.total_cells_x(conf, 2), _custom.total_cells_y(conf, 2)
+    assert all(_custom.get_cell_position(c) < nx * ny for c in made)
+    assert H._custom_cells_bound(conf, g, 2, 2, interior=False) >= len(made)

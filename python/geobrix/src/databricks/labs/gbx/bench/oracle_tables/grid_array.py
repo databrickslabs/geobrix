@@ -387,6 +387,41 @@ GRID_ARRAY += (
     Case("cg_kloop_negative_k", CKL, (CG0, G, -1), "raises", "k"),
 )
 
+
+def _cg_block(cols, rows, centre=None):
+    """The resolution-0 cells of the block cols x rows, without ``centre`` (a loop)."""
+    return [cg_id(c, r, 0) for c in cols for r in rows if (c, r) != centre]
+
+
+# At the grid's edges (1000 x 1000 cells at resolution 0, columns and rows 0 to 999) a ring holds only the cells of the
+# grid: at the east edge none wraps into the next row (column 1000 of row r is column 0 of row r + 1), and at the north
+# edge none is past the last row. The geometry-aware rings walk the same neighbours, so they keep to the grid as well.
+CG_EAST, CG_NORTH, CG_CORNER = (999, 500), (500, 999), (999, 999)
+CG_EAST_PT, CG_NORTH_PT, CG_CORNER_PT = (
+    "POINT(999500 500500)",
+    "POINT(500500 999500)",
+    "POINT(999500 999500)",
+)
+GRID_ARRAY += (
+    Case("cg_kring_east_edge", CKR, (cg_id(*CG_EAST, 0), G, 1), "cell_set", _cg_block((998, 999), (499, 500, 501))),
+    Case("cg_kring_north_edge", CKR, (cg_id(*CG_NORTH, 0), G, 1), "cell_set", _cg_block((499, 500, 501), (998, 999))),
+    Case("cg_kring_ne_corner", CKR, (cg_id(*CG_CORNER, 0), G, 1), "cell_set", _cg_block((998, 999), (998, 999))),
+    Case("cg_kring_ne_corner_k2", CKR, (cg_id(*CG_CORNER, 0), G, 2), "cell_set", _cg_block((997, 998, 999), (997, 998, 999))),
+    Case("cg_kloop_east_edge", CKL, (cg_id(*CG_EAST, 0), G, 1), "cell_set", _cg_block((998, 999), (499, 500, 501), CG_EAST)),
+    Case("cg_kloop_north_edge", CKL, (cg_id(*CG_NORTH, 0), G, 1), "cell_set", _cg_block((499, 500, 501), (998, 999), CG_NORTH)),
+    Case("cg_kloop_ne_corner", CKL, (cg_id(*CG_CORNER, 0), G, 1), "cell_set", _cg_block((998, 999), (998, 999), CG_CORNER)),
+    Case(
+        "cg_kloop_ne_corner_k2", CKL, (cg_id(*CG_CORNER, 0), G, 2), "cell_set",
+        [c for c in _cg_block((997, 998, 999), (997, 998, 999)) if c not in _cg_block((998, 999), (998, 999))],
+    ),
+    Case("cg_geomkring_east_edge", CGKR, (CG_EAST_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (499, 500, 501))),
+    Case("cg_geomkring_north_edge", CGKR, (CG_NORTH_PT, G, 0, 1), "cell_set", _cg_block((499, 500, 501), (998, 999))),
+    Case("cg_geomkring_ne_corner", CGKR, (CG_CORNER_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (998, 999))),
+    Case("cg_geomkloop_east_edge", CGKL, (CG_EAST_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (499, 500, 501), CG_EAST)),
+    Case("cg_geomkloop_north_edge", CGKL, (CG_NORTH_PT, G, 0, 1), "cell_set", _cg_block((499, 500, 501), (998, 999), CG_NORTH)),
+    Case("cg_geomkloop_ne_corner", CGKL, (CG_CORNER_PT, G, 0, 1), "cell_set", _cg_block((998, 999), (998, 999), CG_CORNER)),
+)  # fmt: skip
+
 # --- Unity Catalog rows: a grid is defined in one SRID, and a geometry in another is refused with a Fix:.
 
 GRID_ARRAY = uc_view(

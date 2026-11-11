@@ -188,10 +188,10 @@ class RST_Custom_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         val offset = CustomGridSystem(GridConf(529000, 533000, 179000, 183000, 2, 4000, 4000, Some(27700)))
         val cells  = Seq((530000.0, 180000.0), (532000.0, 180000.0), (530000.0, 182000.0))
             .map { case (x, y) => offset.pointToCellID(x, y, 1) }
-        // kRing runs one past the last cell; kRingInGrid stops at it
-        offset.kRingInGrid(cells(1), 1).toSet shouldBe offset.kRingInGrid(cells(1), 1).toSet.filter(c =>
+        // the ring stops at the last cell of each axis
+        offset.kRing(cells(1), 1).toSet shouldBe offset.kRing(cells(1), 1).toSet.filter(c =>
             offset.getCellPositionX(offset.getCellPosition(c), 1) < 2 && offset.getCellPositionY(offset.getCellPosition(c), 1) < 2)
-        offset.kRingInGrid(cells(1), 1).size shouldBe 4
+        offset.kRing(cells(1), 1).size shouldBe 4
         val g = RST_Custom_RasterizeAgg.computeGridspec(offset, cells.iterator, 27700, None, "centroids", 1, 1)
         g shouldBe ((529000.0, 179000.0, 533000.0, 183000.0, 2, 2))
     }

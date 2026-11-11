@@ -270,7 +270,7 @@ object RST_Custom_RasterizeAgg extends WithExpressionInfo {
         // Dedup + optional k-ring padding.
         val base = cellIds.toSet
         val cells =
-            if (kringPad > 0) base.flatMap(c => grid.kRingInGrid(c, kringPad).toSet) // cells that exist, not kRing's one past the edge
+            if (kringPad > 0) base.flatMap(c => grid.kRing(c, kringPad).toSet) // the ring holds only cells that exist
             else base
 
         // Collect sample points in the grid's native CRS per mode.

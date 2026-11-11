@@ -884,7 +884,7 @@ GeoBrix applies one rule for which pixels are valid.
   - Two spellings of one BNG cell, such as `TQ3080` and `TQ 3080`, are one cell.
 - **`gbx_rst_custom_rasterize_agg` and `gbx_rst_custom_rasterize` derive their canvas from the grid's cell edges.** With NULL canvas arguments, a grid whose bounds are not a multiple of the pixel size gave a tile of NoData.
   - The canvas snapped to multiples of the pixel size from 0, so every pixel centre fell on a cell edge. It now snaps from the grid's `bound_x_min` and `bound_y_min`.
-  - The padding of `kring_pad` holds the cells that exist. The grid's `gbx_custom_kring` runs one past its last cell, so a canvas at the grid edge grew past the grid.
+  - The padding of `kring_pad` holds the cells that exist, so a canvas at the grid edge no longer grows past the grid.
   - The JVM form gives NoData for a pixel outside the grid, as the lightweight form does. It raised an error.
   - The JVM and Python forms give the same canvas. A canvas in another CRS than the grid's still snaps from 0.
 - **In the lightweight rasterizers a null value never wins.** A null or `NaN` is ignored whenever the cell has a number, so values `0.5` and `NULL` burn `0.5`.
@@ -1040,6 +1040,8 @@ Every grid function follows one contract for its resolution and its input.
 - **The grouped aggregates raise for a group with a NULL cell id.** The aggregates are `gbx_quadbin_cellunion_agg`, `gbx_h3_cellfill`, `gbx_quadbin_cellfill` and `gbx_custom_cellfill`. Pandas cannot read exact ids, so the message says to filter first: `WHERE cellid IS NOT NULL`. `gbx_rst_*_rasterize_agg` already did this.
 - **A BNG chip with NULL bytes is an empty geometry** in `gbx_bng_cellunion`, `gbx_bng_cellintersection` and their aggregates, on both levels. The union is the other chip, and the intersection is empty. `gbx_bng_cellintersection` leaves NULL bytes for an empty intersection.
 - **A BIGINT resolution in the custom-grid functions raises an `IllegalArgumentException` that names the value,** where `ArithmeticException: integer overflow` was raised.
+- **`gbx_custom_kring` and `gbx_custom_kloop` at the grid edge no longer include cells outside the grid.** A ring at the east edge held a cell of the next row, and a ring at the north edge held a cell past the last row. The geometry-aware rings, their explodes and `gbx_custom_cellfill` walk the same neighbours, so they keep to the grid as well. This holds on every level.
+- **The JAR level of the custom-grid cell functions takes a cell id given as INT,** such as the literal `180530`. `gbx_custom_kring`, `kloop`, `cellaswkb`, `cellaswkt`, `centroid` and `distance` returned NULL or raised for it, where the lightweight level answered.
 - **The raster-to-grid functions give no rows for an unreadable tile** and no rows for a NULL resolution or custom grid. A bad resolution, coverage or assignment raises and names the value before the tile is opened. A custom resolution above the grid's maximum raises before the tile is opened.
 - **`gbx_rst_*_rastertogrid*` cell functions treat a transparent pixel as no data.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
 

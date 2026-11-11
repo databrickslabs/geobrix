@@ -734,9 +734,7 @@ def _custom_cells_bound(
     conf, g, resolution: int, pad: int, interior: bool = True, clip: bool = True
 ) -> int:
     """The most cells of a custom grid that cover a geometry and ``pad`` rings around it, cut to the grid unless ``clip``
-    is False. ``interior`` False: only the cells near its outlines (a dilation). The custom ring kernel does not drop
-    the cells past the grid (its ring runs to ``total_cells`` inclusive, one past the last cell), so a ring is bounded
-    with ``clip`` False; a fill drops them and is bounded with ``clip`` True."""
+    is False. ``interior`` False: only the cells near its outlines (a dilation)."""
     from databricks.labs.gbx.pygx import _custom
 
     return _square_cells_bound(
@@ -1142,8 +1140,8 @@ def _custom_ring(fn: str, cell, grid, k, kernel):
         _custom.get_cell_position_x(conf, pos, res),
         _custom.get_cell_position_y(conf, pos, res),
     )
-    nx = min(px + kk, _custom.total_cells_x(conf, res)) - max(px - kk, 0) + 1
-    ny = min(py + kk, _custom.total_cells_y(conf, res)) - max(py - kk, 0) + 1
+    nx = min(px + kk, _custom.total_cells_x(conf, res) - 1) - max(px - kk, 0) + 1
+    ny = min(py + kk, _custom.total_cells_y(conf, res) - 1) - max(py - kk, 0) + 1
     _check_array(fn, nx * ny)  # a loop is built as the ring minus the one inside it
     return kernel(conf, c, kk)
 
@@ -1196,9 +1194,7 @@ def _custom_geom_ring(fn: str, geom, grid, resolution, k, mode, coverage, kernel
         fn,
         g,
         lambda g: kernel(conf, g, res, kk, mode, coverage),
-        bound=lambda g: _custom_cells_bound(
-            conf, g, res, kk, interior=False, clip=False
-        ),
+        bound=lambda g: _custom_cells_bound(conf, g, res, kk, interior=False),
     )
 
 

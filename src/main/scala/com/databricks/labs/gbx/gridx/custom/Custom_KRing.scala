@@ -44,7 +44,7 @@ case class Custom_KRing(
         val k   = Custom_GridSpec.asInt(kVal, "k")                                  // PARAMETER
         GeomDilation.requireK(k)                                                    // PARAMETER: a negative k raises, never a NULL
         GridErrorHandler.safeEval[ArrayData](null) {
-            val cell = cellVal.asInstanceOf[Long]
+            val cell = Custom_GridSpec.asLong(cellVal, "cell")
             val cells: Seq[Long] = sys.kRing(cell, k)
             ArrayData.toArrayData(cells.toArray)
         }

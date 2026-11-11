@@ -375,18 +375,13 @@ def covering_candidate_cells(
 def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     """Chebyshev (square) k-ring of cell IDs around ``cell_id``.
 
-    Port of CustomGridSystem.scala:38-60. The neighborhood is the Chebyshev
+    Port of CustomGridSystem.kRing. The neighborhood is the Chebyshev
     (square / Moore) block of cells within ``k`` steps of the center cell in
-    both axes, INCLUDING the center cell itself (heavy iterates the full
-    ``[posX-k, posX+k] x [posY-k, posY+k]`` square with no center exclusion).
+    both axes, INCLUDING the center cell itself.
 
-    The block is CLAMPED to the grid bounds rather than wrapped: the lower
-    bound is ``max(pos-k, 0)`` so positions never go negative, and the upper
-    bound is ``min(pos+k, totalCellsX/Y(res))`` so off-edge cells are dropped.
-    A center cell at a grid corner therefore yields fewer cells than an interior
-    cell. The upper clamp uses ``totalCells`` ITSELF (not ``totalCells - 1``) and
-    iterates INCLUSIVELY (Scala ``a to b``) — ported verbatim so the cell set is
-    bit-identical to heavy; the parity test locks heavy's set.
+    The block is CLAMPED to the cells that exist, positions ``[0, totalCells - 1]`` on each axis: a ring at the east
+    edge does not wrap into the next row, and a ring at the north edge names no cell outside the grid. A center cell
+    at a grid edge or corner therefore yields fewer cells than an interior cell.
     """
     if k < 0:
         raise ValueError("gbx_custom: k must be at least 0")
@@ -396,9 +391,9 @@ def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     pos_y = get_cell_position_y(conf, cell_position, res)
 
     from_x = max(pos_x - k, 0)
-    to_x = min(pos_x + k, total_cells_x(conf, res))
+    to_x = min(pos_x + k, total_cells_x(conf, res) - 1)
     from_y = max(pos_y - k, 0)
-    to_y = min(pos_y + k, total_cells_y(conf, res))
+    to_y = min(pos_y + k, total_cells_y(conf, res) - 1)
 
     out: List[int] = []
     for x in range(from_x, to_x + 1):  # Scala `a to b` is INCLUSIVE
@@ -406,27 +401,6 @@ def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
             pos = get_cell_position_from_positions(conf, x, y, res)
             out.append(get_cell_id(pos, res))
     return out
-
-
-def k_ring_in_grid(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
-    """The cells within ``k`` rings of ``cell_id`` that exist in the grid (positions clamped to ``[0, totalCells - 1]``).
-
-    ``k_ring`` runs to ``totalCells`` inclusive, one past the last cell: at the east edge that cell wraps into the
-    next row, and at the north edge it names a cell outside the grid. A canvas derived from the cells uses this ring.
-    """
-    if k < 0:
-        raise ValueError("gbx_custom: k must be at least 0")
-    res = get_cell_resolution(cell_id)
-    cell_position = get_cell_position(cell_id)
-    pos_x = get_cell_position_x(conf, cell_position, res)
-    pos_y = get_cell_position_y(conf, cell_position, res)
-    to_x = min(pos_x + k, total_cells_x(conf, res) - 1)
-    to_y = min(pos_y + k, total_cells_y(conf, res) - 1)
-    return [
-        get_cell_id(get_cell_position_from_positions(conf, x, y, res), res)
-        for x in range(max(pos_x - k, 0), to_x + 1)
-        for y in range(max(pos_y - k, 0), to_y + 1)
-    ]
 
 
 def k_loop(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:

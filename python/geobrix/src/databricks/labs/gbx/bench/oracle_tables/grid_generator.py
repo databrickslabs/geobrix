@@ -10,6 +10,9 @@ past 2**53: a row that went through a float would round them.
 
 from databricks.labs.gbx.bench.oracle_tables.grid_array import (
     CG0_PT,
+    CG_CORNER,
+    CG_CORNER_PT,
+    CG_EAST_PT,
     CG_LOOP1,
     CG_RING1,
     H3_LOOP1,
@@ -18,6 +21,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_array import (
     POINT,
     QB_LOOP1,
     QB_RING1,
+    _cg_block,
     _square,
     _tq,
 )
@@ -179,6 +183,9 @@ GRID_GENERATOR = (
         "raises",
         "sideways",
     ),
+    # at the grid's east edge and north-east corner the explodes keep to the cells of the grid, as the arrays do
+    Case("cg_geomkringx_east_edge", CGKR, (CG_EAST_PT, G, 0, 1), "cell_rows", _cg_block((998, 999), (499, 500, 501))),
+    Case("cg_geomkloopx_ne_corner", CGKL, (CG_CORNER_PT, G, 0, 1), "cell_rows", _cg_block((998, 999), (998, 999), CG_CORNER)),
     # ---------------------------------------------------------------------------------------------- H3
     Case("h3_geomkringx_point_k1", HGKR, (QB_PT, 8, 1), "cell_rows", H3_RING1),
     Case("h3_geomkringx_digit_res", HGKR, (QB_PT, "8", 1), "cell_rows", H3_RING1),

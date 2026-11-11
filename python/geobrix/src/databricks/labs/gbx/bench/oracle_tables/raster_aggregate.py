@@ -1139,8 +1139,8 @@ RASTER_AGGREGATE += (
     _offset_case("cgr_derived_canvas_offset_centroids", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "centroids", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
     _offset_case("cgr_derived_canvas_offset_envelope", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "spatial_envelope", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
     _offset_case("cgr_derived_canvas_offset_padded", CGA, OFFSET_GRID_8KM, "cgr_offset_8km", "centroids", 1, _OFFSET_8KM_CANVAS, _OFFSET_8KM_PIXELS, ONLY),
-    # the documented default kring_pad of 1 at the grid edge: the padding holds the cells that exist, so the canvas
-    # stays the grid (the grid's own k_ring runs one past its last cell, into the next row or past the north edge)
+    # the documented default kring_pad of 1 at the grid edge: the padding holds the cells that exist (a ring at the edge
+    # neither wraps into the next row nor passes the north edge), so the canvas stays the grid
     _offset_case("cgr_derived_canvas_offset_edge_pad", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "centroids", 1, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
     _offset_case("cgrt_derived_canvas_offset_edge_pad", CGT, OFFSET_GRID_4KM, "cgrt_offset_4km", "centroids", 1, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, _surfaces(CGT)),
     _offset_case("cgrt_derived_canvas_offset_centroids", CGT, OFFSET_GRID_4KM, "cgrt_offset_4km", "centroids", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, _surfaces(CGT)),

@@ -302,9 +302,8 @@ class _CustomAdapter:
         return res
 
     def k_ring(self, key, k):
-        # The padding of a derived canvas: the cells that exist. The grid's k_ring runs one past the last cell, which
-        # wraps into the next row or names a cell outside the grid.
-        return self._c.k_ring_in_grid(self._conf, key, k)
+        # The padding of a derived canvas: the grid's k_ring holds only the cells that exist.
+        return self._c.k_ring(self._conf, key, k)
 
     def cell_center(self, key):
         # Returns (x, y) in the grid's native CRS (conf.srid).

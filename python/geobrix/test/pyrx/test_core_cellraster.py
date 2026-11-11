@@ -104,7 +104,7 @@ def test_the_padding_of_a_derived_custom_canvas_holds_the_cells_that_exist():
     assert gs == (529000.0, 179000.0, 533000.0, 183000.0, 2000.0, 2, 2, 27700)
     from databricks.labs.gbx.pygx import _custom
 
-    ring = _custom.k_ring_in_grid(
+    ring = _custom.k_ring(
         ad._conf, cells[1], 1
     )  # the east-most cell of the south row
     assert sorted(ring) == sorted(

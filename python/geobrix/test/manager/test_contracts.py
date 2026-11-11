@@ -720,8 +720,14 @@ def test_connect_session_never_touches_the_jvm(
     # reported unregistered where this process cannot run it
     from databricks.labs.gbx.engine import run
 
+    # (a row whose own UDF calls the engine, such as rst_chm, or that lists osgeo in its needs, goes the same way)
     no_engine = (
-        {n for n, f in MAN.functions.items() if levels.engine_only(f, "L3")}
+        {
+            n
+            for n, f in MAN.functions.items()
+            if levels.engine_only(f, "L3")
+            or "osgeo" in (f.levels.get("L3") or {}).get("needs", ())
+        }
         if run.unavailable_reason()
         else set()
     )
@@ -3120,6 +3126,20 @@ _CONTAINER_WANT = {
 }
 
 
+def _engine_unavailable_reason():
+    from databricks.labs.gbx.engine import run
+
+    return run.unavailable_reason()
+
+
+# rst_summary is an engine-only row: a host venv without osgeo does not register it
+needs_engine = pytest.mark.skipif(
+    bool(_engine_unavailable_reason()),
+    reason=str(_engine_unavailable_reason()),
+)
+
+
+@needs_engine
 def test_light_container_tile_answers_its_header_and_has_no_pixel(spark):
     names = _CONTAINER_ANSWERS + _CONTAINER_PIXEL
     got = _container_answers(spark, names, _light(spark, names))

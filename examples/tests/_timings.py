@@ -465,6 +465,9 @@ if __name__ == "__main__":  # python examples/tests/_timings.py <history.json> <
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+
+    exit_if_help(__doc__)
     root = Path(__file__).resolve().parents[2]
     if len(sys.argv) > 3 and sys.argv[3] == "contention":
         extra = json.loads(Path(sys.argv[4]).read_text()) if len(sys.argv) > 4 else {}

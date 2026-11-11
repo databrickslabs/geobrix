@@ -394,6 +394,7 @@ def test_a_scala_tag_links_to_its_jar_functions_row_or_to_the_page():
     """A function's Scala tag (`<Surfaces ... scala jar="<anchor>" />`) names the anchor of its row on the
     jar-functions page; a Scala form the default never picks has no row there, so its tag names no anchor.
     """
+    import dataclasses
     import re
 
     surfaces = _tool("surfaces")
@@ -425,6 +426,9 @@ def test_a_scala_tag_links_to_its_jar_functions_row_or_to_the_page():
         man.functions["gbx_rst_width"]
     )
     assert "jar=" not in surfaces.surfaces_props(man.functions["gbx_st_makevalid"])
+    # the page lists stable rows only, so a non-stable function's tag names no anchor either
+    beta = dataclasses.replace(man.functions["gbx_rst_width"], status="beta")
+    assert "jar=" not in surfaces.surfaces_props(beta)
 
 
 def test_check_names_a_jar_functions_page_that_stopped_importing_link(monkeypatch):

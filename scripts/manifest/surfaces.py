@@ -248,7 +248,7 @@ def surfaces_props(fn) -> str:
     jar-functions page, so its Scala tag links to that row (a Scala form the default never picks links to the page).
     """
     props = list(fn.surfaces)
-    if "scala" in fn.surfaces and jvm_by_default(fn):
+    if "scala" in fn.surfaces and fn.status == "stable" and jvm_by_default(fn):
         props.append(f'jar="{jar_anchor(fn)}"')
     return " ".join(props)
 

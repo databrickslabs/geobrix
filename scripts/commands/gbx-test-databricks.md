@@ -21,12 +21,12 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel, or a folder that holds it (the newest `geobrix-*+env6-py3-none-any.whl` there by mtime, then by version, as `--jar-path` takes a JAR from a folder). Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.
 - `--jar-path <path>` - the JAR of the heavy shards, or the folder that holds it. Default: `python/geobrix/lib/`.
-- `--max-parallel <n>` - runners per cluster, so shards side by side. Default: the node's cores / 8 (4 on 32 vCPU).
+- `--max-parallel <n>` - runners per cluster, so shards side by side. Default: the node's cores / 8 (4 on 32 vCPU); 8 runner tasks on Serverless.
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards. The cut sets the queue's order and grain, not which slot runs a part.
-- `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min. A task spends about 0.7 min before its first test.
+- `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min (3 and 6 min on Serverless). A task spends about 0.7 min before its first test.
 - `--timings <path>` - the timing history of every run. Default: `test-logs/databricks-tests/timings-history.json`. The run cuts and orders the queue by it, then merges its own times in.
-- `--serverless` - run the light shards on Serverless env 6 (a fidelity leg). A Spark test runs its UDFs on workers that import the wheel, not the checkout. Pass a `--wheel` built at `--sha`, or the wheel guard fails the shard.
+- `--serverless` - run the light shards on Serverless env 6, in small chunks (see "Serverless"). Pass a `--wheel` built at `--sha`: a Spark test's UDFs run the wheel, not the checkout.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
 - `--pool-light <name>`, `--pool-jar <name>` - the pools. Defaults: `gbx-test-1n` (no JAR), `gbx-test-1n-jar` (the JAR).
 - `--node-type <t>` - the node of a pool cluster this run makes. Default: `m5d.8xlarge` (32 vCPU).
@@ -34,6 +34,12 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--stall-min <n>` - stop a shard when no test finished for n minutes; its runner takes the next. Default: 10.
 - `--start-cap-min <n>` - cancel when no shard has beaten n minutes after the submit. Default: 25.
 - `--pool-wait-min <n>` - wait up to n minutes for a free pool cluster. Default: 30.
+- `--first-failed <k>` - stop the run when the first k chunks to finish all failed. Default: 3. 0 turns it off.
+- `--max-failed-chunks <n>` - stop the run when n chunks have failed. Default: 5. 0 turns it off.
+- `--max-failures <n>` - stop the run when n tests have failed or errored. Default: 20. 0 turns it off.
+- `--maxfail <n>` - pytest's `--maxfail` in each chunk, so a broken chunk stops early. Default: 3. 0 turns it off.
+- `--no-fail-fast` - run every chunk to its end: no stop rule and no `--maxfail`. The smoke chunk stays.
+- `--no-smoke` - start the whole queue at once, without the smoke chunk first.
 - `--pip-extra "<reqs>"` - more pip requirements the tests import.
 - `--env KEY=VAL` - an environment variable every shard sets before its tests (repeatable). For example, `GBX_CAP_ARROW_TILE_TRANSPORT=0` runs the light tile functions with pickled rows.
 - `--spark-conf KEY=VAL` - a Spark conf every shard's session sets before its tests (repeatable). For example, `spark.sql.execution.arrow.maxBytesPerBatch=16m` makes the Arrow batches of tile rows smaller.
@@ -47,6 +53,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 - `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --purpose "dirs my change touches"` (the `affected` shards)
 - `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --shards all-light --clusters 3 --purpose "light tier before a release"`
+- `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --serverless --shards "manager family 1/3" --purpose "family 1/3 on env6"`
 - Add `--explain-only` to see the plan first.
 
 ## What it does
@@ -56,7 +63,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Leases the pool's single-node cluster (DBR 19, dedicated). It makes one when the pool has none. It never ends a pool cluster; the pool ends itself after 60 idle minutes (`gbx:bench:pool down` is the owner's call).
 - Cuts long shards by file, so no part is much longer than the rest. The cut balances the recorded timings, or CI's minutes without timings.
 - Leases the free clusters of the pool, up to `--clusters` (default: the pool's cap). It starts stopped clusters, and makes new ones while under the cap. It prints the plan: the queue, the clusters, the runners, the expected wall.
-- Submits one job per pool. Its first task puts the shards into a queue table, longest first.
+- Submits one job per pool. Its first task puts the shards into a queue table, longest first. A smoke task then runs the shortest chunk alone.
 - Starts one runner task per slot (clusters x `--max-parallel`). Each runner claims the next shard, runs it, and claims again until the queue is empty.
 - No slot idles while a shard waits, however far the actual times stray from the estimates.
 - The queue is a Delta table in the Volume's schema (`gbx_test_queue_<run id>_<pool kind>`). A claim is an `UPDATE` of one row, from no owner to the runner.
@@ -71,8 +78,9 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - A pool cluster carries only JARs, and the notebook-scoped install lasts one session. An earlier run's wheel does not carry over.
   - The guard also covers a wheel library someone attached to the cluster.
   - The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
+- Prints a row per chunk the moment it ends, and stops the run early on failures (see "Fail fast").
 - Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`. It prints one table and writes `summary.md` with the first lines of each failure and the skip reasons.
-- Removes the Volume folder, the notebooks and the queue table after the download. Exit code 1 when any shard failed, errored or did not finish.
+- Removes the Volume folder, the notebooks and the queue table after the download. Exit code 1 when any shard failed, errored or did not finish, or the run stopped early.
 
 ## What to expect
 
@@ -91,6 +99,34 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - Example: the TIN Rust kernel change (`7274d554d~1..66d5ead5b`) touched `rust/gbxrs/src/*`, `_rs/__init__.py`, `pyvx/_tin.py`, `pyvx/_conforming.py` and the pyvx tests.
   - It selects 22 files and 1 table, in 7 chunks.
   - The earlier per-directory rule selected 48 chunks, nearly the whole light bank.
+
+## Fail fast
+
+- Each chunk writes a one-line result the moment it ends: `<stage>/results/<shard>.json`. It holds the counts and the first failure (test id and a short message).
+- The launcher reads those every 15 s and prints a row per chunk: when it ended, the verdict, the counts and the first failure. It downloads the chunk's files at once.
+- The run stops at the first rule that fires:
+  - the smoke chunk failed;
+  - the first 3 chunks to finish all failed (`--first-failed`);
+  - 5 chunks failed (`--max-failed-chunks`);
+  - 20 tests failed or errored over the chunks (`--max-failures`).
+- A failed chunk is one with a failed or erroring test (an import error at collection included), or one that ended without a result. A part that collects nothing is not one.
+- To stop, the launcher writes `<stage>/stop.json` and cancels every pool's job: the running chunks and the queue.
+- Each runner also checks the rules and the marker before it claims. It claims nothing more once one fires, even when the launcher is gone.
+- It prints `stopped early: <rule>` and the first failure of each failed chunk so far. `summary.md` and the run entry of the timing history record the rule.
+- A chunk the stop cut short, or that pytest stopped at `--maxfail`, leaves lower bounds for the files it did not finish, flagged with the rule.
+- The smoke chunk is the shortest chunk that is not heavy. It heads the queue and runs alone, as a task the runners depend on.
+  - It fails the job before the queue starts, so a bad wheel, an import error or a missing native library shows in about 1-3 min.
+  - A run of one chunk has no smoke.
+  - `--no-smoke` starts the whole queue at once.
+- Run `--no-fail-fast` for a full list of failures, for example before a fix that touches many tests.
+
+## Serverless
+
+- `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
+- Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
+- The cut aims at 3-6 min per chunk, by test file or oracle table. A table that takes longer alone gets a chunk of its own.
+- A Serverless run records its times under `sls:<key>` in the timing history. A Serverless plan uses them, else the pools' solo times; a pool plan never reads them.
+- Run `t26-eq-sls3` (2026-11-11) planned 26 chunks of 30-76 min each from the pools' contention factors. The same selection now plans 22 chunks of 2-16 min.
 
 ## Affected
 

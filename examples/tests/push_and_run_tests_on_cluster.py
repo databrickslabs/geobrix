@@ -1362,7 +1362,7 @@ def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
     spec = plan["pools"][pool]
     before = list(spec["queue"])
     size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min,
-              {slug for slug in before if plan["shards"][slug].get("heavy")})
+              {slug for slug in before if plan["shards"][slug].get("heavy")}, smoke=bool(spec.get("smoke")))
     assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"
 
 

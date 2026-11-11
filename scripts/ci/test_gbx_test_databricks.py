@@ -1029,7 +1029,7 @@ def _picked_plan(shards, *extra):
 
 
 def test_the_planner_builds_runner_tasks_not_chained_shard_tasks(shards):
-    plan = _picked_plan(shards, "--clusters", "2", "--max-parallel", "2")
+    plan = _picked_plan(shards, "--clusters", "2", "--max-parallel", "2", "--no-smoke")
     spec = plan["pools"]["gbx-test-1n"]
     assert spec["runners"] == 4 and "lanes" not in spec
     tasks = launcher.job_tasks(plan, "gbx-test-1n", {"runner": "/w/runner.ipynb", "shard": "/w/tests.ipynb"}, ["c1", "c2"])
@@ -1045,7 +1045,7 @@ def test_the_planner_builds_runner_tasks_not_chained_shard_tasks(shards):
 
 
 def test_the_queue_holds_every_shard_once_longest_first(shards):
-    plan = _picked_plan(shards)
+    plan = _picked_plan(shards, "--no-smoke")
     spec = plan["pools"]["gbx-test-1n"]
     assert sorted(spec["queue"]) == sorted(plan["shards"]) and len(set(spec["queue"])) == len(spec["queue"])
     mins = [plan["shards"][s]["expected_min"] for s in spec["queue"]]
@@ -1665,3 +1665,280 @@ def test_a_split_chunk_estimated_by_its_share_of_ci_minutes_gives_no_contention_
     assert tm.contention_records(split, 900.0, {"a.py": 800.0}, 3, 4) == [], "a share of CI's minutes is a guess, not a solo time"
     whole = dict(split, name="zarr 4/4")
     assert tm.contention_records(whole, 900.0, {"a.py": 800.0}, 3, 4)[0]["x"] == 5.0, "CI's minutes for a whole shard are a solo time"
+
+
+# ---- fail fast: results as they come, the stop rules, the smoke chunk, and Serverless chunks
+
+
+def _line(slug, end, *, failed=0, errors=0, passed=5, rc=None, reason="", smoke=False):
+    rc = (1 if failed or errors else 0) if rc is None else rc
+    res = {"rc": rc, "reason": reason, "passed": passed, "failed": failed, "errors": errors, "skipped": 0, "total": passed + failed,
+           "first_failure": {"id": f"test/x.py::t_{slug}", "msg": "AssertionError: boom"} if failed or errors else {}, "smoke": smoke}
+    return sr.result_line(slug, res, end - 60, end, "r0")
+
+
+def test_the_run_stops_when_the_first_k_chunks_to_finish_all_failed():
+    first = [_line("a", 30, failed=1), _line("b", 10, failed=2), _line("c", 20, errors=1)]
+    assert sr.stop_rule(first[:2]) == "", "two of the first three: not yet"
+    assert sr.stop_rule(first) == "the first 3 chunks to finish all failed"
+    # one of the first three to END passed: the K rule never fires, whatever the order of the files
+    mixed = [_line("a", 30, failed=1), _line("b", 10), _line("c", 20, failed=1), _line("d", 40, failed=1)]
+    assert sr.stop_rule(mixed) == ""
+    assert sr.stop_rule(first, {"first_k": 0}) == "", "0 turns the rule off"
+    assert sr.stop_rule(first, {"off": True}) == "", "--no-fail-fast"
+    assert sr.stop_rule(first[:2], {"first_k": 2}) == "the first 2 chunks to finish all failed"
+
+
+def test_the_run_stops_at_the_max_failed_chunks_or_the_max_failures():
+    lines = [_line("ok1", 1), _line("ok2", 2)] + [_line(f"f{i}", 10 + i, failed=1) for i in range(5)]
+    assert sr.stop_rule(lines[:6]) == "", "4 failed chunks, under the default 5"
+    assert sr.stop_rule(lines) == "5 chunks failed (--max-failed-chunks 5)"
+    assert sr.stop_rule(lines[:4], {"max_failed_chunks": 2}) == "2 chunks failed (--max-failed-chunks 2)"
+    many = [_line("ok", 1), _line("big", 2, failed=12), _line("big2", 3, errors=9)]
+    assert sr.stop_rule(many) == "21 tests failed or errored (--max-failures 20)"
+    assert sr.stop_rule(many, {"max_failures": 0}) == ""
+    # what counts as a failed chunk: a failure, an error, a stop without a result; not a part that collected nothing
+    assert sr.chunk_failed({"rc": 5, "failed": 0}) is False and sr.chunk_failed({"rc": 0, "passed": 3}) is False
+    assert sr.chunk_failed({"rc": 2, "errors": 1}) and sr.chunk_failed({"rc": None, "reason": "killed by watchdog: shard cap 45 min"})
+
+
+def test_a_failed_smoke_chunk_stops_the_run_whatever_the_policy():
+    assert sr.stop_rule([_line("s", 5, errors=1, smoke=True)], {"off": True}) == "the smoke chunk s failed"
+    assert sr.stop_rule([_line("s", 5, smoke=True)]) == "", "a smoke chunk that passed lets the queue go"
+
+
+def test_runners_claim_nothing_more_once_the_rule_fires_and_the_queue_keeps_the_rest(tmp_path):
+    results = tmp_path / "results"
+    results.mkdir()
+    order = [f"c{i}" for i in range(12)]
+
+    def execute(slug):
+        return {"rc": 1, "failed": 1, "passed": 2, "total": 3, "first_failure": {"id": f"test/x.py::{slug}", "msg": "ImportError: no osgeo"}}
+
+    def on_result(slug, res, start, end):
+        (results / f"{slug}.json").write_text(json.dumps(sr.result_line(slug, res, start, end)))
+
+    def stop():
+        return sr.stop_rule(sr.read_results(str(results)))
+
+    q = sr.DirQueue(str(tmp_path / "q"), order)
+    rec = sr.run_loop(q, "r0", execute, stop=stop, on_result=on_result)
+    assert [x["slug"] for x in rec["shards"]] == ["c0", "c1", "c2"], "the 4th claim never happens"
+    assert rec["stopped"] == "the first 3 chunks to finish all failed" and rec["done"]
+    assert q.claim("r1") == "c3", "the rest is still queued: nothing claimed it"
+    line = json.loads((results / "c0.json").read_text())
+    assert line["failed_chunk"] and line["first_failure"] == {"id": "test/x.py::c0", "msg": "ImportError: no osgeo"}
+
+
+def _picked_plan_ff(shards, *extra):
+    return _plan(_args(*extra), ts.select(shards, "pyrx,ds,zarr,scripts/ci"))
+
+
+def test_the_smoke_chunk_is_the_shortest_light_chunk_and_runs_alone_before_the_queue(shards):
+    plan = _picked_plan_ff(shards, "--clusters", "2", "--max-parallel", "2")
+    spec = plan["pools"]["gbx-test-1n"]
+    light = [s for s in plan["shards"] if not plan["shards"][s]["heavy"]]
+    smoke = min(light, key=lambda s: (plan["shards"][s]["expected_min"], s))
+    assert spec["smoke"] == smoke and spec["queue"][0] == smoke and sorted(spec["queue"]) == sorted(plan["shards"])
+    assert spec["queue"][1:] == sr.queue_order({s: plan["shards"][s]["expected_min"] for s in spec["queue"][1:]}), "the rest longest first"
+    tasks = launcher.job_tasks(plan, "gbx-test-1n", {"runner": "/w/runner.ipynb", "shard": "/w/tests.ipynb"}, ["c1", "c2"])
+    by = {t["task_key"]: t for t in tasks}
+    assert by["smoke"]["depends_on"] == ["q_seed"] and by["smoke"]["base_parameters"]["role"] == "smoke"
+    assert all(by[f"r_{i}"]["depends_on"] == ["smoke"] for i in range(spec["runners"])), "the runners wait for the smoke to pass"
+    plain = _picked_plan_ff(shards, "--no-smoke")
+    assert plain["pools"]["gbx-test-1n"]["smoke"] == ""
+    assert all(t["depends_on"] in ([], ["q_seed"]) for t in launcher.job_tasks(plain, "gbx-test-1n", {"runner": "/r", "shard": "/s"}, ["c"]))
+    assert "smoke (gbx-test-1n):" in launcher.explain(plan, [], []) and "fail fast: stop the run at the first 3" in launcher.explain(plan, [], [])
+    assert launcher.smoke_pick({"only": 1.0}, set()) == "", "a single chunk is its own smoke"
+
+
+def test_the_plan_carries_the_policy_and_each_chunk_gets_maxfail(shards):
+    plan = _plan(_args(), ts.select(shards, "ds"))
+    assert plan["fail_fast"] == {"first_k": 3, "max_failed_chunks": 5, "max_failures": 20, "maxfail": 3, "off": False, "smoke": True}
+    src = launcher.run_source(plan)
+    assert '["--maxfail=" + str(MAXFAIL)] if MAXFAIL' in src and "def pytest_collectreport" in src and "maxfail_hit" in src
+    off = launcher.fail_fast(_args("--no-fail-fast"))
+    assert off["off"] and off["maxfail"] == 0 and off["smoke"], "--no-fail-fast runs every chunk out; the smoke stays"
+    assert launcher.fail_fast(_args("--no-fail-fast", "--maxfail", "7"))["maxfail"] == 7
+    assert launcher.problems(_args("--max-failed-chunks", "-1"))
+    res = _sh("--help")
+    for opt in ("--first-failed", "--max-failed-chunks", "--max-failures", "--maxfail", "--no-fail-fast", "--no-smoke"):
+        assert opt in res.stdout
+
+
+class _VolW:
+    """A workspace whose Volume is a local folder: the Files calls Live and stop_early make, and the cancels."""
+
+    def __init__(self, root):
+        self.root, self.cancelled = Path(root), []
+        w = self
+
+        class Files:
+            def list_directory_contents(self, path):
+                d = w._p(path)
+                if not d.is_dir():
+                    raise FileNotFoundError(path)
+                return [type("E", (), {"path": f"{path}/{p.name}", "name": p.name, "is_directory": p.is_dir()})() for p in sorted(d.iterdir())]
+
+            def download(self, path):
+                data = w._p(path).read_bytes()
+                return type("R", (), {"contents": type("C", (), {"read": lambda _s: data})()})()
+
+            def upload(self, path, stream, overwrite=True):
+                w._p(path).parent.mkdir(parents=True, exist_ok=True)
+                w._p(path).write_bytes(stream.read())
+
+        class Jobs:
+            def cancel_run(self, rid):
+                w.cancelled.append(rid)
+
+        self.files, self.jobs = Files(), Jobs()
+
+    def _p(self, path):
+        return self.root / path.lstrip("/")
+
+
+def test_live_results_print_a_row_per_chunk_as_it_ends_and_fetch_its_files(shards, tmp_path):
+    plan = _plan(_args(), ts.select(shards, "pyrx,ds"))
+    w = _VolW(tmp_path / "vol")
+    stage = w._p(plan["stage"])
+    printed = []
+    live = launcher.Live(w, plan, tmp_path / "local", t0=0.0, out=printed.append)
+    assert live.poll(5.0) == [] and printed == [], "no results folder yet"
+    slugs = list(plan["shards"])
+    (stage / "results").mkdir(parents=True)
+    (stage / "out" / slugs[0]).mkdir(parents=True)
+    (stage / "out" / slugs[0] / "junit.xml").write_text(JUNIT)
+    (stage / "results" / f"{slugs[0]}.json").write_text(json.dumps(_line(slugs[0], 100, failed=1)))
+    (stage / "results" / f"{slugs[1]}.json.tmp").write_text("{")  # not a result file
+    got = live.poll(125.0)
+    assert [x["slug"] for x in got] == [slugs[0]]
+    assert printed[0].startswith("  live results") and "+  2m05s  FAILED" in printed[1] and f"first: test/x.py::t_{slugs[0]} AssertionError: boom" in printed[1]
+    assert (tmp_path / "local" / slugs[0] / "junit.xml").exists() and slugs[0] in live.fetched, "its files came down at once"
+    assert live.poll(130.0) == [], "a result is read once"
+    (stage / "results" / f"{slugs[1]}.json").write_text(json.dumps(_line(slugs[1], 140)))
+    assert [x["slug"] for x in live.poll(150.0)] == [slugs[1]] and " ok " in printed[-1]
+    assert live.check() == "" and live.counts() == (2, 1)
+
+
+def test_a_rule_that_fires_stops_the_whole_run_and_says_why(shards, tmp_path, capsys):
+    plan = _plan(_args(), ts.select(shards, "pyrx,ds,zarr"))
+    w = _VolW(tmp_path / "vol")
+    res = w._p(plan["stage"]) / "results"
+    res.mkdir(parents=True)
+    for i, slug in enumerate(list(plan["shards"])[:3]):
+        (res / f"{slug}.json").write_text(json.dumps(_line(slug, 10 + i, errors=1)))
+    live = launcher.Live(w, plan, None, t0=0.0, out=lambda s: None)
+    live.poll(60.0)
+    rule = live.check()
+    assert rule == "the first 3 chunks to finish all failed"
+    launcher.stop_early(w, {"light": 11, "jar": 22}, plan, live, rule)
+    err = capsys.readouterr().err
+    assert "stopped early: the first 3 chunks to finish all failed" in err and err.count("  FAIL [") == 3
+    assert sorted(w.cancelled) == [11, 22], "every pool's job is cancelled: the queue and the running chunks"
+    assert json.loads(w._p(plan["stage"] + "/stop.json").read_text())["rule"] == rule, "the runners' stop marker"
+    assert plan["stopped_early"] == rule
+    md = launcher.summary_md(plan, [], {})
+    assert "**stopped early: the first 3 chunks to finish all failed**" in md and "- fail fast: stop the run at" in md
+
+
+def test_a_failed_smoke_stops_the_job_before_the_runners_and_a_stop_marker_stops_a_runner(shards, tmp_path):
+    a = _args("--max-parallel", "2")
+    plan = launcher.make_plan(a, "a" * 40, ts.select(shards, "pyrx,ds"), None, None, str(tmp_path), REPO_ROOT)
+    stage = Path(plan["stage"])
+    stage.mkdir(parents=True)
+    (stage / "plan.json").write_text(json.dumps(plan))
+    src = "".join(launcher.build_runner_notebook(plan, "gbx-test-1n")["cells"][1]["source"])
+    fake = _FakeDelta()
+    ran = []
+
+    class Spark:
+        def sql(self, q):
+            rows = fake.sql(q)
+            return type("DF", (), {"collect": lambda _self: rows})()
+
+    def dbutils(widgets, result):
+        def run(path, timeout, args):
+            ran.append((widgets["runner"], args["shard"]))
+            return json.dumps(result)
+
+        def exit_(v):
+            raise _Exit(v)
+
+        nbk = type("N", (), {"run": staticmethod(run), "exit": staticmethod(exit_)})
+        return type("D", (), {"widgets": type("W", (), {"get": staticmethod(widgets.__getitem__)}), "notebook": nbk})
+
+    def run_cell(widgets, result=None):
+        exec(compile(src, "runner", "exec"), {"spark": Spark(), "dbutils": dbutils(widgets, result or {"rc": 0, "passed": 1})})  # noqa: S102
+
+    with pytest.raises(_Exit):
+        run_cell({"role": "seed", "pool": "gbx-test-1n"})
+    smoke = plan["pools"]["gbx-test-1n"]["smoke"]
+    bad = {"rc": 2, "errors": 1, "total": 0, "first_failure": {"id": "test/pyrx/test_env.py", "msg": "ImportError: libgdal.so"}}
+    with pytest.raises(RuntimeError, match=r"stopped early: the smoke chunk .* failed .*ImportError: libgdal.so"):
+        run_cell({"role": "smoke", "pool": "gbx-test-1n", "runner": "smoke", "index": "0", "shard_nb": "/w/t"}, bad)
+    assert ran == [("smoke", smoke)], "the smoke task ran the smoke chunk, and only it"
+    line = json.loads((stage / "results" / f"{smoke}.json").read_text())
+    assert line["smoke"] and line["failed_chunk"] and sr.stop_rule([line]) == f"the smoke chunk {smoke} failed"
+    # a runner that starts anyway (a launcher's stop marker is there) claims nothing
+    (stage / "stop.json").write_text(json.dumps({"rule": "the smoke chunk failed"}))
+    with pytest.raises(_Exit) as got:
+        run_cell({"role": "run", "pool": "gbx-test-1n", "runner": "r0", "index": "0", "shard_nb": "/w/t"})
+    assert json.loads(str(got.value)) == {"runner": "r0", "shards": 0, "stopped": "stopped early: the smoke chunk failed"} and len(ran) == 1
+
+
+def test_serverless_cuts_small_chunks_from_its_own_history_without_the_pools_contention(shards, tmp_path, monkeypatch, capsys):
+    # the pool history says ds's files are contention-heavy (5x beside neighbours); Serverless has its own samples for one file
+    ds = next(s for s in shards if s.name == "ds")
+    files = ts.files_of(ds, REPO_ROOT)
+    hist = tmp_path / "h.json"
+    tm.merge(hist, [{"key": f, "s": 120.0, "slots": 1} for f in files], {"run": "pool1"}, [{"key": f, "x": 5.0, "nb": 3} for f in files])
+    tm.merge(hist, [{"key": tm.SLS + files[0], "s": 900.0, "slots": 1}], {"run": "sls1"})
+    h = tm.load(hist)
+    sv, pv = tm.view(h, serverless=True), tm.view(h)
+    assert tm.seconds(sv, 1, adjust=False)[files[0]] == 900.0 and tm.seconds(sv, 1, adjust=False)[files[1]] == 24.0, "its own, else the pool's solo time"
+    assert files[0] in tm.contended(pv) and not any(k.startswith(tm.SLS) for k in pv["keys"]), "a pool plan never reads Serverless keys"
+    assert launcher.main(["--explain-only", "--serverless", "--shards", "ds", "--timings", str(hist)]) == 0
+    out = capsys.readouterr().out
+    assert "x 8 slots" in out and ", heavy" not in out and "smoke (serverless):" in out, "8 runners by default, no heavy gate"
+    m = __import__("re").search(r"cut to about ([\d.]+) min", out)
+    assert m and launcher.SERVERLESS_TARGET[0] <= float(m.group(1)) <= launcher.SERVERLESS_TARGET[1], out
+    plan = _plan(_args("--serverless"), ts.select(shards, "ds"))
+    assert set(plan["pools"]) == {"serverless"} and plan["pools"]["serverless"]["slots"] == launcher.SERVERLESS_SLOTS
+    assert launcher.job_tasks(plan, "serverless", {"runner": "/r", "shard": "/s"}, [])[1]["environment_key"] == "gbx_env6"
+
+
+def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower_bounds(tmp_path):
+    files = _ds_files(2)
+    picked = [ts.Shard(name="ds [1/2]", kind="light", paths=[files[0]], est_min=3.0, solo_min=3.0, est_src="history"),
+              ts.Shard(name="ds [2/2]", kind="light", paths=[files[1]], est_min=3.0, solo_min=3.0, est_src="history")]
+    plan = _plan(_args("--serverless"), picked)
+    plan["stopped_early"] = "the first 3 chunks to finish all failed"
+    out = tmp_path / "out"
+    _junit(out / "ds-1-2" / "junit.xml", [(_mod(files[0]), "a", 200)])
+    _junit(out / "ds-2-2" / "junit.xml", [(_mod(files[1]), "b", 30)])
+    records = {"serverless": [{"runner": "r0", "shards": [_shard_rec("ds-1-2", 0, 260)]}, {"runner": "r1", "shards": [_shard_rec("ds-2-2", 0, 100)]}]}
+    rows = [{"name": n, "slug": s, "pool": "serverless", "verdict": v, "expected_min": 3.0, "passed": 1, "failed": 1, "errors": 0,
+             "skipped": 0, "wall_s": 100, "reason": "", "claims": 1, "est_src": "history", "actual_s": act, "failures": [],
+             "skip_reasons": {}, "maxfail_hit": hit} for n, s, v, act, hit in (("ds [1/2]", "ds-1-2", "FAILED", 260, False),
+                                                                             ("ds [2/2]", "ds-2-2", "FAILED", 100, True))]
+    got = launcher.record_timings(tmp_path / "h.json", plan, rows, out, records)
+    h = tm.load(tmp_path / "h.json")
+    assert got["contention"] == 0 and rows[0]["nb"] == 0, "Serverless runners have no neighbours"
+    assert set(h["keys"]) == {tm.SLS + files[0], tm.SLS + files[1]}, "Serverless samples under their own keys"
+    full = h["keys"][tm.SLS + files[0]]["samples"][0]
+    assert full == {"s": 200.0, "run": "t1", "slots": 1, "lb": False}, "a failed chunk that ran to its end is a full sample"
+    lb = h["keys"][tm.SLS + files[1]]["samples"][0]
+    assert lb["lb"] and lb["stop"] == "the first 3 chunks to finish all failed", "--maxfail cut the chunk short: a flagged lower bound"
+    assert h["runs"][-1]["stopped_early"] == "the first 3 chunks to finish all failed" and h["runs"][-1]["serverless"]
+
+
+def test_collect_says_which_chunks_the_stop_left_unrun(shards, monkeypatch, tmp_path):
+    plan = _picked_plan(shards)
+    plan["stopped_early"] = "5 chunks failed (--max-failed-chunks 5)"
+    queue = plan["pools"]["gbx-test-1n"]["queue"]
+    monkeypatch.setattr(launcher.mut, "download_dir", lambda w, remote, local: [])
+    recs = {"gbx-test-1n": [{"runner": "r0", "shards": [{"slug": queue[0], "start": 0, "end": 9}]}]}
+    rows = {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}
+    assert rows[queue[0]]["reason"] == "stopped early (5 chunks failed (--max-failed-chunks 5)) while it ran"
+    assert rows[queue[1]]["reason"] == "not run: stopped early (5 chunks failed (--max-failed-chunks 5))" and rows[queue[1]]["verdict"] == "INCOMPLETE"

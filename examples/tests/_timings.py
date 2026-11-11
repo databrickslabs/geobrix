@@ -17,6 +17,12 @@ more marks the key contention-heavy: the planner treats it as a heavy unit (at m
 plans it at its solo time times its factor. A sample taken beside neighbours is deflated by its run's ``x`` before it joins the
 solo estimate, so the factor is never counted twice.
 
+Serverless: a run there records its samples under ``sls:<key>`` (each runner task has compute of its own, so a sample is a chunk
+alone, and no contention record is made). A Serverless plan reads ``view(h, serverless=True)``: a key's ``sls:`` samples where it has
+them, else its pool samples without their contention records. A pool plan never sees the ``sls:`` keys.
+
+A run that stopped early (fail fast) flags its lower bounds with the rule (``stop``) and its run entry with ``stopped_early``.
+
 Writers take an exclusive ``fcntl`` lock on ``<file>.lock``, read, merge and replace the file atomically (``os.replace`` of a
 temporary in the same folder), so two runs that finish together keep both their samples.
 """
@@ -48,6 +54,7 @@ KEEP = 20  # the samples kept per key
 FAMILY_FILE = "test/manager/test_family_cross_tier.py"
 REST = "table:*"
 FUNCTIONS_JSON = "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+SLS = "sls:"  # the prefix of a Serverless run's keys
 
 
 # ---------------------------------------------------------------------------------------------- the file
@@ -118,7 +125,7 @@ def merge(path, samples: Iterable[dict], run: dict, contention: Iterable[dict] =
                 continue
             slots = int(smp.get("slots") or 1)
             entry["samples"].append({"s": round(float(smp["s"]) / ts.slowdown(slots), 2), "run": run_id, "slots": slots,
-                                     "lb": bool(smp.get("lb"))})
+                                     "lb": bool(smp.get("lb")), **({"stop": str(smp["stop"])} if smp.get("stop") else {})})
             entry["samples"] = entry["samples"][-KEEP:]
             added["lower_bounds" if smp.get("lb") else "keys"] += 1
         if run_id and not any(r.get("run") == run_id for r in h["runs"]):
@@ -128,6 +135,20 @@ def merge(path, samples: Iterable[dict], run: dict, contention: Iterable[dict] =
 
 
 # ---------------------------------------------------------------------------------------------- estimates
+
+
+def view(h: dict, serverless: bool = False) -> dict:
+    """The history a plan reads. A pool plan: every key but the ``sls:`` ones. A Serverless plan: per key, its ``sls:`` entry where
+    there is one, else its pool entry, read with ``adjust=False`` and no contended keys (a Serverless runner has no neighbours on its
+    compute): the pool's contention records then only deflate their samples to the solo time."""
+    keys = h.get("keys", {})
+    if not serverless:
+        return dict(h, keys={k: v for k, v in keys.items() if not k.startswith(SLS)})
+    out = {k: dict(v) for k, v in keys.items() if not k.startswith(SLS)}
+    for k, v in keys.items():
+        if k.startswith(SLS) and v.get("samples"):
+            out[k[len(SLS):]] = {"samples": list(v["samples"])}
+    return dict(h, keys=out)
 
 
 def contention_of(entry: dict) -> Optional[float]:
@@ -315,10 +336,22 @@ def case_seconds(junit: Path, root: Path, chunk_tables: List[str], fn_table: Dic
 
 
 def run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path, root: Path, slots: int,
-                fn_table: Optional[Dict[str, str]] = None) -> List[dict]:
+                fn_table: Optional[Dict[str, str]] = None, stop: str = "", prefix: str = "") -> List[dict]:
     """The samples one chunk leaves. A finished chunk: the seconds of each key from its junit. A chunk that did not finish
-    (INCOMPLETE: a cap, a stall, a crash): its keys that finished are full samples; the key it was in when it stopped and the keys
-    it never reached share what its elapsed time leaves over as lower bounds, so none of them is underestimated next time."""
+    (INCOMPLETE: a cap, a stall, a crash, --maxfail, a fail-fast stop): its keys that finished are full samples; the key it was in
+    when it stopped and the keys it never reached share what its elapsed time leaves over as lower bounds, so none of them is
+    underestimated next time. ``stop`` (the fail-fast rule that stopped the run) flags those lower bounds; ``prefix`` (``sls:``)
+    names the keys of a Serverless run."""
+    out = _run_samples(chunk, verdict, busy_s, junit, root, slots, fn_table)
+    for x in out:
+        x["key"] = prefix + x["key"]
+        if stop and x["lb"]:
+            x["stop"] = stop
+    return out
+
+
+def _run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path, root: Path, slots: int,
+                 fn_table: Optional[Dict[str, str]] = None) -> List[dict]:
     if verdict in ("EMPTY", "ERRORS"):  # nothing ran, or pytest stopped before the tests: no times to learn from
         return []
     tables = list(chunk.get("tables") or [])

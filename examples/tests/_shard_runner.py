@@ -20,6 +20,11 @@ Each shard runs in its own notebook run (``dbutils.notebook.run``): its own exec
 and its own Spark session (confs and temp views), on the cluster's driver JVM. That is what a job task gave each shard
 before. The shard notebook keeps its watchdog (--shard-cap-min, --stall-min); the runner adds the outer timeout, records a
 shard that did not finish, and goes on with the next one.
+
+Fail fast: each chunk that ends leaves a one-line result (``results/<slug>.json``: the counts and its first failure) in the run's
+Volume folder at once. ``stop_rule`` reads those, in the order the chunks ended, against the run's policy (the first K chunks all
+failed, N failed chunks, M failed tests). The launcher applies it and cancels the run; a runner applies it too before each claim, and
+claims nothing more once it fires (or once the launcher's ``stop.json`` is there), so a run stops even when its launcher is gone.
 """
 
 import json
@@ -215,21 +220,32 @@ def _fired(watchdog: Optional[Callable[[], str]]) -> str:
 
 def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable[[], float] = time.time, offset: int = 0,
              on_change: Optional[Callable[[dict], None]] = None, heavy: Iterable[str] = (), gate: Optional[HeavyGate] = None,
-             wait_s: float = 10.0, sleep: Callable[[float], None] = time.sleep) -> dict:
+             wait_s: float = 10.0, sleep: Callable[[float], None] = time.sleep, stop: Optional[Callable[[], str]] = None,
+             on_result: Optional[Callable[[str, dict, float, float], None]] = None, limit: int = 0) -> dict:
     """Claim and run shards until the queue is empty. ``execute(slug)`` runs one shard and returns its result; an exception
     from it is recorded as the shard's reason and the loop goes on. Returns the runner's record: when it started and ended,
     and per shard the claim time, the start, the end, rc and reason.
 
     ``heavy`` names the chunks that run one at a time per cluster, and ``gate`` is the cluster's lock for them: a runner takes the
     gate before it claims, and keeps it only for a heavy chunk. Without the gate it claims light chunks, and waits (``wait_s``)
-    when only heavy ones are left."""
+    when only heavy ones are left.
+
+    ``stop()`` is asked before each claim: a reason ("" to go on) ends the loop and is kept as the record's ``stopped``.
+    ``on_result(slug, result, start, end)`` is called the moment a shard ends (the one-line result the launcher polls). ``limit``
+    caps the shards this runner takes (the smoke task takes one)."""
     note = on_change or (lambda rec: None)
     heavy = set(heavy)
     gated = bool(heavy and gate)
-    rec = {"runner": who, "start": clock(), "end": None, "current": None, "done": False, "shards": [], "error": ""}
+    rec = {"runner": who, "start": clock(), "end": None, "current": None, "done": False, "shards": [], "error": "", "stopped": ""}
     note(rec)
     first = True
     while True:
+        if limit and len(rec["shards"]) >= limit:
+            break
+        why = _ask(stop)
+        if why:
+            rec["stopped"] = why
+            break
         t_claim = clock()
         held = gate.try_acquire() if gated else True
         try:
@@ -262,10 +278,94 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
                               "reason": out.get("reason") or "", "pid": out.get("pid"), "isolation": out.get("isolation"),
                               "heavy": slug in heavy, **{k: out.get(k) for k in ("passed", "failed", "errors", "skipped")}})
         rec["current"] = None
+        if on_result is not None:
+            try:
+                on_result(slug, out, t0, t1)
+            except Exception as exc:  # noqa: BLE001 - the live result is a report; the run goes on without it
+                rec["error"] = rec["error"] or f"result not written for {slug}: {type(exc).__name__}: {str(exc)[:200]}"
         note(rec)
     rec["end"], rec["done"] = clock(), True
     note(rec)
     return rec
+
+
+def _ask(stop: Optional[Callable[[], str]]) -> str:
+    try:
+        return str((stop() if stop else "") or "")
+    except Exception:  # noqa: BLE001 - a stop check that cannot read its inputs never stops a run
+        return ""
+
+
+# ---------------------------------------------------------------------------------------------- fail fast
+
+# The default policy (``--first-failed``, ``--max-failed-chunks``, ``--max-failures``, ``--maxfail``): stop the run when the first 3
+# chunks to end all failed, or 5 chunks failed, or 20 tests failed; and stop each chunk's pytest at its 3rd failure.
+POLICY = {"first_k": 3, "max_failed_chunks": 5, "max_failures": 20, "maxfail": 3, "off": False}
+
+
+def chunk_failed(res: dict) -> bool:
+    """Whether a chunk's result fails the run: a test failed or errored (collection included), pytest ended with an error code, or
+    the chunk ended without finishing (a watchdog stop, no result). A chunk that collected nothing (rc 5) is not a failure here."""
+    if not res:
+        return True
+    if res.get("rc") == 5 and not (res.get("failed") or res.get("errors")):
+        return False
+    return bool(res.get("reason")) or res.get("rc") not in (0,) or bool(res.get("failed")) or bool(res.get("errors"))
+
+
+def result_line(slug: str, res: dict, start: float, end: float, runner: str = "") -> dict:
+    """The one-line result a chunk leaves the moment it ends (``results/<slug>.json``): counts, the verdict for fail fast, and its
+    first failure (test id and a short message), or why it ended without a result."""
+    first = res.get("first_failure") or {}
+    if not first and res.get("reason"):
+        first = {"id": "", "msg": str(res.get("reason"))[:300]}
+    return {"slug": slug, "runner": runner, "start": start, "end": end, "rc": res.get("rc"), "reason": res.get("reason") or "",
+            "failed_chunk": chunk_failed(res), "maxfail_hit": bool(res.get("maxfail_hit")), "smoke": bool(res.get("smoke")),
+            "first_failure": first, **{k: int(res.get(k) or 0) for k in ("passed", "failed", "errors", "skipped", "total")}}
+
+
+def stop_rule(results: List[dict], policy: Optional[dict] = None) -> str:
+    """Why the run should stop now ("" to go on), from the one-line results of the chunks that ended (any order: they are taken in
+    the order they ended). Rules, in this order: a smoke chunk failed; the first ``first_k`` chunks to end all failed; ``max_failed_chunks``
+    chunks failed; ``max_failures`` tests failed or errored over the chunks. A rule set to 0 is off; ``off`` turns all but the smoke off."""
+    p = dict(POLICY, **(policy or {}))
+    done = sorted((r for r in results if r), key=lambda r: (float(r.get("end") or 0), str(r.get("slug"))))
+    bad = [r for r in done if r.get("failed_chunk")]
+    smoke = [r for r in bad if r.get("smoke")]
+    if smoke:
+        return f"the smoke chunk {smoke[0].get('slug')} failed"
+    if p.get("off"):
+        return ""
+    k = int(p.get("first_k") or 0)
+    if k and len(done) >= k and all(r.get("failed_chunk") for r in done[:k]):
+        return f"the first {k} chunks to finish all failed"
+    n = int(p.get("max_failed_chunks") or 0)
+    if n and len(bad) >= n:
+        return f"{len(bad)} chunks failed (--max-failed-chunks {n})"
+    m = int(p.get("max_failures") or 0)
+    tests = sum(int(r.get("failed") or 0) + int(r.get("errors") or 0) for r in done)
+    if m and tests >= m:
+        return f"{tests} tests failed or errored (--max-failures {m})"
+    return ""
+
+
+def read_results(folder: str) -> List[dict]:
+    """The one-line results under ``folder`` (the node reads the Volume's FUSE mount); [] while there are none. A file being
+    written (not yet JSON) is skipped until the next read."""
+    out = []
+    try:
+        names = sorted(os.listdir(folder))
+    except OSError:
+        return out
+    for n in names:
+        if not n.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(folder, n)) as f:
+                out.append(json.load(f))
+        except (OSError, ValueError):
+            continue
+    return out
 
 
 def slot_metrics(records: List[dict]) -> dict:

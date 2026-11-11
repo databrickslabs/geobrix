@@ -49,13 +49,46 @@ SERIES = (
 W_PERF_UNITS = tuple(f"m{i}" for i in (0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 13))
 
 
+def head_sha12(cwd: Optional[str] = None) -> str:
+    """The first 12 hex digits of the checkout's HEAD. Raises ValueError outside a git checkout."""
+    import subprocess
+
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(
+            f"cannot read the checkout's HEAD ({type(exc).__name__}); pass --volume-dir"
+        ) from exc
+    sha = res.stdout.strip()
+    if res.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError(
+            "cannot read the checkout's HEAD (not a git checkout); pass --volume-dir"
+        )
+    return sha[:12]
+
+
+def default_volume_dir(
+    volroot: str = DEFAULT_VOLROOT, sha12: Optional[str] = None
+) -> str:
+    """The pass's UC folder: ``<volroot>/t28/<sha12>``, one per commit as gbx:uc:tests stages ``uc-it/<sha12>/``.
+
+    A restaged wheel of a new commit lands in a new folder, so an install never relies on UC's cache of a wheel that
+    had the same path before."""
+    return f"{volroot.rstrip('/')}/t28/{sha12 or head_sha12()}"
+
+
 @dataclass
 class Params:
     catalog: str = DEFAULT_CATALOG
     schema: str = DEFAULT_SCHEMA  # the base name: <schema>_w, _s6, _s6j, _se
-    volume_dir: str = (
-        f"{DEFAULT_VOLROOT}/t28/uc-py"  # the folder that holds the env 6 wheel alone
-    )
+    # the folder that holds the env 6 wheel alone: "" means <volroot>/t28/<sha12> of the checkout's HEAD
+    volume_dir: str = ""
     jar: str = (
         f"{DEFAULT_VOLROOT}/geobrix/0.6.0/jar/geobrix-0.6.0-jar-with-dependencies.jar"
     )
@@ -68,6 +101,10 @@ class Params:
     cluster_id: Optional[str] = (
         None  # the P1 cluster; its notebooks are written only when it is known
     )
+
+    def __post_init__(self) -> None:
+        if not self.volume_dir:
+            self.volume_dir = default_volume_dir(self.volroot)
 
     def schema_of(self, key: str) -> str:
         return f"{self.schema}_{key}"
@@ -981,7 +1018,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         default=DEFAULT_SCHEMA,
         help="base name of the four scratch schemas (default %(default)s)",
     )
-    ap.add_argument("--volume-dir", default=Params.volume_dir)
+    ap.add_argument(
+        "--volume-dir",
+        default="",
+        help="the folder that holds the env 6 wheel alone (default <volroot>/t28/<sha12 of HEAD>)",
+    )
     ap.add_argument("--jar", default=Params.jar)
     ap.add_argument("--volroot", default=DEFAULT_VOLROOT)
     ap.add_argument("--out-dir", default=Params.out_dir)
@@ -1014,18 +1055,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except RuntimeError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    p = Params(
-        a.catalog,
-        a.schema,
-        a.volume_dir,
-        a.jar,
-        a.volroot,
-        a.out_dir,
-        a.profile,
-        a.ws_root,
-        a.cluster_id,
-    )
     try:
+        p = Params(
+            a.catalog,
+            a.schema,
+            a.volume_dir,
+            a.jar,
+            a.volroot,
+            a.out_dir,
+            a.profile,
+            a.ws_root,
+            a.cluster_id,
+        )
         for kind, value in (("catalog", p.catalog), ("schema", p.schema)):
             from databricks.labs.gbx.uc.ddl import (
                 check_jar_path,

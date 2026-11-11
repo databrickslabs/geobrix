@@ -20,7 +20,7 @@ show_help() {
     echo "Options:"
     echo "  --catalog C       Catalog of the scratch schemas (default geospatial_docs)"
     echo "  --schema S        Base name of the four scratch schemas S_w, S_s6, S_s6j, S_se (default geobrix_t28)"
-    echo "  --volume-dir DIR  Volume folder that holds the env 6 wheel alone (default <volroot>/t28/uc-py)"
+    echo "  --volume-dir DIR  Volume folder that holds the env 6 wheel alone (default <volroot>/t28/<sha12 of HEAD>)"
     echo "  --jar PATH        The JAR on a Volume, for the Scala forms (default <volroot>/geobrix/0.6.0/jar/geobrix-0.6.0-jar-with-dependencies.jar)"
     echo "  --volroot DIR     Volume root of the flat env wheels (default /Volumes/geospatial_docs/geobrix/sample-data)"
     echo "  --out-dir DIR     Where the files go (default .superpowers/streamline/t28)"

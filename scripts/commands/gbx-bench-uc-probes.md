@@ -7,7 +7,7 @@ Write the notebooks and statement files of the batched workspace pass into one f
 **Options:**
 - `--catalog C` - catalog of the scratch schemas. Default `geospatial_docs`.
 - `--schema S` - base name of the four scratch schemas `S_w`, `S_s6`, `S_s6j`, `S_se`. Default `geobrix_t28`.
-- `--volume-dir DIR` - Volume folder that holds the env 6 wheel alone. Default `<volroot>/t28/uc-py`.
+- `--volume-dir DIR` - Volume folder that holds the env 6 wheel alone. Default `<volroot>/t28/<sha12>`, one folder per commit (the first 12 digits of HEAD).
 - `--jar PATH` - the JAR on a Volume, for the Scala forms. Default `<volroot>/geobrix/0.6.0/jar/geobrix-0.6.0-jar-with-dependencies.jar`.
 - `--volroot DIR` - Volume root of the flat env wheels. Default `/Volumes/geospatial_docs/geobrix/sample-data`.
 - `--out-dir DIR` - where the files go. Default `.superpowers/streamline/t28`.

@@ -440,3 +440,27 @@ def test_the_classic_cluster_oracle_notebooks_install_the_vizx_extra(plan):
     by = {f.name: f for f in files}
     for name in ("register_ded.ipynb", "register_std.ipynb"):
         assert "[vizx]" in by[name].content, name
+
+
+def test_the_uc_folder_is_one_per_commit(monkeypatch):
+    # a restaged wheel of a new commit must land in a new folder, so an install never relies on UC's cached wheel
+    monkeypatch.setattr(t28, "head_sha12", lambda cwd=None: "0123456789ab")
+    assert t28.Params().volume_dir == f"{t28.DEFAULT_VOLROOT}/t28/0123456789ab"
+    monkeypatch.setattr(t28, "head_sha12", lambda cwd=None: "ba9876543210")
+    assert t28.Params().volume_dir == f"{t28.DEFAULT_VOLROOT}/t28/ba9876543210"
+    assert t28.Params(volume_dir="/Volumes/c/s/v/x").volume_dir == "/Volumes/c/s/v/x"
+    assert (
+        t28.default_volume_dir("/Volumes/c/s/v/", "aaaaaaaaaaaa")
+        == "/Volumes/c/s/v/t28/aaaaaaaaaaaa"
+    )
+
+
+def test_head_sha12_is_the_checkouts_head_and_refuses_outside_git(tmp_path):
+    import subprocess
+
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True
+    ).stdout.strip()
+    assert t28.head_sha12(str(REPO)) == head[:12]
+    with pytest.raises(ValueError, match="--volume-dir"):
+        t28.head_sha12(str(tmp_path))

@@ -54,6 +54,7 @@ from databricks.labs.gbx._transport import (  # noqa: F401  (re-exported)
     _LossyCellId,
 )
 from databricks.labs.gbx._transport import tile_udf as _tile_udf
+from databricks.labs.gbx._transport import tile_udtf as _tile_udtf
 from databricks.labs.gbx.engine._tile import cellid as _tile_cellid  # noqa: F401
 from databricks.labs.gbx.engine._tile import (  # noqa: F401
     error_tile_of as _error_tile_of,
@@ -1369,27 +1370,22 @@ def _array_member_bytes(tile):
 
 
 def _group_udf(fn):
-    """A tile UDF over a whole group (``ARRAY<tile>`` first, one tile out): an Arrow-optimized UDF, so the rows cross
-    the JVM <-> Python boundary as Arrow buffers.
+    """A tile UDF over a whole group (``ARRAY<tile>`` first, one tile out) whose rows cross the JVM <-> Python boundary
+    as Arrow buffers on every runtime.
 
     ``gbx_rst_combine*(collect_list(tile))`` hands Python a group of N tiles of tens of MB as ONE row. A scalar
     (pickled) UDF makes the executor JVM pickle the rows on its heap (about 100 rows per pickle, copied as the buffer
     grows), and at the default shuffle width that exhausted the heap (JVM OutOfMemoryError, executors lost) over
-    1000 groups x 2 tiles x 13 MB. Arrow keeps the same rows in off-heap buffers. The answer is the same: a row UDF
-    over the same function, only the transport differs (see :func:`_exact_member` for the one place it shows). The
-    tiles of every group of the task's partition still arrive in one batch (up to 10000 rows), so a group the
-    executor cannot hold needs ``combine_by_key``, which streams a key's members.
+    1000 groups x 2 tiles x 13 MB. Arrow keeps the same rows in off-heap buffers. On Spark 4.1+ it is the session's
+    ``arrow`` form (an ``arrow_udf``: the members' integers exact); on Spark 4.0, which has no ``arrow_udf``, it is the
+    Arrow-optimized row UDF (``arrow_row``), which restores a member's integers below 2**53 and refuses a larger cell id
+    (see :func:`_exact_member`) rather than pickle the group. The tiles of every group of the task's partition still
+    arrive in one batch (up to 10000 rows), so a group the executor cannot hold needs ``combine_by_key``, which streams
+    a key's members.
     """
-
-    @functools.wraps(fn)
-    def run(tiles, *rest):
-        try:
-            members = None if tiles is None else [_exact_member(t) for t in tiles]
-        except _LossyCellId as exc:
-            return _serde.build_error_tile(str(exc), 0)
-        return fn(members, *rest)
-
-    return f.udf(run, V2_TILE_SCHEMA, useArrow=True)
+    return SessionTileUdf(
+        fn, V2_TILE_SCHEMA, tiles=(), tile_arrays=(0,), fallback="arrow_row"
+    )
 
 
 # rst_combineavg: single ARRAY<tile struct> arg -> per-pixel mean tile.
@@ -3000,7 +2996,7 @@ def _dtmfromgeoms_udf(
 # Each UDTF row IS the tile struct (V2_TILE_SCHEMA: 9-field v2 tile with cellid, raster, metadata, path_mode, etc).
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstSeparateBandsUDTF:
     """Streaming UDTF: yield one single-band tile struct per band."""
 
@@ -3053,7 +3049,7 @@ def _cut_tile(raster_bytes, cellid, window, whole_input_of=None, band=None):
     )
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstRetileUDTF:
     """Streaming UDTF: yield one sub-tile struct per non-overlapping window."""
 
@@ -3084,7 +3080,7 @@ class _RstRetileUDTF:
             return
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstToOverlappingTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per overlapping window."""
 
@@ -3116,7 +3112,7 @@ class _RstToOverlappingTilesUDTF:
             return
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstMakeTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per power-of-4 split tile."""
 
@@ -3158,7 +3154,7 @@ class _RstMakeTilesUDTF:
             return
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstH3TessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping H3 cell."""
 
@@ -3221,7 +3217,7 @@ def _light_rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
     return _RstRetileUDTF(tc, _col(tile_width), _col(tile_height), file_ref_arg(tc))
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstQuadbinTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping quadbin cell."""
 
@@ -3264,7 +3260,7 @@ class _RstQuadbinTessellateUDTF:
             return
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstBngTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping BNG cell.
 
@@ -3328,7 +3324,7 @@ class _RstBngTessellateUDTF:
 # cellID is LONG (custom cell IDs are signed int64 by construction).
 
 
-@udtf(returnType=V2_TILE_SCHEMA)
+@_tile_udtf(returnType=V2_TILE_SCHEMA)
 class _RstCustomTessellateUDTF:
     """Streaming UDTF: yield one clipped tile struct per overlapping custom-grid cell."""
 
@@ -3498,7 +3494,7 @@ _XYZPYRAMID_ROW_SCHEMA = StructType(
 )
 
 
-@udtf(returnType=_XYZPYRAMID_ROW_SCHEMA)
+@_tile_udtf(returnType=_XYZPYRAMID_ROW_SCHEMA)
 class _RstXyzPyramidUDTF:
     """Streaming UDTF: yield one (z, x, y, bytes) row per intersecting XYZ tile.
 
@@ -3709,7 +3705,7 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     """
     if grid == "custom":
 
-        @udtf(returnType=flat_schema)
+        @_tile_udtf(returnType=flat_schema)
         class _CustomRasterToGridUDTF:
             def eval(
                 self, tile, grid_struct, resolution, coverage=None, assignment=None
@@ -3727,7 +3723,7 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
 
         return _CustomRasterToGridUDTF
 
-    @udtf(returnType=flat_schema)
+    @_tile_udtf(returnType=flat_schema)
     class _RasterToGridUDTF:
         def eval(self, tile, resolution, coverage=None, assignment=None):
             yield from _rastertogrid_rows(

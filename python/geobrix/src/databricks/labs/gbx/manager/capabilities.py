@@ -483,26 +483,26 @@ def _udtf_partition_probe(
     return probe
 
 
-LEGACY_PANDAS_UDF_CONVERSION = (
-    "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled"
+LEGACY_PANDAS_UDTF_CONVERSION = (
+    "spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled"
 )
 
 
-def _arrow_udf_rows_probe(spark) -> Tuple[bool, str]:
-    """Whether an Arrow-optimized Python UDF gets its arguments as the pickled form does (no Spark work: a conf read).
+def _arrow_udtf_rows_probe(spark) -> Tuple[bool, str]:
+    """Whether an Arrow-optimized Python UDTF gets its arguments as the pickled form does (no Spark work: a conf read).
 
-    With ``spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled`` on, the arguments go through pandas: an INT
-    or BIGINT arrives as float64 (a BIGINT past 2**53 rounded) and a NULL INT, BIGINT or DOUBLE as NaN. Dedicated DBR 19
-    (Spark 4.2.0) turns it on by default and gbx_rst_band(tile, NULL) failed there; Serverless environment 6 and open
-    source Spark 4.1+ hand the values over exactly. Serverless allows no conf read, so it reads as off there.
+    With ``spark.sql.legacy.execution.pythonUDTF.pandas.conversion.enabled`` on, the arguments go through pandas: an
+    INT or BIGINT arrives as float64 (a BIGINT past 2**53 rounded) and a NULL INT as NaN. Dedicated and standard
+    DBR 19 (Spark 4.2.0) leave it off, and a probe there and on Serverless environment 6 handed BIGINT 2**62+1, NULL
+    ints and NULL structs over exactly. Serverless allows no conf read, so it reads as off there.
     """
-    value = _conf_value(spark, LEGACY_PANDAS_UDF_CONVERSION)
+    value = _conf_value(spark, LEGACY_PANDAS_UDTF_CONVERSION)
     if (value or "").strip().lower() == "true":
         return False, (
-            f"{LEGACY_PANDAS_UDF_CONVERSION}=true: an Arrow UDF would get INT and BIGINT as float64 and NULL as NaN; "
-            "set it to false on the cluster to carry the tile rows as Arrow batches"
+            f"{LEGACY_PANDAS_UDTF_CONVERSION}=true: an Arrow UDTF would get INT and BIGINT as float64 and NULL as "
+            "NaN; set it to false on the cluster to carry the tile rows of the table functions as Arrow batches"
         )
-    return True, f"{LEGACY_PANDAS_UDF_CONVERSION}={value}"
+    return True, f"{LEGACY_PANDAS_UDTF_CONVERSION}={value}"
 
 
 def _sql_file_type_probe(spark) -> Tuple[bool, str]:
@@ -598,12 +598,22 @@ REGISTRY: Dict[str, Capability] = _caps(
     Capability(
         "arrow_tile_transport",
         "a tile op's rows cross the JVM <-> Python boundary as Arrow batches (off the executor heap, a batch bounded "
-        "by spark.sql.execution.arrow.maxBytesPerBatch), not as pickles of up to 100 tiles built on the heap; Spark "
-        "4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, so 4.0 keeps the "
-        "pickles, and so does a session whose Arrow UDFs convert through pandas (the legacy conversion conf on)",
+        "by spark.sql.execution.arrow.maxBytesPerBatch), not as pickles of up to 100 tiles built on the heap. The "
+        "UDF is an arrow_udf (pyarrow arrays in and out, no pandas), which hands INT, BIGINT and NULL over exactly "
+        "whatever the legacy pandas conversion conf says; Spark 4.0 has no arrow_udf and keeps the pickles",
+        client=lambda: _has_arrow_eval("SCALAR"),
         min_server=(4, 1),
-        probe=_arrow_udf_rows_probe,
         default_when_present=True,  # dedicated DBR 19: 3.6x the time for 4x the rows, where the pickles took 8x
+    ),
+    Capability(
+        "arrow_tile_udtf_transport",
+        "a tile table function's rows cross the JVM <-> Python boundary as Arrow batches (the Arrow-optimized row "
+        "UDTF; a LATERAL join takes no pyarrow UDTF), not as pickles; Spark 4.0 and a session with the legacy UDTF "
+        "pandas conversion on hand it INT and BIGINT as float64 and NULL as NaN, so they keep the pickles",
+        client=lambda: _has_function("udtf"),
+        min_server=(4, 1),
+        probe=_arrow_udtf_rows_probe,
+        default_when_present=True,
     ),
     Capability(
         "arrow_max_bytes_per_batch",
@@ -853,10 +863,15 @@ def _tile_udf_path(spark) -> str:
     return "arrow" if has(spark, "arrow_tile_transport") else "pickle"
 
 
+def _tile_udtf_path(spark) -> str:
+    return "arrow" if has(spark, "arrow_tile_udtf_transport") else "pickle"
+
+
 # op -> which path a session takes for it (the label a log line or a bench row carries)
 _PATHS: Dict[str, Callable[[Any], str]] = {
     "merge_agg": _merge_agg_path,
     "tile_udf": _tile_udf_path,
+    "tile_udtf": _tile_udtf_path,
 }
 
 

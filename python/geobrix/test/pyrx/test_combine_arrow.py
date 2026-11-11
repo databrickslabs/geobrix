@@ -82,9 +82,17 @@ def _all_combine_udfs():
     "udf", [u for _, u in _all_combine_udfs()], ids=[n for n, _ in _all_combine_udfs()]
 )
 def test_combine_udfs_cross_as_arrow_batches(udf):
-    """An Arrow-optimized UDF (SQL_ARROW_BATCHED_UDF) keeps a group's tiles off the executor JVM heap; the
-    scalar (pickled) form is what ran executors out of memory."""
-    assert udf.evalType == PythonEvalType.SQL_ARROW_BATCHED_UDF
+    """Every session runs a combine UDF as Arrow batches, which keep a group's tiles off the executor JVM heap: the
+    arrow_udf form on Spark 4.1+, the Arrow-optimized row UDF (SQL_ARROW_BATCHED_UDF) on Spark 4.0. The scalar
+    (pickled) form is what ran executors out of memory, so it is never a session's choice.
+    """
+    from databricks.labs.gbx import _transport
+
+    udf = getattr(udf, "_f", udf)
+    assert isinstance(udf, _transport.SessionTileUdf) and udf.fallback == "arrow_row"
+    assert udf.form("arrow_row").evalType == PythonEvalType.SQL_ARROW_BATCHED_UDF
+    if _transport.has_arrow_udf():
+        assert udf.form("arrow").evalType == PythonEvalType.SQL_SCALAR_ARROW_UDF
 
 
 # ---------------------------------------------------------------------------

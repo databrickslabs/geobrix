@@ -134,12 +134,9 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     elif "udtf" in spec:
         table_fn = resolve_ref(spec["udtf"])
         if spec.get("arrow"):
-            # Arrow batches between the JVM and Python: the same class and schema, registered as an Arrow UDTF
-            from pyspark.sql.functions import udtf
-
-            table_fn = udtf(
-                table_fn.func, returnType=table_fn.returnType, useArrow=True
-            )
+            # a table function over tiles or large BINARY: Arrow batches between the JVM and Python where the session
+            # hands an Arrow UDTF its arguments exactly (``arrow_tile_udtf_transport``), pickles elsewhere
+            table_fn = _session_udtf(table_fn).for_session(spark)
         reg.udtf.register(name, table_fn)
     else:
         raise ValueError(
@@ -150,6 +147,15 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
         from databricks.labs.gbx.manager import jvm, sqlwrap
 
         jvm._create_wrapper(spark, fn, sqlwrap.default_wrapper(fn, target))
+
+
+def _session_udtf(table_fn):
+    """*table_fn* as a ``SessionTileUdtf`` (the same handler class and return type), when it is not one already."""
+    from databricks.labs.gbx._transport import SessionTileUdtf
+
+    if isinstance(table_fn, SessionTileUdtf):
+        return table_fn
+    return SessionTileUdtf(table_fn.func, table_fn.returnType)
 
 
 def _needs_default_wrapper(spark, fn, spec, name: str, built=None) -> bool:
@@ -251,7 +257,8 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
     default anywhere else, Spark Connect included): the row-wise UDF alone. A generator row (a table function) registers
-    its UDTF: the row UDTF for ``engine-c0``, the Arrow-optimized one for ``engine-c1``. A row whose output is features has
+    its UDTF: the row UDTF for ``engine-c0``, the Arrow-optimized one for ``engine-c1`` where the session's tile UDTF
+    transport is Arrow (the row UDTF elsewhere, and the returned form says ``engine-c0``). A row whose output is features has
     no batch form: every form registers its row-wise UDF, and the returned form says ``engine-c0``. The default is the form the row
     measured fastest (``levels.engine_form``).
     """
@@ -268,7 +275,12 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
         # a table function: no SQL wrapper and no batch UDF. engine-c0 is the row UDTF, engine-c1 the Arrow-optimized one
         from databricks.labs.gbx.ds.file_gbx import report_detected_cap
 
-        arrow = form == "engine-c1"
+        # engine-c1 is the Arrow-optimized UDTF where the session hands it its arguments exactly; Spark 4.0 (and the
+        # legacy UDTF pandas conversion) would give it a NULL INT as NaN, so the row UDTF serves there
+        arrow = (
+            form == "engine-c1"
+            and capabilities.path(spark, "tile_udtf") == "tile_udtf:arrow"
+        )
         reg.udtf.register(
             name,
             engine_l3.udtf(

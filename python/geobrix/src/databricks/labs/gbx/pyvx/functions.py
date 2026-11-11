@@ -19,11 +19,12 @@ from typing import Union
 import pandas as pd
 from pyspark.sql import Column
 from pyspark.sql import functions as f
-from pyspark.sql.functions import pandas_udf, udtf
+from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import BinaryType, BooleanType
 
 # an array of geometries (a whole coverage, the features of an MVT layer) crosses as Arrow batches on Spark 4.1+
 from databricks.labs.gbx._transport import tile_udf as _session_udf
+from databricks.labs.gbx._transport import tile_udtf as _session_udtf
 
 from . import _legacy, _mvt, _tin
 
@@ -152,7 +153,7 @@ def _mvt_tile_return():
     return TILE_SCHEMA
 
 
-@udtf(returnType=_mvt_tile_return())
+@_session_udtf(returnType=_mvt_tile_return())
 class _AsMvtPyramidUDTF:
     def eval(self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None):
         if (
@@ -199,7 +200,7 @@ def _triangulate_schema():
     return TRIANGLE_SCHEMA
 
 
-@udtf(returnType=_triangulate_schema())
+@_session_udtf(returnType=_triangulate_schema())
 class _TriangulateUDTF:
     def eval(
         self,
@@ -248,7 +249,7 @@ def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
         yield (blob,)
 
 
-@udtf(returnType=_elevation_schema())
+@_session_udtf(returnType=_elevation_schema())
 class _InterpElevBBoxUDTF:
     def eval(
         self,
@@ -288,7 +289,7 @@ class _InterpElevBBoxUDTF:
         )
 
 
-@udtf(returnType=_elevation_schema())
+@_session_udtf(returnType=_elevation_schema())
 class _InterpElevGeomUDTF:
     def eval(
         self,

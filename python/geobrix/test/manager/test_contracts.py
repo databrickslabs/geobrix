@@ -3309,8 +3309,9 @@ def test_heavy_container_tile_answers_its_header_and_has_no_pixel(jvm_spark):
 def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
     monkeypatch,
 ):
-    """`arrow: true` on an L3 udtf row registers the same table function with Arrow batches; a row without it
-    registers the class as written."""
+    """`arrow: true` on an L3 udtf row registers the same table function with Arrow batches where the session's tile
+    UDTF transport is Arrow, and the row UDTF where it is not; a row without it registers the class as written.
+    """
     from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.manager import l3
 
@@ -3324,6 +3325,10 @@ def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
             seen[name] = f
 
     monkeypatch.setattr(_gdal_policy, "carrying_session", lambda spark: _Udtf())
+    # a session whose tile UDTF transport is Arrow (Spark 4.1+ with the legacy UDTF pandas conversion off)
+    monkeypatch.setattr(
+        "databricks.labs.gbx.manager.capabilities.path", lambda spark, op: f"{op}:arrow"
+    )
     l3.register_l3(None, MAN.functions["gbx_rst_retile"], "-")
     l3.register_l3(None, MAN.functions["gbx_bng_tessellateexplode"], "-")
     assert MAN.functions["gbx_rst_retile"].levels["L3"]["arrow"] is True
@@ -3331,6 +3336,13 @@ def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
 
     assert seen["gbx_rst_retile"].evalType == PythonEvalType.SQL_ARROW_TABLE_UDF
     assert seen["gbx_bng_tessellateexplode"].evalType == PythonEvalType.SQL_TABLE_UDF
+    # a session that keeps the pickles registers the row UDTF for the same row
+    monkeypatch.setattr(
+        "databricks.labs.gbx.manager.capabilities.path",
+        lambda spark, op: f"{op}:pickle",
+    )
+    l3.register_l3(None, MAN.functions["gbx_rst_retile"], "-")
+    assert seen["gbx_rst_retile"].evalType == PythonEvalType.SQL_TABLE_UDF
     assert "arrow" in manifest.LEVEL_KEYS["L3"]
 
 

@@ -2,6 +2,8 @@
 and the reader oracle that judges what a read brings back (coverage, CRS, dtype, every band).
 """
 
+from test._volume_safe import open_raster
+
 import pytest
 
 from databricks.labs.gbx.bench import oracles
@@ -30,10 +32,9 @@ def _batch_of(path, window=None, metadata=None):
 
 def _tif(path, bands=1, size=64, dtype="float32", crs="EPSG:4326"):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="GTiff", width=size, height=size, count=bands, dtype=dtype, crs=crs,
         transform=from_origin(0, size, 1, 1),
     ) as dst:  # fmt: skip
@@ -223,13 +224,12 @@ def test_the_reader_oracle_compares_every_band(tmp_path, case):
 def test_the_reader_oracle_treats_nan_as_equal_to_nan_in_pixels_and_nodata(tmp_path):
     """A float raster with NaN NoData (and NaN pixels) read back exactly is not a mismatch (nan != nan was one)."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     path = str(tmp_path / "nan.tif")
     data = (np.arange(64 * 64, dtype="float32") % 97).reshape(1, 64, 64)
     data[0, ::7, ::5] = np.nan
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="GTiff", width=64, height=64, count=1, dtype="float32",
         crs="EPSG:4326", transform=from_origin(0, 64, 1, 1), nodata=float("nan"),
     ) as dst:  # fmt: skip

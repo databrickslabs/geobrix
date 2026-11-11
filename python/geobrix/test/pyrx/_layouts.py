@@ -4,8 +4,9 @@ All three writers emit identical pixels + georeference so 'read window W from
 any layout' yields the same slice. Origin (10, 50), 0.001 deg pixels (EPSG:4326).
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 _PX = 0.001
@@ -31,7 +32,7 @@ def _base_profile(width, height, epsg):
 def write_striped_gtiff(dst_path, width=1024, height=1024, epsg=4326):
     prof = _base_profile(width, height, epsg)
     prof.update(tiled=False)
-    with rasterio.open(dst_path, "w", **prof) as ds:
+    with open_raster(dst_path, "w", **prof) as ds:
         ds.write(PIXELS(width, height), 1)
     return dst_path
 
@@ -39,7 +40,7 @@ def write_striped_gtiff(dst_path, width=1024, height=1024, epsg=4326):
 def write_tiled_gtiff(dst_path, width=1024, height=1024, blocksize=256, epsg=4326):
     prof = _base_profile(width, height, epsg)
     prof.update(tiled=True, blockxsize=blocksize, blockysize=blocksize)
-    with rasterio.open(dst_path, "w", **prof) as ds:
+    with open_raster(dst_path, "w", **prof) as ds:
         ds.write(PIXELS(width, height), 1)
     return dst_path
 
@@ -51,6 +52,6 @@ def write_cog(dst_path, width=1024, height=1024, blocksize=256, epsg=4326):
     # It rejects GTiff-only keys: tiled, blockxsize, blockysize.
     prof.update(driver="COG", blocksize=blocksize, overview_resampling="nearest")
     prof.pop("tiled", None)
-    with rasterio.open(dst_path, "w", **prof) as ds:
+    with open_raster(dst_path, "w", **prof) as ds:
         ds.write(PIXELS(width, height), 1)
     return dst_path

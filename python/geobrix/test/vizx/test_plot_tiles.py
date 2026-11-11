@@ -1,3 +1,5 @@
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -11,7 +13,7 @@ from rasterio.transform import from_bounds  # noqa: E402
 def _write_tif(path, size=32, crs="EPSG:4326"):
     data = (np.random.rand(size, size) * 100).astype("uint16")
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -212,7 +214,6 @@ def test_plot_tiles_first_no_overflow_warn(spark, tmp_path):
 
 def test_extract_tile_wrapper_with_sibling_path(tmp_path):
     """Wrapper dict with both 'tile' struct and a sibling 'path' key resolves correctly."""
-    import rasterio
     from rasterio.transform import from_bounds
 
     from databricks.labs.gbx.vizx._tiles import resolve_tile_row
@@ -220,7 +221,7 @@ def test_extract_tile_wrapper_with_sibling_path(tmp_path):
     p = str(tmp_path / "sib.tif")
     data = (np.random.rand(32, 32) * 100).astype("uint16")
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, 32, 32)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

@@ -9,6 +9,8 @@ Uses ``file_mode="fuse"`` and ``where="venv"`` so no FILE tier or cluster is
 required — these run on local[2] in the Docker dev container.
 """
 
+from test._volume_safe import written_locally
+
 
 def _write_gpkg(path, rows=5, offset_y=0.0):
     """Write a .gpkg with ``rows`` Point features via pyogrio.write_arrow."""
@@ -20,14 +22,15 @@ def _write_gpkg(path, rows=5, offset_y=0.0):
         bytes(shapely.to_wkb(shapely.Point(float(j), offset_y))) for j in range(rows)
     ]
     tbl = pa.table({"geometry": pa.array(wkbs, type=pa.binary())})
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        driver="GPKG",
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="GPKG",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
 
 
 def _write_n_gpkg(tmp_path, n, rows=5):

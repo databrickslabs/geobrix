@@ -1,7 +1,8 @@
 """Tests for Approach 3: lazy planning (no rasterio.open at plan time for virtual passthrough)."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 
@@ -17,7 +18,7 @@ def _write_sample(path, width=4, height=3, epsg=4326):
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
         nodata=-9999.0,
     )
-    with rasterio.open(str(path), "w", **profile) as ds:
+    with open_raster(str(path), "w", **profile) as ds:
         ds.write(data, 1)
 
 

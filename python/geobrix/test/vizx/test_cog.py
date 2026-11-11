@@ -1,5 +1,7 @@
 """Offline tests for plot_cog (rasterio overview read over a contextily basemap)."""
 
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -8,13 +10,12 @@ import numpy as np  # noqa: E402
 
 
 def _write_tif(tmp_path, bands=3, size=32, crs="EPSG:3857"):
-    import rasterio
     from rasterio.transform import from_bounds
 
     path = tmp_path / "cog.tif"
     data = (np.random.rand(bands, size, size) * 1000).astype("uint16")
     transform = from_bounds(-1.36e7, 4.5e6, -1.35e7, 4.51e6, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -32,13 +33,12 @@ def _write_tif(tmp_path, bands=3, size=32, crs="EPSG:3857"):
 def _write_tif_4326(tmp_path, bands=3, size=32, name="cog_4326.tif", nodata=None):
     # A small geographic (EPSG:4326) GeoTIFF near Rochester, NY -- degree-scale
     # bounds, matching the real ortho COG's CRS class used to reproduce the bug.
-    import rasterio
     from rasterio.transform import from_bounds
 
     path = tmp_path / name
     data = (np.random.rand(bands, size, size) * 255).astype("uint8")
     transform = from_bounds(-77.97, 43.23, -77.96, 43.24, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -152,7 +152,6 @@ def test_plot_cog_to_crs_already_matching_is_noop(tmp_path):
 def test_plot_cog_to_crs_none_source_crs_does_not_warp(tmp_path):
     # A CRS-less source cannot be warped; to_crs must be ignored rather than
     # raising.
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.vizx import plot_cog
@@ -160,7 +159,7 @@ def test_plot_cog_to_crs_none_source_crs_does_not_warp(tmp_path):
     plt.close("all")
     path = tmp_path / "no_crs.tif"
     data = (np.random.rand(1, 8, 8) * 255).astype("uint8")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -188,7 +187,7 @@ def test_plot_cog_to_crs_preserves_nodata_borders(tmp_path, monkeypatch):
     with rasterio.open(path) as src:
         arr = src.read(1)
     arr[:5, :] = 0  # force a nodata band across the top rows
-    with rasterio.open(path, "r+") as dst:
+    with open_raster(path, "r+") as dst:
         dst.write(arr, 1)
 
     captured = {}

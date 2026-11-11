@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import pathlib
 import xml.etree.ElementTree as ET
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -70,7 +71,7 @@ def _write_tile(
     ).astype(dtype) % (
         np.iinfo(dtype).max if np.issubdtype(np.dtype(dtype), np.integer) else 1
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 

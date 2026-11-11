@@ -5,6 +5,7 @@ and table mode (FILE-column-table read gap closure).
 import json
 import shutil
 from pathlib import Path
+from test._volume_safe import written_locally
 from unittest.mock import patch
 
 import pytest
@@ -127,14 +128,15 @@ def _write_gpkg(p, n):
 
     wkbs = [bytes(shapely.to_wkb(shapely.Point(float(i), float(i)))) for i in range(n)]
     tbl = pa.table({"geometry": pa.array(wkbs, type=pa.binary())})
-    pyogrio.write_arrow(
-        tbl,
-        str(p),
-        driver="GPKG",
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(str(p)) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="GPKG",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
 
 
 def test_vector_file_read_source_uses_read_arrow_not_read_dataframe():

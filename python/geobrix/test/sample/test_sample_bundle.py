@@ -13,6 +13,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from test._volume_safe import written_locally
 from unittest.mock import patch
 
 import pytest
@@ -300,6 +301,17 @@ def _zip_layers(zip_path: Path) -> set:
     return {str(row[0]) for row in pyogrio.list_layers(_gdb_uri(zip_path))}
 
 
+@pytest.fixture
+def local_work():
+    """The staging step's work folder on local disk, as a caller gives it: the step builds its FileGDB there, which a
+    Volume (``tmp_path`` under the Serverless runner) cannot hold while it is written.
+    """
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="gbx-bundle-work-") as d:
+        yield Path(d)
+
+
 def _write_tiny_nyc_layers(base: Path) -> None:
     """Write the four NYC layers the FileGDB step reads, in the bundle's own layout and columns."""
     gpd = pytest.importorskip("geopandas")
@@ -314,7 +326,8 @@ def _write_tiny_nyc_layers(base: Path) -> None:
     def put(rel, gdf, driver):
         out = base / rel
         out.parent.mkdir(parents=True, exist_ok=True)
-        gdf.to_file(str(out), driver=driver)
+        with written_locally(str(out)) as _local:
+            gdf.to_file(_local, driver=driver)
 
     put(
         "nyc/boroughs/nyc_boroughs.geojson",
@@ -356,7 +369,8 @@ def _write_tiny_nyc_layers(base: Path) -> None:
         zpath.parent.mkdir(parents=True, exist_ok=True)
         shp_dir = zpath.parent / "_shp"
         shp_dir.mkdir()
-        gdf.to_file(str(shp_dir / "layer.shp"), driver="ESRI Shapefile")
+        with written_locally(str(shp_dir / "layer.shp")) as _local:
+            gdf.to_file(_local, driver="ESRI Shapefile")
         with zipfile.ZipFile(zpath, "w") as z:
             for f in shp_dir.iterdir():
                 z.write(f, f.name)
@@ -380,13 +394,13 @@ def test_run_complete_bundle_stages_nyc_filegdb_zip(tmp_path, monkeypatch):
     assert "FileGDB" not in [name for name, _ in result["errors"]]
 
 
-def test_nyc_filegdb_zip_holds_the_four_feature_classes(tmp_path):
+def test_nyc_filegdb_zip_holds_the_four_feature_classes(tmp_path, local_work):
     """The zip opens as a File Geodatabase with the four feature classes, real attributes and multi geometries."""
     pyogrio = pytest.importorskip("pyogrio")
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
 
-    dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
 
     assert dest == base / FILEGDB_REL
     assert _zip_layers(dest) == FILEGDB_LAYERS
@@ -406,55 +420,63 @@ def test_nyc_filegdb_zip_holds_the_four_feature_classes(tmp_path):
     assert sorted(subway["LINE"]) == ["Broadway", "Flushing"]
 
 
-def test_nyc_filegdb_step_writes_no_zip_when_a_source_layer_is_missing(tmp_path):
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_layer_is_missing(
+    tmp_path, local_work
+):
     """No partial geodatabase is frozen: a missing source layer raises and leaves no zip."""
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
     (base / "nyc" / "subway" / "nyc_subway.shp.zip").unlink()
 
     with pytest.raises(RuntimeError, match="missing: nyc/subway/nyc_subway.shp.zip"):
-        _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+        _bundle_mod._stage_nyc_filegdb(base, local_work)
 
     assert not (base / FILEGDB_REL).exists()
 
 
-def test_nyc_filegdb_step_writes_no_zip_when_a_source_column_is_missing(tmp_path):
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_column_is_missing(
+    tmp_path, local_work
+):
     """A source layer without a mapped column fails loudly instead of writing an empty field."""
     gpd = pytest.importorskip("geopandas")
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
     boroughs = base / "nyc" / "boroughs" / "nyc_boroughs.geojson"
-    gpd.read_file(boroughs).rename(columns={"boroname": "name"}).to_file(
-        str(boroughs), driver="GeoJSON"
-    )
+    with written_locally(str(boroughs)) as _local:
+        gpd.read_file(boroughs).rename(columns={"boroname": "name"}).to_file(
+            _local, driver="GeoJSON"
+        )
 
     with pytest.raises(RuntimeError, match="has no column boroname"):
-        _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+        _bundle_mod._stage_nyc_filegdb(base, local_work)
 
     assert not (base / FILEGDB_REL).exists()
 
 
-def test_nyc_filegdb_step_skips_a_complete_zip_and_replaces_an_incomplete_one(tmp_path):
+def test_nyc_filegdb_step_skips_a_complete_zip_and_replaces_an_incomplete_one(
+    tmp_path, local_work
+):
     gpd = pytest.importorskip("geopandas")
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
-    dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
     before = dest.stat().st_mtime_ns
 
     # a complete zip is left alone
-    assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
     assert dest.stat().st_mtime_ns == before
 
     # a zip with only some of the feature classes is rebuilt
     gdb = tmp_path / "partial" / "NYC_Sample.gdb"
     gdb.parent.mkdir()
-    gpd.read_file(base / "nyc" / "boroughs" / "nyc_boroughs.geojson").to_file(
-        str(gdb), layer="NYC_Boroughs", driver="OpenFileGDB"
-    )
+    with written_locally(str(gdb)) as _local:
+        gpd.read_file(base / "nyc" / "boroughs" / "nyc_boroughs.geojson").to_file(
+            _local, layer="NYC_Boroughs", driver="OpenFileGDB"
+        )
     dest.unlink()
     shutil.make_archive(str(dest.with_suffix("")), "zip", gdb.parent, "NYC_Sample.gdb")
     assert _zip_layers(dest) == {"NYC_Boroughs"}
-    assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
     assert _zip_layers(dest) == FILEGDB_LAYERS
 
 
@@ -485,11 +507,13 @@ def test_fgdb_column_converts_to_the_field_dtype_and_keeps_missing_values_null(
     assert [None if pd.isna(v) else v for v in out] == expected
 
 
-def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(tmp_path, monkeypatch):
+def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(
+    tmp_path, local_work, monkeypatch
+):
     """A FUSE mount can report a file present but not its size; that zip is not rebuilt each run."""
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
-    dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+    dest = _bundle_mod._stage_nyc_filegdb(base, local_work)
     before = dest.stat().st_mtime_ns
     exists = _bundle_mod._path_exists_for_skip
     monkeypatch.setattr(
@@ -498,7 +522,7 @@ def test_nyc_filegdb_step_keeps_a_zip_whose_size_cannot_be_read(tmp_path, monkey
         lambda p: (exists(p)[0], None) if Path(p) == dest else exists(p),
     )
 
-    assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
+    assert _bundle_mod._stage_nyc_filegdb(base, local_work) == dest
 
     assert dest.stat().st_mtime_ns == before
 

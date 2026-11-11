@@ -4,6 +4,7 @@ signal of its own, so its own budget is Serverless's 64 MiB, and the read cap th
 """
 
 import json
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -51,9 +52,8 @@ def _big_tile(path=None):
     )
     z = np.zeros((1, 5120, 5120), "float32")
     if path is not None:
-        import rasterio
 
-        with rasterio.open(path, "w", **kw) as ds:
+        with open_raster(path, "w", **kw) as ds:
             ds.write(z)
         return path
     with MemoryFile() as mf:

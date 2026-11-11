@@ -1,5 +1,7 @@
 """plot_static multi-layer compositor tests."""
 
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -30,14 +32,13 @@ def _write_cog_4326(
     # blank because the raster stays in native degrees while the vector branch
     # reprojects to Web Mercator).
     import numpy as np
-    import rasterio
     from rasterio.transform import from_bounds
 
     path = tmp_path / "ortho_4326.tif"
     rng = np.random.default_rng(0)
     data = rng.integers(30, 225, size=(bands, size, size), dtype="uint8")
     transform = from_bounds(*bounds, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

@@ -4,6 +4,8 @@ Rows go through the public path: the reader built from its options, then ``parti
 raster header is opened (no pixels), so even the 10 GB raster of the tileSize guard is a sparse file.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -26,7 +28,7 @@ def raster(tmp_path, width=1000, height=1000, tiled=False, name="r.tif"):
     )  # fmt: skip
     if tiled:
         prof.update(tiled=True, blockxsize=512, blockysize=512, sparse_ok=True)
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         if tiled:
             ds.write(
                 np.zeros((16, 16), "float32"),

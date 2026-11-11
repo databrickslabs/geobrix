@@ -5,6 +5,8 @@ The heavy tier's ``rasterx.rst_fromfile`` is the same pyrx function with materia
 both tiers; the Column-API rows below run it through Spark as each tier's surface does.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -19,7 +21,7 @@ pytestmark = pytest.mark.filterwarnings("ignore")
 
 def _source_tif(path, w=16, h=12):
     data = (np.arange(w * h, dtype="float32").reshape(1, h, w) % 31).astype("float32")
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="GTiff", width=w, height=h, count=1, dtype="float32",
         crs="EPSG:4326", transform=from_origin(10.0, 50.0, 0.5, 0.5),
     ) as dst:  # fmt: skip

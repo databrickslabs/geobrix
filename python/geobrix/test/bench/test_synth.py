@@ -13,6 +13,7 @@ and that it is idempotent (same inputs -> same files, no duplication).
 """
 
 from pathlib import Path
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -32,7 +33,7 @@ def _write_src(path, bands=3, px=16, dtype="float32", srid=4326):
         crs=f"EPSG:{srid}",
         transform=transform,
     )
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         for b in range(1, bands + 1):
             dst.write(np.full((px, px), float(b), dtype=dtype), b)
     return path

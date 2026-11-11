@@ -7,6 +7,8 @@ that no read passes the size of one piece, and compares the pieces with the lega
 under a cap that allows it, then cut): same pixels, transform, CRS, NoData, mask, grid, order.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -40,7 +42,7 @@ def _write(path, side=SIDE, count=1, own_mask=False, nodata=-9999.0):
         blockxsize=16,
         blockysize=16,
     )
-    with rasterio.open(path, "w", **prof) as ds:
+    with open_raster(path, "w", **prof) as ds:
         for b in range(count):
             ds.write(
                 (np.arange(side * side, dtype="float32") + 10000 * b).reshape(
@@ -374,7 +376,7 @@ def test_maketiles_of_a_huge_clipped_virtual_tile(tmp_path, decoded):
 def test_maketiles_under_the_cap_keeps_the_exact_encoded_size(tmp_path):
     """Under the cap the estimate is today's (the encoded window), so a compressible raster is split as it was."""
     path = _write(tmp_path / "flat.tif", side=MK_SIDE)
-    with rasterio.open(
+    with open_raster(
         path, "r+"
     ) as ds:  # a constant raster compresses to almost nothing
         ds.write(np.zeros((1, MK_SIDE, MK_SIDE), dtype="float32"))

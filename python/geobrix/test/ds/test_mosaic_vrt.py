@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import xml.etree.ElementTree as ET
+from test._volume_safe import open_raster
 from typing import List, Tuple
 
 import numpy as np
@@ -76,7 +77,7 @@ def _write_src(
             [data[0] + np.iinfo(dtype).max // count * b for b in range(count)]
         )
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -97,7 +98,7 @@ def _write_src_with_nodata_patch(
     data = np.ones((1, h, w), dtype="float32") * 99.0
     data[0, 100:, 100:] = nodata
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -382,7 +383,7 @@ def test_a_tile_with_fewer_bands_than_the_first_is_refused_naming_the_counts(tmp
     first, second = out / "first.tif", out / "second.tif"
     _write_src(str(first), w=100, h=60, count=3)
     _write_src(str(second), w=100, h=60, count=1)
-    with rasterio.open(second, "r+") as ds:  # next to the first, not on top of it
+    with open_raster(second, "r+") as ds:  # next to the first, not on top of it
         ds.transform = from_origin(401000.0, 5000000.0, 10.0, 10.0)
     with pytest.raises(ValueError, match=r"Fix: ") as err:
         _build_mosaic_vrt([str(first), str(second)], str(out))
@@ -447,7 +448,7 @@ def _write_qb_src(path: str) -> None:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 

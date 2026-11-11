@@ -13,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -63,7 +64,7 @@ def src_tif(tmp_path_factory):
         transform=from_origin(0.0, 10.0, 0.1, 0.1),
     )
     data = np.arange(32 * 32, dtype="int16").reshape(1, 32, 32)
-    with rasterio.open(str(p), "w", **profile) as ds:
+    with open_raster(str(p), "w", **profile) as ds:
         ds.write(data)
     return str(p)
 
@@ -179,7 +180,7 @@ def src_zstd_tif(tmp_path_factory):
         predictor="2",
     )
     data = np.arange(32 * 32, dtype="int16").reshape(1, 32, 32)
-    with rasterio.open(str(p), "w", **profile) as ds:
+    with open_raster(str(p), "w", **profile) as ds:
         ds.write(data)
     return str(p)
 

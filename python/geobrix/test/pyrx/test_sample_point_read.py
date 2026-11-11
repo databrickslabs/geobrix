@@ -8,6 +8,7 @@ the materialized tile.
 """
 
 import os
+from test._volume_safe import open_raster, written_locally
 
 import numpy as np
 import pytest
@@ -44,7 +45,7 @@ def _write(path, data, *, crs="EPSG:32633", nodata=None, block=256, **extra):
         compress="zstd",
         **extra,
     )
-    with rasterio.open(path, "w", **prof) as dst:
+    with open_raster(path, "w", **prof) as dst:
         dst.write(data)
     return str(path)
 
@@ -158,7 +159,7 @@ def _matrix_cases(tmp_path):
     masked = tmp_path / "masked.tif"
     _write(masked, u16[:1].astype("uint8"))
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(masked, "r+") as ds:
+        with open_raster(masked, "r+") as ds:
             m = np.full((300, 300), 255, "uint8")
             m[:, :150] = 0
             ds.write_mask(m)
@@ -460,7 +461,10 @@ def _netcdf(tmp_path, name="n.nc"):
         block=16,
     )
     out = tmp_path / name
-    rasterio.shutil.copy(tif, str(out), driver="netCDF")
+    with written_locally(
+        str(out)
+    ) as local:  # netCDF takes no Volume (test._volume_safe)
+        rasterio.shutil.copy(tif, local, driver="netCDF")
     os.remove(tif)
     return str(out)
 

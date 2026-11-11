@@ -4,9 +4,9 @@ import os
 import subprocess
 import sys
 import textwrap
+from test._volume_safe import open_raster
 
 import numpy as np
-import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
 
@@ -24,7 +24,7 @@ def _write_src(path, w=512, h=512):
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
 
 

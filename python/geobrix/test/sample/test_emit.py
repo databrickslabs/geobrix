@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
@@ -11,7 +12,6 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
-import rasterio  # noqa: E402
 from pyspark.sql import SparkSession  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
@@ -92,7 +92,7 @@ BBOX = [-103.9, 31.65, -103.4, 32.15]
 
 def _write_cog(path):
     # 64x64 so the encoded file clears the 1 KB COG validity floor.
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

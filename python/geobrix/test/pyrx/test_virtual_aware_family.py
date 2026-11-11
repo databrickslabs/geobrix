@@ -8,11 +8,10 @@ two Spark tests confirm the Column API on a v2-schema DataFrame.
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
-import rasterio.io
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import _serde
@@ -40,7 +39,7 @@ def _write_ramp_tif(path, *, side=8, ulx=0.0, uly=8.0, px=1.0, epsg=32633):
         nodata=-9999.0,
     )
     data = np.arange(side * side, dtype="float32").reshape(side, side)
-    with rasterio.open(path, "w", **prof) as ds:
+    with open_raster(path, "w", **prof) as ds:
         ds.write(data, 1)
     return data
 
@@ -273,7 +272,7 @@ def test_reproject_identity_returns_the_source_and_a_codeless_crs_still_warps(tm
         transform=from_origin(0.0, 8.0, 1000.0, 1000.0),
         nodata=-9999.0,
     )
-    with rasterio.open(q, "w", **prof) as ds:
+    with open_raster(q, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
     with rasterio.open(q) as ds:
         assert ds.crs.to_epsg() is None

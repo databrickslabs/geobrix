@@ -2,6 +2,7 @@ import contextlib
 import os
 import subprocess
 import sys
+from test._volume_safe import open_raster
 
 import pytest
 from rasterio.errors import RasterioIOError
@@ -274,10 +275,9 @@ def cap_seen(monkeypatch):
 
 def _small_tif(path, size=64):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -361,13 +361,12 @@ def test_sidecar_files_lists_the_companions_that_exist_and_none_for_a_stamped_fi
 
 def test_sidecars_alter_open_only_when_they_change_the_crs_or_nodata(tmp_path):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.pyrx import _env
 
     path = str(tmp_path / "a.tif")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -392,10 +391,9 @@ def test_sidecars_alter_open_only_when_they_change_the_crs_or_nodata(tmp_path):
 
 def _gtiff(path, colormap=None):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -422,7 +420,7 @@ def test_sidecars_alter_open_sees_an_external_mask(tmp_path):
     _gtiff(path)
     assert _env.sidecars_alter_open(path) is False
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="NO"):
-        with rasterio.open(path, "r+") as ds:
+        with open_raster(path, "r+") as ds:
             ds.write_mask(np.zeros((4, 4), "uint8"))
     assert os.path.exists(path + ".msk")
     assert _env.sidecars_alter_open(path) is True

@@ -1,6 +1,7 @@
 """The IO forms of the levels leg (read paths and writers): their shape, the scratch guard, and a local probe."""
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -10,13 +11,12 @@ from databricks.labs.gbx.bench import preflight
 
 
 def _corpus(tmp_path, n=4):
-    import rasterio
     from rasterio.transform import from_origin
 
     rows = tmp_path / "corpus" / "rows"
     rows.mkdir(parents=True)
     for i in range(n):
-        with rasterio.open(
+        with open_raster(
             rows / f"t{i}.tif",
             "w",
             driver="GTiff",
@@ -531,7 +531,6 @@ def test_every_io_bench_form_runs(spark, tmp_path):
     """The levels leg's IO forms (reads b / d-py / floor, writer W1) on four local tiles: each ends `ok`, and the
     writer leaves no scratch behind."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.bench import levels, levels_forms
@@ -539,7 +538,7 @@ def test_every_io_bench_form_runs(spark, tmp_path):
     rows = tmp_path / "corpus" / "rows"
     rows.mkdir(parents=True)
     for i in range(4):
-        with rasterio.open(
+        with open_raster(
             rows / f"t{i}.tif",
             "w",
             driver="GTiff",

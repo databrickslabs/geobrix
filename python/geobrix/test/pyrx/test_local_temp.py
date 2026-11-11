@@ -2,6 +2,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
+from test._volume_safe import open_raster
 
 import pytest
 
@@ -616,12 +617,11 @@ def test_remove_staged_takes_the_sidecars_found_by_the_prefix(monkeypatch, tmp_p
 
 def _gtiff_source(tmp_path, name="g.tif"):
     import numpy as np
-    import rasterio
     from affine import Affine
 
     p = tmp_path / "src" / name
     p.parent.mkdir(exist_ok=True)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

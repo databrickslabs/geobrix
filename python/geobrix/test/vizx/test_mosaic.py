@@ -1,3 +1,5 @@
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")  # headless: no display needed
@@ -44,7 +46,7 @@ def _write_cog(
     if driver == "COG":
         profile["blocksize"] = 512
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         for b in range(1, count + 1):
             ds.write(data + (b - 1) * 100.0, b)
         if tags:
@@ -200,7 +202,7 @@ def _build_h3_mosaic(tmp_path):
             tags={"GBX_CELLID": cellid, "GBX_GRIDSYSTEM": "h3"},
         )
         # punch a nodata border so a "masked" region exists
-        with rasterio.open(path, "r+") as ds:
+        with open_raster(path, "r+") as ds:
             arr = ds.read(1)
             arr[:8, :] = -9999.0
             ds.write(arr, 1)

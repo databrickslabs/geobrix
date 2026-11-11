@@ -6,10 +6,10 @@ InputPartitions, render via _xyz_mosaic core, emit (z, x, y, bytes) rows.
 
 import io
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from PIL import Image
 from rasterio.transform import from_bounds
 
@@ -19,7 +19,7 @@ from databricks.labs.gbx.ds.pmtiles import PMTilesGbxDataSource
 
 def _write_cog(path, w, s, e, n, px=256, val=200):
     data = np.full((3, px, px), val, dtype="uint8")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -422,7 +422,7 @@ def test_raster_reader_renders_rgba_source_from_rgb(tmp_path):
     p = str(tmp_path / "rgba.tif")
     data = np.full((4, 256, 256), 200, dtype="uint8")
     data[3] = 0
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

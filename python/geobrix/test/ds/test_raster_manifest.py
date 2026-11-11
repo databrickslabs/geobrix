@@ -1,10 +1,10 @@
 """Tests for manifest/tilesTable tile-row input helpers (Approach 1)."""
 
 import json
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.transform import from_origin
 
 
@@ -21,7 +21,7 @@ def _write_sample(path, width=4, height=3, epsg=4326):
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
         nodata=-9999.0,
     )
-    with rasterio.open(str(path), "w", **profile) as ds:
+    with open_raster(str(path), "w", **profile) as ds:
         ds.write(data, 1)
 
 

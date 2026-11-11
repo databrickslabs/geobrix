@@ -1,6 +1,7 @@
 import io
 import os
 import tempfile
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -107,7 +108,7 @@ def _rgba_tmp(w, s, e, n, px=512, rgb=200, alpha=0):
     data[3] = alpha
     fd, p = tempfile.mkstemp(suffix=".tif")
     os.close(fd)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

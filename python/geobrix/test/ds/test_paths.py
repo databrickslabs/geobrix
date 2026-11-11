@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 from datetime import datetime, timezone
+from test._volume_safe import open_raster, written_locally
 
 import pyarrow as pa
 import pytest
@@ -126,15 +127,16 @@ def test_read_paths_gpkg_layer_option(spark, tmp_path):
     tbl = pa.table(
         {"geom": shapely.to_wkb(shapely.points([0, 1], [0, 1])), "k": [1, 2]}
     )
-    pyogrio.write_arrow(
-        tbl,
-        p,
-        layer="pts",
-        driver="GPKG",
-        geometry_name="geom",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(p) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     got = P.read_paths(_paths_df(spark, [p]), "gpkg_gbx", {"layerName": "pts"})
     assert got.count() == 2
 
@@ -280,7 +282,7 @@ def _tif(path, w=64, h=64, value=1):
         crs="EPSG:3857",
         transform=rasterio.Affine(1, 0, 0, 0, -1, h),
     )
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(np.full((1, h, w), value, dtype="uint8"))
     return path
 
@@ -506,14 +508,15 @@ def _shapefile(path, cols):
     import shapely
 
     tbl = pa.table({"geometry": shapely.to_wkb(shapely.points([0, 1], [0, 1])), **cols})
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        driver="ESRI Shapefile",
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="ESRI Shapefile",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 
@@ -550,15 +553,16 @@ def _gdb(path, cols):
     import shapely
 
     tbl = pa.table({"SHAPE": shapely.to_wkb(shapely.points([0], [0])), **cols})
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        layer="pts",
-        driver="OpenFileGDB",
-        geometry_name="SHAPE",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="OpenFileGDB",
+            geometry_name="SHAPE",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 
@@ -575,15 +579,16 @@ def _gpkg(path, cols, geom=None):
     if geom is None:
         geom = shapely.to_wkb(shapely.points(list(range(n)), list(range(n))))
     tbl = pa.table({"geom": pa.array(list(geom), pa.binary()), **cols})
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        layer="pts",
-        driver="GPKG",
-        geometry_name="geom",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 
@@ -1042,15 +1047,16 @@ def _gpkg_file(path):
             "s": ["a", "b", "c"],
         }
     )
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        layer="pts",
-        driver="GPKG",
-        geometry_name="geom",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 
@@ -1236,10 +1242,9 @@ def _pmtiles_archive(path, tiles):
 
 def _rgb_tif(path, w, s, e, n, val):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_bounds
 
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

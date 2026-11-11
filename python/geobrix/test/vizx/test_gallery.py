@@ -1,5 +1,6 @@
 """Tests for gbx.vizx.plot_gallery (small-multiples contact sheet)."""
 
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import matplotlib
@@ -29,11 +30,10 @@ def _pngs(d, n):
 
 
 def _geotiff(path):
-    import rasterio
     from rasterio.transform import from_origin
 
     data = np.arange(64, dtype="uint16").reshape(8, 8) * 50
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

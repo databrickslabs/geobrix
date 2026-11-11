@@ -6,6 +6,7 @@ GDAL; the oracle rows of ``SPEC_WARP`` hold the rest.
 """
 
 import dataclasses
+from test._volume_safe import open_raster, written_locally
 
 import numpy as np
 import pytest
@@ -289,9 +290,9 @@ def test_a_virtual_tile_with_an_overview_is_read_at_its_target_size(engine, tmp_
         blockxsize=32,
         blockysize=32,
     )
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(z)
-    with rasterio.open(path, "r+") as dst:
+    with open_raster(path, "r+") as dst:
         dst.build_overviews([2], Resampling.average)
     tile = {"cellid": 1, "raster": None, "path": path, "window": None, "metadata": {}}
     sizes = []
@@ -412,13 +413,12 @@ def test_a_resample_that_leaves_no_pixel_unreached_has_no_mask_band(engine):
 
 
 def test_a_source_own_mask_and_the_footprint_are_both_masked(engine, tmp_path):
-    import rasterio
     from rasterio.enums import MaskFlags
     from rasterio.transform import from_origin
 
     path = tmp_path / "own_mask.tif"
     z = (np.arange(300) % 250 + 1).astype("uint8").reshape(1, 15, 20)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -446,6 +446,15 @@ def _gcp_tile(tmp_path):
     from osgeo import gdal, osr
 
     path = str(tmp_path / "gcp.tif")
+    with written_locally(
+        path
+    ) as local:  # a Volume takes no update in place (test._volume_safe)
+        _write_gcp_tile(gdal, osr, local)
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _write_gcp_tile(gdal, osr, path):
     ds = gdal.GetDriverByName("GTiff").Create(path, 20, 15, 1, gdal.GDT_Float32)
     ds.GetRasterBand(1).WriteArray(np.arange(1, 301, dtype="float32").reshape(15, 20))
     srs = osr.SpatialReference()
@@ -461,8 +470,6 @@ def _gcp_tile(tmp_path):
         srs.ExportToWkt(),
     )
     ds = None
-    with open(path, "rb") as f:
-        return f.read()
 
 
 def test_a_gcp_georeferenced_tile_with_no_nodata_is_warped_with_its_footprint_masked(
@@ -631,12 +638,11 @@ def test_a_two_band_source_with_nodata_on_one_band_has_it_on_both(engine):
 
 
 def test_one_internal_mask_covers_every_band_of_the_result(engine, tmp_path):
-    import rasterio
     from rasterio.transform import from_origin
 
     path = tmp_path / "two_band_mask.tif"
     z = (np.arange(300) % 250 + 1).astype("uint8").reshape(1, 15, 20).repeat(2, axis=0)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -724,13 +730,12 @@ def test_the_mask_is_cut_to_the_window_of_its_grid_and_a_misfit_is_a_data_error(
 
 # --- a virtual tile read at its target size: the own-mask fallback and the read cap -------------------------------------
 def _virtual_file(tmp_path, mask=False):
-    import rasterio
     from rasterio.enums import Resampling
     from rasterio.transform import from_origin
 
     path = str(tmp_path / ("masked.tif" if mask else "plain.tif"))
     z = (np.arange(64 * 64, dtype="float32") % 251 + 1).reshape(1, 64, 64)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -749,7 +754,7 @@ def _virtual_file(tmp_path, mask=False):
             m = np.full((64, 64), 255, "u1")
             m[:8, :8] = 0
             dst.write_mask(m)
-    with rasterio.open(path, "r+") as dst:
+    with open_raster(path, "r+") as dst:
         dst.build_overviews([2], Resampling.average)
     return {"cellid": 1, "raster": None, "path": path, "window": None, "metadata": {}}
 

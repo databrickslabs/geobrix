@@ -17,6 +17,7 @@ Layout (the canonical-module matrix once, one wiring test per consumer):
 
 import unittest.mock
 from pathlib import Path
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -69,7 +70,7 @@ def write_masked(path, *, count=1, nodata=None, **kw):
     mask = np.full((N, N), 255, dtype="uint8")
     mask[list(MASKED_ROWS), :] = 0
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(
+        with open_raster(
             path, "w", **_profile(count=count, nodata=nodata, **kw)
         ) as dst:
             dst.write(_values(count))
@@ -143,7 +144,7 @@ def test_window_read_matches_a_tile_that_starts_from_bytes(tmp_path):
 
 def test_a_source_without_a_mask_is_read_as_before(tmp_path):
     p = str(tmp_path / "plain.tif")
-    with rasterio.open(p, "w", **_profile(nodata=7.0)) as dst:
+    with open_raster(p, "w", **_profile(nodata=7.0)) as dst:
         dst.write(_values())
     with ot.open_tile(virtual(p)) as ds:
         assert ds.mask_flag_enums[0] == [MaskFlags.nodata]
@@ -156,7 +157,7 @@ def test_an_external_mask_file_is_kept(tmp_path):
     mask = np.full((N, N), 255, dtype="uint8")
     mask[list(MASKED_ROWS), :] = 0
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=False):
-        with rasterio.open(p, "w", **_profile()) as dst:
+        with open_raster(p, "w", **_profile()) as dst:
             dst.write(_values())
             dst.write_mask(mask)
     assert (tmp_path / "ext.tif.msk").exists(), "fixture needs an external mask"
@@ -175,7 +176,7 @@ def test_an_alpha_band_is_left_to_the_alpha_band(tmp_path):
     data[3] = 255
     data[3, 5, :] = 0  # transparent row, colour bands not 0
     prof = {**_profile(count=4), "dtype": "uint8"}
-    with rasterio.open(p, "w", **prof) as dst:
+    with open_raster(p, "w", **prof) as dst:
         dst.write(data)
     with rasterio.open(p) as src:
         assert nd.has_alpha(src) and not nd.has_own_mask(src)
@@ -229,7 +230,7 @@ def _index_file(path, nodata):
     """Same grid as the masked source, no mask: pixel (r, c) holds r + 100, so the warp
     of this file names the source row of every output pixel."""
     idx = np.repeat((np.arange(N) + 100)[:, None], N, axis=1).astype("uint16")
-    with rasterio.open(path, "w", **_profile(nodata=nodata)) as dst:
+    with open_raster(path, "w", **_profile(nodata=nodata)) as dst:
         dst.write(idx, 1)
     return str(path)
 
@@ -294,7 +295,7 @@ def test_one_warp_rule_for_a_non_epsg_target_equal_to_the_source_crs(tmp_path):
     mask = np.full((N, N), 255, dtype="uint8")
     mask[list(MASKED_ROWS), :] = 0
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(
+        with open_raster(
             p, "w", **_profile(crs=esri, origin=(1e5, 5e6), px=100.0)
         ) as dst:
             dst.write(_values())

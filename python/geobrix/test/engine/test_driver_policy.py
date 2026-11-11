@@ -18,6 +18,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from test._volume_safe import open_raster
 
 import pytest
 
@@ -1110,13 +1111,12 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
 
     _rasterio_or_skip()
     import numpy as np
-    import rasterio
     from pyspark.sql import functions as F
     from rasterio.transform import from_origin
 
     spark = spark8
     tif = tmp_path / "a.tif"
-    with rasterio.open(
+    with open_raster(
         tif,
         "w",
         driver="GTiff",
@@ -1268,11 +1268,10 @@ def test_a_name_with_a_query_or_fragment_still_names_a_vrt():
 
 def _served_tif(tmp_path):
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     tif = tmp_path / "a.tif"
-    with rasterio.open(
+    with open_raster(
         tif,
         "w",
         driver="GTiff",

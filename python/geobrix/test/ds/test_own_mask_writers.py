@@ -9,6 +9,7 @@ pixels were rewritten without the mask. A 4-band ``uint8`` source whose band 4 i
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -513,7 +514,7 @@ def test_the_mosaic_vrt_of_a_masked_and_an_unmasked_tile_hides_what_each_hides(
     for band, rows in enumerate(nodata_rows):
         data[band, sorted(rows), :] = 7  # NoData rows of this band
     plain = out_dir / "plain.tif"
-    with rasterio.open(
+    with open_raster(
         plain,
         "w",
         driver="GTiff",

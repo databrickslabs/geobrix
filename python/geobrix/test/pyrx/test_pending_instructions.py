@@ -1,5 +1,6 @@
 import glob
 import tempfile
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -258,7 +259,7 @@ def _write_tif(path, dtype, nodata=None, width=4, height=4):
     if nodata is not None:
         profile["nodata"] = nodata
     arr = np.zeros((1, height, width), dtype=dtype)
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(arr)
 
 

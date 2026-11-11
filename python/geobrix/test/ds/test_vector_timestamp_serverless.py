@@ -8,6 +8,7 @@ the newer behaviour.
 """
 
 import datetime
+from test._volume_safe import written_locally
 
 import pyarrow as pa
 import pyogrio
@@ -100,14 +101,15 @@ def test_reader_streams_timestamp_column(tmp_path, serverless_arrow, fmt, driver
             "geom": pa.array([to_wkb(Point(i, i)) for i in range(2)], pa.binary()),
         }
     )
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        driver=driver,
-        geometry_name="geom",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver=driver,
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     rdr = {s.name(): s for s in datasource_classes()}[fmt]({"path": path}).reader(None)
     batches = [b for p in rdr.partitions() for b in rdr.read(p)]
     assert sum(b.num_rows for b in batches) == 2

@@ -1,5 +1,7 @@
 """tileSize grid emission: materialized per-cell bytes + virtual round-trip."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -23,7 +25,7 @@ def _write(tmp_path, width=512, height=512):
         transform=from_origin(10.0, 50.0, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(width * height, dtype="float32").reshape(height, width), 1)
     return p
 

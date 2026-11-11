@@ -20,6 +20,8 @@ canonical helper behavior is exercised transitively: authority_srid_of and crs_t
 are verified by the two tests above for the same ESRI:54008 case.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 from rasterio.crs import CRS
@@ -39,11 +41,10 @@ def _esri_54008_crs():
 
 def _write_esri_raster(path) -> None:
     """Write a 4x4 float32 GTiff with ESRI:54008 CRS to path."""
-    import rasterio
 
     crs = _esri_54008_crs()
     transform = from_bounds(-180, -90, 180, 90, 4, 4)
-    with rasterio.open(
+    with open_raster(
         str(path),
         "w",
         driver="GTiff",
@@ -82,11 +83,10 @@ def test_clip_geom_crs_str_esri_authority(tmp_path):
 
 def test_clip_geom_crs_str_epsg_preserved(tmp_path):
     """grouped_file._clip_geom_from_source returns 'EPSG:4326' for EPSG:4326 (behavior-preserving)."""
-    import rasterio
 
     tif = tmp_path / "epsg_4326.tif"
     transform = from_bounds(-1, -1, 1, 1, 4, 4)
-    with rasterio.open(
+    with open_raster(
         str(tif),
         "w",
         driver="GTiff",

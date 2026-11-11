@@ -1,6 +1,7 @@
 """Unit test: reader bench pure-local path produces a ResultRow with timing."""
 
 import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
@@ -22,7 +23,7 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -129,13 +130,12 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
     import json
 
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     # Create a minimal 8x8 float32 GeoTIFF with no-data set.
     tif = tmp_path / "tile.tif"
     data = (np.arange(64, dtype="float32") / 64.0).reshape(8, 8)
-    with rasterio.open(
+    with open_raster(
         str(tif),
         "w",
         driver="GTiff",

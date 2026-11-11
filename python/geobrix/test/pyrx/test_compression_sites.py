@@ -9,6 +9,7 @@ a site once had (a copied source profile, BLOCKXSIZE noise, a no-codec name) kee
 from __future__ import annotations
 
 import pathlib
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -38,7 +39,7 @@ def _write_tif(tmp_path, dt="int16", sz=64) -> str:
     p = str(tmp_path / f"{dt}.tif")
     rng = np.random.default_rng(seed=42)
     a = (rng.random((sz, sz)) * 1000).astype(dt)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",
@@ -57,7 +58,7 @@ def _second_tif(tmp_path, sz=32) -> bytes:
     """A non-overlapping int16 neighbour of ``_write_tif(tmp_path, "int16", sz=32)``."""
     p = str(tmp_path / "int16_b.tif")
     a = (np.random.default_rng(seed=99).random((sz, sz)) * 1000).astype("int16")
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from test._volume_safe import written_locally
 
 import numpy as np
 import pytest
@@ -181,6 +182,14 @@ CODED_ROWS = [
 
 
 def _build_coded_domain_source(path: str, driver: str) -> str:
+    """See ``_write_coded_domain_source``: built on local disk, then copied to ``path`` (a Volume under the
+    Serverless runner takes no update in place; ``test._volume_safe``)."""
+    with written_locally(path) as local:
+        _write_coded_domain_source(local, driver)
+    return path
+
+
+def _write_coded_domain_source(path: str, driver: str) -> str:
     """Write a 1-layer point dataset whose fields carry real OGR coded-value
     domains, via native osgeo (pyogrio cannot author field domains).
     Return codes are checked rather than flipping the process-global osgeo

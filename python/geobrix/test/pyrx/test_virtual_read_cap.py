@@ -6,6 +6,8 @@ the cap the task carries. Paths that decode nothing (the plain-window warp, the 
 retile family cutting windows from the open source) are not gated.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -33,7 +35,7 @@ def _write(path, side=SIDE, count=1):
         blockxsize=16,
         blockysize=16,
     )
-    with rasterio.open(path, "w", **prof) as ds:
+    with open_raster(path, "w", **prof) as ds:
         for b in range(count):
             ds.write(
                 (np.arange(side * side, dtype="float32") + 10000 * b).reshape(

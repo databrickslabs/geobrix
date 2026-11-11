@@ -277,6 +277,54 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture
+def volume_like_tmp(tmp_path, monkeypatch):
+    """``tmp_path`` as it is under the Serverless test runner, where it is on the run's Volume folder: a GDAL write
+    there (rasterio or pyogrio) is refused, as a Volume refuses an update in place. A test input is built with
+    ``test._volume_safe`` (on local disk, then copied over in one pass) and passes."""
+    import rasterio
+
+    root = str(tmp_path)
+    real_open = rasterio.open
+
+    def _refuse(fp):
+        try:
+            path = os.fspath(fp)
+        except TypeError:
+            return
+        if str(path).startswith(root):
+            raise rasterio.errors.RasterioIOError(
+                f"Volume-like tmp_path: GDAL cannot write {path} in place"
+            )
+
+    def guarded_open(fp, mode="r", *a, **k):
+        if mode != "r":
+            _refuse(fp)
+        return real_open(fp, mode, *a, **k)
+
+    monkeypatch.setattr(rasterio, "open", guarded_open)
+    if _importable("pyogrio"):
+        import pyogrio
+        import pyogrio.raw
+
+        for mod, name in (
+            (pyogrio, "write_dataframe"),
+            (pyogrio, "write_arrow"),
+            (pyogrio.raw, "write"),
+            (pyogrio.raw, "write_arrow"),
+        ):
+            real = getattr(mod, name, None)
+            if real is None:
+                continue
+
+            def guarded(df, path, *a, _real=real, **k):
+                _refuse(path)
+                return _real(df, path, *a, **k)
+
+            monkeypatch.setattr(mod, name, guarded)
+    return tmp_path
+
+
+@pytest.fixture
 def no_backoff_sleep(monkeypatch):
     """The retry back-offs of the code under test without the waiting.
 

@@ -11,8 +11,9 @@ The goal is to confirm the optimization (skip the double ZSTD encode/decode) is
 correct: the output pixels + georeference are identical to the reference path.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
@@ -42,7 +43,7 @@ def _write_src(tmp_path, name="src.tif", w=W, h=H, epsg=4326, declare_nodata=Tru
     )
     if declare_nodata:
         profile["nodata"] = -9999.0
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
     return path
 

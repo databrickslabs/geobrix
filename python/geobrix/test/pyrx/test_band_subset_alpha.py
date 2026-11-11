@@ -9,6 +9,8 @@ an RGBA raster) is wanted for its values, and an alpha label on any other band i
 The lazy read of a virtual tile with a pending band selection and the eager ``rst_band`` agree on this.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import rasterio
@@ -140,7 +142,7 @@ def test_a_read_with_no_band_selection_keeps_a_raster_that_is_only_an_alpha_band
         photometric="MINISBLACK",
     )
     path = str(tmp_path / "alpha_only.tif")
-    with rasterio.open(path, "w", **prof) as dst:
+    with open_raster(path, "w", **prof) as dst:
         dst.colorinterp = (CI.alpha,)
         dst.write(np.arange(16, dtype="uint8").reshape(1, 4, 4))
     tile = VirtualTile(cellid=0, path=path, window=(0, 0, 4, 4))

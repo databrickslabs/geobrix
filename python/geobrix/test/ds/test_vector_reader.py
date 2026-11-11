@@ -1,5 +1,6 @@
 import json
 import os
+from test._volume_safe import written_locally
 from unittest.mock import patch
 
 import pytest
@@ -316,15 +317,16 @@ def test_vector_reader_restages_a_source_replaced_in_place(tmp_path):
         if os.path.exists(p):
             os.remove(p)
         tbl = pa.table({"geom": shapely.to_wkb(shapely.points(range(n), range(n)))})
-        pyogrio.write_arrow(
-            tbl,
-            p,
-            layer="pts",
-            driver="GPKG",
-            geometry_name="geom",
-            geometry_type="Point",
-            crs="EPSG:4326",
-        )
+        with written_locally(p) as _local:
+            pyogrio.write_arrow(
+                tbl,
+                _local,
+                layer="pts",
+                driver="GPKG",
+                geometry_name="geom",
+                geometry_type="Point",
+                crs="EPSG:4326",
+            )
         st = os.stat(p)
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))
 
@@ -520,9 +522,10 @@ def test_vector_gpkg_domains_without_constraints_table(tmp_path):
     from databricks.labs.gbx.ds import vector as vec
 
     path = str(tmp_path / "nodom.gpkg")
-    gpd.GeoDataFrame({"a": [1]}, geometry=[shapely.Point(0, 0)], crs=4326).to_file(
-        path, driver="GPKG"
-    )
+    with written_locally(path) as _local:
+        gpd.GeoDataFrame({"a": [1]}, geometry=[shapely.Point(0, 0)], crs=4326).to_file(
+            _local, driver="GPKG"
+        )
     assert vec._read_gpkg_domains(path) == {}
 
 
@@ -564,11 +567,12 @@ def _points_gpkg(path, n):
     import geopandas as gpd
     import shapely
 
-    gpd.GeoDataFrame(
-        {"id": list(range(n)), "name": [f"n{i}" for i in range(n)]},
-        geometry=[shapely.Point(i, i) for i in range(n)],
-        crs=4326,
-    ).to_file(path, driver="GPKG")
+    with written_locally(path) as _local:
+        gpd.GeoDataFrame(
+            {"id": list(range(n)), "name": [f"n{i}" for i in range(n)]},
+            geometry=[shapely.Point(i, i) for i in range(n)],
+            crs=4326,
+        ).to_file(_local, driver="GPKG")
     return path
 
 
@@ -738,15 +742,16 @@ def _write_layer(path, driver, n=3):
             "name": [f"n{i}" for i in xs],
         }
     )
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        layer="pts",
-        driver=driver,
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            layer="pts",
+            driver=driver,
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 

@@ -8,6 +8,8 @@ All tests use ``file_mode="fuse"`` and ``where="venv"`` so no FILE tier or
 cluster is required — they run on local[2] in the Docker dev container.
 """
 
+from test._volume_safe import written_locally
+
 
 def _write_one_gpkg(tmp_path, rows=5):
     """Write a single .gpkg file and return its path (mirrors test_gpkg_file_legs)."""
@@ -18,14 +20,15 @@ def _write_one_gpkg(tmp_path, rows=5):
     p = str(tmp_path / "sweep_src.gpkg")
     wkbs = [bytes(shapely.to_wkb(shapely.Point(float(j), 0.0))) for j in range(rows)]
     tbl = pa.table({"geometry": pa.array(wkbs, type=pa.binary())})
-    pyogrio.write_arrow(
-        tbl,
-        p,
-        driver="GPKG",
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(p) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="GPKG",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return p
 
 

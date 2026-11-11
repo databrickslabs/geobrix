@@ -152,25 +152,6 @@ def test_the_eager_warp_keeps_the_mask_beside_the_alpha_band(name, target, warpe
     assert valid[from_visible].all()
 
 
-@pytest.fixture
-def volume_like_tmp(tmp_path, monkeypatch):
-    """``tmp_path`` as it is on Serverless, where the test runner puts it under the run's Volume folder (the
-    workers read it): GDAL cannot update a file there in place, so a GTiff whose mask is added after its
-    data ("Failed to create mask.") must be built elsewhere and written in one sequential pass.
-    """
-    real = rasterio.open
-
-    def refuse_in_place(fp, mode="r", *a, **k):
-        if mode != "r" and str(fp).startswith(str(tmp_path)):
-            raise rasterio.errors.RasterioIOError(
-                f"Volume-like tmp_path: GDAL cannot write {fp} in place"
-            )
-        return real(fp, mode, *a, **k)
-
-    monkeypatch.setattr(rasterio, "open", refuse_in_place)
-    return tmp_path
-
-
 def _per_band_nodata_masked(tmp_path, nodatavals):
     """A VRT (the only source rasterio reads with a NoData per band) over a GTiff with an
     internal mask band over row 5. Every band holds ``100 + row`` except rows 0-1, which hold

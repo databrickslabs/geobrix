@@ -3,6 +3,7 @@ attributes and a CRS), and the plain-pyogrio reading that GeoBrix's rows are hel
 
 import os
 from dataclasses import dataclass
+from test._volume_safe import written_locally
 from typing import Callable, Dict, List, Optional, Tuple
 
 # (WKT, id, name, val)
@@ -64,6 +65,13 @@ def _srs(gb, epsg):
 
 
 def write_generic(gb, case: VectorCase, path: str) -> None:
+    with written_locally(
+        path
+    ) as local:  # a Volume takes no update in place (test._volume_safe)
+        _write_generic(gb, case, local)
+
+
+def _write_generic(gb, case: VectorCase, path: str) -> None:
     ogr = gb.ogr
     ds = ogr.GetDriverByName(case.driver).CreateDataSource(path, list(case.dsco))
     gtype = ogr.wkbUnknown
@@ -93,6 +101,11 @@ def write_generic(gb, case: VectorCase, path: str) -> None:
 
 
 def build_gpx(gb, case, path):
+    with written_locally(path) as local:
+        _build_gpx(gb, case, local)
+
+
+def _build_gpx(gb, case, path):
     ogr = gb.ogr
     ds = ogr.GetDriverByName("GPX").CreateDataSource(path)
     srs = _srs(gb, 4326)
@@ -135,13 +148,14 @@ def build_mbtiles(gb, case, path):
     gdal = gb.gdal
     src = path + ".src.geojson"
     write_generic(gb, VectorCase("GeoJSON", "x"), src)
-    gdal.VectorTranslate(
-        path,
-        src,
-        options=gdal.VectorTranslateOptions(
-            format="MBTiles", datasetCreationOptions=["MINZOOM=0", "MAXZOOM=2"]
-        ),
-    ).FlushCache()
+    with written_locally(path) as local:
+        gdal.VectorTranslate(
+            local,
+            src,
+            options=gdal.VectorTranslateOptions(
+                format="MBTiles", datasetCreationOptions=["MINZOOM=0", "MAXZOOM=2"]
+            ),
+        ).FlushCache()
     os.remove(src)
 
 
@@ -150,13 +164,14 @@ def build_mvt_folder(gb, case, path):
     gdal = gb.gdal
     src = path + ".src.geojson"
     write_generic(gb, VectorCase("GeoJSON", "x"), src)
-    gdal.VectorTranslate(
-        path,
-        src,
-        options=gdal.VectorTranslateOptions(
-            format="MVT", datasetCreationOptions=["MINZOOM=0", "MAXZOOM=1"]
-        ),
-    ).FlushCache()
+    with written_locally(path) as local:
+        gdal.VectorTranslate(
+            local,
+            src,
+            options=gdal.VectorTranslateOptions(
+                format="MVT", datasetCreationOptions=["MINZOOM=0", "MAXZOOM=1"]
+            ),
+        ).FlushCache()
     os.remove(src)
 
 

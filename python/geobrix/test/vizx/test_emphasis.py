@@ -8,6 +8,7 @@ import builtins
 import inspect
 import json
 import re
+from test._volume_safe import open_raster
 
 import geopandas as gpd
 import matplotlib
@@ -108,11 +109,10 @@ def test_static_points_and_lines_get_a_dark_ring_and_a_wider_line_unless_overrid
 
 
 def test_a_cog_is_never_dimmed_by_either_emphasis(tmp_path):
-    import rasterio
     from rasterio.transform import from_bounds
 
     path = str(tmp_path / "cog.tif")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

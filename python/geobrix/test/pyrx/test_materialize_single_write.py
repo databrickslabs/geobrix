@@ -7,9 +7,10 @@ file as a full-extent window is the reference: the two must agree on pixels, mas
 options (and, GDAL being deterministic, on the bytes).
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
-import rasterio
 from rasterio.enums import ColorInterp
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
@@ -34,14 +35,14 @@ def _source(tmp_path, kind):
     )
     if kind == "plain":
         data = rng.random((1, SIZE, SIZE)).astype("float32")
-        with rasterio.open(
+        with open_raster(
             path, "w", count=1, dtype="float32", nodata=-9999.0, **base
         ) as dst:
             data[0, :4, :4] = -9999.0
             dst.write(data)
     elif kind == "tiled-own-mask":
         data = (rng.random((3, SIZE, SIZE)) * 60000).astype("uint16")
-        with rasterio.open(
+        with open_raster(
             path,
             "w",
             count=3,
@@ -57,7 +58,7 @@ def _source(tmp_path, kind):
             dst.write_mask(mask)
     else:
         data = (rng.random((4, SIZE, SIZE)) * 255).astype("uint8")
-        with rasterio.open(
+        with open_raster(
             path, "w", count=4, dtype="uint8", photometric="RGB", **base
         ) as dst:
             dst.write(data)

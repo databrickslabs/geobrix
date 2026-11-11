@@ -43,6 +43,7 @@ import math
 import os
 import pickle
 import re
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -122,7 +123,7 @@ def _write_src(
         data = np.stack([data[0] + b * 1000 for b in range(count)])[np.newaxis]
         data = data.squeeze(0)  # (count, h, w)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -310,7 +311,7 @@ def _write_src_with_nodata_patch(
     # Fill bottom-right tile (rows 100..120, cols 100..200) with nodata.
     data[0, 100:, 100:] = nodata
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -555,7 +556,7 @@ def test_prune_empty_skips_a_window_that_is_all_nodata(tmp_path, nodata, fill, w
         transform=from_origin(500000.0, 5700000.0, 10.0, 10.0),
         nodata=nodata,
     )
-    with rasterio.open(src, "w", **profile) as dst:
+    with open_raster(src, "w", **profile) as dst:
         dst.write(data)
     w = _make_writer(
         str(tmp_path / "out"), mosaic_opts=_default_mosaic_opts(tileSize=32)
@@ -582,7 +583,7 @@ def _write_src_at(path: str, origin_x: float, w: int = 200, h: int = 120) -> Non
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -665,7 +666,7 @@ def _write_tiled_src(path: str, w: int, h: int, block: int = 512) -> None:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 
@@ -764,7 +765,7 @@ def small_source_raster(tmp_path):
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -1223,7 +1224,7 @@ def _write_gb_source_27700(tmp_path) -> str:
     )
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 

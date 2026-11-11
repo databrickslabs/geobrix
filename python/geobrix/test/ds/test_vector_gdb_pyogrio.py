@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import warnings
+from test._volume_safe import written_locally
 
 import pyarrow as pa
 import pyogrio
@@ -146,16 +147,19 @@ def test_multi_layer_gdb_reads_each_layer(spark, tmp_path):
             "SHAPE": pa.array([to_wkb(Point(i, i)) for i in range(3)], pa.binary()),
         }
     )
-    pyogrio.write_arrow(
-        second,
-        out,
-        driver="OpenFileGDB",
-        layer="parcels",
-        geometry_name="SHAPE",
-        geometry_type="Point",
-        crs="EPSG:4326",
-        append=True,
-    )
+    with written_locally(
+        out, update=True
+    ) as _local:  # append: start from the layer there
+        pyogrio.write_arrow(
+            second,
+            _local,
+            driver="OpenFileGDB",
+            layer="parcels",
+            geometry_name="SHAPE",
+            geometry_type="Point",
+            crs="EPSG:4326",
+            append=True,
+        )
     assert sorted(n for n, _ in pyogrio.list_layers(out)) == ["parcels", "roads"]
 
     roads = spark.read.format("file_gdb_gbx").option("layerName", "roads").load(out)

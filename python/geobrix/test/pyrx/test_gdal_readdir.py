@@ -12,6 +12,7 @@ The direct-read probe always uses ``EMPTY_DIR``. A value the user set decides ev
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -123,7 +124,7 @@ def _world_file_tiff(tmp_path):
     data = np.arange(50 * 60, dtype="float32").reshape(1, 50, 60)
     path = tmp_path / "plain.tif"
     with rasterio.Env(GDAL_PAM_ENABLED="NO"):  # no .aux.xml: the world file alone
-        with rasterio.open(
+        with open_raster(
             path, "w", driver="GTiff", width=60, height=50, count=1, dtype="float32"
         ) as dst:
             dst.write(data)
@@ -168,7 +169,7 @@ def test_an_external_overview_is_found(tmp_path, readdir, setting, monkeypatch):
     """
     path = tmp_path / "base.tif"
     data = np.arange(256 * 256, dtype="uint16").reshape(1, 256, 256)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -181,7 +182,7 @@ def test_an_external_overview_is_found(tmp_path, readdir, setting, monkeypatch):
     ) as dst:
         dst.write(data)
     with rasterio.Env(TIFF_USE_OVR=True):  # GDAL writes base.tif.ovr beside it
-        with rasterio.open(path, "r+") as ds:
+        with open_raster(path, "r+") as ds:
             ds.build_overviews([2, 4])
     assert (tmp_path / "base.tif.ovr").exists()
     readdir(setting)
@@ -198,7 +199,7 @@ def test_the_direct_read_probe_opens_without_a_folder_listing(
     that open runs with ``EMPTY_DIR`` (no listing, no sidecar checks), and the option is
     back to the process value afterwards."""
     path = tmp_path / "v.tif"
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8"
     ) as dst:
         dst.write(np.ones((1, 8, 8), "uint8"))
@@ -232,7 +233,7 @@ def _plain_tiff(path, georef=True):
         else {}
     )
     with rasterio.Env(GDAL_PAM_ENABLED="NO"):
-        with rasterio.open(
+        with open_raster(
             path, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8", **kw
         ) as dst:
             dst.write(np.ones((1, 8, 8), "uint8"))
@@ -430,7 +431,7 @@ def test_a_warped_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
     (tmp_path / "A").mkdir()
     (tmp_path / "B").mkdir()
     src = tmp_path / "A" / "base.tif"
-    with rasterio.open(
+    with open_raster(
         src,
         "w",
         driver="GTiff",
@@ -443,7 +444,7 @@ def test_a_warped_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
     ) as dst:
         dst.write(np.ones((1, 512, 512), "uint16"))
     with rasterio.Env(TIFF_USE_OVR=True):
-        with rasterio.open(src, "r+") as ds:
+        with open_raster(src, "r+") as ds:
             ds.build_overviews([2, 4])
     with rasterio.open(src) as s, WarpedVRT(s, crs="EPSG:32633") as v:
         xml = v.tags(ns="xml:VRT")["xml:VRT"]
@@ -696,7 +697,7 @@ def test_an_xml_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
     (tmp_path / "A").mkdir()
     (tmp_path / "B").mkdir()
     src = tmp_path / "A" / "base.tif"
-    with rasterio.open(
+    with open_raster(
         src,
         "w",
         driver="GTiff",
@@ -709,7 +710,7 @@ def test_an_xml_vrt_keeps_its_sources_sidecars(tmp_path, readdir):
     ) as dst:
         dst.write(np.ones((1, 512, 512), "uint16"))
     with rasterio.Env(TIFF_USE_OVR=True):
-        with rasterio.open(src, "r+") as ds:
+        with open_raster(src, "r+") as ds:
             ds.build_overviews([2, 4])
     with rasterio.open(src) as s, WarpedVRT(s, crs="EPSG:32633") as v:
         xml = v.tags(ns="xml:VRT")["xml:VRT"]
@@ -1004,7 +1005,7 @@ def test_a_file_with_sidecars_in_a_folder_past_the_limit_keeps_the_by_name_check
     it is TRUE here (``NO`` would have GDAL list the whole folder at every open)."""
     a = _big_folder(tmp_path, extra=0)
     with rasterio.Env(TIFF_USE_OVR=True):
-        with rasterio.open(a, "r+") as ds:
+        with open_raster(a, "r+") as ds:
             ds.build_overviews([2])
     (tmp_path / "a.tif.aux.xml").write_text("<PAMDataset/>")
     assert (tmp_path / "a.tif.ovr").exists()
@@ -1560,7 +1561,7 @@ def _merge_refs(tmp_path, names, stamped):
     for i, name in enumerate(names):
         path = tmp_path / name
         with rasterio.Env(GDAL_PAM_ENABLED="NO"):
-            with rasterio.open(
+            with open_raster(
                 path, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8",
                 crs="EPSG:32633", transform=from_origin(500000.0 + 80 * i, 5000000.0, 10.0, 10.0),
             ) as dst:  # fmt: skip

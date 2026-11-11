@@ -16,10 +16,10 @@ import os
 import subprocess
 import sys
 import textwrap
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.transform import from_origin
 
 # ---------------------------------------------------------------------------
@@ -62,7 +62,7 @@ def _write_striped(path, side: int, bands: int = 1, dtype="float32"):
         tiled=False,
         compress="DEFLATE",
     )
-    with rasterio.open(str(path), "w", **profile) as dst:
+    with open_raster(str(path), "w", **profile) as dst:
         dst.write(data)
     return data
 

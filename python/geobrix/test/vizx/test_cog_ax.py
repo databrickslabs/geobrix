@@ -1,5 +1,7 @@
 """TDD test for plot_cog ax= parameter (static multi-layer composition)."""
 
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -9,14 +11,13 @@ import matplotlib.pyplot as plt  # noqa: E402
 def test_plot_cog_draws_on_provided_axes(tmp_path):
     # build a tiny 1-band GeoTIFF
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.vizx._cog import plot_cog
 
     p = tmp_path / "x.tif"
     data = np.arange(64, dtype="float32").reshape(8, 8)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

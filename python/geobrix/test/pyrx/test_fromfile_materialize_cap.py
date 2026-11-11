@@ -28,10 +28,10 @@ Covers:
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.file_gbx import StageTooLargeError
@@ -61,7 +61,7 @@ def _write_raster(
     )
     if compress:
         profile["compress"] = compress
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.zeros((count, height, width), dtype=dtype))
     decoded = count * width * height * int(np.dtype(dtype).itemsize)
     return os.path.getsize(path), decoded

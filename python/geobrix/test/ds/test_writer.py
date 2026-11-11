@@ -1,6 +1,7 @@
 """Round-trip: raster_gbx read -> gtiff_gbx write -> re-read; + strict schema."""
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -105,7 +106,7 @@ def test_default_names_do_not_collide_when_tiles_share_a_cellid(spark, tmp_path)
     with rasterio.open(str(first)) as ds:
         profile = ds.profile
         data = ds.read(1)
-    with rasterio.open(str(second), "w", **profile) as ds:
+    with open_raster(str(second), "w", **profile) as ds:
         ds.write(data + 100, 1)
 
     out_dir = tmp_path / "out_shared_cellid"

@@ -17,6 +17,7 @@ import subprocess
 import sys
 import warnings
 from datetime import datetime, timezone
+from test._volume_safe import open_raster, written_locally
 
 import numpy as np
 import pyarrow as pa
@@ -319,14 +320,15 @@ def _shapefile(folder, n=20):
             "geometry": shapely.to_wkb(shapely.points(range(n), range(n))),
         }
     )
-    pyogrio.write_arrow(
-        tbl,
-        path,
-        driver="ESRI Shapefile",
-        geometry_name="geometry",
-        geometry_type="Point",
-        crs="EPSG:4326",
-    )
+    with written_locally(path) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="ESRI Shapefile",
+            geometry_name="geometry",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
     return path
 
 
@@ -371,15 +373,16 @@ def _gpkg_with_a_bad_page(path, n=2000, garble=True):
             "geometry": shapely.to_wkb(np.array(geoms)),
         }
     )
-    pyogrio.write_arrow(
-        tbl,
-        str(path),
-        driver="GPKG",
-        layer="feats",
-        geometry_name="geometry",
-        geometry_type="Polygon",
-        crs="EPSG:4326",
-    )
+    with written_locally(str(path)) as _local:
+        pyogrio.write_arrow(
+            tbl,
+            _local,
+            driver="GPKG",
+            layer="feats",
+            geometry_name="geometry",
+            geometry_type="Polygon",
+            crs="EPSG:4326",
+        )
     con = sqlite3.connect(str(path))
     page = con.execute("PRAGMA page_size").fetchone()[0]
     con.close()
@@ -422,7 +425,7 @@ def _tiled_tif(path, compress="deflate"):
     import rasterio
 
     data = (np.arange(256 * 256, dtype="uint16") % 4096).reshape(256, 256)
-    with rasterio.open(
+    with open_raster(
         str(path),
         "w",
         driver="GTiff",
@@ -1878,20 +1881,21 @@ def test_truncated_curves_and_surfaces_are_not_readable_geometries():
 def _layer(path, driver, geometry_type, geoms):
     import pyogrio
 
-    pyogrio.write_arrow(
-        pa.table(
-            {
-                "id": pa.array(range(len(geoms)), pa.int32()),
-                "geometry": pa.array(geoms, pa.binary()),
-            }
-        ),
-        str(path),
-        driver=driver,
-        layer="l",
-        geometry_name="geometry",
-        geometry_type=geometry_type,
-        crs="EPSG:4326",
-    )
+    with written_locally(str(path)) as _local:
+        pyogrio.write_arrow(
+            pa.table(
+                {
+                    "id": pa.array(range(len(geoms)), pa.int32()),
+                    "geometry": pa.array(geoms, pa.binary()),
+                }
+            ),
+            _local,
+            driver=driver,
+            layer="l",
+            geometry_name="geometry",
+            geometry_type=geometry_type,
+            crs="EPSG:4326",
+        )
     return str(path)
 
 

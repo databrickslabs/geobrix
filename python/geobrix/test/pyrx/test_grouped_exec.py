@@ -9,6 +9,8 @@ it keys off _file_ref column presence (has_fr_col) instead, avoiding the
 getActiveSession()==None pitfall on Spark-Connect worker threads.
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 from pyspark.sql.types import LongType, StructField, StructType
@@ -655,7 +657,6 @@ _PENDING_KINDS = {
 def _windowless_pending_tile(tmp_path, kind):
     """(row, VirtualTile) for a two-band uint16 EPSG:4326 file with no NoData, no window
     and the pending instruction ``kind``."""
-    import rasterio
     from rasterio.transform import from_origin
 
     src = tmp_path / "two_band.tif"
@@ -668,7 +669,7 @@ def _windowless_pending_tile(tmp_path, kind):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(src, "w", **prof) as dst:
+    with open_raster(src, "w", **prof) as dst:
         dst.write(np.arange(24, dtype="uint16").reshape(2, 3, 4) + 1)
     vt = VirtualTile(cellid=1, path=str(src), metadata=dict(_PENDING_KINDS[kind]))
     assert vt.window is None and vt.raster is None
@@ -739,7 +740,7 @@ def test_rst_initnodata_then_a_pixel_grouped_function_on_a_whole_file_tile(
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(src, "w", **prof) as dst:
+    with open_raster(src, "w", **prof) as dst:
         dst.write(np.arange(12, dtype="uint16").reshape(1, 3, 4) + 1)
     vt = VirtualTile(cellid=3, path=str(src))
     assert vt.window is None

@@ -1,8 +1,8 @@
 import os
+from test._volume_safe import open_raster
 from unittest.mock import patch
 
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core import cog as gbxcog
@@ -26,7 +26,7 @@ def _write_src(path, w=512, h=512):
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.arange(w * h, dtype="uint8").reshape(1, h, w))
 
 
@@ -529,7 +529,7 @@ def test_cog_convert_file_handles_odd_nbits_source(tmp_path):
     data = (np.arange(64 * 64, dtype=np.uint16).reshape(1, 64, 64) % 30000).astype(
         np.uint16
     )
-    with rasterio.open(
+    with open_raster(
         src,
         "w",
         driver="GTiff",

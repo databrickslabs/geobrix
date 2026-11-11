@@ -1,12 +1,13 @@
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.transform import from_bounds
 
 
 def _write_tif(path, size=16, dtype="uint16", crs="EPSG:4326"):
     data = (np.arange(size * size).reshape(size, size) % 50).astype(dtype)
     transform = from_bounds(-104.0, 31.0, -103.9, 31.1, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

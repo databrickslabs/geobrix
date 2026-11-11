@@ -1,5 +1,6 @@
 import os
 import sys
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -11,7 +12,7 @@ from databricks.labs.gbx.stac._download import fetch_validate_publish
 
 def _write_gtiff(path, width=8, height=8):
     # extent: origin (0, 8), 1.0 px -> x[0,8], y[0,8]
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

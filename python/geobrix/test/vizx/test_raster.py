@@ -1,4 +1,5 @@
 import io
+from test._volume_safe import open_raster
 
 import matplotlib
 import pytest
@@ -84,7 +85,7 @@ def _correlated_gtiff():
 def _disk_gtiff(tmp_path, name="t.tif", width=8, height=8):
     p = tmp_path / name
     arr = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(
+    with open_raster(
         str(p),
         "w",
         driver="GTiff",

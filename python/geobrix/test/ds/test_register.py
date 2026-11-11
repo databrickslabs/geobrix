@@ -1,7 +1,8 @@
 """register(spark) makes all light raster formats resolvable."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.transform import from_origin
 
 
@@ -16,7 +17,7 @@ def _write_sample(path):
         crs="EPSG:4326",
         transform=from_origin(10.0, 50.0, 0.5, 0.5),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 

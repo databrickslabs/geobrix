@@ -7,6 +7,7 @@ their own file, not overwrite one another.
 
 import glob
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -27,7 +28,7 @@ def _write_source(path, *, width, height, count):
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         for band in range(1, count + 1):
             ds.write(np.full((height, width), band * 40, dtype="uint8"), band)
 
@@ -74,7 +75,7 @@ def _write_random_source(path, *, width, height):
         transform=from_origin(0, 60, 0.01, 0.01),
     )
     data = np.random.default_rng(7).integers(0, 256, (height, width), dtype="uint8")
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data, 1)
 
 
@@ -123,7 +124,7 @@ def test_retiled_bands_write_to_distinct_files(spark, tmp_path, cut, side, expec
     marker, which every cut keeps, so every piece still gets its own file."""
     src = tmp_path / "in" / "scene.tif"
     src.parent.mkdir()
-    with rasterio.open(
+    with open_raster(
         str(src),
         "w",
         driver="GTiff",

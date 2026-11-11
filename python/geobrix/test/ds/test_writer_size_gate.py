@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import os
+from test._volume_safe import open_raster
 from typing import Iterator
 from unittest.mock import patch
 
@@ -63,7 +64,7 @@ def _write_geotiff(path: str, width: int = 8, height: int = 6, count: int = 1) -
         nodata=-9999.0,
     )
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         for b in range(1, count + 1):
             ds.write(data + (b - 1) * 100.0, b)
 
@@ -88,7 +89,7 @@ def _write_compressible_geotiff(
         compress="deflate",
     )
     data = np.zeros((count, height, width), dtype=dtype)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     decoded = count * width * height * int(np.dtype(dtype).itemsize)
     return os.path.getsize(path), decoded
@@ -471,7 +472,7 @@ def _write_cog_src(path: str) -> None:
         crs="EPSG:4326",
         transform=from_origin(0, 60, 0.01, 0.01),
     )
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(np.zeros((1, 256, 256), dtype="uint8"))
 
 

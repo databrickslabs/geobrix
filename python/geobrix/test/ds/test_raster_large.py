@@ -1,5 +1,7 @@
 """Tests for splitStrategy / layout-aware chunking in raster_gbx."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import rasterio
 
@@ -23,7 +25,7 @@ def _write_striped(path, w=4000, h=4000):
         transform=rasterio.Affine.identity(),
         tiled=False,
     )  # striped
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(np.zeros((1, h, w), dtype="uint8"))
 
 
@@ -170,7 +172,7 @@ def test_materialized_reads_restage_a_source_replaced_in_place(tmp_path):
             crs="EPSG:4326",
             transform=rasterio.Affine.identity(),
         )
-        with rasterio.open(p, "w", **profile) as dst:
+        with open_raster(p, "w", **profile) as dst:
             dst.write(np.full((1, 64, 64), value, dtype="uint8"))
         st = os.stat(p)
         os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))

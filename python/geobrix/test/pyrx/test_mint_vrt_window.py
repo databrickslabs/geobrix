@@ -10,6 +10,7 @@ validated by the demo run; this is the pytest-able core it builds on.)
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -30,7 +31,7 @@ def _write_tile(path, origin_x, origin_y, val, n=256, px=1.0):
         crs="EPSG:3857",
         transform=tr,
     )
-    with rasterio.open(path, "w", **profile) as dst:
+    with open_raster(path, "w", **profile) as dst:
         dst.write(np.full((n, n), val, "float32"), 1)
 
 

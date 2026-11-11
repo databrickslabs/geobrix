@@ -1,5 +1,7 @@
 """The family sets of the levels leg: one FORMS and one SETS entry per manifest family with more than one level."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 
@@ -32,13 +34,12 @@ def _chosen(spec):
 
 
 def _corpus(tmp_path, n):
-    import rasterio
     from rasterio.transform import from_origin
 
     rows = tmp_path / "corpus" / "rows"
     rows.mkdir(parents=True)
     for i in range(n):
-        with rasterio.open(
+        with open_raster(
             rows / f"t{i}.tif", "w", driver="GTiff", width=16, height=16, count=1,
             dtype="float32", crs="EPSG:4326", transform=from_origin(i * 16, 16, 1, 1),
         ) as dst:  # fmt: skip

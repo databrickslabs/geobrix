@@ -1,4 +1,5 @@
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -22,7 +23,7 @@ def test_materialize_true_forces_bytes(tmp_path):
         transform=rasterio.transform.from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
     vt = VirtualTile(cellid=7, path=p, window=(0, 0, 8, 8))
     out = ot.shape_output(vt, materialize=True)
@@ -75,7 +76,7 @@ def test_materialize_stamps_tile_byte_size(tmp_path):
         transform=rasterio.transform.from_origin(10, 50, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(64, dtype="float32").reshape(8, 8), 1)
     vt = VirtualTile(cellid=7, path=p, window=(0, 0, 8, 8))
     out = ot.shape_output(vt, materialize=True)

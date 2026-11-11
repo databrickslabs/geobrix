@@ -7,10 +7,10 @@ the corresponding writer fix were reverted (with the CRS helpers intact).
 from __future__ import annotations
 
 import xml.etree.ElementTree as ET
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.crs import CRS
 from rasterio.transform import from_bounds
 
@@ -70,7 +70,7 @@ def test_build_mosaic_vrt_srs_preserves_authority(src, expected, tmp_path):
     crs = CRS.from_user_input(src)
     transform = from_bounds(-180, -90, 180, 90, 4, 4)
     tile = tmp_path / "tile.tif"
-    with rasterio.open(
+    with open_raster(
         str(tile),
         "w",
         driver="GTiff",

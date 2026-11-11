@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import glob
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import rasterio
@@ -87,7 +88,7 @@ def _write_src(
     maxval = np.iinfo(dtype).max
     data = data % maxval
     data[data == 0] = 1  # guarantee no all-zero tiles
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -735,7 +736,7 @@ def _write_gb_source_27700(tmp_path) -> str:
     )
     data = np.arange(w * h, dtype=np.uint16).reshape(1, h, w) % np.iinfo(np.uint16).max
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 

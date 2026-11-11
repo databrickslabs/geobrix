@@ -17,6 +17,7 @@ dropDuplicates works across multiple AOIs producing the same item.
 """
 
 import os
+from test._volume_safe import open_raster
 
 import pytest
 from pyspark.sql import SparkSession
@@ -258,7 +259,6 @@ def test_download_udf_path_publishes_valid_bytes(spark_with_fake_catalog, tmp_pa
     fetch_validate_publish end-to-end.
     """
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     spark = spark_with_fake_catalog
@@ -266,7 +266,7 @@ def test_download_udf_path_publishes_valid_bytes(spark_with_fake_catalog, tmp_pa
 
     # Build a real GTiff to serve as fake download bytes
     src = tmp_path / "fake_asset.tif"
-    with rasterio.open(
+    with open_raster(
         str(src),
         "w",
         driver="GTiff",
@@ -428,13 +428,12 @@ def test_fetch_validate_true_rejects_garbage(tmp_path):
 def test_download_emits_last_update_column(spark_with_fake_catalog, tmp_path):
     """Download DataFrame includes a last_update timestamp column."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     spark = spark_with_fake_catalog
 
     src = tmp_path / "t.tif"
-    with rasterio.open(
+    with open_raster(
         str(src),
         "w",
         driver="GTiff",
@@ -496,7 +495,6 @@ def test_download_range_scan_fanout(spark, tmp_path):
     withColumn calls can re-introduce one; getNumPartitions is the robust signal.
     """
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.stac import StacClient
@@ -505,7 +503,7 @@ def test_download_range_scan_fanout(spark, tmp_path):
     src_paths = []
     for i in range(4):
         src = tmp_path / f"asset_{i}.tif"
-        with rasterio.open(
+        with open_raster(
             str(src),
             "w",
             driver="GTiff",
@@ -571,7 +569,6 @@ def test_download_range_scan_fanout(spark, tmp_path):
 def test_fetch_skips_existing_valid_file(tmp_path):
     """If the target file already exists and is valid, no fetch is performed."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.stac._download import fetch_validate_publish
@@ -579,7 +576,7 @@ def test_fetch_skips_existing_valid_file(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     existing = out_dir / "ok.tif"
-    with rasterio.open(
+    with open_raster(
         str(existing),
         "w",
         driver="GTiff",
@@ -661,13 +658,12 @@ def test_fetch_skips_existing_no_validate(tmp_path):
 def test_filename_sanitized_against_path_traversal(tmp_path):
     """An item_id containing ../ does not escape out_dir."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
 
     from databricks.labs.gbx.stac._download import fetch_validate_publish
 
     src = tmp_path / "src.tif"
-    with rasterio.open(
+    with open_raster(
         str(src),
         "w",
         driver="GTiff",

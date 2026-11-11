@@ -28,9 +28,9 @@ from __future__ import annotations
 
 import os
 import pathlib
+from test._volume_safe import open_raster
 
 import numpy as np
-import rasterio
 from pyspark.sql.functions import col
 from rasterio.transform import from_origin
 
@@ -70,7 +70,7 @@ def _write_src(
     data = (np.arange(w * h, dtype=np.uint32).reshape(1, h, w) + 1).astype(dtype)
     data = data % max(np.iinfo(dtype).max, 1)
     data[data == 0] = 1  # no all-zero tiles (avoid NoData pruning side-effects)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -102,7 +102,7 @@ def _write_tile(
     ) % np.iinfo(dtype).max
     # Guarantee no all-zero rows (NoData pruning should not silence any tile)
     data[data == 0] = 1
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
     return path
 
@@ -386,7 +386,7 @@ def _write_qb_src(path: str) -> None:
     data = np.arange(w * h, dtype="uint16").reshape(1, h, w) % np.iinfo("uint16").max
     data[data == 0] = 1
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with rasterio.open(path, "w", **profile) as ds:
+    with open_raster(path, "w", **profile) as ds:
         ds.write(data)
 
 

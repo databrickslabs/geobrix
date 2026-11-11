@@ -7,8 +7,9 @@ Also covers box-as-clipPolygon cases migrated from the removed bbox option:
   - reader emits plain GTiff (not COG)
 """
 
+from test._volume_safe import open_raster
+
 import numpy as np
-import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -31,7 +32,7 @@ def _write(tmp_path, width=512, height=512):
         transform=from_origin(10.0, 50.0, 0.001, 0.001),
         nodata=-9999.0,
     )
-    with rasterio.open(p, "w", **prof) as ds:
+    with open_raster(p, "w", **prof) as ds:
         ds.write(np.arange(width * height, dtype="float32").reshape(height, width), 1)
     return p
 
@@ -45,7 +46,7 @@ def _write(tmp_path, width=512, height=512):
 def _write_small(tmp_path, width=4, height=3, epsg=4326):
     p = str(tmp_path / "s.tif")
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",
@@ -154,7 +155,7 @@ def test_box_clip_emits_plain_gtiff(spark, tmp_path):
     p = str(tmp_path / "large.tif")
     width, height = 512, 512
     data = np.arange(width * height, dtype="float32").reshape(height, width)
-    with rasterio.open(
+    with open_raster(
         p,
         "w",
         driver="GTiff",

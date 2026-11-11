@@ -8,6 +8,8 @@ for opaque full-extent COGs (e.g. a DEM showed only the street map).
 Fix: raster zorder=2, basemap zorder=1.  This test proves the invariant.
 """
 
+from test._volume_safe import open_raster
+
 import matplotlib
 
 matplotlib.use("Agg")
@@ -18,13 +20,12 @@ import numpy as np  # noqa: E402
 
 def _write_single_band_tif(tmp_path, size=16, crs="EPSG:3857"):
     """Write a tiny float32 single-band GeoTIFF; return its path as str."""
-    import rasterio
     from rasterio.transform import from_bounds
 
     path = tmp_path / "dem.tif"
     data = np.linspace(0, 1000, size * size, dtype="float32").reshape(size, size)
     transform = from_bounds(-1.36e7, 4.5e6, -1.35e7, 4.51e6, size, size)
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

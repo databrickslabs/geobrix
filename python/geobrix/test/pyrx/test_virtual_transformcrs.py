@@ -8,6 +8,7 @@ source, and the two set-up costs it cuts (one warp call for the bands, one grid 
 """
 
 import tracemalloc
+from test._volume_safe import open_raster
 
 import numpy as np
 import pytest
@@ -44,7 +45,7 @@ def _write(
         prof["nodata"] = nodata
         data[:, 5:9, 5:9] = nodata
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with rasterio.open(path, "w", **prof) as d:
+        with open_raster(path, "w", **prof) as d:
             d.write(data)
             if alpha:
                 from rasterio.enums import ColorInterp
@@ -184,7 +185,7 @@ def _noise_tile(tmp_path, n):
     """A float32 noise file of n x n x 4 (does not compress) and its virtual tile."""
     rng = np.random.default_rng(1)
     path = str(tmp_path / f"n{n}.tif")
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

@@ -5,6 +5,7 @@ Planning opens no header; a task takes ``files_per_task(n)`` files and yields th
 """
 
 import os
+from test._volume_safe import open_raster
 
 import numpy as np
 import pyarrow as pa
@@ -18,7 +19,7 @@ from databricks.labs.gbx.pyrx import tile_batches
 
 
 def _tif(path, size=32, value=1.0, dtype="float32"):
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="GTiff", width=size, height=size, count=1, dtype=dtype, crs="EPSG:4326",
         transform=from_origin(0, size, 1, 1),
     ) as dst:  # fmt: skip
@@ -325,7 +326,7 @@ def test_a_gdal_worded_missing_file_with_no_errno_is_retried(tmp_path, monkeypat
 
 def test_a_non_gtiff_file_is_re_encoded_to_the_row_of_the_per_file_plan(tmp_path):
     path = str(tmp_path / "a.img")
-    with rasterio.open(
+    with open_raster(
         path, "w", driver="HFA", width=16, height=16, count=2, dtype="uint8", crs="EPSG:32633",
         transform=from_origin(500000, 4000000, 10, 10),
     ) as dst:  # fmt: skip

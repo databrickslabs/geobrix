@@ -7,6 +7,7 @@ lossy format returns its own decoded pixels, a format with no CRS returns none).
 """
 
 from dataclasses import dataclass, field
+from test._volume_safe import written_locally
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
@@ -104,23 +105,31 @@ def write_sample(gb, case: RasterCase, directory: str) -> str:
     drv = gdal.GetDriverByName(case.driver)
     src = memory_source(gb, case)
     opts = list(case.co)
-    if drv.GetMetadataItem("DCAP_CREATECOPY") == "YES":
-        out = drv.CreateCopy(path, src, 0, opts)
-    else:
-        out = drv.Create(
-            path, case.size, case.size, case.bands, getattr(gdal, _NP[case.dtype]), opts
-        )
-        out.SetGeoTransform(case.gt)
-        if case.epsg:
-            out.SetProjection(_srs(gb, case.epsg).ExportToWkt())
-        for i, a in enumerate(source_arrays(case), start=1):
-            band = out.GetRasterBand(i)
-            band.WriteArray(a)
-            if case.nodata is not None:
-                band.SetNoDataValue(float(case.nodata))
-    assert out is not None, f"GDAL could not write a {case.driver} sample"
-    out.FlushCache()
-    out = None
+    with written_locally(
+        path
+    ) as local:  # a Volume takes no update in place (test._volume_safe)
+        if drv.GetMetadataItem("DCAP_CREATECOPY") == "YES":
+            out = drv.CreateCopy(local, src, 0, opts)
+        else:
+            out = drv.Create(
+                local,
+                case.size,
+                case.size,
+                case.bands,
+                getattr(gdal, _NP[case.dtype]),
+                opts,
+            )
+            out.SetGeoTransform(case.gt)
+            if case.epsg:
+                out.SetProjection(_srs(gb, case.epsg).ExportToWkt())
+            for i, a in enumerate(source_arrays(case), start=1):
+                band = out.GetRasterBand(i)
+                band.WriteArray(a)
+                if case.nodata is not None:
+                    band.SetNoDataValue(float(case.nodata))
+        assert out is not None, f"GDAL could not write a {case.driver} sample"
+        out.FlushCache()
+        out = None
     src = None
     return path
 

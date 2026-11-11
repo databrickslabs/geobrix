@@ -11,6 +11,7 @@ itself, and one real light function end to end.
 
 import io
 import re
+from test._volume_safe import open_raster, written_locally
 
 import numpy as np
 import pytest
@@ -40,7 +41,7 @@ def _vrt(source: str) -> bytes:
 def sentinel_tif(tmp_path):
     """A local GeoTIFF of one value (SENTINEL) that a VRT's source can name."""
     path = tmp_path / "sentinel.tif"
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",
@@ -141,7 +142,7 @@ def _memfile_bytes(driver: str) -> bytes:
 
 def _gpkg_bytes(tmp_path) -> bytes:
     path = tmp_path / "a.gpkg"
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GPKG",
@@ -181,7 +182,7 @@ def test_the_formats_kept_readable_still_open_from_bytes(driver, tmp_path):
 def _netcdf4_bytes(tmp_path) -> bytes:
     """A georeferenced NetCDF-4 file (HDF5 container) written by GDAL's netCDF driver, as bytes."""
     src = tmp_path / "src.tif"
-    with rasterio.open(
+    with open_raster(
         src,
         "w",
         driver="GTiff",
@@ -195,7 +196,10 @@ def _netcdf4_bytes(tmp_path) -> bytes:
         w.write(np.arange(20, dtype="float32").reshape(1, 4, 5))
     out = tmp_path / "out.nc"
     try:
-        rasterio.shutil.copy(src, out, driver="netCDF", FORMAT="NC4")
+        with written_locally(
+            out
+        ) as local:  # netCDF takes no Volume (test._volume_safe)
+            rasterio.shutil.copy(src, local, driver="netCDF", FORMAT="NC4")
     except Exception as exc:  # noqa: BLE001 - this GDAL cannot write netCDF-4
         pytest.skip(f"this GDAL cannot write netCDF-4 here: {str(exc)[:80]}")
     return out.read_bytes()

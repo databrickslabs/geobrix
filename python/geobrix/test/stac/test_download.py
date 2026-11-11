@@ -3,11 +3,11 @@ import os
 import socket
 import threading
 import types
+from test._volume_safe import open_raster
 from urllib.parse import urlsplit
 
 import numpy as np
 import pytest
-import rasterio
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.core import _http
@@ -20,7 +20,7 @@ from databricks.labs.gbx.stac._download import (
 
 
 def _write_gtiff(path):
-    with rasterio.open(
+    with open_raster(
         path,
         "w",
         driver="GTiff",

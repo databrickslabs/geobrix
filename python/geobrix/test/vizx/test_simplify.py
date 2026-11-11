@@ -1,4 +1,5 @@
 import shutil
+from test._volume_safe import open_raster
 
 import pytest
 
@@ -160,14 +161,14 @@ def test_simplify_raster_path(tmp_path):
 
     from databricks.labs.gbx.vizx._simplify import simplify_tiles_from_source
 
-    rasterio = pytest.importorskip("rasterio")
+    pytest.importorskip("rasterio")
     from rasterio.transform import from_bounds
 
     # Write a tiny 64×64 GeoTIFF
     src_tif = tmp_path / "src.tif"
     data = np.random.randint(0, 255, (1, 64, 64), dtype=np.uint8)
     transform = from_bounds(-1.0, -1.0, 1.0, 1.0, 64, 64)
-    with rasterio.open(
+    with open_raster(
         str(src_tif),
         "w",
         driver="GTiff",

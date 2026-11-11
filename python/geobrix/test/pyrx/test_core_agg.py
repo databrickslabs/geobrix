@@ -1,5 +1,7 @@
 """Pure-function tests for core/agg.py reducers (Spark-free) + Spark grouped-agg tests."""
 
+from test._volume_safe import open_raster
+
 import numpy as np
 import pytest
 import shapely.wkb
@@ -1592,7 +1594,7 @@ def _write_tif(path, data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=0, mask
     if nodata is not None:
         profile["nodata"] = nodata
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
-        with rasterio.open(path, "w", **profile) as dst:
+        with open_raster(path, "w", **profile) as dst:
             dst.write(data, 1)
             if mask is not None:
                 dst.write_mask(np.asarray(mask, dtype="uint8"))
@@ -2382,7 +2384,7 @@ def test_a_reference_that_is_not_a_local_file_the_vrt_can_name_is_not_plain(tmp_
     )
     assert plain(path=str(vrt)) is None
     rotated = tmp_path / "rot.tif"
-    with rasterio.open(
+    with open_raster(
         rotated,
         "w",
         driver="GTiff",

@@ -1,3 +1,5 @@
+from test._volume_safe import open_raster
+
 import pytest
 from pyspark.sql import functions as f
 
@@ -605,13 +607,12 @@ def test_rst_fromfile_strips_scheme_before_open(spark, tmp_path):
     # else the open fails (rasterio cannot open 'file:/...'). A bare tmp file
     # prefixed with 'file:' exercises that strip (file:/tmp/x -> /tmp/x). Use
     # materialize=True so the read actually happens.
-    import rasterio
 
     p = str(tmp_path / "scene.tif")
     with _serde.open_tile(make_geotiff_bytes(width=4, height=3, epsg=4326)) as src:
         profile = src.profile.copy()
         data = src.read()
-    with rasterio.open(p, "w", **profile) as dst:
+    with open_raster(p, "w", **profile) as dst:
         dst.write(data)
     df = spark.createDataFrame([("file:" + p,)], ["path"])
     tile = df.select(

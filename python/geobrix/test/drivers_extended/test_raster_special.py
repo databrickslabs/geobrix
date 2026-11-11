@@ -3,6 +3,7 @@ the GDAL engine uses for the in-memory feature output of ``gbx_rst_contour``.
 """
 
 import os
+from test._volume_safe import written_locally
 from test.drivers_extended._asserts import assert_tile_is, tile_dict
 from test.drivers_extended._raster import RasterCase, reference, write_sample
 
@@ -86,7 +87,8 @@ def test_mem_is_the_in_memory_output_of_the_engines_feature_functions(
     mem.SetProjection(srs.ExportToWkt())
     mem.GetRasterBand(1).WriteArray(z)
     path = str(tmp_path / "ramp.tif")
-    gdal.GetDriverByName("GTiff").CreateCopy(path, mem)
+    with written_locally(path) as local:
+        gdal.GetDriverByName("GTiff").CreateCopy(local, mem)
     mem = None
 
     from shapely import from_wkb

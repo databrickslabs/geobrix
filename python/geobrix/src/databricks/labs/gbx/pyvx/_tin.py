@@ -721,7 +721,9 @@ def all_xyz(geom):
 
 def validate_mode(mode):
     """``'constrained'`` (the default) or ``'conforming'``, lower-cased, or raise for any other word."""
-    m = (mode or "constrained").lower()
+    m = (
+        "constrained" if mode is None else mode
+    ).lower()  # an empty word is wrong, as on the JVM and UC levels
     if m not in MODES:
         raise ValueError(f"mode must be 'constrained' or 'conforming'; got {mode!r}")
     return m

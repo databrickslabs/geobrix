@@ -18,6 +18,16 @@ def test_mode_arg_tells_left_out_from_null():
         F._mode_arg("sideways")
 
 
+def test_an_empty_mode_is_refused_as_the_jvm_and_uc_levels_refuse_it():
+    from databricks.labs.gbx.pyvx import _tin
+
+    with pytest.raises(ValueError, match="mode must be"):
+        F._mode_arg("")
+    with pytest.raises(ValueError, match="mode must be"):
+        _tin.validate_mode("")
+    assert _tin.validate_mode(None) == "constrained"
+
+
 def test_the_session_udtf_takes_mode_left_out_null_or_by_name(spark):
     spark.udtf.register("gbx_t_tri", F._TriangulateUDTF)
     count = lambda sql: spark.sql(sql).count()  # noqa: E731

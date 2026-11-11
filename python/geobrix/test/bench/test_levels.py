@@ -10,6 +10,7 @@ import threading
 import time
 import types
 import uuid
+from test._provided_spark import wanted as _provided_session
 
 import pytest
 
@@ -24,6 +25,13 @@ from .levels_helpers import run_s
 
 LINUX = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="reads /proc/self/clear_refs"
+)
+# The worker-peak reading inspects the Python workers of the test's own local-mode session (or starts one in a child).
+# The session a Databricks node provides runs its workers for every shard on the node, and a child cannot start a
+# local session there, so these rows cannot pass against it.
+LOCAL_WORKERS = pytest.mark.skipif(
+    _provided_session(),
+    reason="reads the Python workers of a local-mode session; the session a Databricks node provides is shared",
 )
 
 
@@ -511,6 +519,7 @@ _LEAN_WORKER_MB = 200
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local):
     _settle()
     with _own_worker_pool(spark_session_local):
@@ -523,6 +532,7 @@ def test_worker_peak_is_the_shapes_not_the_workers_lifetime(spark_session_local)
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_local):
     # A query with two Python evaluators in each task takes two workers per task, so the pool is
     # left with more idle workers than the session has slots. Spark hands idle workers out
@@ -547,6 +557,7 @@ def test_worker_peak_reaches_every_python_worker_not_one_per_slot(spark_session_
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_local):
     # Idle pooled workers hold about 250 MB each, left by earlier shapes. A trivial shape runs on
     # one lean worker (the pool hands out first-in-first-out, and the fat ones went to the back),
@@ -568,6 +579,7 @@ def test_worker_peak_leaves_out_idle_workers_that_hold_memory(spark_session_loca
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_is_none_when_no_python_worker_ran(spark_session_local):
     _settle()
     spark = spark_session_local
@@ -657,6 +669,7 @@ class _Held:
 
 
 @LINUX
+@LOCAL_WORKERS
 @pytest.mark.parametrize("victim", ["the worker that ran", "an idle worker"])
 def test_worker_peak_is_none_when_a_worker_that_was_there_exits_before_the_read(
     spark_session_local, tmp_path, victim
@@ -708,6 +721,7 @@ def _tasks_done(spark):
 
 
 @LINUX
+@LOCAL_WORKERS
 @pytest.mark.perf
 @pytest.mark.parametrize("pool", ["warm", "cold"])
 def test_worker_peak_is_none_after_spark_stops_a_finished_worker(
@@ -839,6 +853,7 @@ def test_a_rest_api_that_does_not_answer_voids_every_shape(monkeypatch):
 
 
 @LINUX
+@LOCAL_WORKERS
 @pytest.mark.parametrize("gap, reads", [(10.0, True), (70.0, False)])
 def test_a_long_shape_reads_only_if_the_pool_never_idled_for_a_minute(
     spark_session_local, monkeypatch, gap, reads
@@ -912,6 +927,7 @@ print(json.dumps({"peak": peak.read(shape), "reason": peak.reason}))
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_is_none_when_a_task_is_retried_after_its_worker_was_killed():
     # A worker the shape created holds 400 MB and is killed (a crash, an OOM kill); its task runs
     # again on a new worker that holds nothing. The killed worker leaves no trace in /proc, and the
@@ -934,6 +950,7 @@ def test_worker_peak_is_none_when_a_task_is_retried_after_its_worker_was_killed(
 
 
 @LINUX
+@LOCAL_WORKERS
 @pytest.mark.parametrize("pool", ["warm", "cold"])
 def test_worker_peak_is_none_when_a_read_that_stops_early_destroys_the_workers(
     spark_session_local, pool
@@ -970,6 +987,7 @@ def test_worker_peak_is_none_when_a_read_that_stops_early_destroys_the_workers(
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_is_none_when_another_pools_idle_worker_exits(
     spark_session_local, tmp_path
 ):
@@ -1002,6 +1020,7 @@ def test_worker_peak_is_none_when_another_pools_idle_worker_exits(
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_worker_peak_is_none_when_one_of_two_pools_runners_exits(
     spark_session_local, tmp_path
 ):
@@ -1055,6 +1074,7 @@ def test_worker_peak_is_none_when_one_of_two_pools_runners_exits(
 
 
 @LINUX
+@LOCAL_WORKERS
 @pytest.mark.parametrize(
     "how", ["killed", pytest.param("idle", marks=pytest.mark.perf)]
 )
@@ -1114,6 +1134,7 @@ def test_worker_peak_is_none_when_two_environments_start_cold_and_one_goes_idle(
 
 
 @LINUX
+@LOCAL_WORKERS
 def test_the_reading_is_none_when_the_plan_is_not_given_or_stops_early(
     spark_session_local,
 ):
@@ -1230,6 +1251,7 @@ print(json.dumps({"peak": p.read(spark.range(1)), "reason": p.reason}))
 """
 
 
+@LOCAL_WORKERS
 def test_a_stale_default_parallelism_reads_null_not_a_partial_reset():
     # 4 real slots but a default parallelism of 2: a 2-task sweep would reset only some workers
     # and still read a number (a trivial shape after a heavy one read 531 MB, with no note).

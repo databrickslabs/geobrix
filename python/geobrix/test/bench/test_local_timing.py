@@ -238,6 +238,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         "raster-file-op",  # cog_convert
         "raster-generator",  # retile
         "raster-stat",  # avg
+        "raster-tile-op",  # band, setsrid, setcrs, getsubdataset, tri
         "raster-vectorize",  # isoband
     } == {
         f.family

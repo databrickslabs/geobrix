@@ -1952,7 +1952,7 @@ def test_collision_gate_fires_on_a_private_name_equal_to_a_public_one_and_a_dupl
 
 def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkeypatch):
     gates = _gates()
-    fn = MAN.functions["gbx_rst_getsubdataset"]
+    fn = MAN.functions["gbx_rst_rastertoworldcoordx"]
     renamed = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
     )
@@ -1969,13 +1969,13 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
     monkeypatch.setattr(
         gates,
         "_scala_wrappers",
-        lambda: {"rst_getsubdataset": {own: [["a", "b", "c", "d"]]}},
+        lambda: {"rst_rastertoworldcoordx": {own: [["a", "b", "c", "d"]]}},
     )
     assert any(
         "Scala wrapper arities [4] above" in f for f in gates.name_findings([fn])
     )
     bare = _row(
-        "gbx_rst_getsubdataset",
+        "gbx_rst_rastertoworldcoordx",
         levels={k: v for k, v in fn.levels.items() if k != "L1"},
         gdal=None,
     )
@@ -1986,7 +1986,9 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
         gates,
         "_scala_wrappers",
         lambda: {
-            "rst_getsubdataset": {"src/other/functions.scala": [["a", "b", "c", "d"]]}
+            "rst_rastertoworldcoordx": {
+                "src/other/functions.scala": [["a", "b", "c", "d"]]
+            }
         },
     )
     assert not any("Scala wrapper" in f for f in gates.name_findings([bare]))

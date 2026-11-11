@@ -1197,9 +1197,8 @@ def test_a_batched_source_generator_run_gives_each_case_its_alone_verdict(
 ):
     """A table function with no input row (`gbx_drivers`): through SQL its argument rows are one view, through the
     DataFrame-first API each case is one call and the calls one union. Either way the verdicts match the alone run,
-    and only the case red in the batch, and the refusal, run alone. The vector filters only: the raster and unfiltered
-    rows are held to the driver process's registry, and a Python worker that imported osgeo's gdal_array also lists
-    NUMPY, so their verdict follows the worker a row lands on, batched or not."""
+    and only the case red in the batch, and the refusal, run alone. The vector filters keep the run small; the
+    batching path is the same for every filter."""
     import dataclasses
 
     from databricks.labs.gbx import manifest, register

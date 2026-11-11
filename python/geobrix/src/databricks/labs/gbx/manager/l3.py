@@ -219,14 +219,13 @@ def register_engine_c0(spark, fn, name: str, file_ref: bool = False) -> None:
 
     reg = _gdal_policy.carrying_session(spark)
     grid = _factory_args("proj_grid_dirs")[0]
-    reg.udf.register(
-        name,
-        engine_l3.c0(
-            fn.sql_name, grid, read_cap=report_detected_cap(spark), file_ref=file_ref
-        ).for_session(
-            spark
-        ),  # its transport: the session's choice
+    udf = engine_l3.c0(
+        fn.sql_name, grid, read_cap=report_detected_cap(spark), file_ref=file_ref
     )
+    for_session = getattr(udf, "for_session", None)
+    if for_session is not None:  # its transport: the session's choice
+        udf = for_session(spark)
+    reg.udf.register(name, udf)
 
 
 def _file_sql(spark, tile: str) -> str:

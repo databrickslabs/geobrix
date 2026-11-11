@@ -23,7 +23,8 @@ class _LossyCellId(ValueError):
 
 _SCALAR_FIX = (
     "Fix: filter the NULL tiles out first (WHERE tile IS NOT NULL) and give every tile a cellid, or run on Spark 4.1 "
-    "or later (DBR 19), which hands the integers over exactly."
+    "or later with spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled=false, which hands the integers "
+    "over exactly."
 )
 
 _ARRAY_FIX = (
@@ -87,8 +88,11 @@ class SessionTileUdf:
     takes a tile and returns a number pickles the tile all the same.
 
     Spark 4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, which can round an
-    H3-sized cell id to another cell. So the Arrow form runs where the ``arrow_tile_transport`` capability holds
-    (server Spark 4.1+, ``GBX_CAP_ARROW_TILE_TRANSPORT`` overrides it) and the pickled form elsewhere; the Arrow form
+    H3-sized cell id to another cell, and so does a later Spark whose Arrow UDFs convert through pandas
+    (``spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled``, on by default on dedicated DBR 19, where a
+    NULL argument also arrives as NaN). So the Arrow form runs where the ``arrow_tile_transport`` capability holds
+    (server Spark 4.1+ with that conversion off: Serverless environment 6; ``GBX_CAP_ARROW_TILE_TRANSPORT`` turns it
+    off) and the pickled form elsewhere; the Arrow form
     still restores whole numbers below 2**53 in the tile arguments (``tiles``: positions of tile structs;
     ``tile_arrays``: positions of arrays of tile or cell structs) and refuses a cell id past that. A UDF that returns a
     tile refuses it as an error tile naming the fix (``on_lossy``, by default); any other raises it.

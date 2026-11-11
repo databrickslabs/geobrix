@@ -483,6 +483,28 @@ def _udtf_partition_probe(
     return probe
 
 
+LEGACY_PANDAS_UDF_CONVERSION = (
+    "spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled"
+)
+
+
+def _arrow_udf_rows_probe(spark) -> Tuple[bool, str]:
+    """Whether an Arrow-optimized Python UDF gets its arguments as the pickled form does (no Spark work: a conf read).
+
+    With ``spark.sql.legacy.execution.pythonUDF.pandas.conversion.enabled`` on, the arguments go through pandas: an INT
+    or BIGINT arrives as float64 (a BIGINT past 2**53 rounded) and a NULL INT, BIGINT or DOUBLE as NaN. Dedicated DBR 19
+    (Spark 4.2.0) turns it on by default and gbx_rst_band(tile, NULL) failed there; Serverless environment 6 and open
+    source Spark 4.1+ hand the values over exactly. Serverless allows no conf read, so it reads as off there.
+    """
+    value = _conf_value(spark, LEGACY_PANDAS_UDF_CONVERSION)
+    if (value or "").strip().lower() == "true":
+        return False, (
+            f"{LEGACY_PANDAS_UDF_CONVERSION}=true: an Arrow UDF would get INT and BIGINT as float64 and NULL as NaN; "
+            "set it to false on the cluster to carry the tile rows as Arrow batches"
+        )
+    return True, f"{LEGACY_PANDAS_UDF_CONVERSION}={value}"
+
+
 def _sql_file_type_probe(spark) -> Tuple[bool, str]:
     """Whether a SQL function whose body mints a FILE value (`try_to_file`) can be created AND listed. A runtime that
     parses the FILE type in an expression can still refuse it when it lists the session's functions (DBR 17.3:
@@ -578,8 +600,9 @@ REGISTRY: Dict[str, Capability] = _caps(
         "a tile op's rows cross the JVM <-> Python boundary as Arrow batches (off the executor heap, a batch bounded "
         "by spark.sql.execution.arrow.maxBytesPerBatch), not as pickles of up to 100 tiles built on the heap; Spark "
         "4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, so 4.0 keeps the "
-        "pickles",
+        "pickles, and so does a session whose Arrow UDFs convert through pandas (the legacy conversion conf on)",
         min_server=(4, 1),
+        probe=_arrow_udf_rows_probe,
         default_when_present=True,  # dedicated DBR 19: 3.6x the time for 4x the rows, where the pickles took 8x
     ),
     Capability(

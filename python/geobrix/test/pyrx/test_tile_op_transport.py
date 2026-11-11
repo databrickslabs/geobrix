@@ -77,9 +77,10 @@ def _factory_built():
 class _FakeSpark:
     """A session as the capability registry reads it: the server's `.version` and `.conf`."""
 
-    def __init__(self, version):
+    def __init__(self, version, conf=None):
         self.version = version
-        self.conf = type("C", (), {"get": lambda self, k, d=None: d})()
+        values = dict(conf or {})
+        self.conf = type("C", (), {"get": lambda self, k, d=None: values.get(k, d)})()
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +130,19 @@ def test_the_session_server_chooses_the_transport(server, label):
     assert caps.path(spark, "tile_udf") == f"tile_udf:{label}"
     for udf in (_unwrap(prx._init_nodata_udf), _unwrap(prx._u_width)):
         assert udf.for_session(spark) is udf.form(label)
+
+
+@pytest.mark.parametrize("legacy, label", [("true", "pickle"), ("false", "arrow")])
+def test_a_session_whose_arrow_udfs_convert_through_pandas_keeps_the_pickles(
+    legacy, label
+):
+    """Dedicated DBR 19 (Spark 4.2.0) turns the legacy pandas conversion on: an Arrow UDF there gets a NULL INT as NaN
+    and a BIGINT as a float, so gbx_rst_band(tile, NULL) failed; such a session keeps the pickled rows.
+    """
+    spark = _FakeSpark("4.2.0", {caps.LEGACY_PANDAS_UDF_CONVERSION: legacy})
+    assert caps.path(spark, "tile_udf") == f"tile_udf:{label}"
+    udf = _unwrap(prx._band_udf)
+    assert udf.for_session(spark) is udf.form(label)
 
 
 def test_the_override_turns_arrow_off_on_a_server_that_has_it(monkeypatch):
@@ -273,6 +287,21 @@ CALLS = {
         "_tilexyz_udf",
         "(tile, 12, 2088, 1384, 'PNG', 256, 'bilinear', 'auto')",
     ),
+    # a NULL argument is NULL out (the oracle rows band_null_index, setsrid_null_srid): the transports must agree
+    "band_null_index": ("dem", "_band_udf", "(tile, CAST(NULL AS INT))"),
+    "setsrid_null_srid": ("dem", "_setsrid_udf", "(tile, CAST(NULL AS INT))"),
+    "setcrs_null_crs": ("dem", "_setcrs_udf", "(tile, CAST(NULL AS STRING))"),
+    "updatetype_null_type": ("dem", "_update_type_udf", "(tile, CAST(NULL AS STRING))"),
+    "convolve_null_kernel": (
+        "dem",
+        "_convolve_udf",
+        "(tile, CAST(NULL AS ARRAY<ARRAY<DOUBLE>>))",
+    ),
+    "histogram_null_bounds": (
+        "dem",
+        "_histogram_udf",
+        "(tile, 16, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), false)",
+    ),
 }
 
 
@@ -307,6 +336,12 @@ def _plain(v):
 
 @pytest.mark.parametrize("fn", sorted(CALLS))
 def test_arrow_returns_the_pickled_answer_for_materialized_tiles(both, tiles, fn):
+    if "null" in fn and caps.path(both, "tile_udf") != "tile_udf:arrow":
+        # Spark 4.0 (and the legacy pandas conversion) hand a NULL argument over as NaN: the session never runs the
+        # Arrow form there, so only a session that does compares NULL arguments
+        pytest.skip(
+            "this session keeps the pickled rows: an Arrow UDF gets a NULL argument as NaN here"
+        )
     kind = CALLS[fn][0]
     rows = [(i, dict(t, cellid=i + 7)) for i, t in enumerate(tiles[kind])] + [
         (99, None)
@@ -322,6 +357,8 @@ def test_arrow_returns_the_pickled_answer_for_materialized_tiles(both, tiles, fn
             ).collect()
         }
     assert got["arrow"] == got["pickle"]
+    if "null" in fn:
+        return
     assert any(v is not None for k, v in got["arrow"].items() if k != 99)
     first = got["arrow"][0]
     if isinstance(first, dict) and "cellid" in first and "raster" in first:

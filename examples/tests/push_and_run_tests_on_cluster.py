@@ -399,7 +399,14 @@ S = PLAN["shards"][SLUG]
 CAPS = PLAN["caps"]
 STALL_MIN = S.get("stall_min") or CAPS["stall_min"]  # scaled to the chunk's longest file or table (see _test_shards.stall_min_for)
 t0 = time.time()
-root = "/local_disk0/gbxtest/%%s/%%s" %% (PLAN["run_id"], SLUG)
+try:  # the node's local disk; Serverless has none to write, so the task's temp dir there
+    os.makedirs("/local_disk0/gbxtest", exist_ok=True)
+    scratch = "/local_disk0/gbxtest"
+except OSError:
+    import tempfile
+
+    scratch = tempfile.gettempdir() + "/gbxtest"
+root = scratch + "/%%s/%%s" %% (PLAN["run_id"], SLUG)
 shutil.rmtree(root, ignore_errors=True)
 os.makedirs(root + "/out")
 shutil.copy(PLAN["tarball"], root + "/src.tar.gz")  # one read of the Volume file, then local disk
@@ -633,7 +640,12 @@ else:
     HEAVY = SPEC.get("heavy") or []
     q = DeltaQueue(sql, TABLE, heavy=HEAVY)
     # the runners of one cluster share the node's disk: one lock there lets one heavy chunk run at a time
-    gate = HeavyGate("/local_disk0/gbxtest/" + PLAN["run_id"] + "-" + POOL + "/heavy.lock") if HEAVY else None
+    try:  # the node's local disk; Serverless has none to write, so the task's temp dir there
+        os.makedirs("/local_disk0/gbxtest", exist_ok=True)
+        scratch = "/local_disk0/gbxtest"
+    except OSError:
+        scratch = tempfile.gettempdir() + "/gbxtest"
+    gate = HeavyGate(scratch + "/" + PLAN["run_id"] + "-" + POOL + "/heavy.lock") if HEAVY else None
     rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save, heavy=HEAVY, gate=gate)
     rec["conflicts"] = q.conflicts
     save(rec)

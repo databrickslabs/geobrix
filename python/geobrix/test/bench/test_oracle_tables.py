@@ -1235,3 +1235,33 @@ def test_a_batched_source_generator_run_gives_each_case_its_alone_verdict(
         assert dict(got[True])["drivers_wrong"] is False
         assert sum(ok for _, ok in got[True]) == len(got[True]) - 1, got[True]
         assert set(alone) == {"drivers_bad_kind", "drivers_wrong"}, alone
+
+
+def test_the_driver_check_registers_what_the_listing_registers(tmp_path):
+    """The `gbx_drivers` rows come from a process that imported osgeo's gdal_array, which registers GDAL's NUMPY
+    driver. The unfiltered row is held to rasterio's registry in the test process, which lists NUMPY only if that
+    process imported gdal_array too. Each step is a fresh interpreter, so the verdict does not follow test order.
+    """
+    pytest.importorskip("osgeo")
+    rows_json = tmp_path / "rows.json"
+    produce = (
+        "import json, sys; "
+        "from databricks.labs.gbx.drivers._listing import list_drivers; "
+        "rows = list_drivers(); "
+        "assert 'osgeo.gdal_array' in sys.modules and any(r['driver'] == 'NUMPY' for r in rows); "
+        f"json.dump(rows, open({str(rows_json)!r}, 'w'))"
+    )
+    subprocess.run(
+        [sys.executable, "-c", produce], capture_output=True, text=True, check=True
+    )
+    judge = (
+        "import json, sys; "
+        "from databricks.labs.gbx.bench import oracles, oracle_checks; "
+        "assert 'osgeo.gdal_array' not in sys.modules; "
+        "case = next(c for c in oracles.TABLES['DRIVERS'] if c.cid == 'drivers_all'); "
+        f"rows = json.load(open({str(rows_json)!r})); "
+        "print(repr(oracle_checks.check_drivers(case, rows, ())))"
+    )
+    out = subprocess.run([sys.executable, "-c", judge], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() == "None", out.stdout

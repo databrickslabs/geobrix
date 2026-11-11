@@ -718,6 +718,20 @@ def _check_driver_notes(case, name, r) -> Optional[str]:
     return None
 
 
+def _rasterio_driver_names() -> set:
+    """Every driver in rasterio's registry, vector ones too."""
+    import rasterio
+
+    # The listing imports osgeo's gdal_array (see `_osgeo.bindings`), which registers GDAL's NUMPY driver. Make the
+    # same registration here, or the verdict follows whether this process happened to import it earlier.
+    try:
+        from osgeo import gdal_array  # noqa: F401
+    except ImportError:
+        pass
+    with rasterio.Env() as env:
+        return set(env.drivers())
+
+
 def check_drivers(case, rows, args) -> Optional[str]:
     """`drivers`: the rows of ``gbx_drivers`` for one filter. `expect` is {"kind": the filter the call used
     (None: every driver), "present": {driver: {column: value}}, "absent": [driver]}. Beyond the named rows: each
@@ -768,10 +782,7 @@ def check_drivers(case, rows, args) -> Optional[str]:
     for name in want.get("absent", ()):
         if name in got:
             return f"{case.cid}: {name!r} is listed"
-    import rasterio
-
-    with rasterio.Env() as env:
-        theirs = set(env.drivers())  # every registered driver, vector ones too
+    theirs = _rasterio_driver_names()
     if kind is None and set(got) != theirs:
         return (
             f"{case.cid}: drivers differ from rasterio's registry: "

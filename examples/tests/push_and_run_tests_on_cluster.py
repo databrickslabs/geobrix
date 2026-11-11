@@ -308,6 +308,9 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
                 "tables": [t for t in s.oracle_tables.split(",") if t],
                 "cwd": "." if s.kind == "scripts" else ts.PKG, "pool": "serverless" if a.serverless else pool_of(s, a),
                 "select_k": s.select_k,
+                # may this chunk collect nothing? a part of a split shard (its unit is judged over all its parts) or a subset may; a
+                # rerun or a whole shard may not (its run fails, and so its runner and the job)
+                "empty_ok": bool(s.name.endswith("]") or s.subset),
             }
             for s in shards
         } | {slug: {k: v for k, v in sm.items() if k != "slug"} for slug, sm in smokes.items()},
@@ -964,7 +967,8 @@ maxfail_hit = bool(MAXFAIL) and state["failed"] + state["errors"] >= MAXFAIL and
 result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
-              timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER)
+              timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER,
+              empty_ok=S.get("empty_ok", True))
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
@@ -2070,8 +2074,8 @@ def verdict_of(line: dict) -> str:
     """The verdict word of a chunk's one-line result (as ``shard_verdict`` names the rows of the summary)."""
     if line.get("overrun") and not line.get("failed_chunk"):
         return "OVERRUN"
-    if line.get("rc") == 5 and not line.get("failed_chunk"):
-        return "EMPTY"
+    if line.get("rc") == 5 and not (line.get("failed") or line.get("errors") or line.get("reason")):
+        return "EMPTY"  # a failed chunk when it may not be empty (a rerun, a whole shard), else a part that may be
     if not line.get("failed_chunk"):
         return "ok"
     if line.get("reason") or line.get("rc") is None:

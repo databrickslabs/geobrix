@@ -387,6 +387,7 @@ def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s,
         rec["shards"].append({"slug": slug, "claim_s": round(t0 - t_claim, 3), "start": t0, "end": t1, "rc": out.get("rc"),
                               "reason": out.get("reason") or "", "pid": out.get("pid"), "isolation": out.get("isolation"),
                               "heavy": slug in heavy, "child": out.get("child") or {}, "overrun": bool(out.get("overrun")),
+                              **({"empty_ok": out["empty_ok"]} if "empty_ok" in out else {}),
                               **{k: out.get(k) for k in ("passed", "failed", "errors", "skipped")}})
         rec["current"] = None
         if on_result is not None:
@@ -430,11 +431,13 @@ POLICY = {"first_k": 2, "max_failed_chunks": 3, "max_failures": 20, "maxfail": 3
 
 def chunk_failed(res: dict) -> bool:
     """Whether a chunk's result fails the run: a test failed or errored (collection included), pytest ended with an error code, or
-    the chunk ended without finishing (a watchdog stop, no result). A chunk that collected nothing (rc 5) is not a failure here."""
+    the chunk ended without finishing (a watchdog stop, no result). A chunk that collected nothing (rc 5) fails only when its plan
+    says it may not be empty (``empty_ok`` False: a rerun, a whole shard); a part of a split shard may be (the launcher judges its
+    unit over all its parts)."""
     if not res:
         return True
     if res.get("rc") == 5 and not (res.get("failed") or res.get("errors") or res.get("reason")):
-        return False
+        return res.get("empty_ok") is False  # a chunk whose plan says it must collect a test (a rerun, a whole shard): a selection error
     if res.get("overrun") and not (res.get("failed") or res.get("errors")):
         return False  # stopped at 2x its estimate: a timing miss (a lower bound for the next plan), not a test failure
     return bool(res.get("reason")) or res.get("rc") not in (0,) or bool(res.get("failed")) or bool(res.get("errors"))

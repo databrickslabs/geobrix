@@ -2391,6 +2391,21 @@ def test_empty_test_parts_say_empty_and_fail_their_unit_only_when_no_part_collec
     assert launcher.is_failure({"name": "rerun test/x.py", "verdict": "EMPTY", "subset": False}), "a rerun that collects nothing fails"
 
 
+def test_an_unintended_empty_chunk_fails_its_own_run_its_runner_and_the_job(shards):
+    empty = {"rc": 5, "total": 0, "passed": 0, "reason": ""}
+    assert not sr.chunk_failed(empty), "a part that may be empty (the default) is no failure"
+    assert sr.chunk_failed(dict(empty, empty_ok=False)), "a rerun or a whole shard that collects nothing fails"
+    line = sr.result_line("a", dict(empty, empty_ok=False), 0, 1)
+    assert line["failed_chunk"] and launcher.verdict_of(line) == "EMPTY", "a failed chunk, shown as EMPTY"
+    rerun = ts.Shard(name="rerun test/x.py", kind="light", paths=["test/x.py::t"])
+    part = ts.Shard(name="ds [1/2]", kind="light", paths=_ds_files(1))
+    plan = _plan(_args(), [rerun, part])
+    assert plan["shards"][rerun.slug]["empty_ok"] is False and plan["shards"][part.slug]["empty_ok"] is True
+    assert '"empty_ok": S.get("empty_ok", True)' in launcher.run_source(plan) or "empty_ok=S.get(" in launcher.run_source(plan)
+    rec = sr.run_loop(sr.DirQueue("/tmp/gbx-empty-q-" + str(os.getpid()), ["a"]), "r0", lambda slug: dict(empty, empty_ok=False))
+    assert [x for x in rec["shards"] if sr.chunk_failed(x)], "the runner's bad list (and so the job) sees it"
+
+
 def test_the_wall_budget_starts_after_the_lease_wait_when_the_pool_is_submitted(shards, monkeypatch, tmp_path):
     plan = _plan(_args("--max-wall-min", "10"), ts.select(shards, "ds,pyrx"))
     pool = next(iter(plan["pools"]))

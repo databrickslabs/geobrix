@@ -336,7 +336,13 @@ def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(request, tm
     from databricks.labs.gbx.pyrx.core.budget import READ_CAP_KEY
 
     spark = _engine_session(request)
-    spark.conf.set(READ_CAP_KEY, "1024")  # the 64 x 64 Float32 DEM is 16 KiB decoded
+    # the 64 x 64 Float32 DEM is 16 KiB decoded; Serverless allows no conf of ours (CONFIG_NOT_AVAILABLE)
+    try:
+        spark.conf.set(READ_CAP_KEY, "1024")
+    except Exception as exc:  # noqa: BLE001
+        if "CONFIG_NOT_AVAILABLE" not in str(exc):
+            raise
+        pytest.skip("this session takes no GeoBrix conf (Serverless): no read cap key")
     try:
         register(
             spark,

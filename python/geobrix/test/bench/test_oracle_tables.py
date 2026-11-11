@@ -821,3 +821,37 @@ def test_a_contour_reference_row_takes_the_exact_rule_only():
     )
     with pytest.raises(ValueError, match="takes the rule 'exact'"):
         oracle_checks.check_features_ref(case, [], case.args)
+
+
+def test_an_ewkt_geometry_column_is_read_with_st_geomfromewkt_on_uc():
+    """The session runner on UC reads an EWKT argument as the statement renderer does: st_geomfromwkt refuses the
+    `SRID=<n>;` prefix (WKT_PARSE_ERROR on Serverless env 6), st_geomfromewkt reads it and keeps its SRID.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench import oracles
+
+    params = manifest.load().functions["gbx_rst_viewshed"].params
+    case = oracles.Case("probe", "gbx_rst_viewshed", (), "null", None, geom_srid=3857)
+
+    def proj(*observers):
+        return oracles._projection(case, params, [(None, o) for o in observers], "uc")
+
+    assert proj("SRID=4326;POINT(1 2)").split(", ")[1] == (
+        f"CAST(st_geomfromewkt(c1) AS {oracles.UC_GEOMETRY})"
+    )
+    assert (
+        proj(" srid=4326;POINT(1 2)", None)
+        .split(", ")[1]
+        .startswith("CAST(st_geomfromewkt(c1)")
+    )
+    assert (
+        proj("POINT(1 2)")
+        == f"c0, CAST(st_geomfromwkt(c1, 3857) AS {oracles.UC_GEOMETRY})"
+    )
+    with pytest.raises(ValueError, match="EWKT in some rows and WKT in others"):
+        proj("SRID=4326;POINT(1 2)", "POINT(1 2)")
+    # the session surface reads the column as it is
+    assert (
+        oracles._projection(case, params, [(None, "SRID=4326;POINT(1 2)")], "session")
+        == "c0, c1"
+    )

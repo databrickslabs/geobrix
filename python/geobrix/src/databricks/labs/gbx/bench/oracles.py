@@ -5077,13 +5077,14 @@ def verdict(case: Case, outs, rows, tmpdir: Optional[str] = None) -> Optional[st
 
 def _projection(case: Case, params, rows, surface: str) -> str:
     """The select list over the argument columns. On UC a GEOMETRY parameter reads its column through an integer-SRID
-    ``st_geomfromwkt``, except a column of WKB bytes, which goes in as BINARY (the engine refuses it). A column holds
+    ``st_geomfromwkt`` (``st_geomfromewkt`` for EWKT, which carries its SRID), except a column of WKB bytes, which goes
+    in as BINARY (the engine refuses it). A column holds
     one type, so the choice is made over EVERY row of the batch: a column that is bytes in some rows and text in others
     is a harness error (give the variant a row of its own), never a wrapping decided from the first row.
     """
     cols = []
     for i in range(len(rows[0])):
-        as_binary = False
+        as_binary = ewkt = False
         if surface == "uc" and params[i].uc == "GEOMETRY":
             kinds = {
                 isinstance(r[i], (bytes, bytearray)) for r in rows if r[i] is not None
@@ -5094,11 +5095,26 @@ def _projection(case: Case, params, rows, surface: str) -> str:
                     "type; give the variant a row of its own"
                 )
             as_binary = kinds == {True}
-        cols.append(
-            f"c{i}"
-            if surface != "uc" or params[i].uc != "GEOMETRY" or as_binary
-            else f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
-        )
+            # EWKT carries its own SRID: st_geomfromwkt does not parse it, st_geomfromewkt does (as `_sql_literal`)
+            forms = {
+                r[i].lstrip()[:5].upper() == "SRID="
+                for r in rows
+                if isinstance(r[i], str)
+            }
+            if len(forms) > 1:
+                raise ValueError(
+                    f"{case.cid}: argument {i} is EWKT in some rows and WKT in others, and a column is read one "
+                    "way; give the variant a row of its own"
+                )
+            ewkt = forms == {True}
+        if surface != "uc" or params[i].uc != "GEOMETRY" or as_binary:
+            cols.append(f"c{i}")
+        elif ewkt:
+            cols.append(f"CAST(st_geomfromewkt(c{i}) AS {UC_GEOMETRY})")
+        else:
+            cols.append(
+                f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
+            )
     return ", ".join(cols)
 
 

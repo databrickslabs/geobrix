@@ -44,6 +44,8 @@ Options:
   --start-cap-min <n>    cancel when no shard has beaten this long after the submit (default 25)
   --pool-wait-min <n>    wait this long for a free pool cluster (default 30)
   --pip-extra "<reqs>"   more pip requirements the tests import
+  --env KEY=VAL          an environment variable every shard sets before its tests (repeatable), e.g.
+                         GBX_CAP_ARROW_TILE_TRANSPORT=0 to run the light tile UDFs with their pickled transport
   --run-id <id>          default tst-<date>-<time>-<4 hex>
   --keep-stage           leave the Volume folder, the notebooks and the queue table
   --explain-only         print the plan and exit; no network, nothing staged or started
@@ -130,6 +132,7 @@ def parse(argv):
     p.add_argument("--start-cap-min", type=float, default=25.0)
     p.add_argument("--pool-wait-min", type=float, default=30.0)
     p.add_argument("--pip-extra", default="")
+    p.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="an environment variable every shard sets (repeatable)")
     p.add_argument("--run-id", default="")
     p.add_argument("--keep-stage", action="store_true")
     p.add_argument("--explain-only", action="store_true")
@@ -154,7 +157,15 @@ def problems(a) -> list:
     for flag in ("shard_cap_min", "stall_min", "start_cap_min"):
         if getattr(a, flag) <= 0:
             out.append(f"--{flag.replace('_', '-')} must be positive")
+    for kv in a.env:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", kv):
+            out.append(f"--env takes KEY=VAL, not {kv!r}")
     return out
+
+
+def extra_env(a) -> dict:
+    """The --env variables, as every shard sets them (after its own: GBX_SHARD, GBX_ORACLE_TABLES)."""
+    return dict(kv.split("=", 1) for kv in a.env)
 
 
 def default_run_id() -> str:
@@ -212,7 +223,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "local_out": f"test-logs/databricks-tests/{run_id}",
         "shards": {
             s.slug: {
-                "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": ts.shard_env(s), "expected_min": round(s.expected_min, 1),
+                "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": {**ts.shard_env(s), **extra_env(a)}, "expected_min": round(s.expected_min, 1),
                 "est_src": s.est_src or "ci", "heavy": bool(s.heavy), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
                 "solo_min": round(s.solo_min or s.expected_min, 1),
                 "contention": round(s.expected_min / s.solo_min, 2) if s.solo_min else 1.0,

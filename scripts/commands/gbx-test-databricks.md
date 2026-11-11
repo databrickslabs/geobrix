@@ -35,6 +35,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--start-cap-min <n>` - cancel when no shard has beaten n minutes after the submit. Default: 25.
 - `--pool-wait-min <n>` - wait up to n minutes for a free pool cluster. Default: 30.
 - `--pip-extra "<reqs>"` - more pip requirements the tests import.
+- `--env KEY=VAL` - an environment variable every shard sets before its tests (repeatable). For example, `GBX_CAP_ARROW_TILE_TRANSPORT=0` runs the light tile functions with pickled rows.
 - `--run-id <id>` - default `tst-<date>-<time>-<4 hex>`.
 - `--keep-stage` - keep the Volume folder, the notebooks and the queue table.
 - `--explain-only` - print the plan and stop. No network, nothing staged.

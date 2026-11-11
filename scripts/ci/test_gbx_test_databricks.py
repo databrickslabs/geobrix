@@ -362,6 +362,13 @@ def test_the_plan_splits_light_and_heavy_shards_over_their_pools(shards):
     assert plan["pools"]["gbx-test-1n"]["table"] == "`c`.`s`.`gbx_test_queue_t1_light`" and plan["pools"]["gbx-test-1n-jar"]["table"].endswith("_jar`")
 
 
+def test_env_reaches_every_shard_after_its_own(shards):
+    a = _args("--env", "GBX_CAP_ARROW_TILE_TRANSPORT=0", "--env", "GBX_SHARD=x")
+    plan = _plan(a, ts.select(shards, "pyrx"))
+    assert plan["shards"]["pyrx-1-2"]["env"] == {"GBX_SHARD": "x", "GBX_CAP_ARROW_TILE_TRANSPORT": "0"}
+    assert "--env takes KEY=VAL, not 'no-equals'" in launcher.problems(_args("--env", "no-equals"))
+
+
 def test_oracle_tables_and_ignores_reach_the_pytest_args(shards):
     plan = _plan(_args(), ts.select(shards, "manager family 1/3,manager,scripts/ci"))
     fam = plan["shards"]["manager-family-1-3"]

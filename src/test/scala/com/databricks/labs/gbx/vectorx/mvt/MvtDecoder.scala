@@ -9,7 +9,7 @@ import scala.collection.mutable.ArrayBuffer
 import scala.util.Try
 
 /**
-  * Decode a Mapbox Vector Tile (MVT) protobuf blob into features.
+  * Decode a Mapbox Vector Tile (MVT) protobuf blob into features: the tests' round-trip check of [[MvtWriter]].
   *
   * Uses GDAL's OGR MVT driver opened in read mode via a `/vsimem/` scratch path.
   * The OGR MVT driver accepts a single `.pbf` file path for reading (not a directory
@@ -42,7 +42,7 @@ object MvtDecoder {
     def decode(blob: Array[Byte]): Seq[(String, Array[Byte], Map[String, Any])] = {
         if (blob == null || blob.isEmpty) return Seq.empty
         // Load the GDAL native library and register OGR drivers under the shared lock.
-        MvtWriter.ensureNativeLoaded()
+        GDALManager.ensureJniLoaded(None)
         GDALManager.initOgr()
 
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")

@@ -31,19 +31,6 @@ object HeavyRunner {
   private def resolve(corpusRoot: String, path: String): String =
     if (Paths.get(path).isAbsolute) path else Paths.get(corpusRoot, path).toString
 
-  // GDAL needs random access; UC Volumes (cloud object storage) don't support it, so the
-  // JVM can't gdal.Open a /Volumes tile directly. Stage it to a LOCAL temp via the
-  // Volume-native Hadoop read (BenchIO.readBytes), open that, then clean up. Same reason
-  // BenchIO.readBytes reads through the Hadoop FileSystem rather than java.io.
-  private def withVolumeDataset[T](path: String)(f: Dataset => T): T = {
-    val tmp = java.io.File.createTempFile("heavy_gdal_", ".tif")
-    try {
-      Files.write(tmp.toPath, BenchIO.readBytes(path))
-      val ds = gdal.Open(tmp.getAbsolutePath)
-      try f(ds) finally if (ds != null) ds.delete()
-    } finally tmp.delete()
-  }
-
   // Deterministic synth output dir, mirroring bench.synth.synth_dir on the pyrx
   // side EXACTLY (sha1(tile_rel_path)[:12]) so the heavy runner reads the SAME
   // files the pyrx runner wrote (write-once-read-both cross-engine identity).
@@ -59,13 +46,9 @@ object HeavyRunner {
   private def synthPaths(corpusRoot: String, tileRelPath: String, fn: String): Seq[String] = {
     val recipe = BenchDispatch.synthRecipe(fn)
     val dir = synthDir(corpusRoot, tileRelPath, recipe)
-    val names = recipe match {
-      case "frombands" =>
-        // one single-band tile per source band; determined by opening the source.
-        val src = resolve(corpusRoot, tileRelPath)
-        val n = withVolumeDataset(src)(ds => if (ds != null) ds.GetRasterCount() else 0)
-        (1 to n).map(b => f"band_$b%02d.tif")
-      case other        => throw new IllegalArgumentException(s"no synth recipe: $other")
+    // frombands, the last tile_array fn with a heavyweight level, has none now: no recipe is resolved here.
+    val names: Seq[String] = recipe match {
+      case other => throw new IllegalArgumentException(s"no synth recipe: $other")
     }
     names.map(nm => dir.resolve(nm).toString)
   }

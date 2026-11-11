@@ -600,26 +600,6 @@ result.show()
   // Tile ops & constructors family (Scala)
   // ===========================================================================
 
-  val rst_asformat_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_asformat(col("tile"), lit("GTiff")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_asformat_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(re-encoded tile in the requested GDAL format)
-""".trim
-
   val rst_band_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -639,31 +619,6 @@ result.show()
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (single band extracted from the 3-band multiband fixture)
-""".trim
-
-  val rst_convolve_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val kernel = array(
-  array(lit(0.0), lit(0.0), lit(0.0)),
-  array(lit(0.0), lit(1.0), lit(0.0)),
-  array(lit(0.0), lit(0.0), lit(0.0))
-)
-val result = rasters.select(rx.rst_convolve(col("tile"), kernel).alias("tile"))
-result.show()
-""".trim
-
-  val rst_convolve_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(convolved tile; kernel is a 3x3 identity)
 """.trim
 
   val rst_fromcontent_scala_example: String =
@@ -689,54 +644,6 @@ result.show()
 |GTiff |
 +------+
 (format of the tile loaded from binary content via binaryFile reader)
-""".trim
-
-  val rst_frombands_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Constructor: extract per-band tiles from the multiband fixture, then stack them back.
-val rasters = spark.table("multiband_rasters")
-val withBands = rasters.select(
-  array(
-    rx.rst_band(col("tile"), lit(1)),
-    rx.rst_band(col("tile"), lit(2)),
-    rx.rst_band(col("tile"), lit(3))
-  ).alias("bands")
-)
-val result = withBands.select(rx.rst_frombands(col("bands")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_frombands_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(3 per-band tiles stacked back into a 3-band tile)
-""".trim
-
-  val rst_initnodata_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_initnodata(col("tile")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_initnodata_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with NoData initialized)
 """.trim
 
   val rst_setcrs_scala_example: String =
@@ -777,26 +684,6 @@ result.show()
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (tile with SRID stamped to 32618; does NOT reproject — use rst_transform to reproject)
-""".trim
-
-  val rst_updatetype_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_updatetype(col("tile"), lit("Float32")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_updatetype_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(type-converted tile; use rst_type to confirm the new data type)
 """.trim
 
   // ===========================================================================
@@ -1012,31 +899,6 @@ result.show(truncate = false)
 (PNG image bytes, 256×256 pixels)
 """
 
-  val h3_cell_bbox_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// H3 res-9 cell ids (as BIGINT); scalar bbox in EPSG:4326, centroids mode.
-val schema = StructType(Seq(StructField("cellid", LongType())))
-val rows = Seq(617733151020810239L, 617733151085035519L, 617733151021334527L)
-val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map(org.apache.spark.sql.Row(_))), schema)
-val result = df.select(col("cellid"), rx.gbx_h3_cell_bbox(col("cellid"), 4326, "centroids", 0).alias("bbox"))
-result.show(truncate = false)
-""".trim
-
-  val h3_cell_bbox_scala_example_output: String =
-    """
-+------------------+------------------------------+
-|cellid            |bbox                          |
-+------------------+------------------------------+
-|617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
-+------------------+------------------------------+
-(STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
-"""
-
   // =========================================================================
   // rst_custom_rasterize_agg
   //
@@ -1150,49 +1012,9 @@ result.show()
 ... (WKB binary — POINT Z geometries, 3×3 elevation grid, 9 rows)""".trim
 
   // =========================================================================
-  // VectorX CRS family — st_crs, st_setcrs, st_transformcrs
+  // VectorX CRS — st_transformcrs
   // Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'
   // =========================================================================
-
-  val st_crs_scala_example: String =
-    """
-import com.databricks.labs.gbx.vectorx.{functions => vx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-val df = spark.table("vector_geoms")
-val result = df.select(vx.st_crs(col("geom")).alias("crs")).first()
-result.getString(0)
-""".trim
-
-  val st_crs_scala_example_output: String =
-    """
-+---------+
-|crs      |
-+---------+
-|EPSG:4326|
-+---------+
-""".trim
-
-  val st_setcrs_scala_example: String =
-    """
-import com.databricks.labs.gbx.vectorx.{functions => vx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-val df = spark.table("vector_geoms")
-val result = df.select(vx.st_setcrs(col("geom"), "EPSG:4326").alias("stamped")).first()
-result.getAs[Array[Byte]]("stamped")
-""".trim
-
-  val st_setcrs_scala_example_output: String =
-    """
-+---------+
-|stamped  |
-+---------+
-|[binary] |
-+---------+
-... (EWKB binary — coordinates preserved, SRID=4326 embedded)""".trim
 
   val st_transformcrs_scala_example: String =
     """
@@ -1992,43 +1814,6 @@ result.show()
 |1   |
 +----+
 ... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)""".trim
-
-  // ===========================================================================
-  // PMTiles family (Scala)
-  // ===========================================================================
-
-  val pmtiles_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.pmtiles.{functions => px}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
-val rows = Seq(
-  (2,0,0,"t00".getBytes),(2,0,1,"t01".getBytes),(2,0,2,"t02".getBytes),
-  (2,1,0,"t10".getBytes),(2,1,1,"t11".getBytes),(2,1,2,"t12".getBytes),
-  (2,2,0,"t20".getBytes),(2,2,1,"t21".getBytes),(2,2,2,"t22".getBytes))
-val schema = StructType(Seq(
-  StructField("z", IntegerType()), StructField("x", IntegerType()),
-  StructField("y", IntegerType()), StructField("tile_bytes", BinaryType())))
-val df = spark.createDataFrame(
-  spark.sparkContext.parallelize(rows.map(r => org.apache.spark.sql.Row(r._1, r._2, r._3, r._4))),
-  schema)
-val result = df.agg(
-  px.pmtiles_agg(col("tile_bytes"), col("z"), col("x"), col("y"),
-    lit("{\"name\":\"my_tileset\"}")).alias("pmt"))
-result.show()
-""".trim
-
-  val pmtiles_agg_scala_example_output: String =
-    """
-+------------------------------------------+
-|pmt                                       |
-+------------------------------------------+
-|[50 4D 54 69 6C 65 73 03 ...]             |
-+------------------------------------------+
-(BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)""".trim
 
   // ===========================================================================
   // SQL from a JVM job (docs/docs/installation.mdx)

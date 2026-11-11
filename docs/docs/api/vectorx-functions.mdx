@@ -57,7 +57,8 @@ Every function runs on every compute through its Python level. On a dedicated cl
 | `st_triangulate` | Python, JVM | JVM level by default on a dedicated cluster; both modes run on every level |
 | `st_interpolateelevationbbox` | Python, JVM | JVM level by default on a dedicated cluster; both modes run on every level |
 | `st_interpolateelevationgeom` | Python | Both modes run on every level |
-| `st_crs`, `st_setcrs`, `st_transformcrs` | Python, JVM | JVM level by default on a dedicated cluster |
+| `st_crs`, `st_setcrs` | Python | |
+| `st_transformcrs` | Python, JVM | JVM level by default on a dedicated cluster |
 | `st_legacyaswkb` | Python, Unity Catalog | |
 | `st_makevalid`, `st_explainvalidity` | Python, Unity Catalog | |
 | `st_wrapx` | Python, Unity Catalog | |
@@ -586,7 +587,7 @@ These apply in **every** input encoding and at every level — they are properti
 ### st_crs
 
 {/* BEGIN GENERATED gbx_st_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala jar="gbx_st_crs" />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -616,7 +617,7 @@ An SRID is classified against the authoritative PROJ registries, so an ESRI-rang
 ### st_setcrs
 
 {/* BEGIN GENERATED gbx_st_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala jar="gbx_st_setcrs" />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|

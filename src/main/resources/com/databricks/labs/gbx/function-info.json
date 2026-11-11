@@ -19,8 +19,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -426,8 +425,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -668,8 +666,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -954,8 +951,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1749,8 +1745,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1855,8 +1850,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1964,7 +1958,7 @@
       "since": "0.5.1"
     },
     "gbx_bng_cellfill_array": {
-      "examples": "Examples:\n      > SELECT gbx_bng_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT region, gbx_bng_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 'TQ300800', CAST(NULL AS DOUBLE)), (1, 'TQ299800', 5.0), (1, 'TQ301800', 5.0), (1, 'TQ300799', 5.0), (1, 'TQ300801', 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cells, [k], [method], [power]",
       "description": "Fill the NULL cells of an array of BNG cells from their valid neighbours.",
       "surfaces": [
@@ -1997,7 +1991,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_cellintersection_array": {
-      "examples": "Examples:\n      > SELECT gbx_bng_cellintersection_array(c0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_bng_cellintersection_array(collect_list(t.chip)) AS common_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3 )) AS chip UNION ALL SELECT explode(gbx_bng_tessellate( 'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "chips",
       "description": "Take the intersection of an array of chips of one cell.",
       "surfaces": [
@@ -2030,7 +2024,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_cellunion_array": {
-      "examples": "Examples:\n      > SELECT gbx_bng_cellunion_array(c0) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT gbx_bng_cellunion_array(collect_list(t.chip)) AS union_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((530000 180000, 530000 181000, 530600 181000, 530600 180000, 530000 180000))', 3 )) AS chip UNION ALL SELECT explode(gbx_bng_tessellate( 'POLYGON((530400 180000, 530400 181000, 531000 181000, 531000 180000, 530400 180000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "chips",
       "description": "Take the union of an array of chips of one cell.",
       "surfaces": [
@@ -2232,7 +2226,7 @@
       "since": "0.2.0"
     },
     "gbx_custom_cellfill_array": {
-      "examples": "Examples:\n      > SELECT gbx_custom_cellfill_array(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT region, gbx_custom_cellfill_array( collect_list(struct(cellid, value)), gbx_custom_grid(0, 1000000, 0, 1000000, 2, 100000, 100000, 27700), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 216172782113787048L, CAST(NULL AS DOUBLE)), (1, 216172782113786967L, 5.0), (1, 216172782113787127L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cells, grid, [k], [method], [power]",
       "description": "Fill the NULL cells of an array of custom-grid cells from their valid neighbours.",
       "surfaces": [
@@ -2243,7 +2237,7 @@
       "since": "0.6.0"
     },
     "gbx_h3_cellfill_array": {
-      "examples": "Examples:\n      > SELECT gbx_h3_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT region, gbx_h3_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 612934495919669247L, CAST(NULL AS DOUBLE)), (1, 612934495863046143L, 5.0), (1, 612934495900794879L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cells, [k], [method], [power]",
       "description": "Fill the NULL cells of an array of H3 cells from their valid neighbours.",
       "surfaces": [
@@ -2254,7 +2248,7 @@
       "since": "0.6.0"
     },
     "gbx_quadbin_cellfill_array": {
-      "examples": "Examples:\n      > SELECT gbx_quadbin_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellfill_array(collect_list(struct(cellid, value)), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 5234158540624494591L, CAST(NULL AS DOUBLE)), (1, 5234158544919461887L, 5.0), (1, 5234158536329527295L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cells, [k], [method], [power]",
       "description": "Fill the NULL cells of an array of quadbin cells from their valid neighbours.",
       "surfaces": [
@@ -2444,7 +2438,7 @@
       "since": "0.4.0"
     },
     "gbx_st_asmvt_array": {
-      "examples": "Examples:\n      > SELECT gbx_st_asmvt_array(c0, 'lyr') AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT z, x, y, gbx_st_asmvt_array( collect_list(struct(geom_wkb AS geom, to_json(attrs) AS attrs)), 'layer' ) AS mvt FROM mvt_features GROUP BY z, x, y;",
       "usage_args": "features, layer_name, [extent]",
       "description": "Encode an array of features into one Mapbox Vector Tile layer.",
       "surfaces": [
@@ -2476,7 +2470,7 @@
       "since": "0.5.0"
     },
     "gbx_st_coverageinvalidedges_array": {
-      "examples": "Examples:\n      > SELECT gbx_st_coverageinvalidedges_array(c0, 0.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageinvalidedges_array(collect_list(geom_wkb), 0.0) AS bad_edges FROM coverage_overlap GROUP BY cov_id;",
       "usage_args": "geoms, [gap_width]",
       "description": "Give the invalid edges of an array of polygons that should form a coverage.",
       "surfaces": [
@@ -2497,7 +2491,7 @@
       "since": "0.5.0"
     },
     "gbx_st_coverageisvalid_array": {
-      "examples": "Examples:\n      > SELECT gbx_st_coverageisvalid_array(c0, 0.0D) AS out FROM gbx_example;",
+      "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageisvalid_array(collect_list(geom_wkb), 0.0) AS is_valid FROM coverage_parcels GROUP BY cov_id;",
       "usage_args": "geoms, [gap_width]",
       "description": "Say whether an array of polygons is a valid coverage.",
       "surfaces": [
@@ -2513,8 +2507,7 @@
       "description": "Return the canonical CRS of the SRID a geometry carries.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.0"
     },
@@ -2614,8 +2607,7 @@
       "description": "Stamp a CRS on a geometry without reprojecting it.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.0"
     },
@@ -2704,8 +2696,7 @@
       "description": "Fold the tiles of a group into one PMTiles v3 archive.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },

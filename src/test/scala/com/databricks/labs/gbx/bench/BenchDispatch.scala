@@ -5,11 +5,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
-import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
-import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
-import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
-import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
-import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
@@ -17,7 +12,6 @@ import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
-import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.util.NodeFilePathUtil
@@ -36,7 +30,7 @@ object BenchDispatch {
 
   private val ACC = "accessor"; private val TER = "terrain"
   private val EDIT = "edit"
-  private val FOCAL = "focal"; private val FMT = "format"
+  private val FMT = "format"
   private val DGGS = "dggs"
   private val VECTOR = "vector"
 
@@ -61,19 +55,17 @@ object BenchDispatch {
     "rst_boundingbox" -> ACC,
     // (the accessors and statistics that return an array, a map or a struct have no heavyweight level)
     // tile-out transforms with scalar / fixed args
-    "rst_band" -> EDIT, "rst_initnodata" -> EDIT,
-    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT,
-    "rst_convolve" -> FOCAL,
-    "rst_asformat" -> FMT,
+    "rst_band" -> EDIT,
+    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT,
+    // (asformat, convolve, initnodata and updatetype have no heavyweight level: they measured slower than light.)
     // (derivedband has no heavyweight level: its output kept the source data type, not Float64.)
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // getsubdataset is accessor-flavored; the readers emit a tile -> format.
     // (buildoverviews has no heavyweight level: it measured slower than light.)
     "rst_fromcontent" -> FMT,
     "rst_getsubdataset" -> ACC,
-    // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
-    // (The combine family and merge have no heavyweight level: they measured slower than light.)
-    "rst_frombands" -> FMT,
+    // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles). None has a heavyweight level: the combine
+    // family, merge and frombands measured slower than light.
     // (The tiling, tessellate, xyzpyramid and isoband functions have no heavyweight level.)
     // grid rasterize aggregators (DGGS; routed through the grid-aggregate branch
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
@@ -104,10 +96,9 @@ object BenchDispatch {
   // rst_fromfile is lightweight-only now (the JVM cannot read UC Volumes, issue #34),
   // so there is no heavy-tier dispatch for it -- the "path" input_kind is unused.
   private val pathInput: Set[String] = Set.empty
-  // bucket C, group C3: multi-tile fns consume an ARRAY of tiles. The bench
-  // synthesizes the multi-tile input from the corpus tile and writes it ONCE
-  // (write-once-read-both); the heavy runner reads the SAME synthesized files.
-  private val tileArrayInput: Set[String] = Set("rst_frombands")
+  // bucket C, group C3: multi-tile fns consume an ARRAY of tiles. None has a heavyweight
+  // level now (frombands was the last), so the "tile_array" input_kind is unused.
+  private val tileArrayInput: Set[String] = Set.empty
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
@@ -267,7 +258,6 @@ object BenchDispatch {
 
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
   def synthRecipe(fn: String): String = fn match {
-    case "rst_frombands"     => "frombands"
     case other               => throw new IllegalArgumentException(s"no synth recipe for: $other")
   }
 
@@ -275,11 +265,6 @@ object BenchDispatch {
   def all: Seq[String] = cats.keys.toSeq.sorted
   def category(fn: String): String = cats(fn)
   def minBands(fn: String): Int = if (multiBand.contains(fn)) 2 else 1
-
-  // Fixed 3x3 normalised mean kernel for rst_convolve — must match the
-  // _CONVOLVE_KERNEL hardcoded on the pyrx side (1/9 in every cell).
-  private val convolveKernel: Array[Array[Double]] =
-    Array.fill(3, 3)(1.0 / 9.0)
 
   def pureCore(fn: String, ds: Dataset, a: Map[String, String]): String = {
     // gdal_calc/warp-backed functions write to NodeFilePathUtil.rootPath, a per-JVM scratch dir
@@ -331,20 +316,9 @@ object BenchDispatch {
     // tile-out transforms with scalar / fixed args: all produce a raster
     // tile -> fpDerived raster fingerprint (same path as terrain).
     case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
-    case "rst_initnodata"  => fpDerived(RST_InitNoData.execute(ds, Map.empty))
     case "rst_setsrid"     => fpDerived(RST_SetSrid.execute(ds, Map.empty, argI(a, "srid", 4326)))
     // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
     case "rst_setcrs"      => fpDerived(RST_SetCrs.execute(ds, Map.empty, argS(a, "crs", "4326")))
-    case "rst_updatetype"  => fpDerived(RST_UpdateType.execute(ds, Map.empty, argS(a, "new_type", "Float64")))
-    case "rst_convolve"    => fpDerived(RST_Convolve.execute((0L, ds, Map.empty), convolveKernel))
-    // RST_AsFormat is a no-op when newFormat == the input driver: execute returns
-    // the *input* ds unchanged. fpDerived would then release that input ds, and
-    // HeavyRunner reuses the same open ds across the warmup+measured loop, so the
-    // next iteration calls GetDriver() on a freed dataset -> "GetDriver() null".
-    // Guard the release: only release the result when it is a genuinely new
-    // dataset (identity != input ds). The GTiff round-trip still times correctly
-    // when newFormat differs; the no-op case times the cheap identity return.
-    case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -394,15 +368,8 @@ object BenchDispatch {
     * tile_array adapter (core_fn(ds_list, args)). */
   def pureCoreTileArray(fn: String, dss: Array[Dataset], a: Map[String, String]): String = {
     Files.createDirectories(NodeFilePathUtil.rootPath)
-    // Wrap each input ds as a (cellID, ds, metadata) tile; cellID 0, empty meta.
-    val tiles: Seq[(Long, Dataset, Map[String, String])] =
-      dss.toSeq.map(d => (0L, d, Map.empty[String, String]))
     fn match {
-      // frombands: stack the N single-band tiles (array/band order preserved) into
-      // one N-band tile. Fingerprint the stacked dataset.
-      case "rst_frombands" =>
-        val (out, _) = RST_FromBands.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
+      // frombands was the last tile_array fn with a heavyweight level; none is dispatched here now.
       case other => throw new IllegalArgumentException(s"unknown bench tile_array fn: $other")
     }
   }
@@ -451,17 +418,6 @@ object BenchDispatch {
     finally RasterDriver.releaseDataset(out)
   }
 
-  // Fingerprint an AsFormat result without releasing the *input* ds. When
-  // newFormat == the input driver, RST_AsFormat returns the input ds unchanged;
-  // HeavyRunner reuses that open ds across its warmup+measured loop, so releasing
-  // it here would invalidate the next iteration (GetDriver() on a freed dataset).
-  // Only release a genuinely new result (identity != input).
-  private def fpAsFormat(res: (Dataset, Map[String, String]), input: Dataset): String = {
-    val out = res._1
-    try BenchFingerprint.ofDataset(out)
-    finally if (!(out eq input)) RasterDriver.releaseDataset(out)
-  }
-
   def column(fn: String, tile: Column, a: Map[String, String]): Column = {
     import functions._
     fn match {
@@ -494,15 +450,8 @@ object BenchDispatch {
       case "rst_boundingbox"   => rst_boundingbox(tile)
       // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
-      case "rst_initnodata"  => rst_initnodata(tile)
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
       case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
-      case "rst_updatetype"  => rst_updatetype(tile, argS(a, "new_type", "Float64"))
-      case "rst_convolve"    =>
-        import org.apache.spark.sql.functions.{array, lit}
-        val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)
-        rst_convolve(tile, kernelCol)
-      case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
       // bucket C, group C1/C2. fromcontent reads the tile's raster (binary
       // content) column. getsubdataset is pure-core-only here; its column form
       // exists only to keep the match exhaustive (the spark-path runner filters
@@ -511,10 +460,6 @@ object BenchDispatch {
       case "rst_fromcontent" =>
         rst_fromcontent(tile.getField("raster"), argS(a, "driver", "GTiff"))
       case "rst_getsubdataset" => rst_getsubdataset(tile, argS(a, "name", "0"))
-      // bucket C, group C3: multi-tile fns. The `tile` Column passed here IS the
-      // ARRAY<tile> column the runner built from the synthesized tiles (the same
-      // files the pure-core path reads). The binding takes a single array column.
-      case "rst_frombands"     => rst_frombands(tile)
       // bucket A aggregators have no scalar column form; they are aggregate
       // expressions handled by aggregateColumn (the spark-path runner routes them
       // through the aggregate branch, not column()).

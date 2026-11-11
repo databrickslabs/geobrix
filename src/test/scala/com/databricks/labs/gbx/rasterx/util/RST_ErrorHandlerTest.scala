@@ -1,11 +1,10 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, TileBytesRefused}
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.GenericInternalRow
-import org.apache.spark.sql.catalyst.util.GenericArrayData
 import org.apache.spark.sql.types.BinaryType
 
 import scala.collection.IterableOnce
@@ -92,13 +91,6 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         meta("error_message") should include("gen error")
     }
 
-    test("a refused group is the error tile with the reason and cell id 0, as the light tier's") {
-        val tile = RST_ErrorHandler.refusedGroupTile(new TileBytesRefused("over this compute's read cap. Fix: retile"), BinaryType)
-        RasterSerializationUtil.isErrorTile(tile) shouldBe true
-        RasterSerializationUtil.cellIdOf(tile) shouldBe 0L
-        RasterSerializationUtil.metadataOf(tile)("last_error") should include("read cap")
-    }
-
     test("safeEval (generator) error tile carries the input tile's cellid") {
         // The tile holds corrupt raster bytes, so it cannot be opened; the cellid must still be taken from
         // the row without opening the raster.
@@ -122,17 +114,7 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         result.toSeq shouldBe oneRow
     }
 
-    test("safeEval (ArrayData) when eval throws and no input has error should return row with error metadata") {
-        val rows = new GenericArrayData(Array(minimalRow()))
-        val throwingEval: () => InternalRow = () => throw new RuntimeException("array eval fail")
-        val result = RST_ErrorHandler.safeEval(throwingEval, rows, BinaryType)
-        result should not be null
-        val meta = getMetadata(result)
-        meta should contain key "error_message"
-        meta("error_message") should include("array eval fail")
-    }
-
-    // ---- VirtualTileException propagation through ALL four overloads --------
+    // ---- VirtualTileException propagation through ALL three overloads --------
 
     test("safeEval (InternalRow) VirtualTileException is re-thrown not swallowed") {
         val row = minimalRow()
@@ -141,14 +123,6 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
             RST_ErrorHandler.safeEval(eval, row, BinaryType)
         }
         ex.getMessage should include("virtual guard")
-    }
-
-    test("safeEval (ArrayData) VirtualTileException is re-thrown not swallowed") {
-        val rows = new GenericArrayData(Array(minimalRow()))
-        intercept[VirtualTileException] {
-            val eval: () => InternalRow = () => throw new VirtualTileException("array virtual guard")
-            RST_ErrorHandler.safeEval(eval, rows, BinaryType)
-        }
     }
 
     test("safeEval (Any, conf) VirtualTileException is re-thrown regardless of crashExpressions") {
@@ -190,10 +164,9 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         RasterSerializationUtil.rowToDS(upstream, BinaryType) shouldBe null
         RasterDriver.readFromBytes(null, Map.empty) shouldBe null
         RasterSerializationUtil.isErrorTile(upstream) shouldBe true
-        // the row, array and crash overloads hand the upstream tile on instead of replacing its diagnostic
+        // the row and crash overloads hand the upstream tile on instead of replacing its diagnostic
         val failing: () => InternalRow = () => throw new RuntimeException("later failure")
         RST_ErrorHandler.safeEval(failing, upstream, BinaryType) shouldBe upstream
-        RST_ErrorHandler.safeEval(failing, new GenericArrayData(Array(minimalRow(), upstream)), BinaryType) shouldBe upstream
         val crash = new ExpressionConfig(
           Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "true"),
           new SerializableConfiguration(new org.apache.hadoop.conf.Configuration())
@@ -217,7 +190,6 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         val tileEval: () => InternalRow = () => throw oom
         val generatorEval: () => IterableOnce[InternalRow] = () => throw oom
         intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(tileEval, row, BinaryType))
-        intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(tileEval, new GenericArrayData(Array(row)), BinaryType))
         intercept[OutOfMemoryError](RST_ErrorHandler.safeEval(generatorEval, row, BinaryType))
         val conf = new ExpressionConfig(
           Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "false"),

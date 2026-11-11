@@ -35,7 +35,7 @@ A few functions are not measured yet. They run the JVM level until a measurement
 A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
 
 {/* BEGIN GENERATED jar-functions: edit manifest/functions.json, then run gbx:manifest:gen */}
-55 functions run on the JVM when the JAR is present.
+51 functions run on the JVM when the JAR is present.
 
 ### RasterX
 
@@ -45,7 +45,6 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_rst_boundingbox" />`gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_crs" />`gbx_rst_crs` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_format" />`gbx_rst_format` | RasterX | A virtual tile runs in Python. |
-| <Link id="gbx_rst_frombands" />`gbx_rst_frombands` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_fromcontent" />`gbx_rst_fromcontent` | RasterX |  |
 | <Link id="gbx_rst_height" />`gbx_rst_height` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_memsize" />`gbx_rst_memsize` | RasterX | A virtual tile runs in Python. |
@@ -94,16 +93,13 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_custom_distance" />`gbx_custom_distance` | GridX |  |
 | <Link id="gbx_custom_grid" />`gbx_custom_grid` | GridX |  |
 | <Link id="gbx_custom_pointascell" />`gbx_custom_pointascell` | GridX |  |
-| <Link id="gbx_h3_cell_bbox" />`gbx_h3_cell_bbox` | GridX |  |
 | <Link id="gbx_h3_cellfill" />`gbx_h3_cellfill` | GridX |  |
 
 ### VectorX
 
 | Function | Package | Notes |
 |---|---|---|
-| <Link id="gbx_st_crs" />`gbx_st_crs` | VectorX |  |
 | <Link id="gbx_st_interpolateelevationbbox" />`gbx_st_interpolateelevationbbox` | VectorX |  |
-| <Link id="gbx_st_setcrs" />`gbx_st_setcrs` | VectorX |  |
 | <Link id="gbx_st_transformcrs" />`gbx_st_transformcrs` | VectorX |  |
 | <Link id="gbx_st_triangulate" />`gbx_st_triangulate` | VectorX |  |
 {/* END GENERATED jar-functions */}

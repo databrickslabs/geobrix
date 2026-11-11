@@ -288,9 +288,8 @@ object SpatialRefOps {
       * `ESRI:54008` -> 54008); None for authority-less CRS (raw WKT / PROJ4) and for
       * non-numeric codes such as `OGC:CRS84`.
       *
-      * The single home for the "what SRID can a geometry carry for this CRS?" rule — shared by
-      * [[crsInfo]] and by `ST_SetCrs`, which must apply exactly the same rule when deciding
-      * whether a CRS can be stamped onto a geometry at all. */
+      * The single home for the "what SRID can a geometry carry for this CRS?" rule, used by
+      * [[crsInfo]]. */
     def authoritySridOf(spatialRef: SpatialReference): Option[Int] =
         for {
             name <- Option(spatialRef.GetAuthorityName(null)) if name.nonEmpty

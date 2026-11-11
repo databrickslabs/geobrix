@@ -32,15 +32,9 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Quadbin_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_BNG_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Custom_RasterizeAgg",
-        "com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands",
         "com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent",
-        "com.databricks.labs.gbx.rasterx.expressions.grid.RST_H3_CellBBox",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_Convolve",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData",
         "com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX",
         "com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType",
         "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX",
         "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY",
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ",
@@ -87,13 +81,9 @@ object TestL1 {
         "com.databricks.labs.gbx.gridx.custom.generators.Custom_GeometryKLoopExplode",
         // gridx/h3
         "com.databricks.labs.gbx.gridx.h3.H3_CellFill",
-        // pmtiles
-        "com.databricks.labs.gbx.pmtiles.PMTiles_Agg",
         // vectorx
         "com.databricks.labs.gbx.vectorx.expressions.ST_Triangulate",
         "com.databricks.labs.gbx.vectorx.expressions.ST_InterpolateElevationBBox",
-        "com.databricks.labs.gbx.vectorx.expressions.ST_Crs",
-        "com.databricks.labs.gbx.vectorx.expressions.ST_SetCrs",
         "com.databricks.labs.gbx.vectorx.expressions.ST_TransformCrs",
         // vectorx/jts/legacy
         "com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB"

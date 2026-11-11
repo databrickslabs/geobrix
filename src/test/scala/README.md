@@ -41,9 +41,7 @@ src/test/scala/
 │   │   ├── expressions/
 │   │   │   ├── RST_AccessorsEvalTest.scala          # Accessor Spark tests
 │   │   │   ├── RST_AccessorsExecuteTest.scala       # Accessor operation tests
-│   │   │   ├── RST_AggEvalTest.scala                # Aggregation Spark tests
 │   │   │   ├── RST_ConstructorsEvalTest.scala       # Constructor Spark tests
-│   │   │   ├── RST_ConstructorsExecuteTest.scala    # Constructor operation tests
 │   │   │   ├── RST_ExpressionEvalTest.scala         # Expression Spark tests
 │   │   │   ├── RST_ExpressionExecuteTest.scala      # Expression operation tests
 │   │   │   ├── RST_GeneratorsEvalTest.scala         # Generator Spark tests

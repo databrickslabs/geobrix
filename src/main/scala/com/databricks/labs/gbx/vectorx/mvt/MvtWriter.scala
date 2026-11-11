@@ -287,10 +287,7 @@ object MvtWriter {
       * to have been `System.load`-ed first, on the *executor* JVM before any OGR access,
       * not just on the driver. GDALManager loads it once per JVM (the same GDAL RasterX
       * uses); with no ExpressionConfig here, from `GBX_NATIVE_ROOT` or the system JNI.
-      *
-      * Package-private so `MvtDecoder` (same package) can call the shared guard
-      * without duplicating the load path.
       */
-    private[mvt] def ensureNativeLoaded(): Unit = GDALManager.ensureJniLoaded(None)
+    private def ensureNativeLoaded(): Unit = GDALManager.ensureJniLoaded(None)
 
 }

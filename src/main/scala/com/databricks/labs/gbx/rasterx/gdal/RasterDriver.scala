@@ -236,7 +236,7 @@ object RasterDriver {
         // VRT bytes are never a valid self-contained tile.raster payload — they reference
         // /vsimem/ tempfiles that only exist on the producing executor. If metadata or the
         // Dataset itself reports VRT, coerce to GTiff for the on-wire serialization. The
-        // Dataset's actual on-disk content is already materialized (MergeBands et al
+        // Dataset's actual on-disk content is already materialized (the operations
         // translate VRT → GTiff and return the GTiff Dataset); we just need to stop the
         // metadata from claiming otherwise.
         val rawDriverName = options.getOrElse("driver", Option(ds).map(_.GetDriver().getShortName).getOrElse("GTiff"))

@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
-import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_InterpolateElevationBBox, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_InterpolateElevationBBox, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -56,25 +56,6 @@ object functions extends Serializable {
 
     /** Decodes a legacy Mosaic geometry struct (`typeId`, `srid`, `boundaries`, `holes`) to ISO WKB, Z and holes kept. */
     def st_legacyaswkb(geom: Column): Column = ColumnAdapter(ST_LegacyAsWKB.name, Seq(geom))
-
-    /**
-      * Returns the canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) for a geometry's
-      * embedded SRID, or null for plain WKB/WKT (no embedded SRID), null inputs, or unresolvable
-      * SRIDs (never-error: an unrecognized code returns null, not an exception).
-      */
-    def st_crs(geom: Column): Column = ColumnAdapter(ST_Crs.name, Seq(geom))
-
-    /**
-      * Stamps a CRS on a geometry without reprojecting. Returns BINARY (EWKB) for both
-      * BINARY and STRING geometry inputs — the SQL surface has one fixed return type.
-      * A CRS with no integer authority code (raw WKT / PROJ4, or a non-numeric code such
-      * as `OGC:CRS84`) raises: a geometry SRID must be an integer.
-      */
-    def st_setcrs(geom: Column, crs: Column): Column =
-        ColumnAdapter(ST_SetCrs.name, Seq(geom, crs))
-
-    /** Convenience overload — string CRS literal. */
-    def st_setcrs(geom: Column, crs: String): Column = st_setcrs(geom, lit(crs))
 
     /**
       * Reproject geometry to ``targetCrs``. Optional ``sourceCrs`` for plain (SRID-less) inputs.

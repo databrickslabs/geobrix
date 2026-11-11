@@ -74,7 +74,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // derivedband, rasterize, binpoints), the tiling and tessellate generators (maketiles, tooverlappingtiles,
     // separatebands, h3 and quadbin tessellate, and the h3 centroid case), isempty, tryopen, isoband and merge: 55 - 15 = 40.
     // derivedband and xyzpyramid left too (the level order never picks them): 40 - 2 = 38.
-    assert(BenchDispatch.all.size == 38)
+    // asformat, convolve, initnodata, updatetype and frombands left (slower than light on dedicated compute): 38 - 5 = 33.
+    assert(BenchDispatch.all.size == 33)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")

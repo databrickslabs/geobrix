@@ -30,8 +30,8 @@ L1_TILE_FNS = [f for f in FNS if _takes_tile(f) and _first_available(f) == "L1"]
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # color_relief, frombands, and the 21 accessors that return one value
-    assert len(L1_TILE_FNS) >= 23, [f.sql_name for f in L1_TILE_FNS]
+    # TRI and the 21 accessors that return one value
+    assert len(L1_TILE_FNS) >= 22, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)

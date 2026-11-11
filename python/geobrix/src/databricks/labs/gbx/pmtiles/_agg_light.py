@@ -29,7 +29,7 @@ from pyspark.sql.types import BinaryType
 from databricks.labs.gbx.ds.tiles._header import build_header_info, sniff_tile_type
 from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
 
-# Mirror heavy PMTilesAcc's 100 MiB accumulation cap so the failure mode matches.
+# The 100 MiB accumulation cap of one archive (a group over it raises).
 _MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
 
 # Set True by register_pmtiles_agg; only the fallback wrapper path consults it.

@@ -29,55 +29,6 @@ object RST_ExpressionUtil {
         }
     }
 
-    /**
-      * Raster DataType inside an `ARRAY<tile>` expression, with a friendly
-      * IllegalArgumentException when the caller actually passed a single tile.
-      *
-      * Used by the non-aggregating array-of-tiles function with a JVM form
-      * (`gbx_rst_frombands`). Without this guard, callers who write
-      * `gbx_rst_frombands(tile)` instead of `gbx_rst_frombands(collect_list(tile))`
-      * get a raw `ClassCastException: StructType
-      * cannot be cast to ArrayType` from inside Spark's CheckAnalysis,
-      * which is hostile and untraceable from a notebook.
-      *
-      * `funcName` is the SQL-facing name surfaced in the error.
-      *
-      * Note: Spark 4.0's `AnalysisException` no longer exposes a
-      * `(String)` constructor (only the error-class form), so the error
-      * is raised as `IllegalArgumentException` — still surfaces during
-      * Catalyst analysis with the full message, and avoids depending on
-      * Spark-internal error-class catalogs.
-      */
-    def arrayOfTileRasterType(
-        funcName: String,
-        tile: Expression
-    ): DataType = tile.dataType match {
-        case ArrayType(StructType(fields), _) if fields.length >= 2 =>
-            fields(1).dataType match {
-                case StringType => throw new IllegalArgumentException(
-                    "Raster path-tiles (raster field as a String path) are not supported by the " +
-                    "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
-                    "(materialize=True, or write + read back) before passing it to a heavyweight function.")
-                case other => other
-            }
-        case other =>
-            throw new IllegalArgumentException(
-                s"$funcName expects ARRAY<tile> (e.g. collect_list(tile) " +
-                s"or array(t1, t2, ...)), but received ${other.simpleString}."
-            )
-    }
-
-    /**
-      * Field count of the element StructType inside an ARRAY&lt;tile&gt; expression.
-      * Returns 3 for a v1 tile (3-field) or 9 for a v2 tile (9-field), derived from the
-      * declared schema so it is automatically correct for whatever the input is.
-      * Defaults to 3 (v1) if the expression type does not match ArrayType(StructType, _).
-      */
-    def arrayOfTileElementFieldCount(tile: Expression): Int = tile.dataType match {
-        case ArrayType(st: StructType, _) => st.fields.length
-        case _                            => 3
-    }
-
     /** StructType for the window sub-struct (col_off, row_off, width, height). */
     val windowType: StructType = StructType(Seq(
         StructField("col_off", IntegerType, nullable = false),

@@ -12,7 +12,7 @@ import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers._
 
-/** Catalyst-level SQL tests for gbx_st_crs, gbx_st_setcrs, gbx_st_transformcrs.
+/** Catalyst-level SQL tests for gbx_st_transformcrs.
   *
   * These tests run expressions through the full Spark SQL analysis path (parse → analyze
   * → optimize → execute) and catch issues that unit-level eval() tests miss, such as:
@@ -45,30 +45,6 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     private def plainWkbHex: String = {
         val g = gf.createPoint(new Coordinate(15.0, 48.0))
         JTS.toWKB(g).map("%02x".format(_)).mkString
-    }
-
-    test("gbx_st_crs: EWKB EPSG:4326 via SQL") {
-        val result = spark.sql(s"SELECT gbx_st_crs(unhex('${ewkbHex(4326)}'))").first().getString(0)
-        result shouldBe "EPSG:4326"
-    }
-
-    test("gbx_st_setcrs: WKB + string CRS via SQL") {
-        val result = spark.sql(
-            s"SELECT gbx_st_setcrs(unhex('$plainWkbHex'), 'EPSG:32633')"
-        ).first().getAs[Array[Byte]](0)
-        assert(result != null, "gbx_st_setcrs must not return NULL")
-        val g = JTS.fromWKB(result)
-        g.getSRID shouldBe 32633
-    }
-
-    test("gbx_st_setcrs: integer CRS coerces to string via SQL") {
-        // Integer CRS should be implicitly cast to StringType via inputTypes override.
-        val result = spark.sql(
-            s"SELECT gbx_st_setcrs(unhex('$plainWkbHex'), 32633)"
-        ).first().getAs[Array[Byte]](0)
-        assert(result != null, "gbx_st_setcrs with integer CRS must not return NULL")
-        val g = JTS.fromWKB(result)
-        g.getSRID shouldBe 32633
     }
 
     test("gbx_st_transformcrs 2-arg: EWKB 4326 -> 32633 via SQL (Catalyst null propagation check)") {
@@ -116,15 +92,6 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     // ------------------------------------------------------------------
     // Always-BINARY SQL contract: a STRING geometry argument still yields BINARY
     // ------------------------------------------------------------------
-
-    test("gbx_st_setcrs: STRING (EWKT) geometry input declares and returns BINARY") {
-        // POINT(15 48) SRID=4326 — ST_SetCrs doesn't reproject, just stamps the SRID
-        val df = spark.sql("SELECT gbx_st_setcrs('SRID=4326;POINT (15 48)', 'EPSG:32633') AS g")
-        df.schema.fields(0).dataType shouldBe org.apache.spark.sql.types.BinaryType
-        val g = JTS.fromWKB(df.first().getAs[Array[Byte]](0))
-        g.getSRID shouldBe 32633
-        g.getCoordinate.getX shouldBe (15.0 +- 1e-12)
-    }
 
     test("gbx_st_transformcrs: STRING (EWKT) geometry input declares and returns BINARY") {
         // POINT(15 48) SRID=4326: inside EPSG:32633 domain (W=12 E=18)

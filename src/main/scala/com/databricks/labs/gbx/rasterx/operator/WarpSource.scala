@@ -66,8 +66,8 @@ final class WarpSource(val ds: Dataset) extends AutoCloseable {
         (result, metadata)
     }
 
-    /** Deletes the view; idempotent. The view owns no file, so delete() releases all of it (as for the VRT of
-      * MergeBands). RasterDriver.releaseDataset must not be used: a VRT's file list names its
+    /** Deletes the view; idempotent. The view owns no file, so delete() releases all of it (as for any VRT
+      * view). RasterDriver.releaseDataset must not be used: a VRT's file list names its
       * SOURCE files, which it would unlink (/vsimem) or whose node-cache read lock it would drop. */
     override def close(): Unit =
         if (view != null) {

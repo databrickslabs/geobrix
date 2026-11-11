@@ -2,9 +2,8 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Custom_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg}
-import com.databricks.labs.gbx.rasterx.expressions.constructor.{RST_FromBands, RST_FromContent}
+import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent
 import com.databricks.labs.gbx.rasterx.expressions.dem._
-import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
@@ -180,31 +179,12 @@ object functions extends Serializable {
     // Constructors
     def rst_fromcontent(content: Column, driver: Column): Column = ColumnAdapter(RST_FromContent.name, Seq(content, driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper (see register/#34).
-    def rst_frombands(bands: Column): Column = ColumnAdapter(RST_FromBands.name, Seq(bands))
-
-    /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in the output CRS
-     *  (`srid`, an EPSG or ESRI code; or an `outCrs` string that wins over it). */
-    def gbx_h3_cell_bbox(cellid: Column): Column =
-        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, lit(4326), lit("centroids"), lit(0)))
-    def gbx_h3_cell_bbox(cellid: Column, srid: Column, mode: Column, kringPad: Column): Column =
-        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad))
-    def gbx_h3_cell_bbox(cellid: Column, srid: Int, mode: String, kringPad: Int): Column =
-        gbx_h3_cell_bbox(cellid, lit(srid), lit(mode), lit(kringPad))
-    /** Output-CRS-string overload: `outCrs` (EPSG:x / ESRI:x / WKT) wins over `srid`. */
-    def gbx_h3_cell_bbox(
-        cellid: Column, srid: Column, mode: Column, kringPad: Column, outCrs: Column
-    ): Column =
-        ColumnAdapter(RST_H3_CellBBox.name, Seq(cellid, srid, mode, kringPad, outCrs))
 
     // Operations
-    def rst_asformat(tile: Column, newFormat: Column): Column = ColumnAdapter(RST_AsFormat.name, Seq(tile, newFormat))
-    def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
-    def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
-    def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
     def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
     def rst_worldtorastercoordy(tile: Column, x: Column, y: Column): Column =
@@ -217,12 +197,10 @@ object functions extends Serializable {
     def rst_fromcontent(content: Column, driver: String): Column = rst_fromcontent(content, lit(driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper or scalar
     // overloads (the JVM cannot read UC Volumes -- see register/#34). Use the Python/SQL binding.
-    def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
     def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordy(tile, lit(x), lit(y))
-    def rst_updatetype(tile: Column, newType: String): Column = rst_updatetype(tile, lit(newType))
     def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordx(tile, lit(x), lit(y))
     def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =

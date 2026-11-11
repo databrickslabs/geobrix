@@ -348,11 +348,32 @@ def test_a_function_whose_jvm_level_was_removed_has_only_light(name):
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
-def test_the_array_family_keeps_the_unmeasured_rows_as_they_were_and_the_engine_rows_are_light():
-    # unmeasured: the family order, JVM first with the JAR
-    fb = MAN.functions["gbx_rst_frombands"]
-    assert "L1" in fb.levels and levels.order(fb) == ("L1", "L3")
-    assert levels.select(fb, _caps(jar=OK_JAR)).level == "L1"
+# The JVM levels that measured under the 1.2x line against the best light form on dedicated compute (Task 25): their
+# JVM expressions are deleted, so each runs light whether or not the JAR is there.
+_CULLED_BY_THE_JVM_PASS = (
+    "gbx_st_crs",
+    "gbx_st_setcrs",
+    "gbx_h3_cell_bbox",
+    "gbx_rst_frombands",
+    "gbx_rst_asformat",
+    "gbx_rst_convolve",
+    "gbx_rst_initnodata",
+    "gbx_rst_updatetype",
+    "gbx_pmtiles_agg",
+)
+
+
+@pytest.mark.parametrize("name", _CULLED_BY_THE_JVM_PASS)
+def test_a_function_the_jvm_pass_culled_runs_light_with_the_jar(name):
+    fn = MAN.functions[name]
+    assert not {"L1", "L2"} & set(fn.levels)
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
+
+
+def test_the_array_family_is_light_and_the_engine_rows_are_light():
+    # frombands, the family's last JVM level, measured 0.62x and 0.57x of light: the family is light
+    assert levels.FAMILY_PREFERENCE["raster-array-op"] == ("L3",)
+    assert levels.order(MAN.functions["gbx_rst_frombands"]) == ("L3",)
     assert levels.order(MAN.functions["gbx_rst_merge"]) == ("L3",)
     # the engine's Catalyst level measured 1.0x to 1.15x of the light engine at 16x tiles (and returned error tiles
     # under load for transformcrs): it was removed, so the engine rows have no JVM level

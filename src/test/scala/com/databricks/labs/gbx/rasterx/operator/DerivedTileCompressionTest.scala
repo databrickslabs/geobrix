@@ -4,7 +4,6 @@ import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.Convolve
 import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
@@ -16,7 +15,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.util.UUID
 
 /**
-  * Derived heavy tiles (warp / translate / VRT / convolve / band / DEM / grid rasterize) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
+  * Derived heavy tiles (warp / translate / band / DEM / grid rasterize) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
   * the Databricks image preview) when the caller passes no `compression` option. The default is decided in two places that have to agree: the
   * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
   * into `OperatorOptions.appendOptions`) and the `appendOptions` fallback itself. Each test therefore
@@ -106,31 +105,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             // GDALTranslate.executeTranslate(outputPath: String, raster: Dataset, command: String,
             //                                options: Map[String, String]): (Dataset, Map[String, String])
             val (out, meta) = GDALTranslate.executeTranslate(mem("translated.tif"), src, "gdal_translate", Map.empty)
-            try assertCodec(out, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(out)
-        }
-    }
-
-    test("GDALBuildVRT.executeVRT defaults to DEFLATE (VRT serializes as a GTiff)") {
-        withRamp("vrt_src.tif") { src =>
-            // GDALBuildVRT.executeVRT(outputPath: String, dss: Array[Dataset], options: Map[String, String],
-            //                         command: String): (Dataset, Map[String, String])
-            val (vrt, meta) = GDALBuildVRT.executeVRT(mem("built.vrt"), Array(src), Map.empty, "gdalbuildvrt")
-            try assertCodec(vrt, meta, DerivedDefault)
-            finally RasterDriver.releaseDataset(vrt)
-        }
-    }
-
-    test("Convolve.convolve defaults to DEFLATE") {
-        withRamp("conv.tif") { src =>
-            val kernel = Array(
-              Array(0.0, 1.0, 0.0),
-              Array(1.0, -4.0, 1.0),
-              Array(0.0, 1.0, 0.0)
-            )
-            // Convolve.convolve(ds: Dataset, options: Map[String, String], kernel: Array[Array[Double]]):
-            //     (Dataset, Map[String, String])
-            val (out, meta) = Convolve.convolve(src, Map.empty, kernel)
             try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }

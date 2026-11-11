@@ -350,7 +350,7 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     # NOTE: no reprojection here, deliberately. st_setcrs only stamps an integer
     # SRID — it never touches coordinates, so a non-finite Z cannot corrupt X/Y the
     # way it does through a reprojection. Whatever Z the input carried is written back
-    # verbatim, which is also what the heavyweight tier's ST_SetCrs does.
+    # verbatim.
     c = resolve_crs(crs)
     code = authority_srid_of(c)
     if code is None:

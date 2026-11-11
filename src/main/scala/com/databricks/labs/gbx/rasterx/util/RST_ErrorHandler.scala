@@ -5,7 +5,6 @@ import com.databricks.labs.gbx.operations.ProjDatabaseException
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.unsafe.types.UTF8String
 
@@ -29,12 +28,6 @@ object RST_ErrorHandler extends Logging {
       * own mutex and the payload's HDF5 is not thread-safe ([[GDALManager.withHdfLock]]; reentrant, and no Spark task is
       * waited on inside an expression). */
     private def underHdfLock[T](hdf: Boolean)(eval: () => T): T = GDALManager.withHdfLockIf(hdf)(eval())
-
-    /** The error tile of a group one of whose members was refused (decoded over the read cap, or a driver that can name
-      * other files): the reason and its `Fix:` as every error tile carries them, never a result built from the other
-      * members. Its cell id is 0, as the light tier's group refusal (an aggregate has no group key to name). */
-    def refusedGroupTile(error: Throwable, rasterType: DataType): InternalRow =
-        RasterSerializationUtil.tileToRow((0L, null, createErrorMetadata(error)), rasterType, null)
 
     /** Builds metadata map with error message and class name for safeEval error rows. The reason is under
       * `error_message` and under `last_error`, the key every other tile operation, the light tier and the
@@ -68,36 +61,6 @@ object RST_ErrorHandler extends Logging {
                     // Create new error row; the cell id is read from the row, never by opening the raster.
                     val errorMetadata = createErrorMetadata(e)
                     RasterSerializationUtil.tileToRow((RasterSerializationUtil.cellIdOf(row), null, errorMetadata), rasterType, null)
-                }
-        }
-    }
-
-    /** Like safeEval for single row but for array of rows; returns first row with error metadata or propagates.
-      * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
-      * heavyweight function and must surface as hard failures, not silent error rows.
-      *
-      * @param elementFieldCount the declared field count of each element struct (3 for v1, 9 for v2).
-      *                          Passed from the expression's declared input schema.
-      */
-    def safeEval(eval: () => InternalRow, rows: ArrayData, rasterType: DataType, elementFieldCount: Int = 3): InternalRow = {
-        try {
-            underHdfLock((0 until rows.numElements()).exists(i => RasterSerializationUtil.isHdfTile(rows.getStruct(i, elementFieldCount))))(eval)
-        } catch {
-            case e: VirtualTileException => throw e
-            case e: ProjDatabaseException => throw e
-            case e: RasterArgumentException => throw e
-            case NonFatal(e) =>
-                // Check if an input already was an error tile (read structurally, without opening any raster)
-                val errorIdx = (0 until rows.numElements()).find { i =>
-                    RasterSerializationUtil.isErrorTile(rows.getStruct(i, elementFieldCount))
-                }
-                if (errorIdx.nonEmpty) {
-                    // Return the input row that already had the error
-                    rows.getStruct(errorIdx.get, elementFieldCount)
-                } else {
-                    // Create new error row
-                    val errorMetadata = createErrorMetadata(e)
-                    RasterSerializationUtil.tileToRow((-1, null, errorMetadata), rasterType, null)
                 }
         }
     }
@@ -170,24 +133,6 @@ object RST_ErrorHandler extends Logging {
                 val errorMetadata = createErrorMetadata(e)
                 val errorTile = RasterSerializationUtil.tileToRow((RasterSerializationUtil.cellIdOf(tileRow), null, errorMetadata), rasterType, null)
                 Seq(InternalRow.fromSeq(Seq(errorTile)))
-        }
-    }
-
-    /** What an aggregate answers for a group of nothing but error tiles: the FIRST member's error tile, as it is
-      * (every metadata key it carries: `error_message`, `error_detail`, `gdal_error`, `last_error`), so the upstream
-      * diagnostic survives the aggregate as it survives a scalar, for one member or many. "First" is canonical, not
-      * the order the rows arrived in: the least by cell id, then by the metadata sorted. NULL when any member is not
-      * an error tile, or the group is empty: a group with a readable member is an ordinary one, and the aggregate
-      * drops the error tiles and says how many.
-      *
-      * @param members the aggregate's buffered tile rows
-      */
-    def errorTileOfGroup(members: scala.collection.Seq[Any]): InternalRow = {
-        val rows = members.map(_.asInstanceOf[InternalRow])
-        if (rows.isEmpty || !rows.forall(RasterSerializationUtil.isErrorTile)) null
-        else rows.minBy { r =>
-            val md = RasterSerializationUtil.metadataOf(r).toSeq.sorted.map { case (k, v) => s"$k=$v" }
-            (RasterSerializationUtil.cellIdOf(r), md.mkString("\u0000"))
         }
     }
 

@@ -38,9 +38,8 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
         import sc.implicits._
         TestL1.installAll(spark)
 
-        // 256 x 256 windows to reduce data size for faster, more stable testing; 128 x 128 for convolve
+        // a 256 x 256 window to reduce data size for faster, more stable testing
         val window256 = modisWindow(256)
-        val window128 = modisWindow(128)
 
         def runQuery(df: DataFrame): Unit = {
             val base = df
@@ -50,13 +49,10 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
             base.collect()
             Seq(
               rst_boundingbox(col("clipped")),
-              rst_asformat(col("clipped"), lit("GTiff")),
-              rst_initnodata(col("clipped")), //lit(-28672.0)),
               rst_rastertoworldcoordx(col("clipped"), lit(10), lit(10)),
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),
               rst_worldtorastercoordx(col("clipped"), lit(500000.0), lit(5000000.0)),
-              rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0)),
-              rst_updatetype(col("clipped"), lit("Float32"))
+              rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0))
             ).foreach(f => base.select(f).collect())
             base.unpersist()
         }
@@ -79,30 +75,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
         val df2 = byContent(window256)
 
         noException should be thrownBy runQuery(df2)
-
-        def convolveQuery(df: DataFrame): Unit = {
-            val base = df
-                .select(col("raster"))
-                .limit(1)
-                .cache()
-            base.collect()
-            // Test one representative convolve operation for stability
-            Seq(
-                rst_convolve(
-                col("raster"),
-                array(
-                  array(lit(0.0), lit(-1.0), lit(0.0)),
-                  array(lit(-1.0), lit(5.0), lit(-1.0)),
-                  array(lit(0.0), lit(-1.0), lit(0.0))
-                )
-              )
-            ).foreach(f => base.select(f).collect())
-            base.unpersist()
-        }
-
-        // a smaller window for convolve operations (which are compute-intensive)
-        noException should be thrownBy convolveQuery(byPath(window128))
-        noException should be thrownBy convolveQuery(byContent(window128))
 
     }
 

@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.expressions
 
-import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_SetCrs}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_TransformCrs, ST_TransformCrs3}
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.expressions.objects.Invoke
 import org.apache.spark.sql.types.BinaryType
@@ -12,8 +12,8 @@ import org.scalatest.matchers.should.Matchers._
   * A fresh executor JVM has not loaded the GDAL JNI. An expression whose first native call runs before
   * `GDALManager.init` fails with `UnsatisfiedLinkError`, a `LinkageError` that `Try` does not catch, so the
   * task fails. The test suite's JVM has GDAL loaded by earlier suites, so a behaviour test cannot see it;
-  * this guard reads the sources instead. `gbx_st_crs` and `gbx_st_setcrs` shipped without the init and
-  * failed on the first call on a cluster. */
+  * this guard reads the sources instead. Two vector CRS expressions once shipped without the init and failed
+  * on the first call on a cluster. */
 class NativeInitGuardTest extends AnyFunSuite {
 
     private val root = new java.io.File("src/main/scala/com/databricks/labs/gbx")
@@ -36,10 +36,10 @@ class NativeInitGuardTest extends AnyFunSuite {
     private def code(src: String): String =
         src.replaceAll("""(?s)/\*.*?\*/""", "").replaceAll("""//[^\n]*""", "")
 
-    /** A direct native call, or a call into a helper that does not start GDAL itself. `MvtDecoder` and
-      * `MvtWriter` are left out: both call `GDALManager.initOgr()` before their first OGR call. */
+    /** A direct native call, or a call into a helper that does not start GDAL itself. `MvtWriter` is left out: it
+      * calls `GDALManager.initOgr()` before its first OGR call. */
     private val nativeUse =
-        """org\.gdal|SpatialRefOps|RasterDriver|TileBytes|GDALRasterize|OSRTransformGeometry|RasterAccessors|BandAccessors|GDALWarp|GDALTranslate|GDALBuildVRT|GDALInfo|VectorRasterBridge|KernelGdal""".r
+        """org\.gdal|SpatialRefOps|RasterDriver|TileBytes|GDALRasterize|OSRTransformGeometry|RasterAccessors|BandAccessors|GDALWarp|GDALTranslate|GDALInfo|VectorRasterBridge|KernelGdal""".r
 
     private val initCall = """GDALManager\.init|RST_ExpressionUtil\.init|GDALManager\.initOgr|initGdal\(""".r
 
@@ -51,7 +51,7 @@ class NativeInitGuardTest extends AnyFunSuite {
         }
         // the scan must see the known native expressions, or it checks nothing
         val names = exprFiles.map(_._1)
-        Seq("ST_TransformCrs.scala", "ST_Crs.scala", "ST_SetCrs.scala", "RST_Width.scala").foreach { n =>
+        Seq("ST_TransformCrs.scala", "RST_BoundingBox.scala", "RST_FromContent.scala", "RST_Width.scala").foreach { n =>
             assert(names.exists(_.endsWith("/" + n)), s"$n not seen as a native expression: the guard is blind")
         }
         val missing = exprFiles.collect { case (p, s) if initCall.findFirstIn(s).isEmpty => p }
@@ -64,17 +64,17 @@ class NativeInitGuardTest extends AnyFunSuite {
             case other     => fail(s"replacement is not an Invoke: ${other.getClass.getName}")
         }
 
-    test("gbx_st_crs carries the GDAL config and invokes the init path") {
-        val expr = ST_Crs(Literal.create(Array[Byte](1), BinaryType))
-        expr.children should have size 2
+    test("gbx_st_transformcrs carries the GDAL config and invokes the init path") {
+        val expr = ST_TransformCrs(Literal.create(Array[Byte](1), BinaryType), Literal("EPSG:4326"))
+        expr.children should have size 3
         expr.children.last shouldBe a[ExpressionConfigExpr]
         expr.withNewChildren(expr.children).children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
         invokeOf(expr).functionName shouldBe "evalSqlWithConf"
     }
 
-    test("gbx_st_setcrs carries the GDAL config and invokes the init path") {
-        val expr = ST_SetCrs(Literal.create(Array[Byte](1), BinaryType), Literal("EPSG:4326"))
-        expr.children should have size 3
+    test("gbx_st_transformcrs with a source CRS carries the GDAL config and invokes the init path") {
+        val expr = ST_TransformCrs3(Literal.create(Array[Byte](1), BinaryType), Literal("EPSG:4326"), Literal("EPSG:27700"))
+        expr.children should have size 4
         expr.children.last shouldBe a[ExpressionConfigExpr]
         expr.withNewChildren(expr.children).children.count(_.isInstanceOf[ExpressionConfigExpr]) shouldBe 1
         invokeOf(expr).functionName shouldBe "evalSqlWithConf"

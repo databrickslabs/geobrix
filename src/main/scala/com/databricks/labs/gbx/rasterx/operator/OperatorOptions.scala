@@ -106,7 +106,7 @@ object OperatorOptions {
         optionsVec
     }
 
-    /** Appends -of/--format, -co compression/blocksize/predictor from writeOptions and ds; does not change output format (use RST_AsFormat for that).
+    /** Appends -of/--format, -co compression/blocksize/predictor from writeOptions and ds; does not change the output format.
       * A Zarr output gets the Zarr driver's own codec flags, and a codec that driver lacks raises (see `zarrCompression`). */
     def appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String = {
         val format = writeOptions.getOrElse("format", "GTiff")
@@ -125,7 +125,7 @@ object OperatorOptions {
         // output datatype (PREDICTOR=3 is Float32/Float64-only). When the command sets an
         // explicit output type — gdal_translate "-ot <Type>", gdal_calc "--type <Type>" or
         // "--type=<Type>" — derive the predictor from that type; otherwise fall back to the
-        // input band types. Without this, converting a Float raster to Byte (RST_UpdateType)
+        // input band types. Without this, converting a Float raster to Byte (gdal_translate -ot Byte)
         // derived PREDICTOR=3 from the float input and gdal_translate rejected the Byte
         // output. Both the space and equals forms are accepted because the repo's gdal_calc
         // callers emit "--type=Float32" while gdal_translate emits "-ot Byte". (#82)

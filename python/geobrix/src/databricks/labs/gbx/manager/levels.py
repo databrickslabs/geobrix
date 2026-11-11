@@ -29,11 +29,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # is 1.67x slower than the engine, so it is light. Its bespoke JVM expression and Java UDF are gone; the row's L1
     # block is the GDAL spec engine's alone, and that switch records its own order here.
     "gbx_rst_transformcrs": ("L3",),
-    # The CRS functions have JVM companions and take the highest available level. Of the three, only transformcrs is
-    # timed against light: 5.7x and 6.4x faster on the JVM at 4x and 16x rows (dedicated compute). crs and setcrs are
-    # not timed yet. The other vector scalars have no companion (the legacy decode is light by family).
-    "gbx_st_crs": ("L1", "L3"),
-    "gbx_st_setcrs": ("L1", "L3"),
+    # transformcrs is 5.7x and 6.4x faster on the JVM at 4x and 16x rows (dedicated compute). crs and setcrs have no
+    # JVM level: it took 0.77x and 0.59x (crs, at 1x and 4x) and 1.00x, 0.88x and 0.85x (setcrs, at 1x, 4x and 16x) of
+    # the light time (Task 25), so their JVM expressions are deleted. The other vector scalars have no companion (the
+    # legacy decode is light by family).
     "gbx_st_transformcrs": ("L1", "L3"),
     # tessellate and its explode: the JVM form takes 0.47x and 0.42x of the best light form at 4x rows and 0.46x and 0.45x
     # at 16x (dedicated, 1 + 4 x m5d.2xlarge, DBR 19). kring: 0.82x at 4x and 0.79x at 16x (3 iterations), that is 1.21x
@@ -113,8 +112,8 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_merge": ("L3",),
     # The seven combine functions have no JVM level: it ran at 0.93x and 0.67x the speed of the best lightweight SQL form
     # at 4x and 16x rows (131.56 s against 122.16 s, 576.44 s against 387.95 s), and the DataFrame `combine_by_key` form is
-    # 2.2x faster than the JVM form at 16x (261.07 s). frombands, the array family's other JVM level, is not measured
-    # yet and takes the family order.
+    # 2.2x faster than the JVM form at 16x (261.07 s). frombands, the array family's other JVM level, took 0.62x and
+    # 0.57x of the light time at 1x and 4x (Task 25), so its JVM expression is deleted and the family is light.
     "gbx_rst_combineavg": ("L3",),
     "gbx_rst_combinecount": ("L3",),
     "gbx_rst_combinemax": ("L3",),
@@ -178,7 +177,7 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "raster-tile-op": ("L3",),
     "raster-constructor": ("L1", "L3"),
     "raster-rasterize": ("L3",),
-    "raster-array-op": ("L1", "L3"),
+    "raster-array-op": ("L3",),
     "raster-aggregate": ("L3",),
     "raster-vectorize": ("L1", "L3"),
     # the raster tessellates are light: the BNG one's JVM form ran at 1.03x and 0.97x the speed of light at 4x and 16x rows

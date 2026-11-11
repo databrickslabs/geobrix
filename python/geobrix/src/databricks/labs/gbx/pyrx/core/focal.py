@@ -1,10 +1,10 @@
-"""Spark-free focal ops via scipy.ndimage, matching rasterx GDALBlock semantics:
+"""Spark-free focal ops via scipy.ndimage, with these window semantics:
 NoData-aware skip + edge window-shrink (filter) / zero-padded edge (convolve).
 
-GDALBlock.valuesAt (avg/min/max/median): a neighbor contributes only if it is
+Filter (avg/min/max/median): a neighbor contributes only if it is
 in-bounds AND in-mask AND not-NoData; out-of-bounds neighbors are skipped so the
 window shrinks at edges; if no neighbor is valid the output pixel is NoData.
-GDALBlock.convolveAt: ``sum += value * kernel(i)(j)`` over in-bounds valid
+Convolve: ``sum += value * kernel(i)(j)`` over in-bounds valid
 neighbors only (others contribute 0, no renormalization), kernel applied
 UN-flipped (correlation).
 """
@@ -89,7 +89,7 @@ def _out_profile(ds, dtype: str, nd: float, set_nodata: bool) -> dict:
 
 
 def filt(ds, kernel_size, operation: str) -> bytes:
-    """Apply a focal min/max/mean/median filter per band, GDALBlock semantics.
+    """Apply a focal min/max/mean/median filter per band (the module's window semantics).
 
     Output dtype: ``mean`` -> Float32; ``min``/``max``/``median`` -> input dtype.
     All-invalid windows become NoData. A neighbour is valid by ``_nodata.band_valid_mask``: the
@@ -157,12 +157,11 @@ def filt(ds, kernel_size, operation: str) -> bytes:
 def convolve(ds, kernel) -> bytes:
     """2-D correlation (UN-flipped kernel) per band, zero-padded edge.
 
-    Mirrors GDALBlock.convolveAt: ``sum`` starts at 0 and accumulates
+    ``sum`` starts at 0 and accumulates
     ``value * kernel(i)(j)`` over in-bounds valid neighbors; invalid / NoData neighbors
     contribute 0 (via ``data * valid``) and so do the positions off the raster
     (``mode="constant", cval=0.0``), with no weight renormalization, and the returned
-    sum is emitted verbatim (convolveAt never yields NoData). Output dtype is Float64.
-    The result equals the heavyweight's over the whole raster, edges included.
+    sum is emitted verbatim (never NoData). Output dtype is Float64.
     """
     k = check_kernel(kernel)
     nd = _nodata_value(ds, default=-9999.0)

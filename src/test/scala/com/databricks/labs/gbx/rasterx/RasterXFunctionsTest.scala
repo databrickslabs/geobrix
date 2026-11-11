@@ -108,27 +108,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_frombands should accept bands") {
-        val result = functions.rst_frombands(col("bands"))
-        result should not be null
-    }
-
     // ====== Operation Functions ======
-
-    test("rst_asformat should accept tile and format") {
-        val result = functions.rst_asformat(col("tile"), col("format"))
-        result should not be null
-    }
-
-    test("rst_convolve should accept tile and kernel") {
-        val result = functions.rst_convolve(col("tile"), col("kernel"))
-        result should not be null
-    }
-
-    test("rst_initnodata should create Column") {
-        val result = functions.rst_initnodata(col("tile"))
-        result should not be null
-    }
 
     test("rst_rastertoworldcoordx should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoordx(col("tile"), col("x"), col("y"))
@@ -137,11 +117,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("rst_rastertoworldcoordy should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoordy(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
-    test("rst_updatetype should accept tile and new type") {
-        val result = functions.rst_updatetype(col("tile"), col("type"))
         result should not be null
     }
 
@@ -161,8 +136,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
         // int scalars
         functions.rst_band(col("tile"), 1) should not be null
         // string scalars
-        functions.rst_asformat(col("tile"), "GTiff") should not be null
-        functions.rst_updatetype(col("tile"), "Float32") should not be null
+        functions.rst_getsubdataset(col("tile"), "Band1") should not be null
         // double scalars
         functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null
     }

@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
-/** Shared utilities for the VectorX CRS expression companions (ST_Crs, ST_SetCrs, ST_TransformCrs).
+/** Shared utilities for the VectorX CRS expression companions (ST_TransformCrs).
   *
   * Kept in a dedicated private object so that each companion object remains self-contained
   * (no inheritance chain) while sharing the geometry parsing logic in one place.
@@ -63,8 +63,8 @@ private[expressions] object CrsExpressionUtil {
             }
     }
 
-    /** Encode an outcome as BINARY — the SQL-surface contract for `gbx_st_setcrs` and
-      * `gbx_st_transformcrs`, which declare one fixed return type regardless of whether the
+    /** Encode an outcome as BINARY — the SQL-surface contract for
+      * `gbx_st_transformcrs`, which declares one fixed return type regardless of whether the
       * geometry argument arrived as BINARY or STRING.
       *
       * A degrade (`Unchanged`) with binary input returns the original bytes untouched; with

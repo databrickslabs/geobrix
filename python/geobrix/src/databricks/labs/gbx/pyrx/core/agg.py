@@ -1618,8 +1618,7 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
     """Stack single-band (or multi-band) tiles into one multi-band tile (GTiff bytes).
 
     *indexed* is a list of ``(band_index, raster_bytes)``. The list is sorted by
-    ``band_index`` ASCENDING (the critical ordering guarantee of
-    RST_FromBandsAgg), then each tile's band(s) are concatenated in that order.
+    ``band_index`` ASCENDING (the critical ordering guarantee), then each tile's band(s) are concatenated in that order.
     Georef/CRS/dtype/nodata are taken from the first (lowest-index) tile. The stack has an
     alpha band only when its last band is the alpha band of the last tile; where every
     tile has its own mask band the stack has the union of them.
@@ -1637,8 +1636,8 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
         # Align every band onto the reference (lowest band-index) grid before stacking.
         # In an agg/grid context the per-band source tiles can have slightly different
         # extents/shapes (e.g. uneven scene coverage across bands, or a UTM-zone-boundary
-        # cell), so a bare np.stack would fail. This mirrors the heavyweight RST_FromBands,
-        # which builds a VRT and gdal_translate-resamples (bilinear) the bands to one grid.
+        # cell), so a bare np.stack would fail. The bands are resampled (bilinear) onto
+        # the reference grid, as a VRT stack translated with bilinear resampling would be.
         bands = []
         labels = []  # the colour interpretation of every band of the stack, in order
         masks = []  # per tile: its own mask on the reference grid (bool), or None

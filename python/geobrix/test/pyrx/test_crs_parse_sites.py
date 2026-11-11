@@ -101,14 +101,6 @@ SCALA_SITES = {
         "val d = new SpatialReference(); d.ImportFromEPSG(grid.crsSrid); d",
     ): INT_EPSG,
     (
-        "rasterx/expressions/grid/RST_H3_CellBBox.scala",
-        "val gridSR = new SpatialReference(); gridSR.ImportFromEPSG(H3.crsID)",
-    ): CONST_CRS,
-    (
-        "rasterx/expressions/grid/RST_H3_CellBBox.scala",
-        "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(H3.crsID)",
-    ): CONST_CRS,
-    (
         "operations/ProjDatabase.scala",
         "try Try(sr.ImportFromEPSG(4326)).toOption.contains(0)",
     ): CONST_CRS,  # the probe that PROJ's database reads at all: EPSG:4326 resolves, the result is discarded

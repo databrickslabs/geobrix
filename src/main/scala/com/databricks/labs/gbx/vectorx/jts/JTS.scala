@@ -250,7 +250,7 @@ object JTS {
     /** Encodes a JTS Geometry to PostGIS EWKB preserving Z (3 dimensions); embeds SRID when set.
       *
       * Use this instead of [[toEWKB]] when the input geometry may carry Z coordinates and
-      * Z preservation is required (e.g. st_setcrs, which stamps a CRS without touching
+      * Z preservation is required (e.g. stamping a CRS without touching
       * coordinates). Per-thread writer. */
     def toEWKB3(geom: Geometry): Array[Byte] = {
         val tid = Thread.currentThread().getId

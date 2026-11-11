@@ -16,9 +16,14 @@ Each split point takes the Z of the segment it splits (``LineZSplitPointFinder``
 The final triangulation is the Delaunay triangulation of the final vertex set, so only the vertex set needs the
 faithful emulation. The triangles come from scipy (Qhull) when they are provably the unique Delaunay triangulation of
 those vertices, which is so for points in general position; otherwise (co-circular points, such as a regular grid)
-from ``_quadedge``, the port of JTS's incremental triangulation, which makes JTS's own choice among the ties.
+from JTS's incremental triangulation itself, which makes JTS's own choice among the ties.
+
+The KdTree and the incremental triangulation each have two ports of the same steps: the Rust kernels of the wheel's
+native payload (``_rs``: ``TinKdTree``, ``tin_delaunay``), and the pure Python ones here and in ``_quadedge``, which run
+where this process has no Rust build (the plain wheel, a host venv). Both give the same vertices and triangles.
 """
 
+import logging
 import math
 import struct
 from typing import List, Optional, Sequence, Tuple
@@ -48,6 +53,8 @@ class ConformingError(ValueError):
 
 
 Coord = Tuple[float, float, float]
+_LOG = logging.getLogger(__name__)
+_NOTED = False
 _D = struct.Struct("<d")
 _Q = struct.Struct("<Q")
 
@@ -111,19 +118,22 @@ def _key(x: float, y: float):
 # --------------------------------------------------------------------------------------------------- the JTS KdTree
 class KdTree:
     """``org.locationtech.jts.index.kdtree.KdTree``: unbalanced, X and Y levels alternating, a point within ``tol``
-    of a node snaps onto it. A node is the list ``[x, y, left, right, coord]``."""
+    of a node snaps onto it. A node is the list ``[x, y, left, right, coord]``; ``coords`` holds the coordinates of the
+    nodes in the order they were made."""
 
-    __slots__ = ("root", "tol")
+    __slots__ = ("root", "tol", "coords")
 
     def __init__(self, tol: float):
         self.root = None
         self.tol = tol
+        self.coords: List[Coord] = []
 
     def insert(self, c: Coord) -> bool:
         """Insert ``c``; ``True`` when it made a new node (``False``: it snapped onto one)."""
         x, y = c[0], c[1]
         if self.root is None:
             self.root = [x, y, None, None, c]
+            self.coords.append(c)
             return True
         tol = self.tol
         if tol > 0.0 and self._best_match(x, y) is not None:
@@ -146,7 +156,34 @@ class KdTree:
             leaf[2] = node
         else:
             leaf[3] = node
+        self.coords.append(c)
         return True
+
+    def insert_many(self, coords: np.ndarray) -> None:
+        """Insert each (x, y, z) row, in order."""
+        for c in np.asarray(coords, dtype=float).reshape(-1, 3).tolist():
+            self.insert(tuple(c))
+
+    def vertices(self) -> np.ndarray:
+        """The (x, y, z) of every node, in the order they were made."""
+        return np.array(self.coords, dtype=float).reshape(-1, 3)
+
+    def encroacher(self, p0: Coord, p1: Coord) -> Optional[Coord]:
+        """``findNonGabrielPoint``: the node strictly inside the segment's diametral circle closest to its midpoint
+        (the first found on a tie), or None."""
+        px, py, qx, qy = p0[0], p0[1], p1[0], p1[1]
+        mx, my = (px + qx) / 2.0, (py + qy) / 2.0
+        rad = hypot(px - mx, py - my)
+        enc = None
+        min_d = 0.0
+        for nd in self.query(mx - rad, my - rad, mx + rad, my + rad):
+            tx, ty = nd[0], nd[1]
+            if (tx == px and ty == py) or (tx == qx and ty == qy):
+                continue
+            d = hypot(mx - tx, my - ty)
+            if d < rad and (enc is None or d < min_d):
+                enc, min_d = nd, d
+        return None if enc is None else enc[4]
 
     def query(self, minx: float, miny: float, maxx: float, maxy: float) -> list:
         """The nodes inside the closed envelope, in JTS's (in-order, iterative) traversal order."""
@@ -195,6 +232,66 @@ class KdTree:
         return best
 
 
+class _RustKdTree:
+    """:class:`KdTree` on the Rust kernel (``_gbxrs.TinKdTree``, the same steps): node ids are insertion ranks, so the
+    coordinates (with their Z) are kept here, the batch inserts' rows first, then the single ones.
+    """
+
+    __slots__ = ("tree", "base", "extra")
+
+    def __init__(self, tol: float, rs):
+        self.tree = rs.tin_kdtree(tol)
+        self.base = np.zeros((0, 3))
+        self.extra: List[Coord] = []
+
+    def insert_many(self, coords: np.ndarray) -> None:
+        assert not self.extra, "the batch inserts come first"
+        a = np.ascontiguousarray(np.asarray(coords, dtype=float).reshape(-1, 3))
+        made = np.frombuffer(
+            self.tree.insert_many(a[:, 0].tobytes(), a[:, 1].tobytes()), dtype=np.uint8
+        )
+        self.base = np.vstack([self.base, a[made.astype(bool)]])
+
+    def insert(self, c: Coord) -> bool:
+        if self.tree.insert(float(c[0]), float(c[1])):
+            self.extra.append(c)
+            return True
+        return False
+
+    def vertices(self) -> np.ndarray:
+        return np.vstack([self.base, np.array(self.extra, dtype=float).reshape(-1, 3)])
+
+    def encroacher(self, p0: Coord, p1: Coord) -> Optional[Coord]:
+        i = self.tree.encroacher(float(p0[0]), float(p0[1]), float(p1[0]), float(p1[1]))
+        if i < 0:
+            return None
+        nb = len(self.base)
+        return tuple(self.base[i].tolist()) if i < nb else self.extra[i - nb]
+
+
+def _rust():
+    """The Rust TIN kernels (the ``_rs`` loader) when this process's build has them, else None: then the pure-Python
+    ports run (the plain wheel, a host venv, or an older build)."""
+    global _NOTED
+    from databricks.labs.gbx import _rs
+
+    why = _rs.missing("tin_delaunay", "TinKdTree")
+    if why is None:
+        return _rs
+    if not _NOTED:
+        _NOTED = True
+        _LOG.info(
+            "geobrix: Rust TIN kernels unavailable (%s); using the pure-Python port",
+            why,
+        )
+    return None
+
+
+def _kdtree(tol: float):
+    rs = _rust()
+    return KdTree(tol) if rs is None else _RustKdTree(tol, rs)
+
+
 # ------------------------------------------------------------------------------------------------------- split points
 def _split_midpoint(p0: Coord, p1: Coord, enc: Coord) -> Tuple[float, float]:
     """``MidpointSplitPointFinder``."""
@@ -241,11 +338,11 @@ def _split_point(finder, p0: Coord, p1: Coord, enc: Coord) -> Coord:
 
 
 # -------------------------------------------------------------------------------------------------- the vertex set
-def _area_env(coords: Sequence[Coord]):
-    """``computeBoundingBox``: the envelope of the sites and constraint vertices, grown by 20% of its larger side."""
-    xs = [c[0] for c in coords]
-    ys = [c[1] for c in coords]
-    minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+def _area_env(coords: np.ndarray):
+    """``computeBoundingBox``: the envelope of the sites and constraint vertices (an (N, 3) array), grown by 20% of
+    its larger side."""
+    lo, hi = coords[:, :2].min(axis=0), coords[:, :2].max(axis=0)
+    minx, miny, maxx, maxy = float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1])
     delta = max((maxx - minx) * 0.2, (maxy - miny) * 0.2)
     return (minx - delta, miny - delta, maxx + delta, maxy + delta)
 
@@ -259,6 +356,16 @@ def _unique_sites(points) -> np.ndarray:
         keep[1:] = (sp[1:, 0] != sp[:-1, 0]) | (sp[1:, 1] != sp[:-1, 1])
         sp = sp[keep]
     return sp
+
+
+def _not_constraint(sites: np.ndarray, cmap) -> np.ndarray:
+    """The rows of ``sites`` whose X and Y are no break line vertex's (``_key``: -0.0 and 0.0 differ)."""
+    keep = np.ones(len(sites), dtype=bool)
+    if cmap and len(sites):
+        maybe = np.flatnonzero(np.isin(sites[:, 0], [k[0] for k in cmap]))
+        for i, (x, y) in zip(maybe.tolist(), sites[maybe, :2].tolist()):
+            keep[i] = _key(x, y) not in cmap
+    return keep
 
 
 def _constraints(lines):
@@ -283,25 +390,7 @@ def _constraints(lines):
     return cmap, seg_vertices, segments
 
 
-def _encroacher(kdt: KdTree, p0: Coord, p1: Coord):
-    """``findNonGabrielPoint``: the node strictly inside the segment's diametral circle closest to its midpoint (the
-    first found on a tie), or None."""
-    px, py, qx, qy = p0[0], p0[1], p1[0], p1[1]
-    mx, my = (px + qx) / 2.0, (py + qy) / 2.0
-    rad = hypot(px - mx, py - my)
-    enc = None
-    min_d = 0.0
-    for nd in kdt.query(mx - rad, my - rad, mx + rad, my + rad):
-        tx, ty = nd[0], nd[1]
-        if (tx == px and ty == py) or (tx == qx and ty == qy):
-            continue
-        d = hypot(mx - tx, my - ty)
-        if d < rad and (enc is None or d < min_d):
-            enc, min_d = nd, d
-    return enc
-
-
-def _enforce(kdt: KdTree, segments, split, insert, stats: Optional[dict]) -> None:
+def _enforce(kdt, segments, split, stats: Optional[dict]) -> None:
     """``enforceConstraints``: split every segment with an encroaching vertex, pass after pass, at most 99."""
     count = 0
     total = 0
@@ -310,11 +399,11 @@ def _enforce(kdt: KdTree, segments, split, insert, stats: Optional[dict]) -> Non
         new_segments = []
         removed = set()
         for si, (p0, p1) in enumerate(segments):
-            enc = _encroacher(kdt, p0, p1)
+            enc = kdt.encroacher(p0, p1)
             if enc is None:
                 continue
-            sv = _split_point(split, p0, p1, enc[4])
-            insert(sv)
+            sv = _split_point(split, p0, p1, enc)
+            kdt.insert(sv)
             new_segments.append((p0, sv))
             new_segments.append((sv, p1))
             removed.add(si)
@@ -339,35 +428,30 @@ def conforming_vertices(
     finder: str = "NONENCROACHING",
     stats: Optional[dict] = None,
 ):
-    """``(vertices, area envelope)``: the (x, y, z) of every vertex of the conforming triangulation, in JTS's insertion
-    order, and the envelope its incremental triangulation is framed in (None without vertices). ``points`` is (N, 3)
-    and ``lines`` (M, 3) arrays, as ``_tin.prepare_sites`` leaves them. Raises :class:`ConformingError` after 99
-    splitting passes."""
+    """``(vertices, area envelope)``: the (x, y, z) of every vertex of the conforming triangulation, as an (N, 3) array
+    in JTS's insertion order, and the envelope its incremental triangulation is framed in (None without vertices).
+    ``points`` is (N, 3) and ``lines`` (M, 3) arrays, as ``_tin.prepare_sites`` leaves them. Raises
+    :class:`ConformingError` after 99 splitting passes."""
     split = _FINDERS[finder]
     cmap, seg_vertices, segments = _constraints(lines)
-    initial = [  # createSiteVertices
-        (x, y, z)
-        for x, y, z in _unique_sites(points).tolist()
-        if _key(x, y) not in cmap
-    ]
-    if not initial and not seg_vertices:
-        return [], None
-    env = _area_env(initial + seg_vertices)
-
-    kdt = KdTree(merge_tolerance)
-    verts: List[Coord] = []
-
-    def insert(c: Coord):
-        if kdt.insert(c):
-            verts.append(c)
-
-    for c in initial:
-        insert(c)
+    sites = _unique_sites(points)
+    initial = sites[_not_constraint(sites, cmap)]  # createSiteVertices
+    segv = np.array(seg_vertices, dtype=float).reshape(-1, 3)
+    if not len(initial) and not len(segv):
+        return np.zeros((0, 3)), None
+    env = _area_env(np.vstack([initial, segv]))
+    kdt = _kdtree(merge_tolerance)
+    kdt.insert_many(initial)
     if segments:
-        for c in seg_vertices:
-            insert(c)
-        _enforce(kdt, segments, split, insert, stats)
-    return verts, env
+        kdt.insert_many(segv)
+        try:
+            _enforce(kdt, segments, split, stats)
+        except ConformingError:
+            # JTS inserts every vertex into its triangulation as it goes, so a vertex it cannot locate stops it before
+            # the 99th pass: the same vertices in the same order fail here first, with JTS's error
+            jts_delaunay(kdt.vertices(), env, float(merge_tolerance))
+            raise
+    return kdt.vertices(), env
 
 
 # --------------------------------------------------------------------------------------------- the triangles of them
@@ -506,13 +590,21 @@ def unique_delaunay(xy: np.ndarray, origin=None) -> Optional[np.ndarray]:
     return s
 
 
-def jts_delaunay(verts: Sequence[Coord], env, tol: float) -> np.ndarray:
-    """The triangles (vertex index triples) JTS's incremental triangulation makes inserting ``verts`` in order.
-    Raises :class:`ConformingError` where JTS's point location fails."""
+def jts_delaunay(verts, env, tol: float) -> np.ndarray:
+    """The triangles (vertex index triples) JTS's incremental triangulation makes inserting ``verts`` (rows of
+    (x, y, ...)) in order: the Rust kernel's, or the ``_quadedge`` port's where this process has no Rust build. Raises
+    :class:`ConformingError` where JTS's point location fails."""
+    va = np.asarray(verts, dtype=float).reshape(len(verts), -1)
+    rs = _rust()
+    if rs is not None:
+        try:
+            return rs.tin_delaunay(va[:, 0], va[:, 1], env, tol)
+        except rs.LocateFailure:
+            raise ConformingError(LOCATE_FAILED) from None
     from ._quadedge import FRAME, LocateFailureError, Subdivision
 
-    X = [0.0] * FRAME + [c[0] for c in verts]
-    Y = [0.0] * FRAME + [c[1] for c in verts]
+    X = [0.0] * FRAME + va[:, 0].tolist()
+    Y = [0.0] * FRAME + va[:, 1].tolist()
     sd = Subdivision(env, tol, X, Y)
     try:
         for v in range(FRAME, len(X)):
@@ -530,22 +622,23 @@ def triangulate(
     delaunay: str = "hybrid",
     stats: Optional[dict] = None,
 ) -> List[np.ndarray]:
-    """The conforming triangulation as a list of (3, 3) XYZ triangles. ``delaunay="hybrid"`` (the default) takes
-    scipy's triangles when they are certified unique and the JTS port otherwise; ``"jts"`` always takes the port.
+    """The conforming triangulation as a list of (3, 3) XYZ triangles. ``delaunay="hybrid"`` (the default) takes JTS's
+    incremental triangulation from the Rust kernel when this process has it (faster than scipy on every input
+    measured), else scipy's triangles when they are certified unique and the Python port otherwise; ``"jts"`` always
+    takes the incremental triangulation.
     """
     verts, env = conforming_vertices(
         points, lines, float(merge_tolerance), finder, stats
     )
     if len(verts) < 3:
         return []
-    va = np.array(verts, dtype=float)
     simplices = (
-        unique_delaunay(va[:, :2], origin=va[:, :2].min(axis=0))
-        if delaunay == "hybrid"
+        unique_delaunay(verts[:, :2], origin=verts[:, :2].min(axis=0))
+        if delaunay == "hybrid" and _rust() is None
         else None
     )
     if stats is not None:
         stats["fallback"] = simplices is None
     if simplices is None:
         simplices = jts_delaunay(verts, env, float(merge_tolerance))
-    return [va[s] for s in simplices]
+    return list(verts[simplices])

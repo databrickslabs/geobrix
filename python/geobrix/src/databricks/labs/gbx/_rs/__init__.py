@@ -90,3 +90,46 @@ def bng_cells(ev, nv, r: int):
         [pa.py_buffer(valid), pa.py_buffer(offs), pa.py_buffer(data)],
         null_count=nulls,
     )
+
+
+class LocateFailure(RuntimeError):
+    """The TIN kernel's point location did not converge (JTS's ``LocateFailureException``)."""
+
+
+def missing(*names: str) -> Optional[str]:
+    """None when this process's Rust build has every kernel named, else why not (no build, or an older one)."""
+    mod = load()
+    if mod is None:
+        return _WHY
+    absent = [n for n in names if not hasattr(mod, n)]
+    return f"this Rust build has no {', '.join(absent)}" if absent else None
+
+
+def tin_delaunay(x, y, env, tol: float):
+    """JTS 1.20's incremental Delaunay triangulation of the sites x/y (float64, inserted in this order), framed on
+    ``env`` (minx, miny, maxx, maxy) with tolerance ``tol`` -> (M, 3) int64 site indices, each row ascending, the rows
+    ascending. Raises :class:`LocateFailure` where JTS's point location fails."""
+    import numpy as np
+
+    mod = load()
+    if mod is None:
+        raise RuntimeError(f"gbx Rust kernels unavailable: {_WHY}")
+    try:
+        out = mod.tin_delaunay(
+            np.ascontiguousarray(x, dtype="<f8").tobytes(),
+            np.ascontiguousarray(y, dtype="<f8").tobytes(),
+            tuple(float(v) for v in env),
+            float(tol),
+        )
+    except mod.LocateFailure as exc:
+        raise LocateFailure(str(exc)) from None
+    return np.frombuffer(out, dtype="<i8").reshape(-1, 3).astype(np.int64)
+
+
+def tin_kdtree(tol: float):
+    """JTS's KdTree (``_gbxrs.TinKdTree``): a point within ``tol`` of a node snaps onto it; node ids are insertion
+    ranks."""
+    mod = load()
+    if mod is None:
+        raise RuntimeError(f"gbx Rust kernels unavailable: {_WHY}")
+    return mod.TinKdTree(float(tol))

@@ -43,3 +43,20 @@ def test_cpython_hypot_is_not_java_hypot():
         and struct.unpack("<Q", struct.pack("<d", math.hypot(x, y)))[0] != want
     )
     assert differs > 0
+
+
+def test_the_rust_kernels_check_the_same_vectors():
+    # rust/gbxrs holds a copy (its `cargo test` runs on the crate alone): the two must not drift apart
+    import pytest
+
+    crate = next(
+        (
+            p / "rust" / "gbxrs" / "testdata" / "java_hypot.txt"
+            for p in Path(__file__).resolve().parents
+            if (p / "rust" / "gbxrs" / "Cargo.toml").is_file()
+        ),
+        None,
+    )
+    if crate is None:
+        pytest.skip("not a source checkout")
+    assert crate.read_bytes() == _FIXTURE.read_bytes()

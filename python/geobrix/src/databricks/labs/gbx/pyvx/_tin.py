@@ -336,8 +336,7 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
             for a, b in zip(ln.tolist(), ln.tolist()[1:])
         ]
         simplices = _recover_constraints(pts[:, :2], simplices, segments)
-    z = pts[:, 2]
-    return [np.column_stack([pts[s, 0], pts[s, 1], z[s]]) for s in simplices]
+    return list(pts[:, :3][simplices])
 
 
 def _delaunay(xy: np.ndarray) -> np.ndarray:
@@ -345,26 +344,28 @@ def _delaunay(xy: np.ndarray) -> np.ndarray:
     hybrid as the conforming mode: scipy's (Qhull's, run from the sites' corner, where it keeps close points far from
     0) when they are certified to be the unique Delaunay triangulation (``_conforming.unique_delaunay``), which is so
     in general position; otherwise (co-circular sites, such as a regular grid, or sites Qhull leaves out) the port of
-    JTS's incremental triangulation (:func:`_jts_delaunay`), which makes JTS's own choice among the ties.
+    JTS's incremental triangulation (:func:`_jts_delaunay`), which makes JTS's own choice among the ties. Where this
+    process has the Rust kernel, JTS's triangulation comes from it on every input: it is faster than scipy.
     """
-    from ._conforming import unique_delaunay
+    from ._conforming import _rust, unique_delaunay
 
     lo, hi = xy.min(axis=0), xy.max(axis=0)
     env = (float(lo[0]), float(lo[1]), float(hi[0]), float(hi[1]))
-    s = unique_delaunay(xy, origin=lo)
+    s = unique_delaunay(xy, origin=lo) if _rust() is None else None
     return _jts_delaunay(xy, env) if s is None else s
 
 
 def _jts_delaunay(xy: np.ndarray, env) -> np.ndarray:
     """The triangles (site index triples) the JVM level's ``DelaunayTriangulationBuilder`` makes of ``xy``: the sites
     sorted by (x, y), inserted into JTS's incremental triangulation framed on their envelope ``env``, tolerance 0 (the
-    ``_quadedge`` port). Raises :class:`ConstrainedError` (``CONSTRAINED_LOCATE_FAILED``) where JTS's point location
-    fails, as the JVM level does."""
+    Rust kernel, or the ``_quadedge`` port without a Rust build). Raises :class:`ConstrainedError`
+    (``CONSTRAINED_LOCATE_FAILED``) where JTS's point location fails, as the JVM level does.
+    """
     from ._conforming import ConformingError, jts_delaunay
 
     order = np.lexsort((xy[:, 1], xy[:, 0]))
     try:
-        tris = jts_delaunay([(x, y, 0.0) for x, y in xy[order].tolist()], env, 0.0)
+        tris = jts_delaunay(xy[order], env, 0.0)
     except ConformingError:
         raise ConstrainedError(CONSTRAINED_LOCATE_FAILED) from None
     return order[tris]

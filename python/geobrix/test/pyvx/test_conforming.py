@@ -12,6 +12,11 @@ def _sites(xy, z=0.0):
     return np.array([[x, y, z] for x, y in xy], dtype=float)
 
 
+def _python_only(monkeypatch):
+    """The pure-Python ports, as in a process without the Rust build (the plain wheel, a host venv)."""
+    monkeypatch.setattr(_conforming, "_rust", lambda: None)
+
+
 def test_kdtree_snaps_within_tolerance_and_keeps_exact_repeats_out():
     t = _conforming.KdTree(0.5)
     assert t.insert((0.0, 0.0, 0.0))
@@ -37,7 +42,7 @@ def test_an_exact_distance_tie_picks_the_first_point_the_kdtree_finds():
     pts = _sites([(4, 1), (6, 1)])
     bl = [np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]])]
     verts, _ = _conforming.conforming_vertices(pts, bl, 0.0, "NONENCROACHING")
-    steiner = [v[:2] for v in verts[4:]]
+    steiner = [tuple(v[:2]) for v in verts[4:].tolist()]
     assert steiner == [(4.0, 0.0), (6.0, 0.0)]
 
 
@@ -62,7 +67,7 @@ def test_split_points_take_the_z_of_their_segment():
         ("NONENCROACHING", {(4.8766328011611035, 5.145137880986938)}),
     ):
         verts, _ = _conforming.conforming_vertices(pts, bl, 0.0, finder)
-        steiner = [v for v in verts if (v[0], v[1]) not in inputs]
+        steiner = [tuple(v) for v in verts.tolist() if (v[0], v[1]) not in inputs]
         assert {v[:2] for v in steiner} == want, finder
         for x, y, z in steiner:
             assert z == pytest.approx(2 * x + y + 1, abs=1e-12)
@@ -85,7 +90,8 @@ def _key(tris):
     return {frozenset(map(tuple, t[:, :2].tolist())) for t in tris}
 
 
-def test_hybrid_takes_scipy_when_unique_and_the_port_on_ties():
+def test_hybrid_takes_scipy_when_unique_and_the_port_on_ties(monkeypatch):
+    _python_only(monkeypatch)
     rng = np.random.default_rng(3)
     general = np.column_stack([rng.random((60, 2)) * 100, np.zeros(60)])
     grid = _sites(
@@ -148,13 +154,14 @@ def test_a_repeated_break_line_vertex_keeps_its_slot_and_takes_the_last_z():
         np.array([[5.0, 0.0, 9.0], [10.0, 0.0, 9.0]]),
     ]
     verts, _ = _conforming.conforming_vertices(pts, bl, 0.0)
-    assert [v for v in verts if v[:2] == (5.0, 0.0)] == [(5.0, 0.0, 9.0)]
+    assert [v for v in verts.tolist() if v[:2] == [5.0, 0.0]] == [[5.0, 0.0, 9.0]]
 
 
 def test_a_point_location_that_does_not_converge_raises_with_a_fix(monkeypatch):
     from databricks.labs.gbx.pyvx import _quadedge
 
     # a walk that never finds its triangle: every edge has the point on its right
+    _python_only(monkeypatch)
     monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
     pts = _sites([(0, 0), (1, 0), (0, 1), (1, 1.2)])
     verts, env = _conforming.conforming_vertices(pts, [], 0.0)
@@ -176,6 +183,7 @@ def test_the_port_takes_a_point_on_an_edge_with_a_merge_tolerance(monkeypatch):
         hits.append(on_edge(self, e, v))
         return hits[-1]
 
+    _python_only(monkeypatch)
     monkeypatch.setattr(_quadedge.Subdivision, "_on_edge", spy)
     pts = _sites([(0, 0), (10, 0), (5, 6), (5, -6), (2, 9), (8, -9)])
     bl = [np.array([[5.0, 0.0, 1.0], [5.0, -3.0, 1.0]])]
@@ -196,7 +204,9 @@ def test_the_port_takes_a_point_on_an_edge_with_a_merge_tolerance(monkeypatch):
     assert _key(port) == {frozenset(t) for t in want}
 
 
-def test_the_certificate_takes_a_hull_triangle_whose_circle_holds_a_frame_vertex():
+def test_the_certificate_takes_a_hull_triangle_whose_circle_holds_a_frame_vertex(
+    monkeypatch,
+):
     # (0, 0), (5, 0.001), (10, 0) is a hull triangle with a circle of radius 12500: it holds a frame vertex of JTS's
     # subdivision, yet JTS's forceConvex rules give the Delaunay triangulation of the sites, so the hybrid keeps
     # scipy's triangles, and they are the port's
@@ -204,6 +214,7 @@ def test_the_certificate_takes_a_hull_triangle_whose_circle_holds_a_frame_vertex
     verts, env = _conforming.conforming_vertices(pts, [], 0.0)
     xy = np.array(verts)[:, :2]
     assert _conforming.unique_delaunay(xy) is not None
+    _python_only(monkeypatch)
     stats = {}
     hybrid = _conforming.triangulate(pts, [], 0.0, stats=stats)
     assert stats["fallback"] is False
@@ -268,3 +279,110 @@ def test_the_certificate_refuses_broken_neighbours_and_a_non_disk(monkeypatch):
     )
     fake([[0, 1, 2], [3, 4, 5]], [[-1, -1, -1], [-1, -1, -1]])
     assert _conforming.unique_delaunay(two) is None
+
+
+def _xyz_key(tris):
+    return {frozenset(map(tuple, t.tolist())) for t in tris}
+
+
+@pytest.fixture
+def rust_kernels():
+    from databricks.labs.gbx import _rs
+
+    why = _rs.missing("tin_delaunay", "TinKdTree")
+    if why:
+        pytest.skip(why)
+    return _rs
+
+
+def _tin_inputs():
+    rng = np.random.default_rng(5)
+    rand = np.column_stack([rng.random((300, 2)) * 100, rng.random(300)])
+    grid = _sites([(x, y) for x in range(12) for y in range(12)], 1.0)
+    near = np.vstack(
+        [grid, grid[:30] + [0.004, 0.003, 0.0]]
+    )  # within a merge tolerance of 0.01
+    bl = [np.array([[0.5, 0.3, 2.0], [8.4, 4.2, 3.0], [5.4, 9.6, 1.0]])]
+    return [(rand, bl, 0.0), (grid, bl, 0.0), (near, bl, 0.01), (grid, [], 0.0)]
+
+
+def test_the_rust_kernels_make_the_python_ports_vertices_and_triangles(
+    rust_kernels, monkeypatch
+):
+    # the same vertices (KdTree snaps and splits) and the same incremental triangles, in the same order
+    for pts, bl, tol in _tin_inputs():
+        for finder in ("NONENCROACHING", "MIDPOINT"):
+            rs_verts, env = _conforming.conforming_vertices(pts, bl, tol, finder)
+            rs_tris = _conforming.jts_delaunay(rs_verts, env, tol)
+            with monkeypatch.context() as m:
+                _python_only(m)
+                py_verts, py_env = _conforming.conforming_vertices(pts, bl, tol, finder)
+                py_tris = _conforming.jts_delaunay(py_verts, py_env, tol)
+            assert env == py_env
+            assert np.array_equal(rs_verts, py_verts)
+            assert np.array_equal(rs_tris, py_tris)
+        for mode in ("constrained", "conforming"):
+            rs_out = _tin.triangulate(pts, bl, tol, 0.0, mode)
+            with monkeypatch.context() as m:
+                _python_only(m)
+                py_out = _tin.triangulate(pts, bl, tol, 0.0, mode)
+            # the Python level takes scipy's certified triangles in general position: the same set, another order
+            assert _xyz_key(rs_out) == _xyz_key(py_out)
+            assert len(rs_out) == len(py_out)
+
+
+def test_the_rust_kdtree_snaps_and_walks_as_the_python_one(rust_kernels):
+    rng = np.random.default_rng(9)
+    pts = np.column_stack([np.round(rng.random((400, 2)) * 20, 1), np.zeros(400)])
+    for tol in (0.0, 0.15):
+        py, rs = _conforming.KdTree(tol), _conforming._RustKdTree(tol, rust_kernels)
+        py.insert_many(pts)
+        rs.insert_many(pts)
+        assert np.array_equal(py.vertices(), rs.vertices())
+        for a, b in rng.random((50, 2, 2)).tolist():
+            p0, p1 = (a[0] * 20, a[1] * 20, 0.0), (b[0] * 20, b[1] * 20, 0.0)
+            assert py.encroacher(p0, p1) == rs.encroacher(p0, p1)
+        got = [tuple(rs.vertices()[i, :2]) for i in rs.tree.query(3.0, 4.0, 9.0, 7.5)]
+        assert got == [(n[0], n[1]) for n in py.query(3.0, 4.0, 9.0, 7.5)]
+
+
+def test_the_rust_kernel_raises_the_locate_failure(rust_kernels):
+    from databricks.labs.gbx.bench.oracle_tables import _tin_rows
+
+    with pytest.raises(
+        _tin.ConstrainedError, match="locating a point did not converge"
+    ):
+        _tin.triangulate(np.array(_tin_rows.NEAR_LINE), [], 0.0, 0.0)
+    nan = _sites([(0, 0), (1, 0), (float("nan"), float("nan"))])
+    with pytest.raises(_conforming.ConformingError, match="did not converge"):
+        _conforming.jts_delaunay(nan, (0.0, 0.0, 1.0, 1.0), 0.0)
+
+
+def test_the_hybrid_takes_the_rust_kernel_on_every_input(rust_kernels, monkeypatch):
+    # the kernel is faster than scipy plus its certificate on random sites too: scipy is not run
+    monkeypatch.setattr(
+        _conforming, "unique_delaunay", lambda *a, **k: pytest.fail("scipy ran")
+    )
+    pts, bl, _ = _tin_inputs()[0]
+    stats = {}
+    assert _conforming.triangulate(pts, bl, 0.0, stats=stats)
+    assert stats["fallback"] is True
+    assert _tin.triangulate(pts, bl, 0.0, 0.0)
+
+
+def test_a_locate_failure_while_splitting_raises_before_the_99th_pass(monkeypatch):
+    # JTS inserts each split point into its triangulation as it goes: where a point cannot be located, that error
+    # comes first, not the one of 99 passes (a crossing seen on the JVM: `locating a point did not converge`)
+    from databricks.labs.gbx.pyvx import _quadedge
+
+    _python_only(monkeypatch)
+    pts = _sites([(0, -5), (10, -5), (10, 5), (0, 5)])
+    bl = [
+        np.array([[1.0, -0.5, 0.0], [9.0, 0.5, 0.0]]),
+        np.array([[2.0, 0.5, 0.0], [8.63, -0.5, 0.0]]),
+    ]
+    with pytest.raises(_conforming.ConformingError, match="too many splitting"):
+        _tin.triangulate(pts, bl, 0.0, 0.0, "conforming")
+    monkeypatch.setattr(_quadedge.Subdivision, "_right_of", lambda self, v, e: True)
+    with pytest.raises(_conforming.ConformingError, match="locating a point"):
+        _tin.triangulate(pts, bl, 0.0, 0.0, "conforming")

@@ -433,6 +433,9 @@ def test_a_mass_point_near_a_snapped_vertex_merges_into_it():
 def test_constrained_keeps_close_points_far_from_0(monkeypatch):
     # points under 1 cm apart at BNG magnitudes: Qhull on the raw coordinates leaves one out of every triangle; from
     # the corner it keeps them all, and the certificate (on the raw coordinates) takes them (the port is ruled out)
+    from databricks.labs.gbx.pyvx import _conforming
+
+    monkeypatch.setattr(_conforming, "_rust", lambda: None)
     monkeypatch.setattr(
         _tin, "_jts_delaunay", lambda *a: pytest.fail("Qhull left out a site")
     )
@@ -449,6 +452,11 @@ def test_constrained_keeps_close_points_far_from_0(monkeypatch):
 
 
 def _port_calls(monkeypatch):
+    from databricks.labs.gbx.pyvx import _conforming
+
+    monkeypatch.setattr(
+        _conforming, "_rust", lambda: None
+    )  # the scipy hybrid: no Rust build
     calls = []
     real = _tin._jts_delaunay
 

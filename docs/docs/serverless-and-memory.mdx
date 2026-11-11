@@ -89,14 +89,12 @@ For very large vector output, prefer `geojsonl_gbx` (parallel shards, no driver 
 
 The fastest way to read rasters or vectors on Serverless, and on classic clusters, is to read from a **FILE-column Delta table**. For rasters, this is a tile index read with `read_tiles_table`. For vectors, it is a table produced by `vector_file_write` (or `vector_gbx` with `file_mode="external"`). The Delta scan resolves FILE references without per-file opens.
 
-Measured on 1,000 raster tiles:
+| Read path | Per-tile cost |
+|---|---|
+| **FILE-column Delta table** (recommended) | None. The scan resolves the FILE reference and carries the bytes by Arrow transport. |
+| Directory scan (`raster_gbx` DataSource) | One file open per tile, on the worker. |
 
-| Read path | Serverless | Classic |
-|---|---|---|
-| **FILE-column Delta table** (recommended) | **~1.8–2 s** | **~2 s** |
-| Directory scan (`raster_gbx` DataSource) | ~30 s | ~20 s |
-
-**~16–17× faster on Serverless.** The gap is the per-tile open cost. The Delta-scan path amortizes it across the whole job via Arrow transport. The directory DataSource opens each tile individually on the worker.
+On Serverless, each of those opens is a Volume round trip. The Delta-scan path pays no such open per tile, so read from a FILE-column table there.
 
 The same open-amortization benefit applies to vector: `vector_file_read(..., source_type="table")` avoids per-file FUSE opens for a FILE-column vector table. Measured vector-table throughput numbers are not yet available; the mechanism is the same as the raster case.
 

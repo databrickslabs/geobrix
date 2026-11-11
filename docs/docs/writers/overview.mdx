@@ -193,9 +193,8 @@ An unrecognized format raises `ValueError`.
 :::tip On Serverless, write to a FILE-column table for fast reads
 On Serverless, prefer writing raster or vector output to a **FILE-column Delta table** (use
 `file_mode="external"` or `file_mode="managed"` on the writer). Once written, reads via
-`read_tiles_table` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path. It is measured
-at **~2 s** per 1,000 tiles on both Serverless and classic. This avoids the per-tile FUSE opens
-that make the directory DataSource path **~3.7× slower on Serverless**.
+`read_tiles_table` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path. That path resolves the
+FILE reference in the scan, so it needs no per-tile FUSE open. The directory DataSource path opens each tile on the worker.
 
 Per-tile FILE writes themselves are not the fast path; the benefit is on the read side once the
 table exists. For large-dataset write throughput on Serverless, `geojsonl_gbx` (sharded) and

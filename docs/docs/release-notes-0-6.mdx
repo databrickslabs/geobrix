@@ -695,7 +695,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 ### Lightweight raster opens: no folder listing (behavior change) {#raster-opens}
 
 - **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a raster's folder at every open to look for sidecar files. That took 0.3 s to 10 s per open on a Volume on Serverless. GeoBrix now lists a folder once per Python worker, when the worker opens a second, different file of it. It tells GDAL where to look.
-  - A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no sidecar opens with no sidecar look-up. This is about 2.5 times faster on Serverless.
+  - A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no sidecar opens with no sidecar look-up. It no longer pays the per-open folder listing.
   - A file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them. So do the files a VRT or another multi-file dataset opens.
   - Sidecars are checked by name before a folder is listed, and in a folder of more than 100,000 files.
   - A folder of up to 100,000 files is listed once per worker. A file with no sidecar in a folder of 10,000 files then opens with no sidecar look-up.

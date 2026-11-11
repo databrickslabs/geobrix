@@ -228,7 +228,7 @@ Measured on a 10,002-file corpus on a dogfood workspace, driver side, warm run:
 
 A manifest or tile table skips the walk and the header opens. Planning becomes one file or table read, whatever the tile count. This is an optional gain. It helps most when you already keep a tile index, or when a job repeats very many times.
 
-A Delta table with a FILE column reads in about 2 s per 1,000 tiles on Serverless. That is 16x to 17x faster than a directory scan. See the [capability tiers](../readers-writers#capability-tiers) and [Serverless & Memory](../serverless-and-memory).
+A Delta table with a FILE column resolves each tile reference in the scan, with no per-tile open. A directory scan opens each tile on the worker. See the [capability tiers](../readers-writers#capability-tiers) and [Serverless & Memory](../serverless-and-memory).
 
 ```python
 # Option 1: a manifest (JSON or Parquet) with a path and window per tile

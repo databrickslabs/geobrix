@@ -4,7 +4,7 @@ A JVM form (L1, L2) of a tile family gets two twins, `<variant>@probe-readdir` a
 runs the form's own query over `PROBE_CALLS` corpus tiles on ONE task (one partition, so one worker): the tiles are read
 from the Volume inside the timed query (a light-tier open of each file), then the JVM function is called on each. The
 first twin leaves `GDAL_DISABLE_READDIR_ON_OPEN` as shipped (the light tier picks the sidecar probe mode per file);
-the `-empty` twin sets it to `EMPTY_DIR` on the worker before the opens. The pair says whether the mode moves the
+the `-empty` twin sets it to `EMPTY_DIR` for each of its opens, and puts it back after. The pair says whether the mode moves the
 form's time on a Volume (a sidecar listing on FUSE is slow); the JVM itself opens no Volume path in these queries (it
 is handed the tile bytes), so a gap between the twins is the Volume read, and no gap is the answer for the JVM call.
 
@@ -46,7 +46,7 @@ def _probe_paths(spark, n, corpus, schema):
 
 def _open_tile(empty: bool, cap_bytes):
     """A row UDF that opens one tile as `rst_fromfile(materialize=True)` does (`pyrx.functions._fromfile_impl`), after
-    setting the readdir mode of its worker to EMPTY_DIR when `empty`. The mode is set and the open made in ONE UDF
+    setting the readdir mode of its worker to EMPTY_DIR for that open when `empty` (put back after it). The mode is set and the open made in ONE UDF
     because `rst_fromfile` beside a setter UDF is two Python evaluation nodes, so two workers, and the open would never
     see the mode.
     """
@@ -57,9 +57,19 @@ def _open_tile(empty: bool, cap_bytes):
     def open_tile(path):
         from databricks.labs.gbx.pyrx.functions import _fromfile_impl
 
-        if empty:
-            os.environ[READDIR_ENV] = "EMPTY_DIR"
-        return _fromfile_impl(path, "GTiff", True, cap_bytes=cap_bytes)
+        if not empty:
+            return _fromfile_impl(path, "GTiff", True, cap_bytes=cap_bytes)
+        # EMPTY_DIR for this open only: the worker is reused, and a mode left in its environment made every later
+        # open there skip its sidecars (the user's own value, if any, comes back after it)
+        held = os.environ.get(READDIR_ENV)
+        os.environ[READDIR_ENV] = "EMPTY_DIR"
+        try:
+            return _fromfile_impl(path, "GTiff", True, cap_bytes=cap_bytes)
+        finally:
+            if held is None:
+                os.environ.pop(READDIR_ENV, None)
+            else:
+                os.environ[READDIR_ENV] = held
 
     return F.udf(open_tile, TILE_SQL)
 

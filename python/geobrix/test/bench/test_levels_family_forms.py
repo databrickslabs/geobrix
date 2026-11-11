@@ -1,5 +1,6 @@
 """The family sets of the levels leg: one FORMS and one SETS entry per manifest family with more than one level."""
 
+import os
 from test._volume_safe import open_raster
 
 import numpy as np
@@ -286,6 +287,32 @@ def test_the_empty_dir_twin_sets_the_mode_in_the_worker_that_opens_the_tiles(
         "open_tile" in ln for ln in nodes
     ), plan  # the open is in the UDF that sets the mode
     assert len({ln.strip(" +-") for ln in nodes}) == 1, plan  # one node, so one worker
+
+
+@pytest.mark.parametrize("held", [None, "NO"], ids=["unset", "user-set"])
+def test_the_empty_dir_twin_puts_the_readdir_mode_back_after_its_open(
+    spark_session_local, monkeypatch, held
+):
+    """The `-empty` twin's EMPTY_DIR is for its own open only. Left in the worker's environment, every later open in
+    that reused Python worker skipped its sidecars: the `.aux.xml`, `.hdr` and `.prj` of the next rasters read (CRS and
+    NoData gone, an EHdr not recognized)."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    if held is None:
+        monkeypatch.delenv(probe.READDIR_ENV, raising=False)
+    else:
+        monkeypatch.setenv(probe.READDIR_ENV, held)
+    seen = []
+    monkeypatch.setattr(
+        prx,
+        "_fromfile_impl",
+        lambda *a, **k: seen.append(os.environ.get(probe.READDIR_ENV)),
+    )
+    probe._open_tile(True, 1 << 20).func("/x.tif")
+    assert seen == ["EMPTY_DIR"]
+    assert os.environ.get(probe.READDIR_ENV) == held
+    probe._open_tile(False, 1 << 20).func("/x.tif")
+    assert seen[-1] == held  # the plain twin opens under the setting it finds
 
 
 def test_the_aggregate_set_keeps_its_2000_tile_input_beside_the_family_input():

@@ -186,6 +186,39 @@ class DeltaQueue:
         raise RuntimeError(f"no claim after {attempt} attempts and {lost} lost commits in {self.clock() - t0:.0f} s on {self.table}")
 
 
+def node_checkout(base: str, key: str, want: dict, unpack: Callable[[str], None], reset: Callable[[str], bool]) -> tuple:
+    """The checkout a chunk runs in: one per runner (``key``), unpacked by its first chunk and reused by the next ones, so a runner pays
+    the copy, the unpack and the commit of the tarball once, not once per chunk (on Serverless that was most of a chunk's 1.5-3 min
+    before its first test). ``want`` names what the tree holds (the launch's tarball and test resources); a tree of another launch, one
+    this process cannot write, or one ``reset(repo)`` cannot bring back to the commit is unpacked afresh (``unpack(repo)``). The chunks
+    of one runner run one after another, so no two share the tree at once. Returns ("unpacked" | "reused", the repo path)."""
+    import shutil
+    import tempfile
+
+    co = os.path.join(base, "_checkout-" + re.sub(r"[^A-Za-z0-9_.-]", "_", key))
+    repo, mark = os.path.join(co, "repo"), os.path.join(co, "ready.json")
+    try:
+        with open(mark) as f:
+            ready = json.load(f)
+    except (OSError, ValueError):
+        ready = None
+    if ready == want and os.access(repo, os.W_OK):
+        try:
+            if reset(repo):
+                return "reused", repo
+        except Exception:  # noqa: BLE001 - a tree that cannot be reset is unpacked afresh
+            pass
+    shutil.rmtree(co, ignore_errors=True)
+    if os.path.exists(co):  # another user's tree (a notebook run under another uid): a folder of this one's own
+        co = tempfile.mkdtemp(prefix="_checkout-", dir=base if os.access(base, os.W_OK) else None)
+        repo, mark = os.path.join(co, "repo"), os.path.join(co, "ready.json")
+    os.makedirs(co, exist_ok=True)
+    unpack(repo)
+    with open(mark, "w") as f:
+        json.dump(want, f)
+    return "unpacked", repo
+
+
 WATCHDOG_LABEL = "killed by watchdog: "
 
 

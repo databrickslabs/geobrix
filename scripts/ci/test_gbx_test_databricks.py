@@ -878,6 +878,38 @@ def test_the_node_checkout_is_a_repository_that_holds_every_file(shards):
     assert "git add -A -f" in src and "--allow-empty" not in src, "git ls-files / ls-tree HEAD see the files, as in the commit under test"
 
 
+def test_a_runner_unpacks_the_checkout_once_and_its_later_chunks_reuse_it(tmp_path):
+    unpacked, resets = [], []
+
+    def unpack(repo):
+        os.makedirs(repo)
+        (Path(repo) / "f.py").write_text("x")
+        unpacked.append(repo)
+
+    def reset(repo):
+        resets.append(repo)
+        return True
+
+    want = {"tarball": "/Volumes/v/t1-src.tar.gz", "resources": "abc"}
+    got = [sr.node_checkout(str(tmp_path), "r0", want, unpack, reset) for _ in range(3)]
+    assert [g[0] for g in got] == ["unpacked", "reused", "reused"] and len(unpacked) == 1, "one unpack per runner"
+    assert len({g[1] for g in got}) == 1 and len(resets) == 2, "each later chunk resets the same tree"
+    assert sr.node_checkout(str(tmp_path), "r1", want, unpack, reset)[0] == "unpacked", "another runner has a tree of its own"
+    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, reset)[0] == "unpacked", "another launch unpacks again"
+    assert sr.node_checkout(str(tmp_path), "r0", dict(want, tarball="/other"), unpack, lambda repo: False)[0] == "unpacked", \
+        "a tree that cannot be reset is unpacked afresh"
+
+
+def test_the_shard_cell_takes_its_checkout_from_the_runner_and_says_which(shards):
+    src = _cell_source(shards)
+    assert "def node_checkout(" in src and "node_checkout(base," in src and "git clean -fdxq" in src
+    assert 'checkout=CHECKOUT' in src, "the result says whether the chunk unpacked or reused the checkout"
+    ns = {}
+    exec(compile(src[: src.index("import faulthandler")], "head", "exec"), ns)  # noqa: S102 - the inlined helpers stand alone
+    assert ns["chunk_failed"]({"rc": 1}) and callable(ns["node_checkout"])
+    assert '"runner": WHO' in launcher.runner_source(_plan(_args(), ts.select(shards, "ds"))), "the runner names itself to its chunks"
+
+
 def test_a_fresh_cluster_run_makes_one_pool_per_kind_so_light_and_jar_do_not_share_a_cluster():
     light, jar = launcher.fresh_pool_name("tst-1", False), launcher.fresh_pool_name("tst-1", True)
     assert light != jar and light.endswith("-light") and jar.endswith("-jar")

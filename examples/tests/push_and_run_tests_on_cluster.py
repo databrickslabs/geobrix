@@ -541,7 +541,8 @@ def guard_source(plan: dict) -> str:
 def run_source(plan: dict) -> str:
     """The cell that unpacks the checkout, runs one shard's pytest in this process and writes its files."""
     # the chunk fails its own run by the rule its runner and fail fast use (_shard_runner.chunk_failed, inlined: no copy on the node)
-    return inspect.getsource(sr.chunk_failed) + '''
+    helpers = "import json, os, re\nfrom typing import Callable\n\n\n" + inspect.getsource(sr.chunk_failed) + "\n\n" + inspect.getsource(sr.node_checkout)
+    return helpers + '''
 import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
 
 STAGE = %(stage)r
@@ -554,28 +555,68 @@ t0 = time.time()
 try:  # the node's local disk; Serverless has none to write
     os.makedirs("/local_disk0/gbxtest", exist_ok=True)
     scratch = "/local_disk0/gbxtest"
-except OSError:  # a temp dir of this process's own: the runner's notebook runs as another user there
+except OSError:  # Serverless: the temp disk, at a path every chunk of the runner finds again (its checkout is there)
     import tempfile
 
-    scratch = tempfile.mkdtemp(prefix="gbxtest-")
+    scratch = tempfile.gettempdir() + "/gbxtest"
+
+
+def _shared_dir(d):  # a folder the next chunks may write even when they run as another user (as /tmp is: sticky, everyone)
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o1777)
+    except OSError:
+        pass
+
+
 # a folder per launch attempt (run id + attempt): a relaunch under the same run id never meets the files, or the tables that
 # own them, of a cancelled attempt
-root = scratch + "/%%s-%%s/%%s" %% (PLAN["run_id"], PLAN.get("attempt", "0"), SLUG)
-shutil.rmtree(root, ignore_errors=True)
-os.makedirs(root + "/out")
-shutil.copy(PLAN["tarball"], root + "/src.tar.gz")  # one read of the Volume file, then local disk
-with tarfile.open(root + "/src.tar.gz") as tf:
-    tf.extractall(root + "/repo", filter="data")
-repo = root + "/repo"
-if PLAN.get("resources"):  # the test resources, shared by every run of the same content
-    shutil.copy(PLAN["resources"]["volume"], root + "/res.tar.gz")
-    with tarfile.open(root + "/res.tar.gz") as tf:
+base = scratch + "/%%s-%%s" %% (PLAN["run_id"], PLAN.get("attempt", "0"))
+try:
+    _shared_dir(scratch)
+    _shared_dir(base)
+    root = base + "/" + SLUG
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root + "/out")
+except OSError:  # a folder this chunk cannot write: one of its own (the checkout is then unpacked for this chunk alone)
+    import tempfile
+
+    base = tempfile.mkdtemp(prefix="gbxtest-")
+    root = base + "/" + SLUG
+    os.makedirs(root + "/out")
+try:  # the runner that runs this chunk: its chunks share one checkout, one after another
+    RUNNER = dbutils.widgets.get("runner")
+except Exception:
+    RUNNER = ""
+
+
+def _unpack(repo):
+    co = os.path.dirname(repo)
+    shutil.copy(PLAN["tarball"], co + "/src.tar.gz")  # one read of the Volume file, then local disk
+    with tarfile.open(co + "/src.tar.gz") as tf:
         tf.extractall(repo, filter="data")
+    os.remove(co + "/src.tar.gz")
+    if PLAN.get("resources"):  # the test resources, shared by every run of the same content
+        shutil.copy(PLAN["resources"]["volume"], co + "/res.tar.gz")
+        with tarfile.open(co + "/res.tar.gz") as tf:
+            tf.extractall(repo, filter="data")
+        os.remove(co + "/res.tar.gz")
+    # some tests ask git for the checkout's root, HEAD or its files (git ls-files, ls-tree): the tarball has no history, so make it
+    # a one-commit repository that holds every file, as the commit under test does
+    os.system("cd %%s && git init -q && git add -A -f && git -c user.name=gbx -c user.email=gbx@example.com commit -q -m run >/dev/null 2>&1" %% repo)
+
+
+def _reset(repo):  # what the runner's last chunk wrote into the tree goes; the JAR in lib/ stays
+    return os.system("cd %%s && git clean -fdxq -e python/geobrix/lib/ && git checkout -q -- ." %% repo) == 0
+
+
+t_co = time.time()
+CHECKOUT, repo = node_checkout(base, RUNNER or SLUG, {"tarball": PLAN["tarball"], "resources": (PLAN.get("resources") or {}).get("tree", "")},
+                               _unpack, _reset)
+CHECKOUT_S = round(time.time() - t_co, 1)
+print("checkout:", CHECKOUT, "for runner", RUNNER or "-", "in", CHECKOUT_S, "s:", repo, flush=True)
 pkg = repo + "/python/geobrix"
-# some tests ask git for the checkout's root, HEAD or its files (git ls-files, ls-tree): the tarball has no history, so make it
-# a one-commit repository that holds every file, as the commit under test does
-os.system("cd %%s && git init -q && git add -A -f && git -c user.name=gbx -c user.email=gbx@example.com commit -q -m run >/dev/null 2>&1" %% repo)
-if PLAN.get("jar"):  # the heavy tests look for the JAR in the checkout's lib/ (the cluster has it installed as a library as well)
+if PLAN.get("jar") and not os.path.exists(pkg + "/lib/" + PLAN["jar"]["name"]):  # the heavy tests look for the JAR in lib/ (it is a cluster library as well)
     os.makedirs(pkg + "/lib", exist_ok=True)
     shutil.copy(PLAN["jar"]["volume"], pkg + "/lib/" + PLAN["jar"]["name"])
 OUT = STAGE + "/out/" + SLUG
@@ -918,7 +959,7 @@ maxfail_hit = bool(MAXFAIL) and state["failed"] + state["errors"] >= MAXFAIL and
 result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
-              timed_out=state["timed_out"], test_part=S.get("test_part", ""))
+              timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER)
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
@@ -992,7 +1033,7 @@ else:
 
     def execute(slug):
         print("+%ds" % (time.time() - T0), WHO, "runs", PLAN["shards"][slug]["name"], flush=True)
-        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug}), TIMEOUT_S,
+        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug, "runner": WHO}), TIMEOUT_S,
                         watchdog=lambda: heartbeat_watchdog(STAGE + "/hb/" + slug + ".json"),
                         result=lambda: read_json_file(STAGE + "/out/" + slug + "/result.json"))
         if not res.get("child"):  # a chunk that failed before pytest: its first cell named its run, so the launcher can read why

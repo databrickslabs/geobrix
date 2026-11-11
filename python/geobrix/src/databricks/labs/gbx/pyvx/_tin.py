@@ -336,7 +336,9 @@ def _triangulate_constrained(pts, lines) -> List[np.ndarray]:
             for a, b in zip(ln.tolist(), ln.tolist()[1:])
         ]
         simplices = _recover_constraints(pts[:, :2], simplices, segments)
-    return list(pts[:, :3][simplices])
+    from ._conforming import canonical_rings
+
+    return list(canonical_rings(pts[:, :3][simplices]))
 
 
 def _delaunay(xy: np.ndarray) -> np.ndarray:

@@ -87,8 +87,43 @@ object InterpolateElevation {
         }
         val (points, lines) = prepareSites(multiPoint, breaklines, mergeTolerance, snapTolerance)
         val gf = multiPoint.getFactory
-        if (m == "conforming") triangulateConforming(points, lines, mergeTolerance, splitPointFinder, gf)
-        else triangulateConstrained(points, lines, gf)
+        val triangles =
+            if (m == "conforming") triangulateConforming(points, lines, mergeTolerance, splitPointFinder, gf)
+            else triangulateConstrained(points, lines, gf)
+        triangles.map(canonicalTriangle(_, gf))
+    }
+
+    /** The triangle written one way on every level: counter-clockwise (the exact sign of its area) and from its lowest
+     *  vertex, the least X then the least Y (`pyvx/_conforming.py` `canonical_rings`). So its WKB is the same bytes on
+     *  every level. Anything but a triangle is returned as it is. */
+    private[jts] def canonicalTriangle(t: Geometry, gf: GeometryFactory): Geometry = {
+        val cs = t.getCoordinates
+        if (!t.isInstanceOf[Polygon] || cs.length != 4) return t
+        val v =
+            if (orientationSign(cs(0), cs(1), cs(2)) < 0) Array(cs(0), cs(2), cs(1))
+            else Array(cs(0), cs(1), cs(2))
+        var k = 0
+        for (j <- 1 to 2) {
+            if (v(j).x < v(k).x || (v(j).x == v(k).x && v(j).y < v(k).y)) k = j
+        }
+        val a = v(k)
+        gf.createPolygon(Array(a, v((k + 1) % 3), v((k + 2) % 3), new Coordinate(a)))
+    }
+
+    /** The exact sign of `(b - a) x (c - a)`: the floating-point determinant where Shewchuk's error bound certifies it,
+     *  else exact decimal arithmetic. */
+    private[jts] def orientationSign(a: Coordinate, b: Coordinate, c: Coordinate): Int = {
+        val left = (b.x - a.x) * (c.y - a.y)
+        val right = (b.y - a.y) * (c.x - a.x)
+        val det = left - right
+        val eps = Math.ulp(1.0) / 2.0
+        if (Math.abs(det) > (3.0 + 16.0 * eps) * eps * (Math.abs(left) + Math.abs(right))) {
+            return if (det > 0.0) 1 else -1
+        }
+        def d(x: Double) = new java.math.BigDecimal(x)
+        d(b.x).subtract(d(a.x)).multiply(d(c.y).subtract(d(a.y)))
+            .subtract(d(b.y).subtract(d(a.y)).multiply(d(c.x).subtract(d(a.x))))
+            .signum()
     }
 
     /** The message of a conforming triangulation JTS stops after its 99 splitting passes. */

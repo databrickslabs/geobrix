@@ -502,6 +502,41 @@ def _orient_sign(a, b, c) -> np.ndarray:
     return np.where(sure, np.sign(det), 0.0)
 
 
+def canonical_rings(tris) -> np.ndarray:
+    """The triangles (an (M, 3, 3) XYZ array) each written one way on every level: counter-clockwise (the exact sign of
+    its area) and from its lowest vertex, the least X then the least Y (``InterpolateElevation.canonicalTriangle`` on
+    the JVM level). So each triangle's WKB is the same bytes whichever triangulation path made it.
+    """
+    from fractions import Fraction
+
+    t = np.array(tris, dtype=float).reshape(-1, 3, 3)
+    if not len(t):
+        return t
+    a, b, c = t[:, 0, :2], t[:, 1, :2], t[:, 2, :2]
+    sign = _orient_sign(a, b, c)
+    for i in np.flatnonzero(
+        sign == 0.0
+    ).tolist():  # too close to call in floating point: the exact sign
+        (ax, ay), (bx, by), (cx, cy) = (
+            t[i, 0, :2].tolist(),
+            t[i, 1, :2].tolist(),
+            t[i, 2, :2].tolist(),
+        )
+        d = (Fraction(bx) - Fraction(ax)) * (Fraction(cy) - Fraction(ay)) - (
+            Fraction(by) - Fraction(ay)
+        ) * (Fraction(cx) - Fraction(ax))
+        sign[i] = (d > 0) - (d < 0)
+    cw = sign < 0
+    t[cw, 1], t[cw, 2] = t[cw, 2].copy(), t[cw, 1].copy()
+    x, y = t[:, :, 0], t[:, :, 1]
+    rows = np.arange(len(t))
+    k = np.zeros(len(t), dtype=np.int64)
+    for j in (1, 2):
+        kx, ky = x[rows, k], y[rows, k]
+        k = np.where((x[:, j] < kx) | ((x[:, j] == kx) & (y[:, j] < ky)), j, k)
+    return t[rows[:, None], (k[:, None] + np.arange(3)) % 3]
+
+
 def _valid_triangulation(xy: np.ndarray, s: np.ndarray, nb: np.ndarray) -> bool:
     """True when the triangles ``s`` (counter-clockwise, ``nb[t, k]`` the triangle across from vertex k, -1 on the
     hull) PROVABLY tile the convex hull of ``xy`` once: every interior edge is walked in opposite directions by its
@@ -644,4 +679,4 @@ def triangulate(
         stats["fallback"] = simplices is None
     if simplices is None:
         simplices = jts_delaunay(verts, env, float(merge_tolerance))
-    return list(verts[simplices])
+    return list(canonical_rings(verts[simplices]))

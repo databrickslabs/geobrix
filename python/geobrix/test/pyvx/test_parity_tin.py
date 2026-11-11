@@ -381,3 +381,43 @@ def test_conforming_parity_exact(spark_with_jar, spf, snap):
     )
     assert steiner, "the break lines should need extra points"
     assert light == heavy, f"{len(light ^ heavy)} triangles differ"
+
+
+@pytest.mark.parametrize("mode", ["constrained", "conforming"])
+@pytest.mark.parametrize("kind", ["grid", "random", "random_bl"])
+def test_triangle_wkb_bytes_are_the_same_on_both_levels(spark_with_jar, mode, kind):
+    """Each level writes a triangle counter-clockwise from its lowest vertex, so the raw WKB bytes agree, not only the
+    vertex sets: a co-circular grid (JTS's own ties), random sites, and random sites with break lines.
+    """
+    import numpy as np
+
+    spark = spark_with_jar
+    rng = np.random.default_rng(23)
+    if kind == "grid":
+        xy = np.array([(x * 2.0, y * 2.0) for x in range(9) for y in range(9)])
+    else:
+        xy = rng.random((200, 2)) * 100
+    pts = _pts_wkb([(x, y, 0.01 * x) for x, y in xy.tolist()])
+    span = float(xy.max())
+    lines = (
+        [
+            [
+                (0.13 * span, 0.27 * span, 1.0),
+                (0.6 * span, 0.4 * span, 2.0),
+                (0.85 * span, 0.7 * span, 1.0),
+            ]
+        ]
+        if kind != "random"
+        else []
+    )
+    bl = [bytearray(to_wkb(LineString(ln))) for ln in lines]
+    df = spark.createDataFrame(
+        [(pts, bl, 0.0, 0.0, "NONENCROACHING")],
+        "pts array<binary>, bl array<binary>, mt double, st double, spf string",
+    )
+    view = f"tin_bytes_{kind}_{mode}"
+    df.createOrReplaceTempView(view)
+    light = sorted(bytes(r["triangle"]) for r in _light_triangles(spark, view, mode))
+    heavy = sorted(bytes(r["triangle"]) for r in _heavy_triangles(df, mode))
+    assert len(light) > 50
+    assert light == heavy, f"{len(set(light) ^ set(heavy))} triangle WKBs differ"

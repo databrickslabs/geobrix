@@ -623,3 +623,50 @@ def test_the_recovery_maps_read_lazily_are_the_eager_ones():
     assert e not in lazy_e
     lazy_e[e] = [7, 9]
     assert e in lazy_e and lazy_e[e] == [7, 9]
+
+
+def test_canonical_rings_run_counter_clockwise_from_the_lowest_vertex():
+    from databricks.labs.gbx.pyvx import _conforming
+
+    cw = np.array([[[4.0, 4.0, 1.0], [4.0, 0.0, 2.0], [0.0, 0.0, 3.0]]])
+    assert _conforming.canonical_rings(cw).tolist() == [
+        [[0.0, 0.0, 3.0], [4.0, 0.0, 2.0], [4.0, 4.0, 1.0]]
+    ]
+    # the least X first, then the least Y among equal X; a ring the float sign cannot tell keeps its order
+    tie = np.array([[[1.0, 5.0, 0.0], [1.0, 2.0, 0.0], [3.0, 3.0, 0.0]]])
+    assert _conforming.canonical_rings(tie)[0, 0].tolist() == [1.0, 2.0, 0.0]
+    flat = np.array([[[0.2, 0.2, 0], [0.1, 0.1, 0], [0.30000000000000004] * 2 + [0]]])
+    assert _conforming.canonical_rings(flat)[0, :, :2].tolist() == [
+        [0.1, 0.1],
+        [0.30000000000000004, 0.30000000000000004],
+        [0.2, 0.2],
+    ]
+    assert _conforming.canonical_rings(np.zeros((0, 3, 3))).shape == (0, 3, 3)
+
+
+@pytest.mark.parametrize("mode", ["constrained", "conforming"])
+def test_every_path_writes_the_same_triangle_bytes(monkeypatch, mode):
+    # scipy's triangles, the Python port's and the Rust kernel's: one ring per triangle, so the same WKB bytes
+    from databricks.labs.gbx import _rs
+    from databricks.labs.gbx.pyvx import _conforming
+
+    rng = np.random.default_rng(8)
+    grid = _sites([(x, y) for x in range(10) for y in range(10)], 0.0)
+    rand = np.column_stack([rng.random((150, 2)) * 9, rng.random(150)])
+    bl = [np.array([[0.5, 0.3, 1.0], [7.4, 3.2, 2.0], [4.4, 8.6, 1.0]])]
+    for pts in (grid, rand):
+        runs = {}
+        for path in ("scipy", "port", "rust"):
+            with monkeypatch.context() as m:
+                if path == "rust":
+                    if _rs.missing("tin_delaunay", "TinKdTree"):
+                        continue
+                else:
+                    m.setattr(_conforming, "_rust", lambda: None)
+                if path == "port":
+                    m.setattr(_conforming, "unique_delaunay", lambda *a, **k: None)
+                runs[path] = sorted(
+                    _tin.triangle_wkbs(None, None, 0.0, 0.0, mode, parsed=(pts, bl))
+                )
+        first = next(iter(runs.values()))
+        assert first and all(v == first for v in runs.values()), list(runs)

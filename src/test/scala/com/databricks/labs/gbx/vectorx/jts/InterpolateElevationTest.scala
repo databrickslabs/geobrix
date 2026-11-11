@@ -395,4 +395,28 @@ class InterpolateElevationTest extends AnyFunSuite {
         kept.map(c => (c.x, c.y)).toSeq shouldBe Seq((5.0, 8.0))
         lines(0).map(c => (c.x, c.y)).toSeq shouldBe Seq((0.0, 0.0), (5.0, 0.0), (10.0, 0.0))
     }
+
+    test("each triangle ring is counter-clockwise from its lowest vertex, in both modes") {
+        val gf = new GeometryFactory()
+        // a clockwise triangle that starts at its highest vertex comes back counter-clockwise from (0, 0)
+        val cw = gf.createPolygon(Array(new Coordinate(4.0, 4.0), new Coordinate(4.0, 0.0), new Coordinate(0.0, 0.0),
+            new Coordinate(4.0, 4.0)))
+        InterpolateElevation.canonicalTriangle(cw, gf).getCoordinates.map(c => (c.x, c.y)).toSeq shouldBe
+            Seq((0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 0.0))
+        // the exact sign where the floating-point determinant cannot tell
+        InterpolateElevation.orientationSign(new Coordinate(0.1, 0.1), new Coordinate(0.2, 0.2),
+            new Coordinate(0.30000000000000004, 0.30000000000000004)) shouldBe 0
+        val grid = for (x <- 0 until 6; y <- 0 until 6) yield JTS.point(new Coordinate(x.toDouble, y.toDouble, 0.0))
+        val bl = Seq(gf.createLineString(Array(new Coordinate(0.5, 0.3), new Coordinate(4.2, 3.7))))
+        for (mode <- Seq("constrained", "conforming")) {
+            val tris = InterpolateElevation.triangulate(JTS.multiPoint(grid.toArray), bl, 0.0, 0.0, None, mode)
+            tris should not be empty
+            tris.foreach { t =>
+                val c = t.getCoordinates
+                c.length shouldBe 4
+                c.take(3).foreach(p => (p.x > c(0).x || (p.x == c(0).x && p.y >= c(0).y)) shouldBe true)
+                InterpolateElevation.orientationSign(c(0), c(1), c(2)) shouldBe 1
+            }
+        }
+    }
 }

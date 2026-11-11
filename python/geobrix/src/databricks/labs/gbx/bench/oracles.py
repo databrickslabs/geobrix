@@ -5399,6 +5399,17 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     raise ValueError(case.kind)
 
 
+def _orientation(a, b, c) -> int:
+    """The exact sign of the area of the triangle a, b, c: +1 counter-clockwise."""
+    from fractions import Fraction
+
+    (ax, ay), (bx, by), (cx, cy) = a, b, c
+    d = (Fraction(bx) - Fraction(ax)) * (Fraction(cy) - Fraction(ay)) - (
+        Fraction(by) - Fraction(ay)
+    ) * (Fraction(cx) - Fraction(ax))
+    return (d > 0) - (d < 0)
+
+
 def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
     """Judge the rows of a vector fan-out (see `Case`): triangles, elevation points or MVT tiles."""
     from databricks.labs.gbx._geom import parse_geom
@@ -5415,9 +5426,13 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
         got = []
         for r in rows:
             poly = parse_geom(bytes(_field(r, "triangle")))
-            ring = [xy(x, y) for x, y in list(poly.exterior.coords)[:-1]]
+            exact = [(float(x), float(y)) for x, y in list(poly.exterior.coords)[:-1]]
+            ring = [xy(x, y) for x, y in exact]
             if len(ring) != 3:
                 return f"{case.cid}: a triangle with {len(ring)} vertices"
+            # every level writes a triangle one way: counter-clockwise from its lowest (x, y) vertex
+            if exact[0] != min(exact) or _orientation(*exact) <= 0:
+                return f"{case.cid}: the ring {exact} does not run counter-clockwise from its lowest vertex"
             got.append(frozenset(ring))
         want = [frozenset(xy(x, y) for x, y in t) for t in case.expect]
         return (

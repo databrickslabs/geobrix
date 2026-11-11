@@ -174,7 +174,7 @@ If a tile reaching the writer has a pending warp or clip operation that has not 
 
 ### Tile tables with large row groups {#tile-table-row-groups}
 
-On every DBR 19 and Serverless compute, the lightweight tile functions move their rows to Python in Arrow batches. A batch is bounded in bytes, so the executor heap does not hold the tiles. DBR 17.3 and 18 send the rows as pickles.
+On every DBR 19 and Serverless compute, the lightweight tile functions move their rows to Python in Arrow batches. The executor heap does not hold the tiles. GeoBrix turns a batch into Python values a slice of rows at a time. DBR 17.3 and 18 send the rows as pickles.
 
 A tile table written in very large Parquet row groups, about 128 MB each, costs memory in every batch. Spark reads a row group as one batch, so a task holds all of its tiles at once. On dedicated DBR 19, 64 tiles of 2.3 MB per file spent up to 45% of each task in garbage collection.
 

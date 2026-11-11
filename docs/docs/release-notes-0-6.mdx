@@ -715,7 +715,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - This covers the tile operations, accessors, statistics, constructors, the array and pair functions, and the rasterizers. It also covers `rst_apply`, the GDAL spec engine's row form and the vector array functions.
   - It also covers the table functions over tiles: `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the `rst_*_rastertogrid*` reducers. `st_triangulate`, `st_interpolateelevation*` and `st_asmvt_pyramid` are covered too.
   - Dedicated and standard DBR 19 clusters need no Spark config for this. Integer arguments, BIGINT cell ids and NULLs arrive exactly.
-  - A batch is bounded in bytes, so time grows in line with the rows.
+  - GeoBrix turns a batch into Python values a slice of rows at a time. A large batch never holds a second copy of all its tiles.
   - DBR 17.3 and 18 (Spark 4.0) keep the pickled rows. Spark 4.0 can round a large BIGINT cell id in an Arrow batch.
   - The `gbx_rst_combine*` array functions use Arrow batches on DBR 17.3 and 18 too.
   - Set the `GBX_CAP_ARROW_TILE_TRANSPORT=0` environment variable on the cluster to keep the pickled rows of the row functions anywhere. `GBX_CAP_ARROW_TILE_UDTF_TRANSPORT=0` does the same for the table functions.

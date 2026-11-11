@@ -130,7 +130,7 @@ nbconvert==7.17.2
 pyzmq==25.1.1
 
 # --- transitive packages floored at their security-patched releases ---
-# Nothing here declares these; the Jupyter, STAC and viz closures pull them. A floor stops a
+# Only pillow is declared by GeoBrix (pyproject.toml); the Jupyter, STAC and viz closures pull the rest. A floor stops a
 # regenerated lock from resolving below the patched release. pyarrow stays at the DBR 17.3 value
 # above on purpose: the dev container is the Arrow / pandas baseline the Python tests run against.
 pillow>=13.0.0

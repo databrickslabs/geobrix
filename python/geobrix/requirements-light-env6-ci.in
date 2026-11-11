@@ -155,12 +155,11 @@ exifread>=3.0,<4
 pytest==9.1.1
 
 # --- transitive packages floored at their security-patched releases ---
-# GeoBrix declares none of these directly: certifi comes in through requests and httpx2, pillow
-# through matplotlib, imageio and contextily, aiohttp and multidict through
-# earthaccess -> s3fs -> aiobotocore.
+# GeoBrix declares only pillow directly (pyproject.toml: pillow>=11.1.0, the lowest runtime base); certifi comes
+# in through requests and httpx2, aiohttp and multidict through earthaccess -> s3fs -> aiobotocore.
 # A floor stops a regenerated lock from resolving below the patched release. CI-only: the
-# shipped extras (pyproject.toml) keep their ranges, and pip leaves the runtime's own pillow
-# (11.1.0 on DBR 17.3/18/env 5, 12.0.0 on DBR 19/env 6) in place, because nothing GeoBrix
+# declared pillow floor and the shipped extras (pyproject.toml) keep their ranges, and pip leaves the
+# runtime's own pillow (11.1.0 on DBR 17.3/18/env 5, 12.0.0 on DBR 19/env 6) in place, because nothing GeoBrix
 # installs requires a newer one.
 pillow>=13.0.0
 certifi>=2026.10.19

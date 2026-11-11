@@ -1110,6 +1110,7 @@ pillow==13.0.0 \
     # via
     #   -r requirements-light-env5-all-ci.in
     #   contextily
+    #   geobrix
     #   imageio
     #   matplotlib
 planetary-computer==1.0.0 \

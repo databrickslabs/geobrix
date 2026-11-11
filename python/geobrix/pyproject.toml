@@ -50,6 +50,9 @@ dependencies = [
     # 21.0.0, so the floor moves nothing on Databricks.
     "pyarrow>=14.0.1",
     "scipy>=1.11.0",
+    # PIL is imported by rasterx (ortho, imagery) and the exif_gbx reader. The lowest runtime base is 11.1.0
+    # (DBR 17.3, DBR 18, env 5; DBR 19 and env 6 ship 12.0.0).
+    "pillow>=11.1.0",
     # rio-tiler imports it (rio_tiler.expression, loaded by every rio_tiler import). The env wheels vendor
     # rio-tiler without its requirements, so it is declared here. GeoBrix code does not import it.
     "numexpr>=2.14.1",

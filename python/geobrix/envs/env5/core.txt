@@ -7,7 +7,7 @@
 
 # The runtime's preinstalled versions as the floor, the next minor as the cap: these move nothing.
 # These are FROZEN-BASE caps, deliberate: this wheel targets frozen runtime bases (DBR 17.3, DBR 18, Serverless
-# environment 5), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf or urllib3, and
+# environment 5), so a cap cannot downgrade the runtime's numpy, pandas, pyarrow, scipy, protobuf, urllib3 or pillow, and
 # it stops a transitive requirement from upgrading one. (The extras follow another rule: a package the runtimes
 # preinstall gets a floor only there; see gbx:build:wheel.)
 # (DBR 17.3 ships pyarrow 19.0.1, DBR 18 and env 5 ship 21.0.0.)
@@ -17,6 +17,9 @@ pyarrow>=19.0.1,<22
 scipy>=1.15.1,<1.16
 protobuf>=5.26.1,<6
 urllib3<2.4
+# pillow: GeoBrix imports PIL (rasterx ortho and imagery, the exif_gbx reader); DBR 17.3, DBR 18 and env 5 all ship
+# 11.1.0.
+pillow>=11.1.0,<11.2
 # What the core install does move (gbx:versions:audit --install-moves lists these and fails on any other move), each
 # to the newest release that meets the floor, as pip upgrades an installed package that does not:
 # - typing_extensions 4.12.2 -> 4.13 or later: PEP 728 TypedDict(extra_items=...), which rio-tiler 9 uses, works

@@ -56,7 +56,10 @@ def test_the_probe_has_the_cells_the_runs_rely_on():
     assert 'MODE = globals().get("MODE", "serverless")' in config  # a preset MODE (the pip notebook's) survives
     assert _source(cells[5]).count("dbutils.notebook.exit(") == 1
     pip = [_source(c) for c in _cells("probe_native_payload_pip") if c["cell_type"] == "code"]
-    assert pip[0].startswith('%pip install "geobrix @ file:///Volumes/') and "+env6-py3-none-any.whl" in pip[0]
+    # the staged wheel is forced in first (a same-version geobrix on the cluster would make a plain install a no-op), then the plain install
+    first, plain = pip[0].splitlines()
+    assert first.startswith('%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/')
+    assert plain.startswith('%pip install "geobrix @ file:///Volumes/') and "+env6-py3-none-any.whl" in plain
     assert pip[1:] == ["dbutils.library.restartPython()\n", 'MODE = "dedicated"\n', "%run ./probe_native_payload\n"]
 
 

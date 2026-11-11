@@ -213,7 +213,8 @@ def test_main_runs_the_smoke_then_the_real_run_and_verifies_the_sampled_sha256(m
         "/Users/me@example.com/geobrix_gen_corpus_t1_smoke.ipynb",
         "/Users/me@example.com/geobrix_gen_corpus_t1.ipynb",
     ]
-    modes = ['"mode": "smoke"' in "".join(nb["cells"][1]["source"]) for _, nb in sdk.uploads]
+    modes = ['"mode": "smoke"' in "".join("".join(c["source"]) for c in nb["cells"]) for _, nb in sdk.uploads]
+    assert all("def run_guard(" in "".join(nb["cells"][1]["source"]) for _, nb in sdk.uploads)  # the wheel guard follows the environment cell
     assert modes == [True, False]  # the first notebook is the smoke, the second the real run
     (env,) = sdk.submits[1]["environments"]
     assert env.spec.environment_version == "6" and env.spec.dependencies[0].endswith("+env6-py3-none-any.whl")

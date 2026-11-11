@@ -589,6 +589,17 @@ def test_vacuum_keeps_deltas_retention_at_the_stores_and_survives_a_delta_vacuum
         spark.sql(f"VACUUM {table} RETAIN 0 HOURS").collect()
     finally:
         spark.conf.set(check, "true")
+    # the precondition, asked of Delta itself: it can no longer read where v1 reads. Databricks
+    # kept those files on the test pool (a managed table's files outlive RETAIN 0 HOURS there,
+    # before and after a version read past its compactions), so nothing was dropped to refuse
+    at = M._read_version(M._history(spark, table), layered.v1)
+    try:
+        spark.sql(f"SELECT kind FROM {table} VERSION AS OF {at}").collect()
+        kept = True
+    except Exception:  # noqa: BLE001 - any failure here is the files being gone
+        kept = False
+    if kept:
+        pytest.skip(f"Delta still reads version {at} after VACUUM RETAIN 0 HOURS")
     with pytest.raises(ZarrVersionUnavailable, match="Delta has removed"):
         M.snapshot(spark, table, version_as_of=layered.v1)
 

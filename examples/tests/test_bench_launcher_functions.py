@@ -273,8 +273,8 @@ def test_the_scales_check_judges_only_the_forms_levels_forms_selects(monkeypatch
     pytest.importorskip("pyspark")
     root = launcher.TESTS_DIR.parent.parent
     assert launcher.levels_scales_problem("SE", (1, 4), root) is not None  # every form: refused
-    assert launcher.levels_scales_problem("SE", (1, 4), root, ("today@256",)) is None
-    assert launcher.levels_scales_problem("SE", (1, 4), root, ("today@1024",)) is not None
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("engine-c0@256",)) is None
+    assert launcher.levels_scales_problem("SE", (1, 4), root, ("engine-c0@1024",)) is not None
 
 
 def test_a_levels_io_launch_passes_the_preflight_without_starting_spark(monkeypatch):
@@ -326,10 +326,10 @@ def test_the_probe_workers_import_the_launch_checkout_not_the_installed_copy(mon
 def test_a_levels_forms_typo_is_refused_at_argument_time_with_exit_2(monkeypatch, capsys):
     pytest.importorskip("pyspark")
     root = launcher.TESTS_DIR.parent.parent
-    assert launcher.levels_forms_problem("SE", ("today@256",), root) is None
+    assert launcher.levels_forms_problem("SE", ("engine-c0@256",), root) is None
     assert launcher.levels_forms_problem("SE", (), root) is None
-    msg = launcher.levels_forms_problem("SE", ("today@256", "tday@256"), root)
-    assert "tday@256" in msg and "today@256," not in msg.split("(the forms")[0]
+    msg = launcher.levels_forms_problem("SE", ("engine-c0@256", "tday@256"), root)
+    assert "tday@256" in msg and "engine-c0@256," not in msg.split("(the forms")[0]
     io = launcher.levels_forms_problem("IO", ("x",), root)  # IO has forms now: the message lists them, floor included
     assert "x" in io and "d-py" in io and "floor" in io
     _no_work(monkeypatch, "--levels", "SE", "--levels-scales", "1", "--levels-forms", "tday@256")

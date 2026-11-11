@@ -394,7 +394,8 @@ _PROMOTED_BY_THE_JVM_PASS = (
 
 def test_tilexyz_keeps_light_first_its_null_and_error_tiles_need_an_image():
     """The JVM tilexyz was 2.8x faster at 4x tiles, but the dispatch wrapper that sends a virtual tile to light gives
-    NULL for a NULL or error tile, where the function returns a transparent image: it stays light first."""
+    NULL for a NULL or error tile, where the function returns a transparent image: it stays light first.
+    """
     fn = MAN.functions["gbx_rst_tilexyz"]
     assert not fn.accepts_virtual_tile
     assert "L1" not in levels.order(fn)

@@ -354,7 +354,9 @@ def test_notebook_cells_compile_and_exit_in_their_own_last_cell(mode):
 def test_the_wheel_guard_cell_follows_the_environment_cell():
     cfg = _cfg(mode="run")
     plain = dr.build_gen_notebook(cfg)
-    guarded = dr.build_gen_notebook(cfg, "WHEEL_GUARD = run_guard({'wheel': '/Volumes/c/s/v/x.whl'}, spark=spark)\n")
+    guarded = dr.build_gen_notebook(
+        cfg, "WHEEL_GUARD = run_guard({'wheel': '/Volumes/c/s/v/x.whl'}, spark=spark)\n"
+    )
     assert len(guarded["cells"]) == len(plain["cells"]) + 1
     assert "WHEEL_GUARD = run_guard(" in "".join(guarded["cells"][1]["source"])
     assert guarded["cells"][0] == plain["cells"][0]

@@ -210,12 +210,23 @@ def test_build_bench_notebook_install_setup_and_exit_cells():
 
 def test_build_bench_notebook_puts_the_launchers_wheel_guard_right_after_the_install():
     """The launcher hands the guard cell's source in; it follows the install cell (and the restart it ends with), so it
-    checks the geobrix the run will use. Without one (a direct caller) the notebook is as it was."""
+    checks the geobrix the run will use. Without one (a direct caller) the notebook is as it was.
+    """
     plain = cl.build_bench_notebook(_cfg())
-    guarded = cl.build_bench_notebook(_cfg(guard_cell="WHEEL_GUARD = run_guard({'wheel': '/Volumes/c/s/v/x.whl'}, spark=spark)\n"))
+    guarded = cl.build_bench_notebook(
+        _cfg(
+            guard_cell="WHEEL_GUARD = run_guard({'wheel': '/Volumes/c/s/v/x.whl'}, spark=spark)\n"
+        )
+    )
     assert len(guarded["cells"]) == len(plain["cells"]) + 1
-    install = next(i for i, c in enumerate(guarded["cells"]) if "restartPython" in "".join(c["source"]))
-    assert "WHEEL_GUARD = run_guard(" in "".join(guarded["cells"][install + 1]["source"])
+    install = next(
+        i
+        for i, c in enumerate(guarded["cells"])
+        if "restartPython" in "".join(c["source"])
+    )
+    assert "WHEEL_GUARD = run_guard(" in "".join(
+        guarded["cells"][install + 1]["source"]
+    )
     assert "run_guard(" not in _all_source(plain)
 
 

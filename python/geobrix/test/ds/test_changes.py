@@ -376,15 +376,12 @@ def test_current_view_shows_each_files_latest_readable_version(spark):
     try:
         # managed tables in the session's default catalog and schema: a LOCATION on the local disk is refused where the
         # default catalog is Unity Catalog ("Missing cloud file system scheme"); the table format is the session's default
-        spark.sql(
-            f"""CREATE TABLE {rows} AS
+        spark.sql(f"""CREATE TABLE {rows} AS
             SELECT * FROM VALUES
                 ('/a', 'h1', 1), ('/a', 'h2', 2), ('/a', 'h2', 3),
                 ('/b', 'h1', 4), ('/b', 'h2', 5)
-            AS t(_source_path, _source_hash, id)"""
-        )
-        spark.sql(
-            f"""CREATE TABLE {versions} AS
+            AS t(_source_path, _source_hash, id)""")
+        spark.sql(f"""CREATE TABLE {versions} AS
             SELECT * FROM VALUES
                 ('/a', 'h1', TIMESTAMP'2026-10-17 10:00:00'),
                 ('/a', 'h2', TIMESTAMP'2026-10-17 11:00:00'),
@@ -393,8 +390,7 @@ def test_current_view_shows_each_files_latest_readable_version(spark):
                 ('/b', 'h2', TIMESTAMP'2026-10-17 11:00:00'),
                 ('/b', 'h1', TIMESTAMP'2026-10-17 12:00:00'),
                 ('/c', 'bad', TIMESTAMP'2026-10-17 12:00:00')
-            AS t(_source_path, _source_hash, __START_AT)"""
-        )
+            AS t(_source_path, _source_hash, __START_AT)""")
         C._ensure_current_view(spark, rows, versions)
         got = sorted(r["id"] for r in spark.table(f"{rows}_current").collect())
         assert got == [2, 3, 4]

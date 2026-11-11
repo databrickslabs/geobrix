@@ -564,6 +564,60 @@ def interpolate_z(triangles, x, y):
     return None
 
 
+_EPS_BARY = 1e-9  # interpolate_z's tolerance on the barycentric coordinates
+_CHUNK = 65536  # grid cells per batch
+
+
+def interpolate_zs(tris: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """:func:`interpolate_z` for many points at once: ``tris`` is an (M, 3, 3) array, the result the Z at each
+    (xs[i], ys[i]), NaN where it gives None. The same float operations in the same order, and the same triangle (the
+    first in ``tris`` that holds the point); an index of the triangles only skips the ones too far to hold it.
+    """
+    import shapely
+
+    xs, ys = np.asarray(xs, dtype=float), np.asarray(ys, dtype=float)
+    out = np.full(len(xs), np.nan)
+    if not len(tris) or not len(xs):
+        return out
+    A, B, C = tris[:, 0, :2], tris[:, 1, :2], tris[:, 2, :2]
+    d = (B[:, 0] - A[:, 0]) * (C[:, 1] - A[:, 1]) - (B[:, 1] - A[:, 1]) * (
+        C[:, 0] - A[:, 0]
+    )
+    lo, hi = tris[:, :, :2].min(axis=1), tris[:, :, :2].max(axis=1)
+    # A point the test takes is within twice a triangle's size of it, even where rounding flips the sign of a
+    # sliver's area (barycentric coordinates in [-1, 0] then pass); the margin keeps every such triangle a candidate.
+    m = 2.0 * (hi - lo).max(axis=1)
+    tree = shapely.STRtree(
+        shapely.box(lo[:, 0] - m, lo[:, 1] - m, hi[:, 0] + m, hi[:, 1] + m)
+    )
+    for s in range(0, len(xs), _CHUNK):
+        px, py = xs[s : s + _CHUNK], ys[s : s + _CHUNK]
+        pi, ti = tree.query(shapely.points(px, py))
+        x, y = px[pi], py[pi]
+        a0, a1, b0, b1, c0, c1 = (
+            A[ti, 0],
+            A[ti, 1],
+            B[ti, 0],
+            B[ti, 1],
+            C[ti, 0],
+            C[ti, 1],
+        )
+        dt = d[ti]
+        with np.errstate(divide="ignore", invalid="ignore"):
+            l1 = ((b0 - x) * (c1 - y) - (b1 - y) * (c0 - x)) / dt
+            l2 = ((x - a0) * (c1 - a1) - (y - a1) * (c0 - a0)) / dt
+            l3 = 1.0 - l1 - l2
+        ok = (dt != 0.0) & (l1 >= -_EPS_BARY) & (l2 >= -_EPS_BARY) & (l3 >= -_EPS_BARY)
+        pi, ti, l1, l2, l3 = pi[ok], ti[ok], l1[ok], l2[ok], l3[ok]
+        first = np.lexsort((ti, pi))  # per point, the first triangle in list order
+        keep = np.ones(len(first), dtype=bool)
+        keep[1:] = pi[first][1:] != pi[first][:-1]
+        k = first[keep]
+        t = tris[ti[k]]
+        out[s + pi[k]] = l1[k] * t[:, 0, 2] + l2[k] * t[:, 1, 2] + l3[k] * t[:, 2, 2]
+    return out
+
+
 # --- the rows of the TIN functions: the one core of the session UDTFs and the Unity Catalog routines ---------------------
 def geoms_from_array(arr):
     """Decode an ARRAY<BINARY|STRING> of geometries via the shared parse_geom contract (WKB/EWKB/WKT/EWKT); a NULL or
@@ -633,21 +687,22 @@ def triangle_wkbs(
 ):
     """The 2D WKB polygon of every triangle of the triangulation (:func:`triangulate`), one at a time. ``parsed`` is the
     ``(coords, break lines)`` of :func:`sites` when the caller has them already."""
-    from shapely import to_wkb
-    from shapely.geometry import Polygon
+    import shapely
 
     coords, bls = parsed or sites(points, breaklines)
     if coords is None:
         return
-    for t in triangulate(
+    tris = triangulate(
         coords,
         bls,
         float(merge_tolerance),
         float(snap_tolerance),
         mode,
         split_point_finder,
-    ):
-        yield to_wkb(Polygon([(p[0], p[1]) for p in t]))
+    )
+    for s in range(0, len(tris), _CHUNK):
+        part = np.asarray(tris[s : s + _CHUNK])[:, :, :2]
+        yield from shapely.to_wkb(shapely.polygons(part)).tolist()
 
 
 def elevation_wkbs(
@@ -665,8 +720,9 @@ def elevation_wkbs(
     """The WKB point (with Z) at the centre of every grid cell inside the surface, in the order of ``cell_iter``; a cell
     outside the hull gives none. ``flavor="iso"`` writes type 1001 for a point with Z (the form the warehouse parses).
     """
-    from shapely import set_srid, to_wkb
-    from shapely.geometry import Point
+    import itertools
+
+    import shapely
 
     coords, bls = parsed or sites(points, breaklines)
     if coords is None:
@@ -679,11 +735,15 @@ def elevation_wkbs(
         mode,
         split_point_finder,
     )
-    for x, y in cell_iter:
-        z = interpolate_z(tris, x, y)
-        if z is None:
-            continue
-        p = Point(x, y, z)
+    tri_arr = np.asarray(tris, dtype=float).reshape(-1, 3, 3)
+    cells = iter(cell_iter)
+    while True:
+        xy = np.array(list(itertools.islice(cells, _CHUNK)), dtype=float).reshape(-1, 2)
+        if not len(xy):
+            return
+        z = interpolate_zs(tri_arr, xy[:, 0], xy[:, 1])
+        hit = ~np.isnan(z)
+        pts = shapely.points(xy[hit, 0], xy[hit, 1], z[hit])
         if srid:
-            p = set_srid(p, int(srid))
-        yield to_wkb(p, output_dimension=3, flavor=flavor)
+            pts = shapely.set_srid(pts, int(srid))
+        yield from shapely.to_wkb(pts, output_dimension=3, flavor=flavor).tolist()

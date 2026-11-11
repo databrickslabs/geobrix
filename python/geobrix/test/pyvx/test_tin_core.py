@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 
@@ -545,3 +547,52 @@ def test_a_locate_failure_raises_the_constrained_error():
     assert str(e.value) == _tin.CONSTRAINED_LOCATE_FAILED
     # the port's conforming error does not leak out of the constrained mode
     assert not isinstance(e.value, _conforming.ConformingError)
+
+
+def test_interpolate_zs_is_interpolate_z_point_for_point():
+    # the batch form takes the same triangle with the same floats: on grid nodes and edges (ties between triangles),
+    # inside, outside the hull, on a sliver, and at BNG magnitude
+    rng = np.random.default_rng(4)
+    for off in (0.0, 530000.0):
+        grid = _sites([(off + x, off + y) for x in range(8) for y in range(8)])
+        grid[:, 2] = rng.random(len(grid)) * 10
+        sliver = _sites(
+            [(off, off - 1), (off + 7, off - 1), (off + 3.5, off - 1 + 1e-9)]
+        )
+        tris = _tin.triangulate(np.vstack([grid, sliver]), [], 0.0, 0.0)
+        arr = np.asarray(tris)
+        xs = np.concatenate(
+            [off + np.arange(-1, 9, 0.5), off + rng.random(300) * 9 - 1]
+        )
+        ys = np.concatenate(
+            [off + np.arange(-1, 9, 0.5)[::-1], off + rng.random(300) * 9 - 1]
+        )
+        got = _tin.interpolate_zs(arr, xs, ys)
+        for x, y, g in zip(xs.tolist(), ys.tolist(), got.tolist()):
+            want = _tin.interpolate_z(tris, x, y)
+            assert (want is None and math.isnan(g)) or g == want, (x, y)
+
+
+def test_the_batched_wkbs_are_the_per_row_ones():
+    from shapely import set_srid, to_wkb
+    from shapely.geometry import Point, Polygon
+
+    pts = _sites([(x, y) for x in range(6) for y in range(6)])
+    pts[:, 2] = pts[:, 0] * 2 + pts[:, 1]
+    tris = _tin.triangulate(pts, [], 0.0, 0.0)
+    got = list(_tin.triangle_wkbs(None, None, 0.0, 0.0, parsed=(pts, [])))
+    assert got == [to_wkb(Polygon([(p[0], p[1]) for p in t])) for t in tris]
+    cells = list(_tin.grid_bbox(-1.0, -1.0, 6.0, 6.0, 9, 9))
+    for flavor in ("extended", "iso"):
+        got = list(
+            _tin.elevation_wkbs(
+                None, None, 0.0, 0.0, iter(cells), 27700, flavor, (pts, [])
+            )
+        )
+        want = []
+        for x, y in cells:
+            z = _tin.interpolate_z(tris, x, y)
+            if z is not None:
+                p = set_srid(Point(x, y, z), 27700)
+                want.append(to_wkb(p, output_dimension=3, flavor=flavor))
+        assert got == want and len(want) > 20

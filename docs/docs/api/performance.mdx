@@ -85,7 +85,7 @@ These are the measurements. [Functions the JAR speeds up](./jar-functions) lists
 
 A later run re-measured `gbx_bng_cellfill`, `gbx_bng_kring` and the rasterize aggregate. Its figures replace the single-sample figures of an earlier run.
 
-A later pass timed every other JVM form at 1x and 4x rows on the same cluster, with the same decoded output. These 17 functions passed the 1.2x line at 4x rows, so they run on the JVM by default too:
+A later pass timed every other JVM form at 1x and 4x rows on the same cluster, with the same decoded output. These 16 functions passed the 1.2x line at 4x rows, so they run on the JVM by default too:
 
 | Function | Heavy 1x / 4x (s) | Best light 1x / 4x (s) | Heavy is faster by |
 |---|---|---|---|
@@ -101,11 +101,12 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 | `gbx_bng_geomkloop` | 4.57 / 17.16 | 24.85 / 86.00 | 5.4x / 5.0x |
 | `gbx_custom_geomkring` | 5.37 / 14.10 | 16.77 / 69.74 | 3.1x / 4.9x |
 | `gbx_rst_custom_rasterize_agg` | 1.56 / 2.02 | 6.78 / 9.10 | 4.4x / 4.5x |
-| `gbx_rst_tilexyz` | 0.68 / 1.45 | 1.73 / 4.13 | 2.5x / 2.8x |
 | `gbx_rst_quadbin_rasterize_agg` | 0.96 / 1.39 | 2.36 / 3.34 | 2.5x / 2.4x |
 | `gbx_rst_h3_rasterize_agg` | 2.96 / 1.72 | 3.24 / 3.86 | 1.1x / 2.2x |
 | `gbx_custom_cellfill` | 0.91 / 1.59 | 1.54 / 3.33 | 1.7x / 2.1x |
 | `gbx_bng_kloop` | 2.04 / 6.69 | 3.81 / 11.30 | 1.9x / 1.7x |
+
+The JVM `gbx_rst_tilexyz` was 2.5x and 2.8x faster at 1x and 4x tiles, but it stays light first. The JVM form cannot read a virtual tile. The SQL function that would send one to the light form gives NULL for a NULL tile, where `gbx_rst_tilexyz` returns a transparent image.
 
 The same pass found nine JVM forms under the line, so the JAR no longer holds them. See the [release notes](../release-notes-0-6).
 

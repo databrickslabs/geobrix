@@ -388,9 +388,16 @@ _PROMOTED_BY_THE_JVM_PASS = (
     "gbx_rst_custom_rasterize_agg",
     "gbx_rst_quadbin_rasterize_agg",
     "gbx_rst_h3_rasterize_agg",
-    "gbx_rst_tilexyz",
     "gbx_st_legacyaswkb",
 )
+
+
+def test_tilexyz_keeps_light_first_its_null_and_error_tiles_need_an_image():
+    """The JVM tilexyz was 2.8x faster at 4x tiles, but the dispatch wrapper that sends a virtual tile to light gives
+    NULL for a NULL or error tile, where the function returns a transparent image: it stays light first."""
+    fn = MAN.functions["gbx_rst_tilexyz"]
+    assert not fn.accepts_virtual_tile
+    assert "L1" not in levels.order(fn)
 
 
 @pytest.mark.parametrize("name", _PROMOTED_BY_THE_JVM_PASS)

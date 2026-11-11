@@ -10,9 +10,13 @@ External/managed legs on FUSE tier:
 """
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+
+# the tests are about the FUSE tier (see `fuse_tier` in conftest.py)
+pytestmark = pytest.mark.usefixtures("fuse_tier")
 
 
 def _write_n_geotiffs(tmp_path, n):

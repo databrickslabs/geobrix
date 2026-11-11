@@ -3,6 +3,7 @@ file passes its static checks, every printed command names a script and flags th
 """
 
 import json
+import os
 import re
 import shlex
 from pathlib import Path
@@ -313,6 +314,9 @@ def test_what_sparks_parser_rejects_is_only_databricks_only_create_statements(
 ):
     """Every SELECT, DROP FUNCTION, CALL and USE of every file parses locally. What does not is CREATE FUNCTION / PROCEDURE with
     ENVIRONMENT, PARAMETER STYLE or LANGUAGE PYTHON, and DROP PROCEDURE: the workspace is the parser for those.
+
+    On a Databricks runtime the session's parser IS the workspace's: it accepts those statements too, so nothing is
+    rejected there (and the check below, that what is rejected is only those statements, has nothing to look at).
     """
     _p, files, _runs = plan
     rejected = t28.parse_locally(files)
@@ -322,7 +326,10 @@ def test_what_sparks_parser_rejects_is_only_databricks_only_create_statements(
         if f.kind == "sql"
         for c, s in oracles.parse_uc_sql(f.content)
     }
-    assert rejected
+    if not os.environ.get("DATABRICKS_RUNTIME_VERSION"):
+        assert (
+            rejected
+        ), "open-source Spark's parser must reject the Databricks-only statements"
     for key in rejected:
         name, cid = key.split(":", 1)
         sql = by_cid[(name, cid)]

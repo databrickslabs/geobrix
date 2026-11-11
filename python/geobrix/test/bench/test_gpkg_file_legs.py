@@ -12,6 +12,11 @@ External leg on FUSE tier:
 Fixtures use pyogrio.write_arrow (no geopandas required).
 """
 
+import pytest
+
+# the tests are about the FUSE tier (see `fuse_tier` in conftest.py)
+pytestmark = pytest.mark.usefixtures("fuse_tier")
+
 
 def _write_gpkg(path, rows=5, offset_y=0.0):
     """Write a .gpkg with `rows` Point features via pyogrio.write_arrow (no geopandas)."""

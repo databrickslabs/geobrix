@@ -30,3 +30,18 @@ def spark():
 def spark_session_local(spark):
     """The local classic session, under the name the levels leg's tests use."""
     return spark
+
+
+@pytest.fixture
+def fuse_tier(monkeypatch):
+    """The FUSE floor of the FILE probe: a session without `read_files`/`list_files`, as a local[2] session is.
+
+    The FILE legs' tests build their inputs on the local disk and expect the FUSE listing (and `na_by_design` for the
+    FILE-only modes). A Databricks cluster probes as a FILE tier, which lists a local path through `read_files` and
+    fails: the tests pin the tier they are about.
+    """
+    for module in (
+        "databricks.labs.gbx.ds.file_gbx",
+        "databricks.labs.gbx.vectorx.file_read",
+    ):
+        monkeypatch.setattr(f"{module}.file_access_tier", lambda spark=None: "fuse")

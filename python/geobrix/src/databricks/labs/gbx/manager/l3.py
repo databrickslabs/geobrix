@@ -123,6 +123,9 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             udf = for_session(spark)
         reg.udf.register(target, udf)
     elif "factory" in spec:
+        for_session = getattr(built, "for_session", None)
+        if for_session is not None:  # a UDF whose transport the session chooses
+            built = for_session(spark)
         reg.udf.register(target, built)
     elif "callable" in spec:
         reg.udf.register(

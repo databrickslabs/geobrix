@@ -40,12 +40,20 @@ from pyspark.sql.types import (
 from databricks.labs.gbx import _gdal_policy
 from databricks.labs.gbx._gdal_policy import (
     DriverPolicyError,
-    carrying_udf,
+    carrying_call,
     data_path,
     driver_switch,
     open_bytes,
     open_data,
 )
+from databricks.labs.gbx._transport import (  # noqa: F401  (re-exported)
+    _ARRAY_FIX,
+    _SCALAR_FIX,
+    SessionTileUdf,
+    _exact_member,
+    _LossyCellId,
+)
+from databricks.labs.gbx._transport import tile_udf as _tile_udf
 from databricks.labs.gbx.engine._tile import cellid as _tile_cellid  # noqa: F401
 from databricks.labs.gbx.engine._tile import (  # noqa: F401
     error_tile_of as _error_tile_of,
@@ -199,86 +207,6 @@ def _tile_op(*required, check=None, tiles=()):
     return wrap
 
 
-_SCALAR_FIX = (
-    "Fix: filter the NULL tiles out first (WHERE tile IS NOT NULL) and give every tile a cellid, or run on Spark 4.1 "
-    "or later (DBR 19), which hands the integers over exactly."
-)
-
-
-class SessionTileUdf:
-    """A tile-returning row UDF whose TRANSPORT the session that uses it chooses: Arrow batches or pickles.
-
-    The body is the same row function in both forms; only how its rows cross the JVM <-> Python boundary differs.
-    A plain (pickled) UDF groups up to ``spark.sql.execution.python.udf.maxRecordsPerBatch`` (100) rows into ONE
-    pickle that the executor JVM builds on its heap, and reads the outputs back the same way. With tiles of a few MB
-    that pickle is the task's whole partition: 64 tiles of 2.3 MB (a 146 MB file) per task made the JVM spend a third
-    to a half of each task collecting garbage, the Python worker grew to 0.9 GB and a node ran out of memory, so 4x the
-    rows took 8x the time (dedicated DBR 19, 4 x m5d.2xlarge). Arrow keeps the rows in off-heap buffers, and a batch
-    is bounded by ``spark.sql.execution.arrow.maxBytesPerBatch`` (32 MiB on DBR 19): the same op took 3.6x the time
-    for 4x the rows and the worker stayed under 0.5 GB.
-
-    Spark 4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, which can round an
-    H3-sized cell id to another cell. So the Arrow form runs where the ``arrow_tile_transport`` capability holds
-    (server Spark 4.1+, ``GBX_CAP_ARROW_TILE_TRANSPORT`` overrides it) and the pickled form elsewhere; the Arrow form
-    still restores whole numbers below 2**53 and refuses a cell id past that (an error tile naming the fix).
-
-    To the machinery that reads a UDF object (``is_light_udf``, ``carrying``, the oracles' plain-function leg) it looks
-    like the pickled form; a registrar and a Column-API call ask for the session's form with :meth:`for_session`.
-    """
-
-    def __init__(self, func):
-        self._func = func
-        self._forms = {"pickle": f.udf(func, V2_TILE_SCHEMA)}
-        self._lock = threading.Lock()
-        functools.update_wrapper(self, func)
-
-    def form(self, label: str):
-        """The UDF of transport *label* (``pickle`` or ``arrow``), built once."""
-        with self._lock:
-            if label not in self._forms:
-                func = self._func
-
-                @functools.wraps(func)
-                def exact(tile, *rest):
-                    try:
-                        tile = _exact_member(tile, _SCALAR_FIX)
-                    except _LossyCellId as exc:
-                        return _serde.build_error_tile(str(exc), 0)
-                    return func(tile, *rest)
-
-                if label != "arrow":
-                    raise ValueError(
-                        f"no tile UDF transport {label!r}; known: arrow, pickle"
-                    )
-                self._forms[label] = f.udf(exact, V2_TILE_SCHEMA, useArrow=True)
-            return self._forms[label]
-
-    def for_session(self, spark):
-        """The UDF form *spark* runs: the capability registry's choice of transport for that session."""
-        from databricks.labs.gbx.manager import capabilities
-
-        return self.form(capabilities.path(spark, "tile_udf").split(":", 1)[1])
-
-    def __call__(self, *cols):
-        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
-
-        spark = _resolve_session_for_cap()
-        udf = self._forms["pickle"] if spark is None else self.for_session(spark)
-        return udf(*cols)
-
-    def __getattr__(self, name):
-        # the pickled form's attributes (func, returnType, evalType, ...): only for a name not found on the instance
-        forms = self.__dict__.get("_forms")
-        if forms is None or name.startswith("__"):
-            raise AttributeError(name)
-        return getattr(forms["pickle"], name)
-
-
-def _tile_udf(func):
-    """Decorator: *func* (a row function returning a v2 tile) as a :class:`SessionTileUdf`."""
-    return SessionTileUdf(func)
-
-
 def _dataset_to_gtiff_bytes(ds) -> bytes:
     """Encode an open rasterio dataset to standalone GTiff bytes (full extent).
 
@@ -362,7 +290,7 @@ def _header_accessor_udf(core_fn, return_type):
 
     _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
             return None
@@ -385,7 +313,7 @@ def _pixel_accessor_udf(core_fn, return_type, on_empty=None):
 
     _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile):
         if _tile_is_empty(tile):
             return on_empty if _error_tile_of(tile) is not None else None
@@ -415,7 +343,7 @@ def _header_accessor_udf_file(core_fn, return_type):
 
     _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
             return None
@@ -441,7 +369,7 @@ def _pixel_accessor_udf_file(core_fn, return_type, on_empty=None):
 
     _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile, file_ref):
         if _tile_is_empty(tile):
             return on_empty if _error_tile_of(tile) is not None else None
@@ -478,7 +406,7 @@ _u_isempty = _pixel_accessor_udf(accessors.isempty, BooleanType(), on_empty=True
 # metadata: HEADER-ONLY accessor. Struct-accepting (so a virtual tile's ``path``
 # is reachable) and MapType-returning (plain @f.udf; pandas_udf rejects MapType
 # on some Arrow builds).
-@f.udf(MapType(StringType(), StringType()))
+@_tile_udf(returns=MapType(StringType(), StringType()))
 def _metadata_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -534,7 +462,7 @@ _uf_getnodata = _header_accessor_udf_file(accessors.getnodata, ArrayType(DoubleT
 
 # metadata: HEADER-ONLY, MapType return (plain @f.udf; pandas_udf rejects
 # MapType on some Arrow builds).  2-arg FILE-aware variant for Python bindings.
-@f.udf(MapType(StringType(), StringType()))
+@_tile_udf(returns=MapType(StringType(), StringType()))
 def _uf_metadata_udf(tile, file_ref):
     if _tile_is_empty(tile):
         return None
@@ -549,7 +477,7 @@ def _uf_metadata_udf(tile, file_ref):
 
 
 # histogram: PIXEL accessor, MapType return.  2-arg FILE-aware variant.
-@f.udf(MapType(StringType(), ArrayType(LongType())))
+@_tile_udf(returns=MapType(StringType(), ArrayType(LongType())))
 def _uf_histogram_udf(tile, file_ref, n_buckets, min_val, max_val, include_nodata):
     accessors.check_n_buckets(n_buckets)
     if _tile_is_empty(tile):
@@ -575,7 +503,7 @@ def _uf_histogram_udf(tile, file_ref, n_buckets, min_val, max_val, include_nodat
 def _header_accessor_udf2(core_fn, return_type):
     """Struct-accepting header-only 2-arg accessor UDF (open_header, no pixel read)."""
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile, a, b):
         if _tile_is_empty(tile):
             return None
@@ -594,7 +522,7 @@ def _header_accessor_udf2(core_fn, return_type):
 def _header_accessor_udf3_file(core_fn, return_type):
     """Struct + FileRef + 2 scalar args header-only accessor UDF (4 args total)."""
 
-    @f.udf(return_type)
+    @_tile_udf(returns=return_type)
     def _udf(tile, file_ref, a, b):
         if _tile_is_empty(tile):
             return None
@@ -644,7 +572,7 @@ _avg_pixel_udf = _u_avg
 
 # memsize: works off the raw raster bytes (no rasterio open needed) — mirror
 # heavyweight which returns the in-memory buffer length.
-@f.udf(LongType())
+@_tile_udf(returns=LongType(), tiles=())
 def _memsize_udf(raster):
     if raster is None:
         return None
@@ -654,7 +582,7 @@ def _memsize_udf(raster):
 # Struct-accepting memsize for SQL registration: returns byte length for a
 # materialized tile; estimated decoded window footprint for a virtual tile
 # (count * width * height * itemsize via open_header — no pixel read).
-@f.udf(LongType())
+@_tile_udf(returns=LongType())
 def _memsize_struct_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -677,7 +605,7 @@ def _memsize_struct_udf(tile):
 # georeference / bandmetadata / subdatasets: HEADER-ONLY accessors (open_header,
 # no pixel read). MapType returns use plain @f.udf (pandas_udf rejects MapType
 # on some Arrow builds).
-@f.udf(MapType(StringType(), DoubleType()))
+@_tile_udf(returns=MapType(StringType(), DoubleType()))
 def _georeference_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -688,7 +616,7 @@ def _georeference_udf(tile):
         return accessors.georeference(ds)
 
 
-@f.udf(MapType(StringType(), StringType()))
+@_tile_udf(returns=MapType(StringType(), StringType()))
 def _bandmetadata_udf(tile, band):
     if _tile_is_empty(tile) or band is None:
         return None
@@ -699,7 +627,7 @@ def _bandmetadata_udf(tile, band):
         return accessors.bandmetadata(ds, int(band))
 
 
-@f.udf(MapType(StringType(), StringType()))
+@_tile_udf(returns=MapType(StringType(), StringType()))
 def _subdatasets_udf(tile):
     if _tile_is_empty(tile):
         return None
@@ -711,7 +639,7 @@ def _subdatasets_udf(tile):
 
 
 # histogram / getsubdataset: PIXEL accessors (_open — need the window).
-@f.udf(MapType(StringType(), ArrayType(LongType())))
+@_tile_udf(returns=MapType(StringType(), ArrayType(LongType())))
 def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
     accessors.check_n_buckets(n_buckets)
     if _tile_is_empty(tile):
@@ -793,7 +721,7 @@ _BBOX_SCHEMA = StructType(
 )
 
 
-@f.udf(_R2W_COORD_SCHEMA)
+@_tile_udf(returns=_R2W_COORD_SCHEMA)
 def _rastertoworldcoord_udf(tile, x, y):
     if _tile_is_empty(tile):
         return None
@@ -804,7 +732,7 @@ def _rastertoworldcoord_udf(tile, x, y):
         return coords.raster_to_world_coord(ds, int(x), int(y))
 
 
-@f.udf(_W2R_COORD_SCHEMA)
+@_tile_udf(returns=_W2R_COORD_SCHEMA)
 def _worldtorastercoord_udf(tile, x, y):
     if _tile_is_empty(tile):
         return None
@@ -816,7 +744,7 @@ def _worldtorastercoord_udf(tile, x, y):
 
 
 # --- Constructor ------------------------------------------------------------
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _fromcontent_udf(raster, drv):
     if raster is None or drv is None:
         return None
@@ -842,7 +770,7 @@ def _fromfile_extra(path, driver, materialize):
     )
 
     _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
-    udf = carrying_udf(_fromfile_udf, driver_switch())
+    udf = carrying_call(_fromfile_udf, driver_switch())
     return udf(path, driver, materialize, f.lit(_cap))
 
 
@@ -1211,7 +1139,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     ).to_row()
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _fromfile_udf(path, driver, materialize, cap_bytes):
     """Python-binding UDF: 4-arg (path, driver, materialize, cap_bytes).
 
@@ -1222,7 +1150,7 @@ def _fromfile_udf(path, driver, materialize, cap_bytes):
     return _fromfile_impl(path, driver, bool(materialize), cap_bytes=cap_bytes)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _fromfile_sql_udf(path, driver):
     """SQL UDF registered by the LIGHT (pyrx) tier: 2-arg (path, driver) → a
     VIRTUAL tile (materialize=False, the light-tier default). Keeps the historical
@@ -1239,7 +1167,7 @@ def _build_fromfile_sql_materialized_udf(cap_bytes=None):
     (``factory_args: read_cap``): a worker has no session to measure it, and would use the classic 256 MiB.
     """
 
-    @f.udf(V2_TILE_SCHEMA)
+    @_tile_udf(tiles=())
     def fromfile_sql_materialized_udf(path, driver="GTiff"):
         return _fromfile_impl(path, driver, True, cap_bytes=cap_bytes)
 
@@ -1306,7 +1234,7 @@ def _merge_bytes(tiles):
         spool.close()
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 def _merge_udf(tiles):
     if not tiles:
         return None
@@ -1329,7 +1257,7 @@ def _merge_udf(tiles):
     return tile
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     # Force-output variant (Python API only): same mosaic via shape_output.
     if not tiles:
@@ -1384,7 +1312,7 @@ def _file_ref_member(tile, fref):
         return _dataset_to_gtiff_bytes(ds)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 def _uf_merge(tiles, file_refs):
     """FILE-aware rst_merge: reads each input via its per-element FileRef.
 
@@ -1436,43 +1364,6 @@ def _array_member_bytes(tile):
     """
     vt = ot._to_virtual_tile(tile)
     return ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
-
-
-class _LossyCellId(ValueError):
-    """A member's cell id arrived as a float64 past 2**53: it may no longer be the id that was sent."""
-
-
-_ARRAY_FIX = (
-    "Fix: take the NULL tiles out of the array first, as in "
-    "gbx_rst_combineavg(filter(tiles, t -> t IS NOT NULL)), and give every tile a cellid."
-)
-
-
-def _exact_member(tile, fix: str = _ARRAY_FIX):
-    """One member of an Arrow-delivered array with its integers as integers.
-
-    pyspark 4.0 hands a batch to an Arrow-optimized UDF through pandas: an INT or BIGINT field that holds a NULL
-    arrives as float64 (a NULL ``cellid`` or ``window`` taints every row of the batch, a NULL member taints its own
-    array). A whole number below 2**53 is exact and is restored; a cell id at or past 2**53 (H3, quadbin and custom
-    ids are) may have been rounded to another cell and is refused. pyspark 4.1 converts the integers exactly and
-    passes through here unchanged.
-    """
-    if tile is None or isinstance(tile, (bytes, bytearray)):
-        return tile
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    cellid = d.get("cellid")
-    if isinstance(cellid, float):
-        if abs(cellid) >= 2**53:
-            raise _LossyCellId(
-                f"a tile's cell id came through a float and may have been rounded to another cell ({cellid!r}). "
-                + fix
-            )
-        d["cellid"] = int(cellid)
-    window = d.get("window")
-    if window is not None:
-        w = window.asDict() if hasattr(window, "asDict") else dict(window)
-        d["window"] = {k: (int(v) if isinstance(v, float) else v) for k, v in w.items()}
-    return d
 
 
 def _group_udf(fn):
@@ -1563,7 +1454,7 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     return row
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 @_refusal_as_error_tile
 def _uf_combineavg(tiles, file_refs):
     """FILE-aware rst_combineavg: reads each input via its per-element FileRef. A plain (row) UDF on purpose: its tiles
@@ -1740,14 +1631,14 @@ def _align_to_bytes(tile, reference):
         return warp.align_datasets(src, ref)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(0, 1))
 @_tile_op(tiles=("reference",))
 def _align_to_udf(tile, reference):
     new_bytes = _align_to_bytes(tile, reference)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(0, 1))
 @_tile_op(tiles=("reference",))
 def _align_to_v2_udf(tile, reference, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _align_to_bytes(tile, reference)
@@ -1762,7 +1653,7 @@ def _align_to_v2_udf(tile, reference, virtualize_dir, virtualize_prefix, materia
 # ---------------------------------------------------------------------------
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(0, 1))
 def _chm_udf(dsm_tile, dem_tile):
     if dsm_tile is None or dem_tile is None:
         return None
@@ -1825,7 +1716,7 @@ def _frombands_bytes(bands):
     return agg_core.frombands_tiles(indexed), cellid, dropped
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 @_refusal_as_error_tile
 def _frombands_udf(bands):
     if not bands:
@@ -1842,7 +1733,7 @@ def _frombands_udf(bands):
     return tile
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 @_refusal_as_error_tile
 def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     if not bands:
@@ -1861,7 +1752,7 @@ def _frombands_v2_udf(bands, virtualize_dir, virtualize_prefix, materialize):
     return row
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=(), tile_arrays=(0,))
 @_refusal_as_error_tile
 def _uf_frombands(bands, file_refs):
     """FILE-aware rst_frombands: reads each input via its per-element FileRef.
@@ -1957,7 +1848,7 @@ def _clip_bytes(tile, geom_wkb, all_touched, clip_crs=None):
         return edit.clip_to_geom(ds, geom, bool(all_touched), geom_crs=clip_crs)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("geom_wkb", "all_touched")
 def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
     new_bytes = _clip_bytes(tile, geom_wkb, all_touched, clip_crs)
@@ -1968,7 +1859,7 @@ def _clip_udf(tile, geom_wkb, all_touched, clip_crs=None):
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("geom_wkb", "all_touched")
 def _clip_v2_udf(
     tile,
@@ -1987,7 +1878,7 @@ def _clip_v2_udf(
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("geom_wkb", "all_touched")
 def _uf_clip(tile, file_ref, geom_wkb, all_touched, clip_crs):
     """FILE-aware clip: reads the input tile through ``file_ref``, then clips.
@@ -2012,7 +1903,7 @@ def _build_clip_v2_udf(grid_dirs):
     """Force-output clip UDF factory: captures grid_dirs at build time → pickled."""
     from databricks.labs.gbx.pyrx import _env
 
-    @f.udf(V2_TILE_SCHEMA)
+    @_tile_udf
     @_tile_op("geom_wkb", "all_touched")
     def _udf(
         tile,
@@ -2040,7 +1931,7 @@ def _build_clip_sql_udf(grid_dirs):
     """SQL-registered (no file_ref) clip UDF factory: captures grid_dirs."""
     from databricks.labs.gbx.pyrx import _env
 
-    @f.udf(V2_TILE_SCHEMA)
+    @_tile_udf
     @_tile_op("geom_wkb", "all_touched")
     def _udf(tile, geom_wkb, all_touched, clip_crs=None):
         _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
@@ -2064,14 +1955,14 @@ def _check_update_type(*, new_type, **_):
     edit.gdal_type(new_type)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("new_type", check=_check_update_type)
 def _update_type_udf(tile, new_type):
     new_bytes = _update_type_bytes(tile, new_type)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("new_type", check=_check_update_type)
 def _update_type_v2_udf(tile, new_type, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _update_type_bytes(tile, new_type)
@@ -2080,7 +1971,7 @@ def _update_type_v2_udf(tile, new_type, virtualize_dir, virtualize_prefix, mater
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("new_type", check=_check_update_type)
 def _uf_update_type(tile, file_ref, new_type):
     new_bytes = _update_type_bytes(tile, new_type, file_ref=file_ref)
@@ -2115,13 +2006,13 @@ def _init_nodata_bytes(tile):
         return edit.init_nodata(ds)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op()
 def _init_nodata_udf(tile):
     return _init_nodata_row(tile)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op()
 def _init_nodata_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _init_nodata_bytes(tile)
@@ -2130,7 +2021,7 @@ def _init_nodata_v2_udf(tile, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op()
 def _uf_initnodata(tile, file_ref):
     """FILE-aware rst_initnodata (a virtual tile: a pending instruction; ``file_ref`` unused)."""
@@ -2139,7 +2030,7 @@ def _uf_initnodata(tile, file_ref):
 
 # --- Tier 1d6: operations UDFs (tryopen, setsrid, band, asformat, ----------
 # buildoverviews, sample) ----------------------------------------------------
-@f.udf(BooleanType())
+@_tile_udf(returns=BooleanType())
 def _tryopen_udf(tile):
     if _tile_is_empty(tile):
         return False
@@ -2356,7 +2247,7 @@ def _empty_tile_rows(tile, who):
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 def _transformcrs_udf(tile, crs_value):
     if crs_value is None:
         return None
@@ -2365,7 +2256,7 @@ def _transformcrs_udf(tile, crs_value):
     return _transformcrs_tile(tile, crs_value)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 def _uf_transformcrs(tile, file_ref, crs_value):
     if crs_value is None:
         return None
@@ -2377,7 +2268,7 @@ def _uf_transformcrs(tile, file_ref, crs_value):
 def _build_uf_transformcrs(grid_dirs):
     """FILE-aware transformcrs UDF factory: captures grid_dirs at build time → pickled."""
 
-    @f.udf(V2_TILE_SCHEMA)
+    @_tile_udf
     def _udf(tile, file_ref, crs_value):
         if crs_value is None:
             return None
@@ -2393,7 +2284,7 @@ def _build_uf_transformcrs(grid_dirs):
 def _build_transformcrs_sql_udf(grid_dirs):
     """SQL-registered (no file_ref) transformcrs UDF factory: captures grid_dirs."""
 
-    @f.udf(V2_TILE_SCHEMA)
+    @_tile_udf
     def _udf(tile, crs_value):
         if crs_value is None:
             return None
@@ -2465,7 +2356,7 @@ def _check_asformat(*, new_format, **_):
     ops_core.driver_name(new_format)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("new_format", check=_check_asformat)
 def _asformat_udf(tile, new_format):
     new_bytes = _asformat_bytes(tile, new_format)
@@ -2475,7 +2366,7 @@ def _asformat_udf(tile, new_format):
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("new_format", check=_check_asformat)
 def _asformat_v2_udf(tile, new_format, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _asformat_bytes(tile, new_format)
@@ -2497,14 +2388,14 @@ def _check_overviews(*, levels, resampling=None, **_):
     ops_core.check_overview_args(levels, resampling)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("levels", check=_check_overviews)
 def _buildoverviews_udf(tile, levels, resampling="average"):
     new_bytes = _buildoverviews_bytes(tile, levels, resampling)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("levels", check=_check_overviews)
 def _buildoverviews_v2_udf(
     tile, levels, resampling, virtualize_dir, virtualize_prefix, materialize
@@ -2515,7 +2406,7 @@ def _buildoverviews_v2_udf(
     )
 
 
-@f.udf(ArrayType(DoubleType()))
+@_tile_udf(returns=ArrayType(DoubleType()))
 def _sample_udf(tile, geom_wkb, crs=None):
     # PIXEL accessor: needs pixels, so use the virtual-aware _tile_is_empty guard
     # (a virtual tile has raster None but a path -> NOT empty). A bytes-only guard
@@ -2550,14 +2441,14 @@ def _proximity_bytes(tile, target_values, distunits, max_distance):
         return analysis_core.proximity(ds, tv, units, md)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op(check=analysis_core.check_proximity)
 def _proximity_udf(tile, target_values=None, distunits="GEO", max_distance=None):
     new_bytes = _proximity_bytes(tile, target_values, distunits, max_distance)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op(check=analysis_core.check_proximity)
 def _proximity_v2_udf(
     tile,
@@ -2628,7 +2519,7 @@ _ISOBAND_SCHEMA = ArrayType(
 )
 
 
-@f.udf(_ISOBAND_SCHEMA)
+@_tile_udf(returns=_ISOBAND_SCHEMA)
 def _isoband_udf(tile, breaks):
     if breaks is not None:  # a PARAMETER error, as in the JVM: checked before the tile
         features.check_breaks(breaks)
@@ -2661,7 +2552,7 @@ def _check_cog_convert(
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op(check=_check_cog_convert)
 def _cog_convert_udf(
     tile, compression="AUTO", blocksize=512, overview_resampling="AVERAGE"
@@ -2671,7 +2562,7 @@ def _cog_convert_udf(
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op(check=_check_cog_convert)
 def _cog_convert_v2_udf(
     tile,
@@ -2772,14 +2663,14 @@ def _check_filter(*, kernel_size, operation, **_):
     focal.check_filter(kernel_size, operation)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("kernel_size", "operation", check=_check_filter)
 def _filter_udf(tile, kernel_size, operation):
     new_bytes = _filter_bytes(tile, kernel_size, operation)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("kernel_size", "operation", check=_check_filter)
 def _filter_v2_udf(
     tile, kernel_size, operation, virtualize_dir, virtualize_prefix, materialize
@@ -2802,14 +2693,14 @@ def _check_convolve(*, kernel, **_):
     focal.check_kernel(kernel)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("kernel", check=_check_convolve)
 def _convolve_udf(tile, kernel):
     new_bytes = _convolve_bytes(tile, kernel)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("kernel", check=_check_convolve)
 def _convolve_v2_udf(tile, kernel, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _convolve_bytes(tile, kernel)
@@ -2833,14 +2724,14 @@ def _check_land_cover(*, method, n_clusters, smooth, **_):
     land_cover_core.check_args(method, n_clusters, smooth)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("method", "n_clusters", "smooth", check=_check_land_cover)
 def _land_cover_udf(tile, method="hybrid", n_clusters=6, smooth=3):
     new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("method", "n_clusters", "smooth", check=_check_land_cover)
 def _land_cover_v2_udf(
     tile, method, n_clusters, smooth, virtualize_dir, virtualize_prefix, materialize
@@ -2863,14 +2754,14 @@ def _check_percentiles(*, lo_pct, hi_pct, **_):
     stretch.check_percentiles(lo_pct, hi_pct)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("lo_pct", "hi_pct", check=_check_percentiles)
 def _percentile_stretch_udf(tile, lo_pct, hi_pct):
     new_bytes = _percentile_stretch_bytes(tile, lo_pct, hi_pct)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("lo_pct", "hi_pct", check=_check_percentiles)
 def _percentile_stretch_v2_udf(
     tile, lo_pct, hi_pct, virtualize_dir, virtualize_prefix, materialize
@@ -2882,7 +2773,7 @@ def _percentile_stretch_v2_udf(
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _rasterize_udf(
     geom_wkb,
     value,
@@ -2932,7 +2823,7 @@ def _rasterize_udf(
 
 
 # --- Tier 1e3: TIN / IDW constructors (point-array -> tile) -----------------
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _gridfrompoints_udf(
     points,
     values,
@@ -2973,7 +2864,7 @@ def _gridfrompoints_udf(
 
 
 # --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _binpoints_udf(
     x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic=None
 ):
@@ -3023,7 +2914,7 @@ def _binpoints_partial_udf(x, y, xmin, ymin, xmax, ymax, w, h):
     return binning.pixel_key(x, y, xmin, ymin, xmax, ymax, w, h)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _binpoints_finalize_udf(cells, xmin, ymin, xmax, ymax, w, h, srid):
     """Scalar: write an array of per-pixel ``(col, row, value)`` structs (the reduced output of a GROUP BY over the
     ``rst_binpoints_partial`` keys) as the single-band GTiff tile ``rst_binpoints_agg`` makes for the same points.
@@ -3049,7 +2940,7 @@ def _binpoints_finalize_udf(cells, xmin, ymin, xmax, ymax, w, h, srid):
     return _serde.build_tile(b, "GTiff", 0)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _dtmfromgeoms_udf(
     points,
     breaklines,
@@ -3552,14 +3443,14 @@ def _check_derivedband(*, pyfunc, func_name, **_):
     derivedband_core.check_function(pyfunc, func_name)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("pyfunc", "func_name", check=_check_derivedband)
 def _derivedband_udf(tile, pyfunc, func_name):
     new_bytes = _derivedband_bytes(tile, pyfunc, func_name)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("pyfunc", "func_name", check=_check_derivedband)
 def _derivedband_v2_udf(
     tile, pyfunc, func_name, virtualize_dir, virtualize_prefix, materialize
@@ -3571,7 +3462,7 @@ def _derivedband_v2_udf(
 
 
 # --- Tier 1h: web-mercator XYZ tiling UDFs ---------------------------------
-@f.udf(BinaryType())
+@_tile_udf(returns=BinaryType())
 def _tilexyz_udf(
     tile, z, x, y, format="PNG", size=256, resampling="bilinear", rescale="auto"
 ):
@@ -3774,14 +3665,14 @@ def _rastertogrid_partial_cells(
     ]
 
 
-@f.udf(_GRID_PARTIAL_SCHEMA)
+@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
 def _h3_rastertogrid_partial_udf(
     tile, resolution, coverage="complete", assignment="centroid"
 ):  # the row's defaults: no SQL wrapper
     return _rastertogrid_partial_cells(tile, resolution, "h3", coverage, assignment)
 
 
-@f.udf(_GRID_PARTIAL_SCHEMA)
+@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
 def _quadbin_rastertogrid_partial_udf(
     tile, resolution, coverage="complete", assignment="centroid"
 ):
@@ -3790,14 +3681,14 @@ def _quadbin_rastertogrid_partial_udf(
     )
 
 
-@f.udf(_GRID_PARTIAL_STRING_SCHEMA)
+@_tile_udf(returns=_GRID_PARTIAL_STRING_SCHEMA)
 def _bng_rastertogrid_partial_udf(
     tile, resolution, coverage="complete", assignment="centroid"
 ):
     return _rastertogrid_partial_cells(tile, resolution, "bng", coverage, assignment)
 
 
-@f.udf(_GRID_PARTIAL_SCHEMA)
+@_tile_udf(returns=_GRID_PARTIAL_SCHEMA)
 def _custom_rastertogrid_partial_udf(
     tile, grid_struct, resolution, coverage="complete", assignment="centroid"
 ):
@@ -4046,7 +3937,7 @@ def _tile_of_error_payload(payload):
 
 
 # --- scalar as_tile UDFs: wrap an aggregated BINARY result into a tile struct
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _as_tile_udf(raster_bytes):
     if raster_bytes is None:
         return None
@@ -4075,7 +3966,7 @@ def _as_tile_cellid_envelope_udf_fn(raster_bytes):
     return _serde.build_tile(rb[8:], "GTiff", cellid)
 
 
-_as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_udf_fn)
+_as_tile_cellid_envelope_udf = _tile_udf(tiles=())(_as_tile_cellid_envelope_udf_fn)
 
 
 # --- grouped-agg pandas_udf(BinaryType()) reducers --------------------------
@@ -4388,7 +4279,7 @@ _merge_agg_v2_udf = _grouped_agg_udf(
 )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf(tiles=())
 def _as_virtual_tile_from_path_udf(encoded):
     """Decode a ``_merge_agg_v2_udf`` BinaryType result into a V2 tile struct.
 
@@ -5222,7 +5113,7 @@ def _twin_burn(
     )  # fmt: skip
 
 
-@f.udf(BinaryType())
+@_tile_udf(returns=BinaryType(), tiles=(), tile_arrays=(0,))
 def _rst_bng_rasterize_udf(
     cells,
     out_srid,
@@ -5282,7 +5173,7 @@ def _twin_lonlat(
     )  # fmt: skip
 
 
-@f.udf(BinaryType())
+@_tile_udf(returns=BinaryType(), tiles=(), tile_arrays=(0,))
 def _rst_h3_rasterize_udf(
     cells,
     out_srid,
@@ -5314,7 +5205,7 @@ def _rst_h3_rasterize_udf(
     )
 
 
-@f.udf(BinaryType())
+@_tile_udf(returns=BinaryType(), tiles=(), tile_arrays=(0,))
 def _rst_quadbin_rasterize_udf(
     cells,
     out_srid,
@@ -5346,7 +5237,7 @@ def _rst_quadbin_rasterize_udf(
     )
 
 
-@f.udf(BinaryType())
+@_tile_udf(returns=BinaryType(), tiles=(), tile_arrays=(0,))
 def _rst_custom_rasterize_udf(
     cells,
     grid,

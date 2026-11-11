@@ -7,6 +7,7 @@ that a cube cannot (miss cells, repeat them, carry nulls) and the shape of the w
 shuffle, no staging table, a partition per unit touched, a unit that fits in a task.
 """
 
+import re
 from dataclasses import replace
 
 import numpy as np
@@ -412,6 +413,10 @@ def test_coords_belong_to_a_create_or_an_append_of_cells(
 # --- the shape of the work ---------------------------------------------------------------
 
 
+# the names the zarr suites' _table helpers give their tables: gbx_zarr_<suite>_<label>_<8 hex>
+_A_TEST_TABLE = re.compile(r"gbx_zarr_[a-z]+_\w+_[0-9a-f]{8}\Z")
+
+
 def _tables(spark):
     return {r["tableName"] for r in spark.sql("SHOW TABLES").collect()}
 
@@ -665,7 +670,11 @@ def test_a_create_is_one_shuffle_and_stages_nothing(
         coords=_coords(ds),
         shards=SHARDS,
     )
-    made = _tables(spark_delta) - before
+    made = {  # tests on other chunks may share the schema (the Databricks test pool)
+        t
+        for t in _tables(spark_delta) - before
+        if t == table or not _A_TEST_TABLE.match(t)
+    }
     assert made == {table}
 
 

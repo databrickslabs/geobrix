@@ -1627,6 +1627,14 @@ def test_a_commit_reads_only_the_files_of_the_shards_it_touches(
     """Fail-on-revert: with the manifest in many files (a store written by many commits), a
     one-shard commit reads far fewer than all of them. One task reads one file, so the
     tasks of the commit's jobs count the files read."""
+    kept = int(
+        spark_delta.sparkContext.getConf().get("spark.ui.retainedStages", "1000")
+    )
+    if kept < 100000:  # what delta_session sets; a provided session keeps its own
+        pytest.skip(
+            f"the status tracker keeps {kept} stages: on a shared driver (the Databricks "
+            "test pool) other work evicts the commit's stages before they are counted"
+        )
     sparse = {"sharded": {"t2m": True}}
     for batch in range(12):
         rows = [

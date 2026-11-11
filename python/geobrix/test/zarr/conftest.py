@@ -19,6 +19,7 @@ the ``delta`` tests keep one end-to-end test per behaviour, plus the commit, con
 rebase tests, which are real Delta semantics.
 """
 
+import contextlib
 from pathlib import Path
 
 import pytest
@@ -118,9 +119,53 @@ def spark_delta(tmp_path_factory):
     clean up after themselves (tables dropped, the session time zone and current schema
     restored), so they share it safely.
     """
+    from test._provided_spark import wanted
+
     session = delta_session(tmp_path_factory.mktemp("delta_wh"))
-    yield session
+    with provided_session_confs(session, PROVIDED_CONFS if wanted() else {}):
+        yield session
     session.stop()
+
+
+# On Databricks the tests get the cluster's session, which ignores the builder's settings
+# (test/_provided_spark.py). These runtime confs give it what the local session has where a
+# test counts versions or files:
+# - 2 shuffle partitions, as locally: a commit writes a file or two, not up to 200;
+# - no auto compaction: Databricks compacts a table after a MERGE (every manifest commit)
+#   when enough small files gather, and the compaction is a Delta version of its own
+#   (OPTIMIZE, operationParameters.auto = true). A test that expects the version after a
+#   commit to be the commit's, or OPTIMIZE to find files to compact, then sees one more.
+#   GeoBrix copes with those versions (they are not GeoBrix commits); the tests that pin
+#   version numbers assume none comes between.
+PROVIDED_CONFS = {
+    "spark.sql.shuffle.partitions": "2",
+    "spark.databricks.delta.autoCompact.enabled": "false",
+    "spark.databricks.delta.autoCompact.minNumFiles": "1000000",
+}
+
+
+@contextlib.contextmanager
+def provided_session_confs(session, confs):
+    """Set ``confs`` on ``session`` for the block, then put back what was there. A conf the
+    session refuses (Serverless keeps some) is left as it is."""
+    before = {}
+    for key, value in confs.items():
+        try:
+            before[key] = session.conf.get(key, None)
+            session.conf.set(key, value)
+        except Exception:  # noqa: BLE001 - a refused conf stays the platform's
+            before.pop(key, None)
+    try:
+        yield session
+    finally:
+        for key, value in before.items():
+            try:
+                if value is None:
+                    session.conf.unset(key)
+                else:
+                    session.conf.set(key, value)
+            except Exception:  # noqa: BLE001 - best effort, as the set was
+                pass
 
 
 @pytest.fixture(scope="session")

@@ -1529,3 +1529,8 @@ from databricks.labs.gbx.uc import rastertogrid as _rastertogrid  # noqa: E402
 HANDLERS.update(
     {k: v for k, v in _rastertogrid.HANDLERS.items() if k.startswith("gbx__")}
 )
+
+# the private routine of the polygonize table function is an engine handler (engine.uc)
+from databricks.labs.gbx.engine import uc as _engine_uc  # noqa: E402
+
+HANDLERS["gbx__rst_polygonize_features"] = _engine_uc.rst_polygonize_features

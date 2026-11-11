@@ -188,8 +188,10 @@ class DeltaQueue:
 
 def node_checkout(base: str, key: str, want: dict, unpack: Callable[[str], None], reset: Callable[[str], bool]) -> tuple:
     """The checkout a chunk runs in: one per runner (``key``), unpacked by its first chunk and reused by the next ones, so a runner pays
-    the copy, the unpack and the commit of the tarball once, not once per chunk (on Serverless that was most of a chunk's 1.5-3 min
-    before its first test). ``want`` names what the tree holds (the launch's tarball and test resources); a tree of another launch, one
+    the copy, the unpack and the commit of the tarball once, not once per chunk. That holds on a pool node, whose chunks share its
+    disk. On Serverless each chunk's notebook run has a user and a temp folder of its own (2026-11-11: uid 1010 then 1011, the second
+    saw no tree), so each chunk unpacks its own (about 12 s there; the rest of its minutes before the first test is not the unpack).
+    ``want`` names what the tree holds (the launch's tarball and test resources); a tree of another launch, one
     this process cannot write, or one ``reset(repo)`` cannot bring back to the commit is unpacked afresh (``unpack(repo)``). The chunks
     of one runner run one after another, so no two share the tree at once. Returns ("unpacked" | "reused", the repo path, why an
     existing tree was not reused: "" when there was none or it was). ``reset`` returns True, or what failed."""

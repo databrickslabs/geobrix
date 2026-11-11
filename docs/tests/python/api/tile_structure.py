@@ -288,9 +288,10 @@ def tessellated_tiles(spark):
     """Tessellated Tiles."""
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
-        f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile")
-    )
+    raw = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
+    # One row per H3 cell, with the columns of a tile; pack them back into one tile struct
+    cells = rx.rst_h3_tessellate(raw.select("tile"), "tile", 7)
+    df = cells.select(f.struct(*raw.select("tile.*").columns).alias("tile"))
     
     df.select(
         f.col("tile.cellid"),      # H3 cell ID (e.g., 604189641255419903)
@@ -373,13 +374,11 @@ def pattern_joining_tiles_by_cell_id(spark):
     from databricks.labs.gbx.rasterx import functions as rx
     
     # Tessellate two rasters to same grid (sample data)
-    rasters1 = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
-        f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile1")
-    )
-    
-    rasters2 = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER).select(
-        f.explode(rx.rst_h3_tessellate(f.col("tile"), f.lit(7))).alias("tile2")
-    )
+    raw = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
+    tile_fields = raw.select("tile.*").columns
+    cells = rx.rst_h3_tessellate(raw.select("tile"), "tile", 7)  # one row per H3 cell
+    rasters1 = cells.select(f.struct(*tile_fields).alias("tile1"))
+    rasters2 = cells.select(f.struct(*tile_fields).alias("tile2"))
     
     # Join on cellid
     joined = rasters1.join(
@@ -436,8 +435,14 @@ def troubleshooting_inspect_raster_field(spark):
 
 def troubleshooting_null_cellid(spark):
     """Troubleshooting: tiles that were not tessellated carry cellid -1, not NULL."""
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
-    
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    raw = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)  # cellid -1
+    tile_fields = raw.select("tile.*").columns
+    cells = rx.rst_h3_tessellate(raw.select("tile"), "tile", 7)  # one row per H3 cell
+    cells = cells.select(f.struct(*tile_fields).alias("tile"))
+    df = raw.select("tile").unionByName(cells)  # a mix of whole and tessellated tiles
+
     # Filter out non-tessellated tiles
     tessellated_only = df.filter(f.col("tile.cellid") != -1)
     return tessellated_only

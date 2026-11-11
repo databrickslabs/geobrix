@@ -107,8 +107,10 @@ def test_non_tessellated_tiles(spark):
 
 
 def test_tessellated_tiles(spark):
-    """Test tessellated tiles (structure check)."""
-    assert callable(tile_structure.tessellated_tiles)
+    """The example gives tiles that each carry an H3 cell id, not -1."""
+    df = tile_structure.tessellated_tiles(spark)
+    cellids = [r[0] for r in df.select("tile.cellid").collect()]
+    assert cellids and -1 not in cellids
 
 
 def test_best_practice_access_fields_efficiently(spark):
@@ -132,8 +134,11 @@ def test_pattern_conditional_processing_based_on_metadata(spark):
 
 
 def test_pattern_joining_tiles_by_cell_id(spark):
-    """Test pattern for joining tiles (structure check)."""
-    assert callable(tile_structure.pattern_joining_tiles_by_cell_id)
+    """The join pairs tiles of one H3 cell."""
+    pairs = tile_structure.pattern_joining_tiles_by_cell_id(spark).select(
+        "tile1.cellid", "tile2.cellid"
+    ).collect()
+    assert pairs and all(a == b and a != -1 for a, b in pairs)
 
 
 def test_pattern_extract_binary_for_external_processing(spark, tmp_path):
@@ -165,7 +170,8 @@ def test_troubleshooting_inspect_raster_field(spark):
 
 
 def test_troubleshooting_null_cellid(spark):
-    """The example keeps only tessellated tiles: no row carries cellid -1."""
+    """The example keeps only the tessellated tiles of a mix: some rows survive, none carries cellid -1."""
     df = tile_structure.troubleshooting_null_cellid(spark)
     cellids = [r[0] for r in df.select("tile.cellid").collect()]
+    assert cellids, "the filter kept no tile, so the -1 check below would pass vacuously"
     assert -1 not in cellids

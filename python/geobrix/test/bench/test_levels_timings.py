@@ -76,6 +76,34 @@ def test_a_run_of_several_rungs_takes_each_rows_scale_from_the_base_rows():
     assert t["functions"]["f"]["4"]["min"] == round(4.0 * 5 / 60, 2)
 
 
+def test_two_runs_at_one_scale_keep_the_later_run_and_do_not_add_up():
+    rows = lt.parse_rows(
+        [
+            "s|f|L1|l1@n|250|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+            "s|f|L3|c0@n|250|ok|2.0|2.0|0|0|3|v1:1|nulls=0",
+            "r|f|L1|l1@n|250|ok|4.0|4.0|0|0|3|v1:1|nulls=0",
+        ]
+    )
+    t = lt.collect({}, rows, {"s": "1", "r": "auto"}, measured=3)
+    # the forms of one run add up; a second run at the same scale replaces them
+    assert t["functions"]["f"]["1"] == {"min": round(4.0 * 5 / 60, 2), "run": "r"}
+
+
+def test_an_auto_row_below_half_the_base_or_with_no_base_rows_is_skipped():
+    rows = lt.parse_rows(
+        [
+            "s|f|L1|l1@n|250|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+            "s|g|L1|l1@n|0|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+            "r|f|L1|l1@n|100|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+            "r|g|L1|l1@n|100|ok|1.0|1.0|0|0|3|v1:1|nulls=0",
+        ]
+    )
+    t = lt.collect({}, rows, {"s": "1", "r": "auto"}, measured=3)
+    assert set(t["functions"]["f"]) == {"1"}
+    assert set(t["functions"]["g"]) == {"1"}
+    assert lt.fn_minutes(t, "f", 4.0) > 0
+
+
 def test_the_bias_of_past_predictions_scales_the_estimates():
     t = {
         "fixed_min": 5.0,

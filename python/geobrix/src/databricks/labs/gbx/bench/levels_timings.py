@@ -80,21 +80,29 @@ def collect(
     for r in rows:
         if scale_of.get(r["run"]) == "1":
             base.setdefault(r["fn"], r["rows"])
-    per: Dict[Tuple[str, str], Tuple[float, str]] = {}
+    # the forms of one run add up; of two runs at one scale, the later one in `rows` stands
+    per: Dict[Tuple[str, str, str], float] = {}
+    last: Dict[Tuple[str, str], str] = {}
     for r in rows:
         scale = scale_of.get(r["run"])
         if scale == "auto":
-            if r["fn"] not in base:
+            if not base.get(r["fn"]):
                 continue
-            scale = str(round(r["rows"] / base[r["fn"]]))
+            ratio = round(r["rows"] / base[r["fn"]])
+            if ratio < 1:  # no scale below 1x (fn_minutes takes its log)
+                continue
+            scale = str(ratio)
         if scale is None:
             continue
         m = form_minutes(r["median"], r["setup"], r["warmup"], measured)
-        key = (r["fn"], scale)
-        cur = per.get(key, (0.0, r["run"]))
-        per[key] = (cur[0] + m, r["run"])
-    for (fn, scale), (m, run) in per.items():
-        fns.setdefault(fn, {})[scale] = {"min": round(m, 2), "run": run}
+        key = (r["fn"], scale, r["run"])
+        per[key] = per.get(key, 0.0) + m
+        last[(r["fn"], scale)] = r["run"]
+    for (fn, scale), run in last.items():
+        fns.setdefault(fn, {})[scale] = {
+            "min": round(per[(fn, scale, run)], 2),
+            "run": run,
+        }
     return timings
 
 

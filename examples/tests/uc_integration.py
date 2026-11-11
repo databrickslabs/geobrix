@@ -272,11 +272,53 @@ def need(rc: int, what: str, out: str = "") -> None:
 # ---- the gate -------------------------------------------------------------------------------------------------------
 
 
+def _needs_osgeo(exc: BaseException) -> bool:
+    return type(exc).__name__ == "OsgeoUnavailable"
+
+
+def _slice_via_container(catalog: str, schema: str, tables) -> dict:
+    """Build the slice statements inside the dev container, where osgeo exists (the raster engine rows need it).
+
+    The container sees this checkout at /root/geobrix, so it writes the JSON where the host reads it.
+    """
+    from databricks.labs.gbx.bench import probes
+
+    scope = "full" if tuple(tables) == tuple(probes.UC_SLICE_TABLES) else "core"
+    key = (catalog, schema, scope)
+    if key not in _CONTAINER_SLICE:
+        out = OUT_DIR / f"slice-{scope}.json"
+        rel = out.relative_to(REPO_ROOT).as_posix()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.unlink(missing_ok=True)
+        say(f"the host has no osgeo (GDAL's Python bindings): building the {scope} statements in the dev container")
+        inner = (
+            f"cd /root/geobrix && PYTHONPATH=python/geobrix/src python3 examples/tests/uc_integration.py "
+            f"--emit-slice {rel} --scope {scope} --catalog {catalog} --against {schema}"
+        )
+        rc, text = run_cmd(["bash", str(CMD / "gbx-docker-exec.sh"), inner], OUT_DIR / f"slice-{scope}.log", "slice statements", echo=False)
+        if rc != 0 or not out.is_file():
+            tail = " | ".join(text.strip().splitlines()[-3:])[:400]
+            raise StepFailed(
+                f"building the {scope} statements in the dev container failed (exit {rc}): {tail}\n"
+                f"Fix: start the container (`gbx:docker:start`) and re-run; the log is {OUT_DIR / f'slice-{scope}.log'}"
+            )
+        _CONTAINER_SLICE[key] = json.loads(out.read_text())
+    return _CONTAINER_SLICE[key]
+
+
+_CONTAINER_SLICE: dict = {}
+
+
 def slice_pairs(catalog: str, schema: str, tables) -> list:
     from databricks.labs.gbx.bench import t28
 
     notes: List[str] = []
-    return t28._slice_pairs(t28.Params(catalog=catalog, schema=schema), schema, tables, notes)
+    try:
+        return t28._slice_pairs(t28.Params(catalog=catalog, schema=schema), schema, tables, notes)
+    except Exception as exc:  # noqa: BLE001 - only a missing osgeo is handled here
+        if not _needs_osgeo(exc):
+            raise
+        return [tuple(p) for p in _slice_via_container(catalog, schema, tables)["pairs"]]
 
 
 def slice_batchable(tables) -> set:
@@ -331,6 +373,7 @@ def parse_args(argv=None):
     p.add_argument("--keep", action="store_true", help="keep the schema and the Volume folder")
     p.add_argument("--install-timeout-min", type=int, default=90)
     p.add_argument("--against", metavar="SCHEMA", default=None, help="run the scope against the existing install in SCHEMA: no build, stage, install or cleanup; writes evidence-adhoc.json, never evidence.json")
+    p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     return p.parse_args(argv)
 
@@ -563,6 +606,14 @@ def oracles_load(path: Path) -> dict:
 
 def main(argv=None) -> int:
     a = parse_args(argv)
+    if a.emit_slice:
+        if not a.against:
+            print("--emit-slice needs --against SCHEMA (the schema the statements are written for)", file=sys.stderr)
+            return 2
+        pairs = slice_pairs(a.catalog, a.against, slice_tables(a.scope))
+        Path(a.emit_slice).write_text(json.dumps({"pairs": pairs}))
+        say(f"wrote {len(pairs)} statements to {a.emit_slice}")
+        return 0
     if not a.profile:
         print("--profile required (a profile is never chosen for you: see `databricks auth profiles`)", file=sys.stderr)
         return 2
@@ -585,7 +636,11 @@ def main(argv=None) -> int:
         return 2
     tables = slice_tables(a.scope)
     if a.dry_run:
-        pairs = slice_pairs(a.catalog, g.schema, tables)
+        try:
+            pairs = slice_pairs(a.catalog, g.schema, tables)
+        except StepFailed as exc:
+            print(f"refused: {exc}", file=sys.stderr)
+            return 1
         if a.scope == "smoke":
             pairs = pairs[:SMOKE_STATEMENTS]
         ex_pairs = example_pairs(a.catalog, g.schema, SMOKE_EXAMPLES if a.scope == "smoke" else None)

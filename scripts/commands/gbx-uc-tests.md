@@ -50,6 +50,12 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - The QC check `uc-integration-evidence` reads `evidence.json` on `gh pr create` and on a push to main. It compares `sources_hash` with `scripts/ci/uc_sources_hash.py`.
 - Release rule: when the range changes the release version, the check needs `scope` `full`. Otherwise `core` or `full` passes. The version is `<version>` in `pom.xml` and `__version__` in `python/geobrix/src/databricks/labs/gbx/__init__.py`.
 
+## Raster statements
+
+- The `full` scope builds raster statements that need `osgeo` (GDAL's Python bindings).
+- When the host has no `osgeo`, the run builds the statements in the dev container through `gbx:docker:exec`. It writes `test-logs/uc-integration/slice-<scope>.json` and reads it on the host.
+- If the container is not running, the run stops with a Fix: start it with `gbx:docker:start`.
+
 ## Limits
 
 - Dev-branch pushes (`streamline/*`, `beta/*`) are not gated.

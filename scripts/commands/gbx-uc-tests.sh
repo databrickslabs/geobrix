@@ -58,6 +58,8 @@ Behaviour:
   (about 70 min before batching); `full` takes well over an hour there. On a Serverless Pro Medium
   warehouse of 2 to 4 clusters `core` took about 22 min end to end (the warehouse step 15 min of it).
   Use a bigger warehouse with --warehouse-id, or set GBX_UC_GATE_WAREHOUSE_ID, to go faster.
+  Raster statements (scope full) need osgeo. A host without it builds them in the dev container (gbx:docker:exec),
+  which must be running (gbx:docker:start).
   Exit code: 0 when the result is pass, 1 on fail or refusal, 2 for bad options.
   Known failures: scripts/ci/uc_integration_known_failures.txt (empty).
 

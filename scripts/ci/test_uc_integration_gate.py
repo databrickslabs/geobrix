@@ -336,6 +336,56 @@ def test_a_missing_warehouse_stops_the_run_before_any_step(driver, monkeypatch, 
     assert "refused" in err and "Fix:" in err
 
 
+def test_slice_statements_come_from_the_container_when_the_host_has_no_osgeo(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import t28
+
+    class OsgeoUnavailable(Exception):
+        pass
+
+    def no_osgeo(*a, **k):
+        raise OsgeoUnavailable("No module named 'osgeo'")
+
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv)
+        out = tmp_path / "slice-full.json"
+        out.write_text(json.dumps({"pairs": [["c1", "SELECT 1"], ["c2", "SELECT 2"]]}))
+        return 0, ""
+
+    monkeypatch.setattr(t28, "_slice_pairs", no_osgeo)
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "_CONTAINER_SLICE", {})
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    from databricks.labs.gbx.bench import probes
+
+    assert driver.slice_pairs("cat", "sch", probes.UC_SLICE_TABLES) == [("c1", "SELECT 1"), ("c2", "SELECT 2")]
+    inner = calls[0][-1]
+    assert calls[0][1].endswith("gbx-docker-exec.sh") and "--emit-slice slice-full.json" in inner
+    assert "--scope full" in inner and "--against sch" in inner and "--catalog cat" in inner
+    driver.slice_pairs("cat", "sch", probes.UC_SLICE_TABLES)
+    assert len(calls) == 1  # built once per run
+
+
+def test_a_failed_container_build_names_a_fix_and_other_errors_pass_through(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import probes, t28
+
+    class OsgeoUnavailable(Exception):
+        pass
+
+    monkeypatch.setattr(t28, "_slice_pairs", lambda *a, **k: (_ for _ in ()).throw(OsgeoUnavailable("x")))
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "_CONTAINER_SLICE", {})
+    monkeypatch.setattr(driver, "run_cmd", lambda *a, **k: (1, "container is not running"))
+    with pytest.raises(driver.StepFailed, match="Fix: start the container"):
+        driver.slice_pairs("cat", "sch", probes.UC_SLICE_TABLES)
+    monkeypatch.setattr(t28, "_slice_pairs", lambda *a, **k: (_ for _ in ()).throw(ValueError("real bug")))
+    with pytest.raises(ValueError):
+        driver.slice_pairs("cat", "sch", probes.UC_SLICE_TABLES)
+
+
 def test_known_failures_need_a_reason_and_skip_comments(driver):
     assert driver.parse_known_failures("# c\n\nfoo: bar baz\n") == {"foo": "bar baz"}
     with pytest.raises(ValueError):

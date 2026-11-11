@@ -48,6 +48,7 @@ sys.path.insert(0, str(REPO_ROOT / "python" / "geobrix" / "src"))  # databricks.
 
 import check_uc_integration_evidence as gate  # noqa: E402
 from _cluster_config import cluster_config_file  # noqa: E402
+from _uc_warehouse import warehouse_problem  # noqa: E402
 import uc_sources_hash  # noqa: E402
 
 CMD = REPO_ROOT / "scripts" / "commands"
@@ -615,6 +616,11 @@ def main(argv=None) -> int:
     if not g.warehouse:
         print("--warehouse-id required (or GBX_UC_GATE_WAREHOUSE_ID / GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
         return 2
+    # Before any build, stage or install: a configured warehouse that was deleted would fail only after all three.
+    problem = warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile)
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 1
     sl = ex = None
     try:
         if a.against:

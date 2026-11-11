@@ -25,6 +25,8 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))  # uc_sql.py
 
 import uc_sql  # noqa: E402
+from _cluster_config import cluster_config_file  # noqa: E402
+from _uc_warehouse import warehouse_problem  # noqa: E402
 
 from databricks.labs.gbx.bench import oracles  # noqa: E402  (uc_sql put the package on the path)
 
@@ -167,6 +169,11 @@ def main(argv=None) -> int:
     from databricks.sdk import WorkspaceClient
 
     w = WorkspaceClient(profile=args.profile)
+    if not args.upload_only:
+        problem = warehouse_problem(w, args.warehouse_id, cluster_config_file(Path(__file__).resolve().parent), args.profile)
+        if problem:
+            print(f"refused: {problem}", file=sys.stderr)
+            return 1
     failed = False
     if not args.upload_only:
         out_dir = Path(args.out_dir)

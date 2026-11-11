@@ -29,7 +29,8 @@ Options:
                           cleanup. Writes evidence-adhoc.json, never evidence.json: the installed code may
                           not match HEAD, so the run is not evidence for a pull request.
   --warehouse-id ID       SQL warehouse (default: GBX_UC_GATE_WAREHOUSE_ID, else GBX_UC_WAREHOUSE_ID, in
-                          examples/tests/databricks_cluster_config.env)
+                          examples/tests/databricks_cluster_config.env, untracked: keep the ID there, not in
+                          a committed file). The run looks it up first and stops with a Fix if it is gone
   --catalog C             Catalog of the schema (default geospatial_docs)
   --volroot DIR           Volume folder that holds uc-it/<sha12>/ (default
                           /Volumes/geospatial_docs/geobrix/sample-data)

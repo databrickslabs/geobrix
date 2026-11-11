@@ -304,7 +304,10 @@ def test_example_files_run_side_by_side_after_the_setup_file(uc_sql, monkeypatch
         return {cid: {"value": 1, "wall_s": [0.1], "rows": 1, "first_row": [1]} for cid, _ in pairs}
 
     monkeypatch.setattr(uc_sql, "run_statements", fake_run)
-    fake_sdk = types.SimpleNamespace(WorkspaceClient=lambda profile=None: object())
+    fake_sdk = types.SimpleNamespace(WorkspaceClient=lambda profile=None: types.SimpleNamespace(
+            warehouses=types.SimpleNamespace(get=lambda wid: types.SimpleNamespace(state="RUNNING"))
+        )
+    )
     monkeypatch.setitem(sys.modules, "databricks.sdk", fake_sdk)
     argv = ["--profile", "p", "--warehouse-id", "w", "--dir", str(d), "--out-dir", str(tmp_path / "o")]
     assert ex.main(argv + ["--parallel", "3"]) == 0

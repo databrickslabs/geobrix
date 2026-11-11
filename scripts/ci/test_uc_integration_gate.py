@@ -315,7 +315,25 @@ def driver(monkeypatch):
     monkeypatch.syspath_prepend(str(CI))
     import importlib
 
-    return importlib.import_module("uc_integration")
+    mod = importlib.import_module("uc_integration")
+    # No workspace call: the warehouse looks fine unless a test says otherwise.
+    monkeypatch.setattr(mod, "warehouse_problem", lambda *a, **k: None)
+    monkeypatch.setattr(mod.Gate, "client", lambda self: object())
+    return mod
+
+
+def test_a_missing_warehouse_stops_the_run_before_any_step(driver, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+    monkeypatch.setattr(driver, "warehouse_problem", lambda *a, **k: "the SQL warehouse w was deleted.\nFix: pass --warehouse-id.")
+    for step in ("step_wheel", "step_stage", "step_install", "step_warehouse", "cleanup"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("a run with no warehouse must not start a step"))
+    assert driver.main(["--profile", "p", "--scope", "core", "--warehouse-id", "w"]) == 1
+    err = capsys.readouterr().err
+    assert "refused" in err and "Fix:" in err
 
 
 def test_known_failures_need_a_reason_and_skip_comments(driver):

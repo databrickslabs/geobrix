@@ -37,6 +37,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "python" / "geobrix
 
 from databricks.labs.gbx.bench import oracles  # noqa: E402
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # _cluster_config.py, _uc_warehouse.py
+from _cluster_config import cluster_config_file  # noqa: E402
+from _uc_warehouse import warehouse_problem  # noqa: E402
+
 POLL_SECS = 1.0
 DEFAULT_TIMEOUT_S = 600.0
 # pip prints "Looking in indexes: <url>" in some failures; an index URL never reaches a log or a file.
@@ -342,6 +346,10 @@ def main(argv=None) -> int:
     from databricks.sdk import WorkspaceClient
 
     w = WorkspaceClient(profile=args.profile)
+    problem = warehouse_problem(w, args.warehouse_id, cluster_config_file(Path(__file__).resolve().parent), args.profile)
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 1
     try:
         results = run_statements(w, pairs, args)
     except Exception as exc:  # noqa: BLE001 - an SDK or network failure: report it, keep the results written so far

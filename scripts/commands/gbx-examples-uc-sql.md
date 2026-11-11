@@ -6,7 +6,7 @@ Runs the Unity Catalog SQL examples in `examples/uc-functions/` on a SQL warehou
 
 **Options:**
 - `--profile <name>` - Databricks config profile (required; never chosen for you, see `databricks auth profiles`)
-- `--warehouse-id ID` - SQL warehouse; default is `GBX_UC_WAREHOUSE_ID` from `examples/tests/databricks_cluster_config.env`
+- `--warehouse-id ID` - SQL warehouse; default is `GBX_UC_WAREHOUSE_ID` from `examples/tests/databricks_cluster_config.env`. The run looks the warehouse up first and stops with a Fix if it is deleted.
 - `--catalog C`, `--schema S` - where the functions are installed (default `geospatial_docs`, `geobrix_uc`)
 - `--dir <folder>` - folder of example files (default `examples/uc-functions`)
 - `--files <prefixes>` - comma list of file name prefixes to run, such as `00,05` (default all, in name order)

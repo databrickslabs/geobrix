@@ -9,7 +9,7 @@ Each statement runs `--repeat` times and every wall time is recorded; the value 
 **Options:**
 - `--file <sql>` — statements, each after a `-- cid: <id>` line (required)
 - `--profile <name>` — Databricks config profile (required; it is never chosen for you, see `databricks auth profiles`)
-- `--warehouse-id ID` — SQL warehouse; default is `GBX_UC_WAREHOUSE_ID` from `examples/tests/databricks_cluster_config.env` (that one key is read, the file is never sourced)
+- `--warehouse-id ID` — SQL warehouse; default is `GBX_UC_WAREHOUSE_ID` from `examples/tests/databricks_cluster_config.env` (that one key is read, the file is never sourced). The run looks the warehouse up first and stops with a Fix if it is deleted.
 - `--catalog C`, `--schema S` — default catalog and schema for the statements
 - `--out <json>` — write `{cid: {"value": ..., "wall_s": [...]} | {"error": ...}}` here (rewritten after every statement, so a failure part-way keeps the results so far; bytes are stored as `{"$bytes": "<base64>"}`; `bench.oracles.load_uc_results` reads them back)
 - `--repeat N` — runs per statement (default 1)

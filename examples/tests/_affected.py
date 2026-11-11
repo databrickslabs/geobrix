@@ -37,7 +37,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 import _test_shards as ts
 
-GRAPH_VERSION = 1
+GRAPH_VERSION = 2  # 2: aliases, parent packages, missing imports, implicit conftest symbols
 SRC_ROOT = "python/geobrix/src"
 TEST_ROOT = "python/geobrix/test"
 GBX = "databricks.labs.gbx"
@@ -179,7 +179,23 @@ def parse_module(name: str, path: str, text: str) -> dict:
                                 "scope": scope, "from": True})
     strings = sorted({n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and 3 <= len(n.value) <= 200})
     return {"name": name, "path": path, "pkg": path.endswith("__init__.py"), "imports": imports,
-            "defs": {k: sorted(v) for k, v in defs.items()}, "words": sorted(_words(tree)), "strings": strings}
+            "defs": {k: sorted(v) for k, v in defs.items()}, "words": sorted(_words(tree)), "strings": strings,
+            "implicit": sorted(_implicit(tree))}
+
+
+def _implicit(tree) -> Set[str]:
+    """The top-level functions pytest runs without a test naming them: ``autouse=True`` fixtures and ``pytest_*`` hooks (a
+    conftest's)."""
+    out = set()
+    for stmt in tree.body:
+        if not isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if stmt.name.startswith("pytest_"):
+            out.add(stmt.name)
+        for d in stmt.decorator_list:
+            if isinstance(d, ast.Call) and any(k.arg == "autouse" and isinstance(k.value, ast.Constant) and k.value.value is True for k in d.keywords):
+                out.add(stmt.name)
+    return out
 
 
 def symbol_dumps(text: Optional[str]) -> Optional[Dict[str, str]]:
@@ -215,9 +231,23 @@ def changed_symbols(old: Optional[str], new: Optional[str]) -> Optional[Set[str]
 # ---------------------------------------------------------------------------------------------- the graph
 
 
+def _ours(name: str) -> bool:
+    return name == GBX or name.startswith((GBX + ".", "test."))
+
+
+def _parents(name: str, known: Set[str], scope) -> List[dict]:
+    """Importing ``a.b.c`` runs ``a/__init__`` and ``a/b/__init__`` first: an edge to each package above (``parent``), which carries no
+    name of it, so a symbol of the package is followed only to the importers that name it."""
+    parts = name.split(".")
+    return [{"to": ".".join(parts[:k]), "names": [], "scope": scope, "parent": True} for k in range(len(parts) - 1, 0, -1)
+            if ".".join(parts[:k]) in known]
+
+
 def _resolve(mod: dict, imp: dict, known: Set[str]) -> List[dict]:
     """The edges of one import statement to modules of the graph: ``{"to", "names"}`` (names imported from it, [] = the module
-    as a whole) and the symbols of the importer that hold the import (``scope``)."""
+    as a whole; ``alias``: a name imported under another, as the importer's code calls it), the symbols of the importer that hold the
+    import (``scope``), and an edge to each package above a module it imports (``parent``). An import of ours that names a module the
+    graph does not hold (a deleted one) is kept in ``missing`` (``{"missing": <dotted name>}``)."""
     out = []
     if not imp["from"]:
         for n, _ in imp["names"]:
@@ -226,7 +256,13 @@ def _resolve(mod: dict, imp: dict, known: Set[str]) -> List[dict]:
                 cand = ".".join(parts[:k])
                 if cand in known:
                     out.append({"to": cand, "names": [], "scope": imp["scope"]})
+                    out += _parents(cand, known, imp["scope"])
+                    if k < len(parts) and _ours(n):
+                        out.append({"missing": n})
                     break
+            else:
+                if _ours(n):
+                    out.append({"missing": n})
         return out
     if imp["level"]:
         pkg = mod["name"].split(".") if mod["pkg"] else mod["name"].split(".")[:-1]
@@ -235,19 +271,27 @@ def _resolve(mod: dict, imp: dict, known: Set[str]) -> List[dict]:
         base = ".".join(pkg + ([imp["module"]] if imp["module"] else []))
     else:
         base = imp["module"]
-    rest = []
-    for n, _ in imp["names"]:
+    rest, alias = [], {}
+    for n, asname in imp["names"]:
         sub = f"{base}.{n}" if base else n
         if n != "*" and sub in known:
             out.append({"to": sub, "names": [], "scope": imp["scope"]})
+            out += _parents(sub, known, imp["scope"])
         else:
             rest.append(n)
+            if asname:
+                alias[n] = asname
     if rest:
         target = base
         while target and target not in known:  # `from a.b import c` where a.b is not ours: nothing; a sub-package: the nearest module
             target = target.rpartition(".")[0]
         if target == base and target in known:
-            out.append({"to": target, "names": [] if "*" in rest else rest, "scope": imp["scope"]})
+            out.append({"to": target, "names": [] if "*" in rest else rest, "scope": imp["scope"], **({"alias": alias} if alias else {})})
+            out += _parents(target, known, imp["scope"])
+            # a name it takes may be a submodule the commit deleted (a function's name here never matches a deleted module)
+            out += [{"missing": f"{base}.{n}"} for n in rest if n != "*" and _ours(base)]
+        elif _ours(base):
+            out.append({"missing": base})
     return out
 
 
@@ -277,26 +321,34 @@ def build_graph(root: Path, sha: str, cache_dir: Optional[Path] = None) -> dict:
         except (OSError, ValueError):
             pass
     paths = [p for p in tracked(root, sha, SRC_ROOT, TEST_ROOT) if p.endswith(".py")]
-    texts = blobs(root, sha, paths)
-    mods = {}
-    for p in paths:
-        name = module_of(p)
-        if name and texts.get(p) is not None:
-            mods[name] = parse_module(name, p, texts[p])
-    known = set(mods)
-    for m in mods.values():
-        edges = []
-        for imp in m.pop("imports"):
-            edges += [e for e in _resolve(m, imp, known) if e["to"] != m["name"]]
-        if m["path"].startswith(TEST_ROOT + "/") and not m["name"].endswith(".conftest"):
-            edges += [{"to": c, "names": [], "scope": [_MODULE], "conftest": True} for c in _conftests(m["name"], known)]
-        m["edges"] = edges
     scripts = {p: t for p, t in blobs(root, sha, [p for p in tracked(root, sha, *SCRIPT_DIRS) if not p.endswith((".png", ".ipynb"))]).items() if t is not None}
-    g = {"version": GRAPH_VERSION, "sha": sha, "modules": mods, "scripts": scripts}
+    g = dict(graph_of(blobs(root, sha, paths), scripts), sha=sha)
     if cache_dir is not None:
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         (Path(cache_dir) / f"{sha}-v{GRAPH_VERSION}.json").write_text(json.dumps(g))
     return g
+
+
+def graph_of(texts: Dict[str, Optional[str]], scripts: Optional[Dict[str, str]] = None) -> dict:
+    """The graph of these module files (path -> text, as at a commit) and ``scripts`` (path -> text)."""
+    mods = {}
+    for p, text in texts.items():
+        name = module_of(p)
+        if name and text is not None:
+            mods[name] = parse_module(name, p, text)
+    known = set(mods)
+    for m in mods.values():
+        edges, missing = [], set()
+        for imp in m.pop("imports"):
+            for e in _resolve(m, imp, known):
+                if "missing" in e:
+                    missing.add(e["missing"])
+                elif e["to"] != m["name"] and e not in edges:
+                    edges.append(e)
+        if m["path"].startswith(TEST_ROOT + "/") and not m["name"].endswith(".conftest"):
+            edges += [{"to": c, "names": [], "scope": [_MODULE], "conftest": True} for c in _conftests(m["name"], known)]
+        m["edges"], m["missing"] = edges, sorted(missing)
+    return {"version": GRAPH_VERSION, "sha": "", "modules": mods, "scripts": dict(scripts or {})}
 
 
 class Graph:
@@ -316,6 +368,14 @@ class Graph:
 
     def is_test(self, name: str) -> bool:
         return is_test(self.mods[name]["path"])
+
+    def implicit(self, name: str) -> Set[str]:
+        """The autouse fixtures and ``pytest_*`` hooks of a module (a conftest's run for every test under it)."""
+        return set(self.mods[name].get("implicit") or ())
+
+    def importers_of_missing(self, name: str) -> List[str]:
+        """The modules that still import ``name`` (or a module under it), which the graph no longer holds."""
+        return sorted(n for n, m in self.mods.items() if any(x == name or x.startswith(name + ".") for x in m.get("missing") or ()))
 
     def reach(self, name: str) -> int:
         """How many test files import ``name``, directly or through any module (the whole-module closure)."""
@@ -416,7 +476,8 @@ def walk(G: Graph, seeds: List[Tuple[str, Optional[Set[str]], str]]) -> Tuple[Di
             tests[mod] = (why, chain)
         for imp, e in G.rev.get(mod, ()):
             if e.get("conftest"):
-                used = ALL if filt is ALL else (G.words[imp] & filt)  # a test uses a conftest's fixtures by name
+                # a test uses a conftest's fixtures by name, and its autouse fixtures and hooks without naming them
+                used = ALL if filt is ALL else (G.words[imp] & filt) | (G.implicit(mod) & filt)
                 if used is not ALL and not used:
                     continue
             elif filt is ALL:
@@ -431,8 +492,10 @@ def walk(G: Graph, seeds: List[Tuple[str, Optional[Set[str]], str]]) -> Tuple[Di
                 scope = set(e["scope"])
                 nxt = ALL if _MODULE in scope else G.closure(imp, scope)
             else:
-                hit = G.users(imp, used)
-                nxt = ALL if hit is None else G.closure(imp, hit | (set(e["names"]) & used))
+                alias = e.get("alias") or {}
+                as_named = {alias.get(n, n) for n in used}  # `from m import f as _f`: the importer's code says _f
+                hit = G.users(imp, used | as_named)
+                nxt = ALL if hit is None else G.closure(imp, hit | {alias.get(n, n) for n in set(e["names"]) & used})
             todo.append((imp, nxt, why, chain + [imp]))
     return tests, states
 
@@ -442,7 +505,8 @@ def walk(G: Graph, seeds: List[Tuple[str, Optional[Set[str]], str]]) -> Tuple[Di
 
 _RS_HEAD = re.compile(
     r"^(?:pub(?:\([^)]*\))?\s+)?(?:(?:async|unsafe|const|extern(?:\s+\"[^\"]*\")?)\s+)*"
-    r"(?:(fn)\s+(\w+)|(struct|enum|trait|union)\s+(\w+)|(impl)(?:<[^{]*?>)?\s+(?:[\w:<>, ]+?\s+for\s+)?(\w+)|(mod)\s+(\w+))"
+    r"(?:(fn)\s+(\w+)|(struct|enum|trait|union)\s+(\w+)|(impl)(?:<[^{]*?>)?\s+(?:[\w:<>, ]+?\s+for\s+)?(\w+)|(mod)\s+(\w+)"
+    r"|(const|static)\s+(?:mut\s+)?(\w+)\s*:|(macro_rules!)\s*(\w+))"
 )
 
 
@@ -452,9 +516,10 @@ def _rs_clean(line: str) -> str:
     return line.split("//", 1)[0]
 
 
-def rust_items(text: str) -> List[dict]:
-    """The top-level items of a Rust file: ``{"kind": fn|type|mod, "name", "start", "end"}`` (1-based lines; a struct and its
-    ``impl`` blocks are one type). ``#[cfg(test)]`` modules are left out."""
+def rust_items(text: str, with_tests: bool = False) -> List[dict]:
+    """The top-level items of a Rust file: ``{"kind": fn|type|mod|value|macro, "name", "start", "end"}`` (1-based lines; a struct
+    and its ``impl`` blocks are one type; ``value``: a const or static). An item starts at the attribute and doc lines right above
+    it. ``#[cfg(test)]`` modules are left out (``with_tests``: kept, as kind ``tests``)."""
     lines = text.splitlines()
     out, depth, i, cfg_test = [], 0, 0, False
     while i < len(lines):
@@ -464,9 +529,12 @@ def rust_items(text: str) -> List[dict]:
             cfg_test = True
         m = _RS_HEAD.match(s) if depth == 0 else None
         if m:
-            kind = "fn" if m.group(1) else "type" if (m.group(3) or m.group(5)) else "mod"
-            name = m.group(2) or m.group(4) or m.group(6) or m.group(8)
+            kind = ("fn" if m.group(1) else "type" if (m.group(3) or m.group(5)) else "mod" if m.group(7) else "value" if m.group(9)
+                    else "macro")
+            name = m.group(2) or m.group(4) or m.group(6) or m.group(8) or m.group(10) or m.group(12)
             start, d, j, opened = i, 0, i, False
+            while start > 0 and lines[start - 1].strip().startswith(("#[", "///", "#![")):  # its attributes and doc comment
+                start -= 1
             while j < len(lines):
                 c = _rs_clean(lines[j])
                 d += c.count("{") - c.count("}")
@@ -476,6 +544,8 @@ def rust_items(text: str) -> List[dict]:
                 j += 1
             if not (kind == "mod" and cfg_test):
                 out.append({"kind": kind, "name": name, "start": start + 1, "end": j + 1})
+            elif with_tests:
+                out.append({"kind": "tests", "name": name, "start": start + 1, "end": j + 1})
             cfg_test = False
             i = j + 1
             continue
@@ -502,6 +572,8 @@ def _refers(body: str, item: dict) -> bool:
     n = re.escape(item["name"])
     if item["kind"] == "fn":
         return bool(re.search(rf"(?:\b{n}\s*\(|::{n}\b|\(\s*{n}\b)", body))
+    if item["kind"] == "macro":
+        return bool(re.search(rf"\b{n}!", body))
     return bool(re.search(rf"\b{n}\b", body))
 
 
@@ -513,9 +585,15 @@ def rust_changed_exports(files: Dict[str, Tuple[Optional[str], Set[int]]]) -> Tu
         if text is None:
             continue
         src = text.splitlines()
-        for it in rust_items(text):
+        found = rust_items(text, with_tests=True)
+        mine = [it for it in found if it["kind"] != "tests"]
+        # a changed code line outside every item (a `use`, a top-level attribute, code the item scan does not know): every item of the
+        # file, rather than none; a line of the file's tests, a blank or a comment line is not code
+        stray = bool(lines) and lines != {-1} and any(
+            0 < ln <= len(src) and _rs_clean(src[ln - 1]).strip() and not any(it["start"] <= ln <= it["end"] for it in found) for ln in lines)
+        for it in mine:
             it = dict(it, path=path, body="\n".join(src[it["start"] - 1:it["end"]]))
-            it["changed"] = not lines or any(it["start"] <= ln <= it["end"] for ln in lines)
+            it["changed"] = not lines or stray or any(it["start"] <= ln <= it["end"] for ln in lines)
             items.append(it)
     reached = {id(it) for it in items if it["changed"]}
     grew = True
@@ -683,8 +761,11 @@ def select(G: Graph, changed: List[str], shards: List[ts.Shard], *, old_text: Ca
             else:
                 seeds.append((name, ALL, f))
             continue
-        if name is not None:
-            sel.notes.append(f"{f}: not in the commit (deleted); its importers would fail to import, and are not selected for it")
+        if name is not None:  # deleted (or never a module of the graph): what still imports it fails at collection, so it runs
+            users = G.importers_of_missing(name)
+            sel.notes.append(f"{f}: not in the commit (deleted); {len(users)} module(s) still import it")
+            for u in users:
+                seeds.append((u, ALL, f"{f}: deleted, and it still imports it"))
             continue
         if f.startswith(ts.PKG + "/"):  # a data file of the package or of the tests: the modules that name it
             base = f.rsplit("/", 1)[-1]
@@ -722,6 +803,9 @@ def select(G: Graph, changed: List[str], shards: List[ts.Shard], *, old_text: Ca
             if mod in states and (states[mod] is ALL or sym in states[mod]):
                 rows_changed.setdefault(n, f"its light code {_short(mod)}:{sym} is reached")
                 break
+    if MANIFEST_JSON in changed:  # the tests that read the whole manifest (iterate its rows, or open functions.json) see any row change
+        for t in whole_manifest_tests(G):
+            _add_test(sel, G, t, f"{MANIFEST_JSON}: changed; it reads the whole manifest", tables_of)
     if rows_changed:
         names = set(rows_changed)
         for n, why in sorted(rows_changed.items()):
@@ -735,6 +819,23 @@ def select(G: Graph, changed: List[str], shards: List[ts.Shard], *, old_text: Ca
             if hit:
                 _add_test(sel, G, t, f"names row {sorted(hit)[0]} ({rows_changed[sorted(hit)[0]]})", tables_of)
     return sel
+
+
+MANIFEST_MOD = f"{GBX}.manifest"
+
+
+def whole_manifest_tests(G: Graph) -> List[str]:
+    """The test modules that read the manifest as a whole: they import the manifest package (or a module of it) themselves and walk
+    its rows (``.values()`` / ``.items()``), or they open ``functions.json``. Not the family harness: the changed rows pick its tables."""
+    out = []
+    for t in G.tests:
+        m = G.mods[t]
+        if m["path"].endswith("/" + FAMILY_FILE):  # the family harness runs by table: the changed rows pick its tables
+            continue
+        direct = any(e["to"] == MANIFEST_MOD or e["to"].startswith(MANIFEST_MOD + ".") for e in m["edges"] if not e.get("parent"))
+        if (direct and {"values", "items"} & G.words[t]) or any("functions.json" in x for x in m["strings"]):
+            out.append(t)
+    return out
 
 
 def _add_test(sel: Selection, G: Graph, t: str, why: str, tables_of: Dict[str, ts.Shard]) -> None:
@@ -785,7 +886,7 @@ def to_shards(sel: Selection, shards: List[ts.Shard], root: Path) -> Tuple[List[
         dirs = sorted({f.split("/")[1] if f.startswith("test/") else f.rsplit("/", 1)[0] for f in files})
         label = group if dirs in ([group.split()[-1]], [group]) or group.startswith("heavy") else "+".join(dirs)  # bench 1/3 holds test/pyvx
         out.append(ts.Shard(name=f"{label} affected", kind=home.kind, paths=sorted(files), delta=home.delta, pool=home.pool,
-                            marker=home.marker, subset=True))
+                            marker=home.marker, subset=True, est_min=subset_minutes(home, len(files), len(ts.files_of(home, root) or []))))
     tables_of = family_tables(runnable)
     try:
         per_table = Counter(t for row in _rows((Path(root) / MANIFEST_JSON).read_text()).values() if row.get("status") == "stable" for t in row_tables(row))
@@ -799,16 +900,23 @@ def to_shards(sel: Selection, shards: List[ts.Shard], root: Path) -> Tuple[List[
         rows_only = [t for t in mine if t not in whole]
         common = dict(kind=s.kind, paths=list(s.paths), ignore=list(s.ignore), part=s.part, delta=s.delta, pool=s.pool, marker=s.marker,
                       unsplittable=True, subset=True)
+        n_tables = len([t for t in s.oracle_tables.split(",") if t])
         if whole:
-            out.append(ts.Shard(name=f"{s.name} affected", oracle_tables=",".join(whole), **common))
+            out.append(ts.Shard(name=f"{s.name} affected", oracle_tables=",".join(whole), est_min=subset_minutes(s, len(whole), n_tables), **common))
         if rows_only:  # only the rows of the functions the change reaches: -k with their names, not the whole table
             fns = sorted(set().union(*(sel.functions[t] for t in rows_only)))
             share = min(1.0, max(0.05, len(fns) / max(1, sum(per_table.get(t, 0) for t in rows_only))))
             out.append(ts.Shard(name=f"{s.name} affected rows", oracle_tables=",".join(rows_only), select_k=" or ".join(fns),
-                                share=round(share, 3), **common))
+                                share=round(share, 3), est_min=subset_minutes(s, len(rows_only), n_tables), **common))
     unknown = sorted(t for t in sel.tables if t not in tables_of)
     lost += [f"table:{t}" for t in unknown]
     return out, lost
+
+
+def subset_minutes(home: ts.Shard, picked: int, of: int) -> float:
+    """CI's minutes for the ``picked`` of ``of`` units (files or tables) of a CI shard: its own share of the shard's minutes, so an
+    untimed unit counts as it does in the whole shard (``_test_shards.untimed_file_seconds``), not as a share of the default."""
+    return ts.FIXED_MIN + max(0.0, home.expected_min - ts.FIXED_MIN) * max(1, picked) / max(1, of, picked)
 
 
 def affected(root: Path, base: str, sha: str, shards: List[ts.Shard], cache_dir: Optional[Path] = None) -> Tuple[Selection, Graph]:

@@ -5775,8 +5775,9 @@ def run_rows(
     (`python_leg_unexpressible`).
 
     With `batch` the cases of the default shape that can share a query run in one (see `_run_batched`), each case's
-    rows told apart by the input row they come from. Alone: a case that must raise, a windows batch (its rows are one
-    task of their own), a table function with no input row, and any other shape.
+    rows told apart by the input row they come from; on the Python API a table function with no input row (a source)
+    is one call per case, the calls one union. Alone: a case that must raise, a windows batch (its rows are one task
+    of their own), and any other shape.
     """
     from databricks.labs.gbx import manifest
 
@@ -5854,10 +5855,7 @@ def _run_rows_batched(
             case.kind in _ALONE_KINDS
             or case.kind == "windows_batch"
             or shape_sql != _ROWS_SHAPE
-            or (
-                table_of is not None
-                and (fn.source or python_leg_unexpressible(case, fn))
-            )
+            or (table_of is not None and python_leg_unexpressible(case, fn))
         ):
             return None
         arg_rows, schema, cols = _rows_parts(man, case, tmpdir, surface, pad)
@@ -5871,6 +5869,8 @@ def _run_rows_batched(
         }
         if table_of is None:
             return (case.fn, schema, cols), payload
+        if fn.source:  # no input row: one call per case, the calls one union
+            return (case.fn, "source"), payload
         py_args = _python_leg_args(arg_rows[0], fn)
         payload["py_args"] = py_args
         # a literal argument is the Python value of the call: one call per set of them
@@ -5888,23 +5888,32 @@ def _run_rows_batched(
                 ),
             )
         frames, group_of = [], {}
-        for g, members in enumerate(groups):
-            p = members[0][1]
-            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
-            got = table_of(p["case"].fn)(df, *p["py_args"])
+
+        def answer(g, got, case_col, i_col):
             # the rows as the DataFrame-first entry gives them alone: the input's columns, then the generated ones
             fields = [c for c in got.columns if c not in ("_gbx_case", "_gbx_i")]
             frames.append(
                 got.select(
-                    "_gbx_case",
-                    "_gbx_i",
+                    case_col.alias("_gbx_case"),
+                    i_col.alias("_gbx_i"),
                     *[
                         (F.struct(*fields) if j == g else F.lit(None)).alias(f"o{j}")
                         for j in range(len(groups))
                     ],
                 )
             )
+
+        for g, members in enumerate(groups):
+            p = members[0][1]
             group_of.update({k: g for k, _ in members})
+            if man.functions[p["case"].fn].source:
+                # a table function with no input row: the Python entry takes each case's arguments alone
+                for k, q in members:
+                    answer(g, table_of(q["case"].fn)(*q["args"]), F.lit(k), F.lit(0))
+                continue
+            df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
+            got = table_of(p["case"].fn)(df, *p["py_args"])
+            answer(g, got, F.col("_gbx_case"), F.col("_gbx_i"))
         return _gather(
             functools.reduce(lambda a, b: a.union(b), frames).collect(), group_of
         )
@@ -6033,6 +6042,34 @@ def table_call_sql(fn, omitted=frozenset()) -> str:
     )
 
 
+def _table_frame(fn, src, omitted=frozenset()):
+    """The Python API form of `table_call_sql`'s table argument: the frame ``src``'s `key` (every partition key) and
+    members ``c0..`` under the names of the function's table argument, an omitted member left out.
+    """
+    from pyspark.sql import functions as F
+
+    ti = fn.table_input
+    names = {k: "key" for k in ti.partition_by}
+    names.update({n: f"c{i}" for i, (n, _) in enumerate(ti.members)})
+    member_index = {n: i for i, (n, _) in enumerate(ti.members)}
+    return src.select(
+        *[
+            F.col(names[n]).alias(n)
+            for n, _ in ti.columns
+            if member_index.get(n) not in omitted
+        ]
+    )
+
+
+def _python_table_constants(case: Case, consts) -> bool:
+    """Whether the Python API can pass a table function's constants: it renders them into the SQL text, so a fixture
+    or a structured value is no literal."""
+    return not any(
+        isinstance(a, Build) or isinstance(v, (dict, list, tuple))
+        for a, v in zip(case.args[1:], consts)
+    )
+
+
 def run_groups(
     spark,
     cases,
@@ -6057,9 +6094,11 @@ def run_groups(
     A recipe row (`sql`) runs its own statement, which holds its groups: an argument a table holds as a column, or
     several groups with their own arguments. The Python API leg runs it as SQL too.
 
-    With `batch` the aggregate cases with one member schema and one set of constants run in one query, grouped by
-    the case (see `_run_batched`). Alone: a case that must raise, an `error_group` row (its check reads the output
-    type), a recipe, a table function (its partition key is the function's own input), and any other shape.
+    With `batch` the cases with one member schema and one set of constants run in one query (see `_run_batched`):
+    an aggregate grouped by the case, a table function with the case as its partition key (the view's `key`, one
+    partition per case, as the alone run's one partition `a`). Alone: a case that must raise, an `error_group` row
+    (its check reads the output type), a recipe, a Python leg row whose constants the API cannot pass, and any other
+    shape.
     """
     from pyspark.sql.types import StructType
 
@@ -6098,13 +6137,12 @@ def run_groups(
         if column_of is not None and fn.table_input is not None:
             # the Python API renders a table function's constants into the SQL text: a fixture or a structured value
             # is no literal. That is this row's limit, not the function's: say so rather than score it a failure.
-            for a, v in zip(case.args[1:], consts):
-                if isinstance(a, Build) or isinstance(v, (dict, list, tuple)):
-                    raise TypeError(
-                        f"{case.cid}: a constant of {case.fn} is a fixture or a structured value, which the "
-                        "Python leg cannot pass as a SQL literal. Fix: give the row plain constants, or leave "
-                        "the Python surface out of its `surfaces`."
-                    )
+            if not _python_table_constants(case, consts):
+                raise TypeError(
+                    f"{case.cid}: a constant of {case.fn} is a fixture or a structured value, which the "
+                    "Python leg cannot pass as a SQL literal. Fix: give the row plain constants, or leave "
+                    "the Python surface out of its `surfaces`."
+                )
         try:
             src = spark.createDataFrame(rows, schema)
             src.createOrReplaceTempView("_gbx_oracle")
@@ -6120,20 +6158,10 @@ def run_groups(
                 # the Python API: the DataFrame-first entry, the view's `key` and members as the table's columns
                 from pyspark.sql import functions as F
 
-                ti = fn.table_input
-                names = {k: "key" for k in ti.partition_by}
-                names.update({n: f"c{i}" for i, (n, _) in enumerate(ti.members)})
-                member_index = {n: i for i, (n, _) in enumerate(ti.members)}
-                table = src.select(
-                    *[
-                        F.col(names[n]).alias(n)
-                        for n, _ in ti.columns
-                        if member_index.get(n) not in omitted
-                    ]
-                )
-                got_df = column_of(case.fn)(table, *consts)
+                got_df = column_of(case.fn)(_table_frame(fn, src, omitted), *consts)
                 df = got_df.select(
-                    *ti.partition_by, F.col(fn.columns[-1][0]).alias("out")
+                    *fn.table_input.partition_by,
+                    F.col(fn.columns[-1][0]).alias("out"),
                 )
             elif column_of is None:
                 df = spark.sql(
@@ -6236,22 +6264,37 @@ def _run_groups_batched(spark, man, cases, shape_sql, tmpdir, null_burn, column_
 
     def prepare(case):
         fn = man.functions[case.fn]
+        table = fn.table_input is not None
         if (
             case.sql is not None
             or case.kind in _ALONE_KINDS
             or case.kind == "error_group"
-            or fn.table_input is not None
             or shape_sql is not None
         ):
             return None
         p = _group_parts(man, case, tmpdir, null_burn)
         p["case"] = case
+        if (
+            table
+            and column_of is not None
+            and not _python_table_constants(case, p["consts"])
+        ):
+            return None  # the alone run refuses it, as unbatched
         str_only = tuple(
             repr(v)
             for i, v in enumerate(p["consts"])
             if fn.params[i + p["first_const"]].str_only
         )
-        key = (case.fn, p["schema"], p["members"], tuple(p["literals"]), str_only)
+        # the Python API passes a table function's constants as Python values: one call per set of them
+        py_consts = repr(p["consts"]) if table and column_of is not None else None
+        key = (
+            case.fn,
+            p["schema"],
+            p["members"],
+            tuple(p["literals"]),
+            str_only,
+            py_consts,
+        )
         return key, p
 
     def call_py(p):
@@ -6264,26 +6307,51 @@ def _run_groups_batched(spark, man, cases, shape_sql, tmpdir, null_burn, column_
             ],
         )
 
+    def select_sql(g, p, view, n):
+        fn = man.functions[p["case"].fn]
+        if fn.table_input is None:
+            return (
+                "SELECT _gbx_case, 0 AS _gbx_i, "
+                + _answer_columns(
+                    g,
+                    n,
+                    f"{fn.sql_name}({', '.join([p['members']] + p['literals'])}) AS o{g}",
+                )
+                + f" FROM {view} GROUP BY _gbx_case"
+            )
+        # a table function: the case is the partition key, so each case is one partition of one call
+        members = ", ".join(f"c{i}" for i in range(p["n0"]))
+        src = f"(SELECT CAST(_gbx_case AS STRING) AS key, {members} FROM {view}) AS _gbx_src"
+        call = table_call_sql(fn, p["omitted"]).format(
+            fn=fn.sql_name, src=src, args="".join(f", {lit}" for lit in p["literals"])
+        )
+        return (
+            "SELECT CAST(key AS INT) AS _gbx_case, 0 AS _gbx_i, "
+            + _answer_columns(g, n, f"out AS o{g}")
+            + f" FROM ({call}) AS _gbx_t"
+        )
+
+    def answer_py(p, df):
+        """The frame ``(_gbx_case, _gbx_out)`` of one group through the Python API: a case is a group of the
+        aggregate, or the partition of the table function."""
+        fn = man.functions[p["case"].fn]
+        if fn.table_input is None:
+            return df.groupBy("_gbx_case").agg(call_py(p).alias("_gbx_out"))
+        src = df.withColumn("key", F.col("_gbx_case").cast("string"))
+        got = column_of(fn.sql_name)(_table_frame(fn, src, p["omitted"]), *p["consts"])
+        return got.select(
+            F.col(fn.table_input.partition_by[0]).cast("int").alias("_gbx_case"),
+            F.col(fn.columns[-1][0]).alias("_gbx_out"),
+        )
+
     def run_batch(groups):
         if column_of is None:
-            return _batch_sql(
-                spark,
-                groups,
-                lambda g, p, view, n: (
-                    "SELECT _gbx_case, 0 AS _gbx_i, "
-                    + _answer_columns(
-                        g,
-                        n,
-                        f"{p['case'].fn}({', '.join([p['members']] + p['literals'])}) AS o{g}",
-                    )
-                    + f" FROM {view} GROUP BY _gbx_case"
-                ),
-            )
+            return _batch_sql(spark, groups, select_sql)
         frames, group_of = [], {}
         for g, members in enumerate(groups):
             p = members[0][1]
             df = spark.createDataFrame(_batch_rows(members), _batch_schema(p["schema"]))
-            agg = df.groupBy("_gbx_case").agg(call_py(p).alias("_gbx_out"))
+            agg = answer_py(p, df)
             frames.append(
                 agg.select(
                     "_gbx_case",

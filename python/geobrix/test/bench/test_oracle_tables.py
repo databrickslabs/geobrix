@@ -1142,3 +1142,96 @@ def test_a_batched_aggregate_run_groups_by_case_and_reruns_only_red_ones(
                 batch_sql[0].count("GROUP BY _gbx_case")
                 == batch_sql[0].count(" UNION ALL ") + 1
             )
+
+
+def test_a_batched_table_function_run_partitions_by_case_and_reruns_only_red_ones(
+    spark, tmp_path, monkeypatch
+):
+    """Table functions over `TABLE(...) PARTITION BY` in one query, a partition per case, through SQL and the
+    DataFrame-first API: the verdicts match the alone run, and only the case red in the batch runs alone, with the
+    refusal and the `error_group` row (its check reads the output type), which never batch.
+    """
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    names = ("gbx_rst_bng_rasterize_tvf", "gbx_rst_merge_tvf")
+    register(spark, only=list(names), _levels={n: ("L3", "-") for n in names})
+    cases = [
+        c
+        for c in oracles.TABLES["RASTER_AGGREGATE"]
+        if c.fn in names and "session" in c.surfaces
+    ]
+    pixels = next(c for c in cases if c.kind == "pixels")
+    wrong = dataclasses.replace(pixels, cid="tvf_wrong", expect=[[0.0] * 3] * 2)
+    cases.append(wrong)
+    unbatched = {
+        c.cid for c in cases if c.kind in (*oracles._ALONE_KINDS, "error_group")
+    }
+    man = manifest.load()
+    for column_of in (
+        None,
+        lambda f: manifest.resolve_ref(man.functions[f].python.ref),
+    ):
+        got, alone, batch_sql = _batched_vs_alone(
+            monkeypatch,
+            "run_groups",
+            spark,
+            cases,
+            tmpdir=str(tmp_path),
+            column_of=column_of,
+        )
+        assert got[True] == got[False]
+        assert dict(got[True])["tvf_wrong"] is False
+        assert sum(ok for _, ok in got[True]) == len(cases) - 1, got[True]
+        assert set(alone) == unbatched | {"tvf_wrong"}, alone
+        if column_of is None:
+            # one query for both functions: a branch each, each partitioned by the case
+            assert len(batch_sql) == 1 and batch_sql[0].count(" UNION ALL ") == 1
+            assert batch_sql[0].count("PARTITION BY (key)") == 2
+
+
+def test_a_batched_source_generator_run_gives_each_case_its_alone_verdict(
+    spark, tmp_path, monkeypatch
+):
+    """A table function with no input row (`gbx_drivers`): through SQL its argument rows are one view, through the
+    DataFrame-first API each case is one call and the calls one union. Either way the verdicts match the alone run,
+    and only the case red in the batch, and the refusal, run alone. The vector filters only: the raster and unfiltered
+    rows are held to the driver process's registry, and a Python worker that imported osgeo's gdal_array also lists
+    NUMPY, so their verdict follows the worker a row lands on, batched or not."""
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.engine import run
+
+    if run.unavailable_reason():  # the driver listing reads GDAL's own (osgeo)
+        pytest.skip(run.unavailable_reason())
+    name = "gbx_drivers"
+    register(spark, only=[name], _levels={name: ("L3", "-")})
+    cases = [
+        c
+        for c in oracles.TABLES["DRIVERS"]
+        if c.fn == name
+        and (c.kind == "raises" or c.cid in ("drivers_vector", "drivers_kind_any_case"))
+    ]
+    vector = next(c for c in cases if c.cid == "drivers_vector")
+    wrong = dataclasses.replace(
+        vector, cid="drivers_wrong", expect={**vector.expect, "kind": "raster"}
+    )
+    cases.append(wrong)
+    py = manifest.resolve_ref(manifest.load().functions[name].python.ref)
+    for table_of in (None, lambda f: py):
+        got, alone, _ = _batched_vs_alone(
+            monkeypatch,
+            "run_rows",
+            spark,
+            cases,
+            tmpdir=str(tmp_path),
+            table_of=table_of,
+        )
+        assert got[True] == got[False]
+        assert dict(got[True])["drivers_wrong"] is False
+        assert sum(ok for _, ok in got[True]) == len(got[True]) - 1, got[True]
+        assert set(alone) == {"drivers_bad_kind", "drivers_wrong"}, alone

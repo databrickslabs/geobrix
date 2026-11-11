@@ -165,5 +165,7 @@ def test_troubleshooting_inspect_raster_field(spark):
 
 
 def test_troubleshooting_null_cellid(spark):
-    """Test troubleshooting null cellid (structure check)."""
-    assert callable(tile_structure.troubleshooting_null_cellid)
+    """The example keeps only tessellated tiles: no row carries cellid -1."""
+    df = tile_structure.troubleshooting_null_cellid(spark)
+    cellids = [r[0] for r in df.select("tile.cellid").collect()]
+    assert -1 not in cellids

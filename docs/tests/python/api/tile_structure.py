@@ -439,7 +439,7 @@ def troubleshooting_null_cellid(spark):
     df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # Filter out non-tessellated tiles
-    tessellated_only = dX
+    tessellated_only = df.filter(f.col("tile.cellid") != -1)
     return tessellated_only
 
 

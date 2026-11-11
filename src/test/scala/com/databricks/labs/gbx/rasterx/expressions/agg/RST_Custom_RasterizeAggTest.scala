@@ -226,6 +226,37 @@ class RST_Custom_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         r.data.toSeq shouldBe Seq(3.0, -9999.0, 1.0, 2.0) // north row first
     }
 
+    // A grid with no CRS (srid -1) is taken to be in out_srid, as the lightweight level takes it: the canvas follows
+    // its cell edges and the burn needs no reprojection. The JVM used to raise "CRS ID is not defined" here.
+    test("a grid with no CRS rasterizes in out_srid, as the lightweight level does") {
+        val offset = CustomGridSystem(GridConf(529000, 533000, 179000, 183000, 2, 4000, 4000, None))
+        val cells  = Seq((530000.0, 180000.0), (532000.0, 180000.0), (530000.0, 182000.0))
+            .map { case (x, y) => offset.pointToCellID(x, y, 1) }
+        val agg = RST_Custom_RasterizeAgg(
+            cellidExpr    = Literal.create(null, LongType),
+            valueExpr     = Literal(0.0),
+            gridExpr      = Custom_Grid(Literal(529000L), Literal(533000L), Literal(179000L), Literal(183000L),
+                Literal(2), Literal(4000), Literal(4000), Literal(-1)),
+            outSridExpr   = Literal(27700),
+            pixelSizeExpr = Literal.create(null, DoubleType),
+            xminExpr      = Literal.create(null, DoubleType),
+            yminExpr      = Literal.create(null, DoubleType),
+            xmaxExpr      = Literal.create(null, DoubleType),
+            ymaxExpr      = Literal.create(null, DoubleType),
+            widthExpr     = Literal.create(null, IntegerType),
+            heightExpr    = Literal.create(null, IntegerType),
+            modeExpr      = Literal("centroids"),
+            kringPadExpr  = Literal(0),
+            exprConfExpr  = Literal.create(encodedEmpty(), StringType)
+        )
+        val buf = agg.createAggregationBuffer()
+        cells.zipWithIndex.foreach { case (c, i) => agg.update(buf, c, (i + 1).toDouble) }
+        val r = readRaster(agg.eval(buf).asInstanceOf[AnyRef])
+        (r.width, r.height) shouldBe ((2, 2))
+        (r.gt(0), r.gt(3)) shouldBe ((529000.0, 183000.0))
+        r.data.toSeq shouldBe Seq(3.0, -9999.0, 1.0, 2.0) // north row first
+    }
+
     test("auto-grid (extent omitted) at out_srid == grid CRS round-trips into the input cell set") {
         val cellIds = points.map { case (x, y) => grid.pointToCellID(x, y, res) }
         val cellSet = cellIds.toSet

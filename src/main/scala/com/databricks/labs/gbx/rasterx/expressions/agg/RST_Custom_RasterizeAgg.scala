@@ -192,11 +192,15 @@ case class RST_Custom_RasterizeAgg(
         if (buffer.cells.isEmpty) return null
 
         val (args, row) = groupArgs.bind(buffer.args)
-        val grid     = Custom_GridSpec.systemFromRow(args(0).eval(row).asInstanceOf[InternalRow])
+        val given    = Custom_GridSpec.systemFromRow(args(0).eval(row).asInstanceOf[InternalRow])
         // out_srid wins; else the grid's own CRS; a grid with none needs the argument (the lightweight rule)
-        val srid     = evalIntOpt(args(1), row).getOrElse(grid.conf.crsID.getOrElse(
+        val srid     = evalIntOpt(args(1), row).getOrElse(given.conf.crsID.getOrElse(
             throw new IllegalArgumentException(
                 s"${RST_Custom_RasterizeAgg.name}: grid has no CRS (srid=-1); supply out_srid explicitly.")))
+        // A grid with no CRS is taken to be in out_srid, as the lightweight level takes it (its fallback_srid): the
+        // canvas follows its cell edges and the burn needs no reprojection.
+        val grid     =
+            if (given.conf.crsID.isEmpty) CustomGridSystem(given.conf.copy(crsID = Some(srid))) else given
         val pixelOpt = evalDoubleOpt(args(2), row)
         val xminOpt  = evalDoubleOpt(args(3), row)
         val yminOpt  = evalDoubleOpt(args(4), row)

@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import inspect
 import json
 import math
 import os
@@ -539,7 +540,9 @@ def guard_source(plan: dict) -> str:
 
 def run_source(plan: dict) -> str:
     """The cell that unpacks the checkout, runs one shard's pytest in this process and writes its files."""
-    return '''import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
+    # the chunk fails its own run by the rule its runner and fail fast use (_shard_runner.chunk_failed, inlined: no copy on the node)
+    return inspect.getsource(sr.chunk_failed) + '''
+import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
 
 STAGE = %(stage)r
 SLUG = dbutils.widgets.get("shard")
@@ -634,6 +637,7 @@ TEST_TIMEOUT = float(FF.get("test_timeout_s") or 0)  # a test that runs longer f
 # the chunk stops at OVERRUN times its estimate (never under OVERRUN_FLOOR_MIN): its times are then a lower bound, and the next plan
 # cuts it finer
 OVERRUN_S = max(float(FF.get("overrun_x") or 0) * float(S.get("expected_min") or 0), float(FF.get("overrun_floor_min") or 0)) * 60 if FF.get("overrun_x") else 0
+OVERRUN_S = 0 if S.get("smoke") else OVERRUN_S  # the smoke's estimate is a guess (a collect of every file): its caps are the shard and stall caps
 
 
 def child_run():  # this notebook run's own ids (a child run of the runner task), for the queue table and the launcher's table
@@ -920,8 +924,9 @@ for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
 beat()
 print("shard rc:", rc, "after", result["wall_s"], "s", flush=True)
-if rc not in (0, 5) or state["failed"] or state["errors"] or state["reason"]:
-    # this run's status tells the truth: it fails (the runner reads the result file it just wrote)
+if chunk_failed(result):
+    # this run's status tells the truth: it fails (the runner reads the result file it just wrote). A chunk stopped at --overrun-x with
+    # no failed test is an overrun (a timing miss, OVERRUN in the summary), not a failed run
     ff = state["first_failure"] or {}
     raise RuntimeError("chunk %%s: rc %%s, %%d failed, %%d errors%%s; first: %%s %%s" %% (
         S["name"], rc, state["failed"], state["errors"], (", " + state["reason"]) if state["reason"] else "", ff.get("id", ""), ff.get("msg", "")))
@@ -1026,7 +1031,8 @@ else:
                     return "stopped early: " + json.load(f).get("rule", "the launcher stopped the run")
             except (OSError, ValueError):
                 return "stopped early: the launcher stopped the run"
-        if POLICY.get("deadline") and time.time() > POLICY["deadline"]:
+        deadline = SPEC.get("deadline") or POLICY.get("deadline")  # set when this pool's job was submitted, after its leases
+        if deadline and time.time() > deadline:
             return "stopped early: the wall budget of " + str(POLICY.get("max_wall_min")) + " min is spent (--max-wall-min)"
         why = stop_rule(read_results(RESULTS), POLICY)
         return "stopped early: " + why if why else ""
@@ -1049,7 +1055,7 @@ else:
         raise RuntimeError("stopped early: the smoke chunk " + last["slug"] + " failed (" + str(last.get("failed")) + " failed, "
                            + str(last.get("errors")) + " errors); first: " + (ff.get("id") or "") + " " + (ff.get("msg") or ""))
     # the task's status tells the truth: it fails when a chunk it ran failed or did not finish (each chunk's own run failed too)
-    bad = [x for x in rec["shards"] if x.get("rc") not in (0, 5) or x.get("reason") or x.get("failed") or x.get("errors")]
+    bad = [x for x in rec["shards"] if chunk_failed(x)]  # an overrun with no failed test is a timing miss, not a failed runner
     if bad:
         raise RuntimeError(str(len(bad)) + " of " + str(len(rec["shards"])) + " chunk(s) this runner ran failed or did not finish: "
                            + ", ".join(PLAN["shards"][x["slug"]]["name"] + " (" + (x.get("reason") or "rc " + str(x.get("rc"))) + ")" for x in bad[:5]))
@@ -1134,10 +1140,13 @@ def parse_junit(path: Path) -> dict:
 
 
 def shard_verdict(res: Optional[dict], junit: Optional[dict]) -> str:
-    """ok | FAILED | ERRORS (pytest stopped on a collection or usage error) | INCOMPLETE (no result, a watchdog stop or a
-    cancel: the shard did not finish) | EMPTY (nothing collected)."""
+    """ok | FAILED | ERRORS (pytest stopped on a collection or usage error) | OVERRUN (stopped at --overrun-x times its estimate
+    with no failed test: a timing miss) | INCOMPLETE (no result, another watchdog stop or a cancel: the shard did not finish) | EMPTY
+    (nothing collected)."""
     if not res:
         return "INCOMPLETE"
+    if res.get("overrun") and not (res.get("failed") or res.get("errors") or (junit and (junit["failed"] or junit["errors"]))):
+        return "OVERRUN"
     if res.get("reason") or res.get("rc") == 130:
         return "INCOMPLETE"
     if res.get("rc") == 5 or (res.get("rc") == 0 and not res.get("total")):
@@ -1151,11 +1160,31 @@ def shard_verdict(res: Optional[dict], junit: Optional[dict]) -> str:
 
 
 def is_failure(row: dict) -> bool:
-    """Whether a shard's row fails the run. A part of a split shard that holds only tests the marker deselects (integration files)
-    collects nothing; CI's whole shard would pass, so that part does too. A whole shard that collects nothing still fails."""
+    """Whether a shard's row fails the run. EMPTY (nothing collected) fails, but for an intended empty selection: a part of a split
+    shard that holds only tests the marker deselects (integration files; CI's whole shard would pass), a test part whose unit's other
+    parts collected tests (the node ids hash unevenly), an ``affected`` subset. A unit no part of which collected a test, a rerun
+    that collects nothing and a whole shard that collects nothing fail. OVERRUN fails the run (its later tests did not run), though
+    not as a failed test: its own run and its runner went on."""
     if row["verdict"] == "ok":
         return False
-    return not (row["verdict"] == "EMPTY" and (row["name"].endswith("]") or row.get("subset")))
+    if row["verdict"] == "EMPTY":
+        return bool(row.get("empty_unit")) or not (row["name"].endswith("]") or row.get("subset"))
+    return True
+
+
+def mark_empty_units(plan: dict, rows: List[dict]) -> None:
+    """Flag the rows of a test-part unit (one file or table cut by node id) when no part of it collected a test: a cut that
+    lost its unit's tests, which an EMPTY part alone would hide."""
+    units: Dict[tuple, List[dict]] = {}
+    for r in rows:
+        c = plan["shards"].get(r["slug"]) or {}
+        if c.get("test_part"):
+            units.setdefault((tuple(c.get("files") or []), tuple(c.get("tables") or []), c["test_part"].split("/")[1]), []).append(r)
+    for (files, tables, n), parts in units.items():
+        if all(r["verdict"] == "EMPTY" for r in parts):
+            for r in parts:
+                r["empty_unit"] = True
+                r["reason"] = r.get("reason") or f"EMPTY: no part of {', '.join(files or tables)} (cut in {n}) collected a test"
 
 
 def pool_metrics(records: List[dict]) -> dict:
@@ -1409,7 +1438,7 @@ def main(argv=None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_USAGE
     if a.rerun_failed:  # only the tests that failed in that run, a chunk per file, each stopping at its first failure
-        shards = rerun_shards(REPO_ROOT / "test-logs/databricks-tests" / a.rerun_failed, REPO_ROOT)
+        shards = rerun_shards(REPO_ROOT / "test-logs/databricks-tests" / a.rerun_failed, REPO_ROOT, all_shards)
         print(f"--rerun-failed {a.rerun_failed}: {sum(len(s.paths) for s in shards)} failed test(s) in {len(shards)} file(s)")
         if not shards:
             print(f"No failed test in test-logs/databricks-tests/{a.rerun_failed}/*/junit.xml: nothing to run.")
@@ -1434,7 +1463,7 @@ def main(argv=None) -> int:
         shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower, hot)
         split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)"
                            + (" (Serverless: its own timings where it has them, else the pools' solo times)" if a.serverless else ""))
-    elif shards:
+    elif shards and not a.rerun_failed:  # a rerun chunk keeps its estimate: its few test ids, not its whole file or tables
         shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec, hot)
                   for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
     shards = [ts.Shard(**{**s.__dict__, "solo_min": round(min(s.expected_min, ts.estimate(s, REPO_ROOT, fsolo)), 2)}) for s in shards]
@@ -1487,10 +1516,20 @@ def main(argv=None) -> int:
     return launch(a, plan, shards)
 
 
-def rerun_shards(run_dir: Path, root: Path) -> List[ts.Shard]:
+def rerun_shards(run_dir: Path, root: Path, shards: Optional[List[ts.Shard]] = None) -> List[ts.Shard]:
     """``--rerun-failed``: one chunk per test file that had a failed or erroring test in the earlier run's junit files, holding just
-    those test ids (``file::[Class::]name[params]``). Empty when the run left no failures (or no results here)."""
+    those test ids (``file::[Class::]name[params]``). Empty when the run left no failures (or no results here).
+
+    Each chunk runs where its file's CI shard runs (``_test_shards.owner_of``: a heavy dir's file on the JAR pool, with its
+    integration tests), with the env of the chunk it failed in (``GBX_SHARD``, ``GBX_ORACLE_TABLES``: the run's ``plan.json``, kept
+    beside its results). A rerun that collects nothing is a selection error, not a pass (never a subset)."""
+    shards = shards if shards is not None else ts.load(root)
+    try:
+        old_plan = json.loads((Path(run_dir) / "plan.json").read_text()).get("shards") or {}
+    except (OSError, ValueError, AttributeError):
+        old_plan = {}
     by_file: Dict[str, List[str]] = {}
+    env_of: Dict[str, dict] = {}
     for junit in sorted(Path(run_dir).glob("*/junit.xml")):
         try:
             cases = list(ET.parse(junit).getroot().iter("testcase"))
@@ -1507,9 +1546,19 @@ def rerun_shards(run_dir: Path, root: Path) -> List[ts.Shard]:
             nid = "::".join([f] + inner + [c.get("name", "")])
             if nid not in by_file.setdefault(f, []):
                 by_file[f].append(nid)
-    return [ts.Shard(name=f"rerun {f}", kind="scripts" if f.startswith("scripts/") else "light", paths=ids, est_min=ts.FIXED_MIN + 0.5 * len(ids),
-                     est_src="ci", marker="" if f.startswith("scripts/") else "not integration", subset=True)
-            for f, ids in sorted(by_file.items())]
+            env_of.setdefault(f, dict((old_plan.get(junit.parent.name) or {}).get("env") or {}))
+    out = []
+    for f, ids in sorted(by_file.items()):
+        env = env_of.get(f) or {}
+        common = dict(name=f"rerun {f}", paths=ids, est_min=ts.FIXED_MIN + 0.5 * len(ids), est_src="ci",
+                      part=str(env.get("GBX_SHARD") or ""), oracle_tables=str(env.get("GBX_ORACLE_TABLES") or ""))
+        if f.startswith("scripts/"):
+            out.append(ts.Shard(kind="scripts", marker="", **common))
+            continue
+        home = ts.owner_of(shards, f, root)
+        out.append(ts.Shard(kind=home.kind if home else "light", pool=home.pool if home else ts.POOL_LIGHT,
+                            marker=home.marker if home else "not integration", delta=bool(home and home.delta), **common))
+    return out
 
 
 def affected_selection(a, sha: str, all_shards: List[ts.Shard]):
@@ -1659,6 +1708,48 @@ def submit_pool_job(w, plan: dict, pool: str, nb_paths: dict, leases: list):
     return waiter.run_id
 
 
+def start_pool(w, a, plan: dict, pool: str, stack, *, volroot: str, me: str, base_dir: str, nbs: List[str], runs: Dict[str, int],
+               pool_info: Dict[str, dict], t_submit: Dict[str, float], fmt=None) -> int:
+    """Lease the pool's clusters (it may wait up to --pool-wait-min), size its runners for them, then arm its wall budget, write the
+    plan, upload its notebooks and submit its job: the budget (``deadline``, which its runners stop claiming at, even with the launcher
+    gone) starts when its tests can start, never during the lease wait. ``fmt``: the notebooks' import format (the SDK's
+    ``ImportFormat.JUPYTER``). Returns the job's run id."""
+    import base64
+
+    run_id = plan["run_id"]
+    pool_leases = []
+    if pool != "serverless":
+        pool_leases = lease_many(stack, w, a, plan, pool, volroot=volroot, me=me)
+        cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
+        relane(plan, pool, a, len(pool_leases), cores)
+        pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
+    budget = float((plan.get("fail_fast") or {}).get("max_wall_min") or 0)
+    if budget:
+        plan["pools"][pool]["deadline"] = time.time() + budget * 60
+    put_text(w, plan["plan_file"], json.dumps(plan))  # the runners read the pool's queue, table and deadline from it
+    spec = plan["pools"][pool]
+    print(f"  {pool}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
+          f"{spec['expected_min']:g} min (longest shard {spec['longest_min']:g}, serial sum {spec['serial_min']:g})"
+          + (f"; wall budget {budget:g} min from now" if budget else ""), flush=True)
+    paths = {"shard": f"{base_dir}/tests_{run_id}_{pool}.ipynb", "runner": f"{base_dir}/runner_{run_id}_{pool}.ipynb"}
+    for kind, nb in (("shard", build_notebook(plan, pool)), ("runner", build_runner_notebook(plan, pool))):
+        body = base64.b64encode(json.dumps(nb, indent=1).encode()).decode()
+        w.workspace.import_(paths[kind], format=fmt, content=body, overwrite=True)
+        nbs.append(paths[kind])
+        print(f"Uploaded {kind} notebook {paths[kind]}", flush=True)
+    job_run = submit_pool_job(w, plan, pool, paths, pool_leases)
+    runs[pool] = job_run
+    pool_info.setdefault(pool, {})["job_run"] = job_run
+    t_submit[pool] = time.monotonic()
+    for l in pool_leases:
+        l.job_run(job_run)
+    try:
+        print(f"  {pool}: run {job_run}  {w.jobs.get_run(job_run).run_page_url}", flush=True)
+    except Exception:  # noqa: BLE001
+        pass
+    return job_run
+
+
 def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> list:
     """Lease the free clusters of the pool, up to --clusters (default: all it has): the first waits for one (and makes the
     pool's cluster when it has none), the others only take what is free now, so a busy shared pool gives fewer slots, not a
@@ -1753,7 +1844,7 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         junit = local_out / r["slug"] / "junit.xml"
         act = actual_s(r, busy)
         # a chunk pytest stopped at --maxfail did not run all its tests: its times are lower bounds, as a capped chunk's are
-        verdict = "INCOMPLETE" if r.get("maxfail_hit") and r["verdict"] == "FAILED" else r["verdict"]
+        verdict = "INCOMPLETE" if (r.get("maxfail_hit") and r["verdict"] == "FAILED") or r["verdict"] == "OVERRUN" else r["verdict"]
         got_s = [] if chunk.get("smoke") or chunk.get("select_k") else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
             chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "")
         n_parts = int(str(chunk.get("test_part") or "0/1").split("/")[1])
@@ -1791,7 +1882,6 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service.workspace import ImportFormat
     from _job_submit import runner_dir
-    import base64
 
     w = WorkspaceClient(profile=a.profile or os.environ.get("DATABRICKS_CONFIG_PROFILE") or None)
     me = w.current_user.me().user_name
@@ -1827,36 +1917,9 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
             finished: set = set()
             with cancel_on_error(w, runs, finished):  # inside the leases: a failed launch cancels its runs before the clusters are given back
                 w.workspace.mkdirs(base_dir)
-                if plan["fail_fast"].get("max_wall_min"):  # the runners stop claiming at this time even when the launcher is gone
-                    plan["fail_fast"]["deadline"] = time.time() + plan["fail_fast"]["max_wall_min"] * 60
-                    put_text(w, plan["plan_file"], json.dumps(plan))
                 for pool in plan["pools"]:
-                    pool_leases = []
-                    if pool != "serverless":
-                        pool_leases = lease_many(stack, w, a, plan, pool, volroot=volroot, me=me)
-                        cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
-                        relane(plan, pool, a, len(pool_leases), cores)
-                        put_text(w, plan["plan_file"], json.dumps(plan))  # the runners read the pool's queue and table from it
-                        pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
-                    spec = plan["pools"][pool]
-                    print(f"  {pool}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
-                          f"{spec['expected_min']:g} min (longest shard {spec['longest_min']:g}, serial sum {spec['serial_min']:g})", flush=True)
-                    paths = {"shard": f"{base_dir}/tests_{run_id}_{pool}.ipynb", "runner": f"{base_dir}/runner_{run_id}_{pool}.ipynb"}
-                    for kind, nb in (("shard", build_notebook(plan, pool)), ("runner", build_runner_notebook(plan, pool))):
-                        body = base64.b64encode(json.dumps(nb, indent=1).encode()).decode()
-                        w.workspace.import_(paths[kind], format=ImportFormat.JUPYTER, content=body, overwrite=True)
-                        nbs.append(paths[kind])
-                        print(f"Uploaded {kind} notebook {paths[kind]}", flush=True)
-                    job_run = submit_pool_job(w, plan, pool, paths, pool_leases)
-                    runs[pool] = job_run
-                    pool_info.setdefault(pool, {})["job_run"] = job_run
-                    t_submit[pool] = time.monotonic()
-                    for l in pool_leases:
-                        l.job_run(job_run)
-                    try:
-                        print(f"  {pool}: run {job_run}  {w.jobs.get_run(job_run).run_page_url}", flush=True)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    start_pool(w, a, plan, pool, stack, volroot=volroot, me=me, base_dir=base_dir, nbs=nbs, runs=runs, pool_info=pool_info,
+                               t_submit=t_submit, fmt=ImportFormat.JUPYTER)
                 print(f"  heartbeats: {stage}/hb/ and {stage}/runners/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
                 live = Live(w, plan, local_out)
                 rc = watch(w, runs, plan, pool_info, live)
@@ -1867,6 +1930,7 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     rc = rc or EXIT_FAILED
                 records = runner_records(w, plan, local_out)
                 rows = collect(w, plan, runs, local_out, records, live.fetched)
+                mark_empty_units(plan, rows)
                 for pool, info in pool_info.items():
                     walls = [r["wall_s"] for r in rows if r["pool"] == pool and isinstance(r["wall_s"], int)]
                     info["longest_s"] = max(walls) if walls else "-"
@@ -1879,6 +1943,7 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 recorded = True
                 text = summary_md(plan, rows, pool_info)
                 (local_out / "summary.md").write_text(text)
+                (local_out / "plan.json").write_text(json.dumps(plan, indent=1))  # --rerun-failed reads each chunk's env from it
                 print("\n" + table_text(rows))
                 for pool, info in pool_info.items():
                     print(f"{pool}: {speedup_line(info)}")
@@ -1957,6 +2022,8 @@ def runner_records(w, plan: dict, local_out: Path) -> Dict[str, List[dict]]:
 
 def verdict_of(line: dict) -> str:
     """The verdict word of a chunk's one-line result (as ``shard_verdict`` names the rows of the summary)."""
+    if line.get("overrun") and not line.get("failed_chunk"):
+        return "OVERRUN"
     if line.get("rc") == 5 and not line.get("failed_chunk"):
         return "EMPTY"
     if not line.get("failed_chunk"):

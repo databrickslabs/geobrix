@@ -1,6 +1,7 @@
 """Tests for gbx:test:databricks: the shards read from CI's files, the selection (`affected` included), the plan, the queue
 and the runners that take shards from it, the notebooks and the result files. No network and no workspace."""
 
+import contextlib
 import importlib.util
 import json
 import multiprocessing
@@ -2307,6 +2308,82 @@ def test_rerun_failed_runs_only_the_test_ids_that_failed_in_that_run(tmp_path, m
     got = launcher.rerun_shards(run, REPO_ROOT)
     assert [s.name for s in got] == [f"rerun {files[0]}"] and got[0].paths == [f"{files[0]}::test_a[x-1]", f"{files[0]}::TestK::test_b"]
     assert launcher.rerun_shards(tmp_path / "absent", REPO_ROOT) == []
+
+
+def _failed_junit(path, cases):
+    """A junit file whose cases (classname, name) all failed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f'<testcase classname="{c}" name="{n}" time="1"><failure message="boom"/></testcase>' for c, n in cases)
+    path.write_text(f"<testsuites><testsuite tests='{len(cases)}'>{body}</testsuite></testsuites>")
+
+
+def test_a_heavy_rerun_runs_on_the_jar_pool_with_its_integration_tests_and_the_family_env(shards, tmp_path):
+    run = tmp_path / "tst-old"
+    vx = "test.vectorx.test_tin_conforming_mode"
+    _failed_junit(run / "heavy-vectorx" / "junit.xml", [(vx, "test_conforming_mode_answers_on_the_jvm[gbx_st_triangulate]")])
+    _failed_junit(run / "manager-family-2-3-1-2" / "junit.xml", [("test.manager.test_family_cross_tier", "test_rows[RASTER_ACCESSOR-x]")])
+    (run / "plan.json").write_text(json.dumps({"shards": {"manager-family-2-3-1-2": {"env": {"GBX_ORACLE_TABLES": "RASTER_ACCESSOR,SPEC_DEM"}}}}))
+    got = {s.name: s for s in launcher.rerun_shards(run, REPO_ROOT, shards)}
+    heavy = got["rerun test/vectorx/test_tin_conforming_mode.py"]
+    assert heavy.kind == "heavy" and heavy.pool == ts.POOL_JAR and "-m" not in ts.pytest_args(heavy), "not deselected, and with the JAR"
+    fam = got["rerun test/manager/test_family_cross_tier.py"]
+    assert fam.oracle_tables == "RASTER_ACCESSOR,SPEC_DEM" and ts.shard_env(fam)["GBX_ORACLE_TABLES"] == "RASTER_ACCESSOR,SPEC_DEM"
+    assert not heavy.subset and not fam.subset, "a rerun that collects nothing is a selection error, not a pass"
+
+
+def test_an_overrun_chunk_is_stopped_and_reported_as_overrun_not_as_a_failed_test():
+    res = {"rc": 130, "reason": "killed by watchdog: ran past 6 min, 2x its estimate", "overrun": True, "failed": 0, "errors": 0, "passed": 4}
+    assert not sr.chunk_failed(res), "its own run and its runner task do not fail"
+    assert launcher.shard_verdict(res, None) == "OVERRUN"
+    assert launcher.verdict_of(sr.result_line("a", res, 0, 1)) == "OVERRUN"
+    assert launcher.shard_verdict(dict(res, failed=1), None) != "OVERRUN", "a test that failed first is a failure"
+    src = launcher.run_source({"stage": "/x"})
+    assert "if chunk_failed(result):" in src and "def chunk_failed(" in src, "the shard raises by the same rule"
+    assert 'OVERRUN_S = 0 if S.get("smoke")' in src, "the smoke has no estimate to overrun"
+    row = {"name": "a [1/2]", "verdict": "OVERRUN", "reason": res["reason"]}
+    assert launcher.is_failure(row), "the run is not green: the tests after the stop did not run"
+    rec = sr.run_loop(sr.DirQueue("/tmp/gbx-overrun-q-" + str(os.getpid()), ["a"]), "r0", lambda slug: res)
+    assert rec["shards"][0]["overrun"] and not [x for x in rec["shards"] if sr.chunk_failed(x)], "the runner's bad list skips it"
+
+
+def test_empty_test_parts_say_empty_and_fail_their_unit_only_when_no_part_collected_a_test(shards):
+    files = _ds_files(1)
+    plan = {"shards": {f"p{i}": {"test_part": f"{i}/3", "files": files, "tables": []} for i in range(3)}}
+    rows = [{"slug": f"p{i}", "name": f"x [{i + 1}/3]", "verdict": v, "reason": ""} for i, v in enumerate(("EMPTY", "ok", "ok"))]
+    launcher.mark_empty_units(plan, rows)
+    assert rows[0]["verdict"] == "EMPTY" and not launcher.is_failure(rows[0]), "one empty part of a unit whose others ran"
+    rows = [dict(r, verdict="EMPTY") for r in rows]
+    launcher.mark_empty_units(plan, rows)
+    assert all(launcher.is_failure(r) for r in rows) and "no part" in rows[0]["reason"], "a unit that collected nothing fails"
+    assert launcher.is_failure({"name": "rerun test/x.py", "verdict": "EMPTY", "subset": False}), "a rerun that collects nothing fails"
+
+
+def test_the_wall_budget_starts_after_the_lease_wait_when_the_pool_is_submitted(shards, monkeypatch, tmp_path):
+    plan = _plan(_args("--max-wall-min", "10"), ts.select(shards, "ds,pyrx"))
+    pool = next(iter(plan["pools"]))
+    now = [1000.0]
+    seen = []
+    monkeypatch.setattr(launcher.time, "time", lambda: now[0])
+
+    def lease_many(*a, **k):
+        now[0] += 25 * 60  # a 25 min wait for a free cluster
+        return [type("L", (), {"cluster_id": "c1", "job_run": lambda self, r: None})()]
+
+    monkeypatch.setattr(launcher, "lease_many", lease_many)
+    monkeypatch.setattr(launcher, "relane", lambda *a, **k: None)
+    monkeypatch.setattr(launcher, "put_text", lambda w, path, text: seen.append(json.loads(text)) if path.endswith("plan.json") else None)
+    monkeypatch.setattr(launcher, "submit_pool_job", lambda *a, **k: 77)
+    w = type("W", (), {"workspace": type("WS", (), {"import_": lambda *a, **k: None})(),
+                       "clusters": type("C", (), {"get": lambda self, cid: type("CI", (), {"node_type_id": "m5d.8xlarge"})()})(),
+                       "jobs": type("J", (), {"get_run": lambda self, rid: type("R", (), {"run_page_url": ""})()})()})()
+    runs, info, nbs, t_submit = {}, {}, [], {}
+    launcher.start_pool(w, _args("--max-wall-min", "10"), plan, pool, contextlib.ExitStack(), volroot="/Volumes/c/s/v", me="me",
+                        base_dir="/x", nbs=nbs, runs=runs, pool_info=info, t_submit=t_submit)
+    assert runs == {pool: 77}
+    assert plan["pools"][pool]["deadline"] == 1000.0 + 25 * 60 + 10 * 60, "the budget counts from the submit, not from before the lease"
+    assert seen[-1]["pools"][pool]["deadline"] == plan["pools"][pool]["deadline"], "the runners read it from the plan"
+    src = launcher.runner_source(plan)
+    assert 'SPEC.get("deadline")' in src
 
 
 def test_affected_runs_the_family_rows_of_the_changed_functions_only_with_k(shards):

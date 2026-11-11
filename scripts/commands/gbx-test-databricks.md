@@ -15,7 +15,9 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - `all-heavy`: one shard per heavy test dir (needs the JAR pool).
   - `affected`: the test files and family oracle tables the files changed between `--base` and `--sha` reach through the import graph (see "Affected"). It runs those files and tables only, never whole CI shards.
   - Names or groups, comma separated: `pyrx` (both halves), `"zarr 2/4"`, `scripts/ci`.
-  - Test files, comma separated (`test/pyrx/test_env.py`, from `python/geobrix` or from the repo root): one shard `files` that runs just those files, with the marker CI uses. For a quick re-run of the files a change touched.
+  - Test files, comma separated (`test/pyrx/test_env.py`, from `python/geobrix` or from the repo root): shards of just those files. For a quick re-run of the files a change touched.
+    - Each file runs where its CI shard runs: `files` (light), `files heavy` (the JAR pool, with its integration tests).
+    - The family file runs as `files family`, timed and cut by its oracle tables. `--env GBX_ORACLE_TABLES=<T>` plans it by those tables only.
 - `--base <rev>` - for `affected`. Default: `origin/streamline/0.6.0`.
 - `--allow-broad` - let `affected` run a selection over 25% of the light bank. Without it, such a selection is refused with the reason.
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
@@ -39,10 +41,16 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--max-failures <n>` - stop the run when n tests have failed or errored. Default: 20. 0 turns it off.
 - `--maxfail <n>` - pytest's `--maxfail` in each chunk, so a broken chunk stops early. Default: 3, and 1 with `--rerun-failed`. 0 turns it off.
 - `--test-timeout <s>` - fail a test whose call runs longer than s seconds (setup and teardown get 3x). Default: 120. 0 turns it off.
-- `--overrun-x <x>` - stop a chunk at x times its estimate, never under 3 min (5 min on Serverless). Its times become lower bounds. Default: 2. 0 turns it off.
-- `--max-wall-min <n>` - stop the run at n minutes of wall after the submit. Default: 20. 0 turns it off.
+- `--overrun-x <x>` - stop a chunk at x times its estimate, never under 3 min (5 min on Serverless). Default: 2. 0 turns it off.
+  - Such a chunk is OVERRUN, not FAILED: its run and its runner go on, and its times become lower bounds. The run still exits non-zero, because its later tests did not run.
+  - The smoke chunk has no overrun stop.
+- `--max-wall-min <n>` - stop the run at n minutes of wall. Default: 20. 0 turns it off.
+  - The budget of each pool starts when its job is submitted, after its cluster lease, not during the lease wait.
 - `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all.
 - `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.
+  - Each chunk runs where its file's CI shard runs: a heavy dir's file on the JAR pool, with its integration tests.
+  - It takes the env of the chunk the test failed in (the run's `plan.json`).
+  - A rerun chunk that collects nothing fails the run (a selection error).
 - `--no-fail-fast` - run every chunk to its end: no stop rule and no `--maxfail`. The smoke chunk stays.
 - `--no-smoke` - start the whole queue at once, without the smoke chunk first.
 - `--pip-extra "<reqs>"` - more pip requirements the tests import.
@@ -117,6 +125,11 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - 20 tests failed or errored over the chunks (`--max-failures`);
   - the wall reached 20 min (`--max-wall-min`). The summary lists the chunks that did not run.
 - A failed chunk has a failed or erroring test (an import error at collection included), or it ended without a result. A part that collects nothing is not a failed chunk, and neither is a chunk stopped at 2x its estimate with no test failed.
+- A chunk that collects nothing is EMPTY in the summary. It fails the run unless the empty selection is intended:
+  - a part of a split shard whose files the marker deselects;
+  - a test part whose unit's other parts collected tests;
+  - an `affected` subset.
+- A unit none of whose test parts collected a test fails, and so does a `--rerun-failed` chunk that collects nothing.
 - To stop, the launcher writes `<stage>/stop.json` and cancels every pool's job: the running chunks and the queue. Each runner also checks the rules, the marker and the wall before it claims.
 - It prints `stopped early: <rule>` and the first failure of each failed chunk. `summary.md` and the run entry of the timing history record the rule.
 - A chunk the stop cut short, or that pytest stopped at `--maxfail`, leaves lower bounds for what it did not finish, flagged with the rule.

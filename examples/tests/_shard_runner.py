@@ -353,7 +353,7 @@ def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s,
         t1 = clock()
         rec["shards"].append({"slug": slug, "claim_s": round(t0 - t_claim, 3), "start": t0, "end": t1, "rc": out.get("rc"),
                               "reason": out.get("reason") or "", "pid": out.get("pid"), "isolation": out.get("isolation"),
-                              "heavy": slug in heavy, "child": out.get("child") or {},
+                              "heavy": slug in heavy, "child": out.get("child") or {}, "overrun": bool(out.get("overrun")),
                               **{k: out.get(k) for k in ("passed", "failed", "errors", "skipped")}})
         rec["current"] = None
         if on_result is not None:

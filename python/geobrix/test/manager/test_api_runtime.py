@@ -241,6 +241,8 @@ def test_a_jar_companion_a_test_installs_stays_over_a_later_ensure(monkeypatch):
     name = "gbx_st_triangulate"
     monkeypatch.setattr(_heavy, "_companions", lambda: ["x.Y"])
     monkeypatch.setattr(_heavy, "_sql_name", lambda fqn: name)
+    # the fake session has no conf: where a payload is present the helper would name it to the JVM
+    monkeypatch.setattr(_heavy, "_point_jvm_at_payload", lambda spark: None)
     assert _heavy.install_jvm_scalars(spark, ("gbx_st_",)) == [name]
     assert installed == [name]
     assert name in _api._done(spark) and _api.chosen(spark)[name] == ("L1", "-")

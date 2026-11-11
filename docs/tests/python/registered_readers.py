@@ -307,11 +307,23 @@ RETIRED_NAME_PAGES = ("docs/docs/release-notes", "docs/docs/migration-0-6")
 DEFERRED_PAGES = frozenset()
 
 
+def _function_names():
+    """The SQL names of the manifest's functions, with and without ``gbx_``: ``gbx_rst_gdal`` is a function (the GDAL
+    command runner), not the retired ``*_gdal`` reader, though it ends the same way."""
+    from databricks.labs.gbx import manifest
+
+    names = set(manifest.load().functions)
+    return names | {n[len("gbx_") :] for n in names if n.startswith("gbx_")}
+
+
 def retired_name_mentions(text):
     """``(line, kind, matched text)`` for each retired reader name ``text`` mentions."""
     found = set()
+    functions = _function_names()
     for kind, pattern in RETIRED_NAME_PATTERNS:
         for match in pattern.finditer(text):
+            if match.group(0) in functions:
+                continue
             found.add((text.count("\n", 0, match.start()) + 1, kind, match.group(0)))
     return sorted(found)
 

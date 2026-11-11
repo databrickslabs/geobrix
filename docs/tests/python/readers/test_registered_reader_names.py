@@ -197,6 +197,8 @@ def test_deferred_notebooks_still_need_a_rewrite():
         ("GDAL and OGR read it; run `gdal.Warp` or `from osgeo import gdal`.", []),
         ("`gdalinfo` and `gdal_calc` are CLIs; see docs/tests-dbr/python/readers/ogr/examples.py", []),
         ("`gtiff_gbx`, `raster_gbx` and `vector_gbx`", []),
+        # a function whose name ends like a retired reader is a function
+        ("Run `gbx_rst_gdal(tile, 'raster info')`; `rst_gdal` in Python.", []),
     ],
 )
 def test_the_retired_name_scan_finds_what_a_page_mentions(text, expected):

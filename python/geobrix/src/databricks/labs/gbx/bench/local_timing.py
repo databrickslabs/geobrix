@@ -951,7 +951,11 @@ def probe_readdir(rows: str) -> str:
     `RuntimeError` with its exit code and stderr (the pass then ends with exit 3).
     """
     env = {k: v for k, v in os.environ.items() if k != "GDAL_DISABLE_READDIR_ON_OPEN"}
-    env["PYTHONPATH"] = os.pathsep.join(p for p in sys.path if p)
+    # The parent's own PYTHONPATH first: on a Databricks node it carries the folder whose sitecustomize activates the wheel's
+    # native payload (a notebook's interpreter reads no .pth). Without it the child has no payload libgdal to reach, and
+    # reports "per-open value cannot be set" for a tile folder a worker would handle.
+    inherited = (os.environ.get("PYTHONPATH") or "").split(os.pathsep)
+    env["PYTHONPATH"] = os.pathsep.join(p for p in [*inherited, *sys.path] if p)
     try:
         out = subprocess.run(
             [sys.executable, "-c", _PROBE, rows],

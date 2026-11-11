@@ -4,6 +4,7 @@ import dataclasses
 import json
 import math
 import os
+import sys
 import time
 import types
 
@@ -821,6 +822,23 @@ def test_the_probe_times_the_one_cold_listing_and_nothing_else(tmp_path, monkeyp
     assert inside["cleared_before"] and inside["listdirs"] == 0
     assert 0.05 <= got["listing_seconds"] < 0.5
     assert got["files"] == 6 and got["tiles"] == ["r0.tif", "r1.tif"]
+
+
+def test_the_probe_child_keeps_the_parents_pythonpath_before_its_sys_path(monkeypatch):
+    """On a Databricks node the parent's PYTHONPATH holds the folder whose sitecustomize activates the native payload; the
+    child, started with sys.path alone, never reached the payload's libgdal and reported the per-open value as unsettable.
+    """
+    seen = {}
+
+    def run(*a, **k):
+        seen.update(k["env"])
+        return _Done(stdout=_probe_json())
+
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join(["/sc", "/site"]))
+    monkeypatch.setattr(lt.subprocess, "run", run)
+    lt.probe_readdir("/x/rows")
+    got = seen["PYTHONPATH"].split(os.pathsep)
+    assert got[:2] == ["/sc", "/site"] and set(p for p in sys.path if p) <= set(got)
 
 
 def test_the_probe_says_which_of_two_reasons_left_the_mode_none(monkeypatch):

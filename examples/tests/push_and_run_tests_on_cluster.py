@@ -35,7 +35,8 @@ Options:
   --wheel <path>         the env6 wheel or the folder that holds it (newest by mtime; default dist/env6/); it carries dependencies and native payload, not the code under test
   --jar-path <path>      the JAR of the heavy shards, or its folder (default python/geobrix/lib/; copied out and sha-checked)
   --max-parallel <n>     runners per cluster, so shards side by side (default: the node's cores / 8; 4 on 32 vCPU)
-  --serverless           run the selected light shards on Serverless env 6 (a fidelity leg; Spark-free dirs only)
+  --serverless           run the selected light shards on Serverless env 6 (a fidelity leg; its workers run the
+                         wheel, so a Spark test needs a --wheel built at --sha)
   --fresh-cluster        use a new cluster that ends with the run, not the pools
   --pool-light <name>    default gbx-test-1n          --pool-jar <name>  default gbx-test-1n-jar
   --node-type <t>        node of a pool cluster made by this run (default m5d.8xlarge, 32 vCPU)

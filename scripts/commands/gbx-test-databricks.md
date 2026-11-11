@@ -26,7 +26,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards. The cut sets the queue's order and grain, not which slot runs a part.
 - `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min. A task spends about 0.7 min before its first test.
 - `--timings <path>` - the timing history of every run. Default: `test-logs/databricks-tests/timings-history.json`. The run cuts and orders the queue by it, then merges its own times in.
-- `--serverless` - run the light shards on Serverless env 6 (a fidelity leg). Spark-free dirs only.
+- `--serverless` - run the light shards on Serverless env 6 (a fidelity leg). A Spark test runs its UDFs on workers that import the wheel, not the checkout. Pass a `--wheel` built at `--sha`, or the wheel guard fails the shard.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
 - `--pool-light <name>`, `--pool-jar <name>` - the pools. Defaults: `gbx-test-1n` (no JAR), `gbx-test-1n-jar` (the JAR).
 - `--node-type <t>` - the node of a pool cluster this run makes. Default: `m5d.8xlarge` (32 vCPU).

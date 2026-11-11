@@ -4,6 +4,7 @@ and the runners that take shards from it, the notebooks and the result files. No
 import importlib.util
 import json
 import multiprocessing
+import os
 import subprocess
 import sys
 import textwrap
@@ -1565,6 +1566,101 @@ def test_a_runner_waits_when_only_heavy_chunks_are_left_and_the_gate_is_taken(tm
     assert holder.try_acquire()
     holder.release()
     assert sr.HeavyGate(str(tmp_path / "g2")).try_acquire()
+
+
+def test_lost_commits_spread_over_the_free_rows_and_never_spend_the_claim_budget():
+    tried, n = [], {"conflicts": 0}
+
+    def sql(q):
+        if q.startswith("SELECT slug"):
+            return [("a",), ("b",), ("c",), ("d",)]
+        if q.startswith("UPDATE"):
+            tried.append(q.split("slug = '")[1].split("'")[0])
+            if n["conflicts"] < 150:  # more lost commits than the 60 attempts: every other runner's claim won
+                n["conflicts"] += 1
+                raise RuntimeError("ConcurrentAppendException: files were added")
+            return [(1,)]
+        return [("r1",)]  # the read-back
+
+    import random
+
+    q = sr.DeltaQueue(sql, "t", sleep=lambda s: None, rng=random.Random(7).random)
+    assert q.claim("r1") in {"a", "b", "c", "d"} and q.conflicts == 150
+    assert len(set(tried)) > 1, "a retry takes another free row, not the first one every runner fights for"
+
+
+def test_a_claim_gives_up_only_when_conflicts_outlast_the_claim_budget():
+    now = [0.0]
+
+    def sql(q):
+        if q.startswith("SELECT slug"):
+            return [("a",)]
+        raise RuntimeError("DELTA_CONCURRENT_WRITE")
+
+    q = sr.DeltaQueue(sql, "t", sleep=lambda s: now.__setitem__(0, now[0] + s), clock=lambda: now[0], budget_s=120.0)
+    with pytest.raises(RuntimeError, match="no claim"):
+        q.claim("r1")
+    assert now[0] >= 120.0
+
+
+def test_the_gate_is_released_whenever_the_runner_leaves_its_loop(tmp_path):
+    gate_path = str(tmp_path / "heavy.lock")
+    q = sr.DirQueue(str(tmp_path / "q"), ["h", "l"], heavy={"h"})
+    calls = {"n": 0}
+
+    def note(rec):  # the record's copy to the Volume fails while the heavy chunk is current
+        calls["n"] += 1
+        if rec.get("current") == "h":
+            raise OSError("Volume write failed")
+
+    rec = sr.run_loop(q, "r0", lambda slug: {"rc": 0}, heavy={"h"}, gate=sr.HeavyGate(gate_path), on_change=note)
+    assert [x["slug"] for x in rec["shards"]] == ["h", "l"], "a record that cannot be saved stops nothing"
+    assert sr.HeavyGate(gate_path).try_acquire(), "and the gate is free again"
+
+    class Boom:
+        def claim(self, who, offset=0, heavy_ok=True):
+            raise KeyboardInterrupt
+
+    gate = sr.HeavyGate(gate_path + "2")
+    with pytest.raises(KeyboardInterrupt):
+        sr.run_loop(Boom(), "r0", lambda slug: {}, heavy={"h"}, gate=gate)
+    assert sr.HeavyGate(gate_path + "2").try_acquire(), "an interrupt leaves no lock behind"
+
+
+def test_a_gate_that_cannot_make_its_lock_lets_the_runner_go_on_ungated(tmp_path):
+    (tmp_path / "file").write_text("x")
+    gate = sr.HeavyGate(str(tmp_path / "file" / "heavy.lock"))  # a file where its folder should be: makedirs fails
+    assert gate.try_acquire() and "Error" in gate.error, "it cannot gate: it says why and does not block the runner"
+    q = sr.DirQueue(str(tmp_path / "q"), ["h", "l"], heavy={"h"})
+    rec = sr.run_loop(q, "r0", lambda slug: {"rc": 0}, heavy={"h"}, gate=sr.HeavyGate(str(tmp_path / "file" / "x.lock")))
+    assert [x["slug"] for x in rec["shards"]] == ["h", "l"] and rec["gate_error"] and not rec["error"]
+
+
+def test_a_runner_that_loses_the_light_rows_waits_for_the_heavy_ones(tmp_path):
+    q = sr.DirQueue(str(tmp_path / "q"), ["h", "l"], heavy={"h"})
+    real_open = os.open
+
+    def racing_open(path, flags, mode=0o777):  # another runner claims "l" between the scan and this runner's create
+        if path.endswith("l.claim") and not os.path.exists(path):
+            fd = real_open(path, flags, mode)
+            os.close(fd)
+        return real_open(path, flags, mode)
+
+    sr.os.open = racing_open
+    try:
+        assert q.claim("r1", heavy_ok=False) is sr.WAIT, "a heavy chunk is still queued: wait, do not quit"
+    finally:
+        sr.os.open = real_open
+
+
+def test_a_result_that_cannot_be_written_does_not_fail_the_runner(tmp_path):
+    q = sr.DirQueue(str(tmp_path / "q"), ["a"])
+
+    def on_result(slug, res, start, end):
+        raise OSError("Volume write failed")
+
+    rec = sr.run_loop(q, "r0", lambda slug: {"rc": 0}, on_result=on_result)
+    assert not rec["error"] and rec["result_errors"] and "a" in rec["result_errors"][0]
 
 
 def test_the_delta_queue_leaves_heavy_chunks_to_a_runner_that_holds_the_gate():

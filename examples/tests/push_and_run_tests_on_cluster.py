@@ -997,13 +997,14 @@ else:
 
     HEAVY = SPEC.get("heavy") or []
     q = DeltaQueue(sql, TABLE, heavy=HEAVY)
-    # the runners of one cluster share the node's disk: one lock there lets one heavy chunk run at a time
+    # the runners of one cluster share the node's disk: one lock there lets one heavy chunk run at a time. The path is the same for
+    # every runner of the node (never a folder of one runner's own, which would gate nothing); a gate that cannot make it runs ungated
     try:  # the node's local disk; Serverless has none to write
         os.makedirs("/local_disk0/gbxtest", exist_ok=True)
-        scratch = "/local_disk0/gbxtest"
-    except OSError:  # a temp dir of this runner's own: a shard notebook there runs as another user
-        scratch = tempfile.mkdtemp(prefix="gbxtest-")
-    gate = HeavyGate(scratch + "/" + PLAN["run_id"] + "-" + POOL + "/heavy.lock") if HEAVY else None
+        gate_root = "/local_disk0/gbxtest"
+    except OSError:
+        gate_root = tempfile.gettempdir() + "/gbxtest"
+    gate = HeavyGate(gate_root + "/" + PLAN["run_id"] + "-" + POOL + "/heavy.lock") if HEAVY else None
     SMOKE = ROLE == "smoke"
     RESULTS = STAGE + "/results"
     os.makedirs(RESULTS, exist_ok=True)

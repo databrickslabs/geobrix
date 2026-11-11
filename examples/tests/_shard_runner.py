@@ -57,14 +57,19 @@ class HeavyGate:
 
     def __init__(self, path: str):
         self.path, self.fd = path, None
+        self.error = ""  # why the lock file cannot be made: the runner then goes on ungated (a slower node, never a stuck one)
 
     def try_acquire(self) -> bool:
         import fcntl
 
-        if self.fd is not None:
+        if self.fd is not None or self.error:
             return True
-        os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError as exc:
+            self.error = f"{type(exc).__name__}: {exc}"[:300]
+            return True
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
@@ -113,6 +118,8 @@ class DirQueue:
             with os.fdopen(fd, "w") as f:
                 f.write(who)
             return slug
+        if not heavy_ok and any(not os.path.exists(os.path.join(self.root, s + ".claim")) for s in self.order if s in self.heavy):
+            return WAIT  # other runners took the light ones first; a heavy chunk is still queued
         return None
 
 
@@ -122,10 +129,14 @@ class DeltaQueue:
     as tuples (``lambda q: [tuple(r) for r in spark.sql(q).collect()]`` on a cluster)."""
 
     def __init__(self, sql: Callable[[str], list], table: str, *, attempts: int = 60, sleep: Callable[[float], None] = time.sleep,
-                 rng: Callable[[], float] = random.random, heavy: Iterable[str] = ()):
+                 rng: Callable[[], float] = random.random, heavy: Iterable[str] = (), clock: Callable[[], float] = time.time,
+                 budget_s: float = 600.0):
         self.sql, self.table, self.attempts, self.sleep, self.rng = sql, table, attempts, sleep, rng
         self.heavy = set(heavy)  # the plan says which chunks are heavy; the table holds the claims only
         self.conflicts = 0
+        # a lost commit (another runner's claim, or a chunk noting its run id, won the table) is retried until this much time has
+        # gone, not counted against ``attempts``: with many runners the losses are many, and each is progress for someone else
+        self.clock, self.budget_s = clock, budget_s
 
     @staticmethod
     def create_sql(table: str, order: List[str], expected: Dict[str, float]) -> str:
@@ -135,8 +146,9 @@ class DeltaQueue:
                 f"CAST(NULL AS STRING) AS child_job_id FROM VALUES {rows} AS v(slug, rank, expected_min)")
 
     def claim(self, who: str, offset: int = 0, heavy_ok: bool = True):
-        errors = 0
-        for attempt in range(self.attempts):
+        errors, attempt, lost = 0, 0, 0
+        t0 = self.clock()
+        while attempt < self.attempts:
             free = [r[0] for r in self.sql(f"SELECT slug FROM {self.table} WHERE owner IS NULL ORDER BY rank")]
             if not free:
                 return None
@@ -145,24 +157,33 @@ class DeltaQueue:
                 if not light:
                     return WAIT
                 free = light
-            slug = free[offset % len(free)] if attempt == 0 and offset else free[0]
+            if attempt == 0 and not lost:
+                slug = free[offset % len(free)] if offset else free[0]
+            else:  # a retry takes a random free row: the runners that lost the same commit do not all fight for free[0] again
+                slug = free[min(len(free) - 1, int(self.rng() * len(free)))]
             try:
                 rows = self.sql(f"UPDATE {self.table} SET owner = {_lit(who)}, claimed_at = current_timestamp() "
                                 f"WHERE slug = {_lit(slug)} AND owner IS NULL")
             except Exception as exc:  # noqa: BLE001 - a lost commit is retried; anything else a few times, then raised
                 if CONFLICT.search(f"{type(exc).__name__}: {exc}"):
                     self.conflicts += 1
-                else:
-                    errors += 1
-                    if errors > 3:
-                        raise
+                    lost += 1
+                    if self.clock() - t0 > self.budget_s:
+                        break
+                    self.sleep(min(5.0, 0.3 * (1 + lost // 10)) + self.rng() * 1.2)
+                    continue
+                errors += 1
+                if errors > 3:
+                    raise
+                attempt += 1
                 self.sleep(0.3 + self.rng() * 1.2)
                 continue
+            attempt += 1
             if rows and int(rows[0][0]) == 1:
                 owner = self.sql(f"SELECT owner FROM {self.table} WHERE slug = {_lit(slug)}")
                 if owner and owner[0][0] == who:  # read back: the row is ours
                     return slug
-        raise RuntimeError(f"no claim after {self.attempts} attempts on {self.table} ({self.conflicts} lost commits)")
+        raise RuntimeError(f"no claim after {attempt} attempts and {lost} lost commits in {self.clock() - t0:.0f} s on {self.table}")
 
 
 WATCHDOG_LABEL = "killed by watchdog: "
@@ -261,10 +282,27 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
     ``on_result(slug, result, start, end)`` is called the moment a shard ends (the one-line result the launcher polls). ``limit``
     caps the shards this runner takes (the smoke task takes one). ``hold()``, asked before the first claim every ``hold_s``,
     keeps the runner waiting while it says True (the ramp: the runners past the first few wait for clean results)."""
-    note = on_change or (lambda rec: None)
     heavy = set(heavy)
     gated = bool(heavy and gate)
     rec = {"runner": who, "start": clock(), "end": None, "current": None, "done": False, "shards": [], "error": "", "stopped": ""}
+
+    def note(r):  # the record is a heartbeat and a report: one that cannot be saved (a Volume write) stops nothing
+        try:
+            (on_change or (lambda _r: None))(r)
+        except Exception as exc:  # noqa: BLE001
+            rec["note_errors"] = rec.get("note_errors", 0) + 1
+            rec["note_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+
+    try:
+        return _loop(queue, who, execute, rec, note, clock=clock, offset=offset, heavy=heavy, gate=gate if gated else None, wait_s=wait_s,
+                     sleep=sleep, stop=stop, on_result=on_result, limit=limit, hold=hold, hold_s=hold_s)
+    finally:  # whatever ends the loop (an error, an interrupt), the cluster's heavy gate is not left held
+        if gated:
+            gate.release()
+
+
+def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s, sleep, stop, on_result, limit, hold, hold_s) -> dict:
+    gated = gate is not None
     note(rec)
     first = True
     while hold is not None and not rec["stopped"]:
@@ -285,6 +323,8 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
             break
         t_claim = clock()
         held = gate.try_acquire() if gated else True
+        if gated and gate.error and not rec.get("gate_error"):
+            rec["gate_error"] = f"no heavy gate ({gate.error}): heavy chunks run ungated on this runner"
         try:
             slug = queue.claim(who, offset=offset if first else 0, **({"heavy_ok": held} if gated else {}))
         except Exception as exc:  # noqa: BLE001 - a runner that cannot claim stops; the others go on
@@ -319,8 +359,8 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
         if on_result is not None:
             try:
                 on_result(slug, out, t0, t1)
-            except Exception as exc:  # noqa: BLE001 - the live result is a report; the run goes on without it
-                rec["error"] = rec["error"] or f"result not written for {slug}: {type(exc).__name__}: {str(exc)[:200]}"
+            except Exception as exc:  # noqa: BLE001 - the live result is a report; the run goes on without it (never a runner error)
+                rec.setdefault("result_errors", []).append(f"result not written for {slug}: {type(exc).__name__}: {str(exc)[:200]}")
         note(rec)
     rec["end"], rec["done"] = clock(), True
     note(rec)

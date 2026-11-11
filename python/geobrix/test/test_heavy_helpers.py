@@ -98,7 +98,21 @@ def _jvm(with_jar):
         return root
     kernels = type("K", (), {"BuildInfo": _BuildInfo})()
     gbx = type("G", (), {"kernels": kernels})()
-    return type("J", (), {"com": type("C", (), {"databricks": type("D", (), {"labs": type("L", (), {"gbx": gbx})()})()})()})()
+    return type(
+        "J",
+        (),
+        {
+            "com": type(
+                "C",
+                (),
+                {
+                    "databricks": type(
+                        "D", (), {"labs": type("L", (), {"gbx": gbx})()}
+                    )()
+                },
+            )()
+        },
+    )()
 
 
 class _Session:
@@ -115,7 +129,15 @@ class _Session:
 
 def test_session_has_jar_sees_spark_jars_and_a_jar_the_cluster_installed_as_a_library():
     jar = "/repo/python/geobrix/lib/geobrix-0.6.0-jar-with-dependencies.jar"
-    assert session_has_jar(_Session(jars=jar), jar), "the local session started with spark.jars"
-    assert session_has_jar(_Session(with_jar=True), jar), "a pool cluster: the JAR is a cluster library, spark.jars names nothing"
-    assert not session_has_jar(_Session(), jar), "a JAR-free JVM: py4j resolves the class name to a package"
-    assert not session_has_jar(_Session(connect=True), jar), "a Connect session has no JVM to ask"
+    assert session_has_jar(
+        _Session(jars=jar), jar
+    ), "the local session started with spark.jars"
+    assert session_has_jar(
+        _Session(with_jar=True), jar
+    ), "a pool cluster: the JAR is a cluster library, spark.jars names nothing"
+    assert not session_has_jar(
+        _Session(), jar
+    ), "a JAR-free JVM: py4j resolves the class name to a package"
+    assert not session_has_jar(
+        _Session(connect=True), jar
+    ), "a Connect session has no JVM to ask"

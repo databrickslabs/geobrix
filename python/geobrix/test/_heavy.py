@@ -64,7 +64,9 @@ def session_has_jar(spark, jar=None):
         return True
     try:
         return bool(spark._jvm.com.databricks.labs.gbx.kernels.BuildInfo.identity())
-    except Exception:  # noqa: BLE001 - no JVM (Connect), no class (a JavaPackage), or access refused: no JAR
+    except (
+        Exception
+    ):  # noqa: BLE001 - no JVM (Connect), no class (a JavaPackage), or access refused: no JAR
         return False
 
 

@@ -5634,8 +5634,9 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
             ring = [xy(x, y) for x, y in exact]
             if len(ring) != 3:
                 return f"{case.cid}: a triangle with {len(ring)} vertices"
-            # every level writes a triangle one way: counter-clockwise from its lowest (x, y) vertex
-            if exact[0] != min(exact) or _orientation(*exact) <= 0:
+            # every level writes a triangle one way: counter-clockwise from its lowest (x, y) vertex. A zero-area ring
+            # has no orientation (the levels keep its input order), so only its first vertex is judged.
+            if exact[0] != min(exact) or _orientation(*exact) < 0:
                 return f"{case.cid}: the ring {exact} does not run counter-clockwise from its lowest vertex"
             got.append(frozenset(ring))
         want = [frozenset(xy(x, y) for x, y in t) for t in case.expect]

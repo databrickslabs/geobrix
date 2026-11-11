@@ -986,3 +986,32 @@ def test_a_batched_session_run_gives_each_case_the_verdict_it_has_alone(
         assert dict(got[True])["cellarea_wrong"] is False
         assert dict(got[True])["cellarea_no_raise"] is False
         assert sum(ok for _, ok in got[True]) == 6, got[True]
+
+
+def test_the_triangle_oracle_judges_ring_order_and_lets_a_degenerate_ring_through():
+    """A ring that runs clockwise, or starts past its lowest vertex, is the wrong ring order. A zero-area ring has no
+    orientation: the levels write it from its lowest vertex and in its input order, so only that part is judged.
+    """
+    from shapely import wkb
+    from shapely.geometry import Polygon
+
+    from databricks.labs.gbx.bench import oracles
+
+    def judge(ring, expect=None):
+        rows = [{"triangle": wkb.dumps(Polygon(ring))}]
+        case = oracles.Case("probe", "f", (), "triangles", [expect or ring])
+        return oracles._check_vector_rows(case, rows)
+
+    ccw = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    order = "does not run counter-clockwise from its lowest vertex"
+    assert judge(ccw) is None
+    assert order in judge([(0.0, 0.0), (0.0, 1.0), (1.0, 0.0)], ccw)  # clockwise
+    assert order in judge([(1.0, 0.0), (0.0, 1.0), (0.0, 0.0)], ccw)  # rotated
+    flat = [(0.0, 0.0), (2.0, 0.0), (1.0, 0.0)]  # collinear, from its lowest vertex
+    assert judge(flat) is None
+    assert order in judge(
+        [(2.0, 0.0), (1.0, 0.0), (0.0, 0.0)], flat
+    )  # not from its lowest vertex
+    assert "want" in judge(
+        flat, [(0.0, 0.0), (3.0, 0.0), (1.0, 0.0)]
+    )  # other vertices: still red

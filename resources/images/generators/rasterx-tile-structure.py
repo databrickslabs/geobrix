@@ -59,8 +59,8 @@ class Field:
     tint: str
 
 FIELDS = [
-    Field("cellid", "bigint", True, "IDENTITY",
-          "Grid cell id — null unless tessellated", A_IDENT, T_IDENT),
+    Field("cellid", "bigint", False, "IDENTITY",
+          "Grid cell id — -1 unless tessellated", A_IDENT, T_IDENT),
     Field("raster", "binary", True, "PAYLOAD",
           "Encoded raster bytes — null when virtual", A_RASTER, T_RASTER),
     Field("path", "string", True, "REFERENCE",
@@ -81,7 +81,7 @@ FIELDS = [
 
 # Example tiles: materialized vs virtual
 MATERIALIZED_EXAMPLE = [
-    ("cellid", "null"),
+    ("cellid", "-1"),
     ("raster", "<GeoTIFF · 184 KB>"),
     ("path", "null"),
     ("path_mode", "null"),
@@ -92,7 +92,7 @@ MATERIALIZED_EXAMPLE = [
     ("metadata", '{driver→"GTiff", size→"188416"}'),
 ]
 VIRTUAL_EXAMPLE = [
-    ("cellid", "null"),
+    ("cellid", "-1"),
     ("raster", "null            ← bytes-free"),
     ("path", "/Vol/…/scene.cog"),
     ("path_mode", '"external"'),

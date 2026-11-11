@@ -18,11 +18,11 @@ In GeoBrix, a **tile** is not a simple binary column. It is a **structured type*
 
 A tile has the following structure:
 
-![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path (string, nullable), path_mode (string, storage mode: null / 'external' / 'managed'), window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string, last field)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
+![GeoBrix tile schema — cellid (bigint, required; -1 when not tessellated), raster (binary, nullable), path (string, nullable), path_mode (string, storage mode: null / 'external' / 'managed'), window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string, last field)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
 
 ```
 struct<
-  cellid: bigint,                                -- Grid cell ID (nullable)
+  cellid: bigint,                                -- Grid cell ID (never NULL; -1 when not tessellated)
   raster: binary,                                -- Raster bytes (NULL when virtual)
   path: string,                                  -- Source path (virtual) or provenance (materialized)
   path_mode: string,                             -- Storage mode: null, 'external', or 'managed'
@@ -40,7 +40,7 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
-| `cellid` | `bigint` (Long) | Yes | Grid cell identifier for tessellated rasters. `null` for non-tessellated rasters. |
+| `cellid` | `bigint` (Long) | No | Grid cell identifier for tessellated rasters. `-1` for a tile that was not tessellated. The field is never `null`. |
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
 | `path` | `string` | Yes | Set on a virtual tile, where it is the source the pixels are read from. On a materialized tile it is provenance of where the bytes came from (a reader's tile, a `materialize=True` output, a lightweight retile-family output); the bytes in `raster` are the data and are always read in preference to `path`. `null` when the tile has no single source file. |
 | `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
@@ -153,7 +153,7 @@ Created by constructors (`rst_fromfile`, `rst_fromcontent`) or readers:
 <CodeFromTest code={tileStructureExamples} functionName="non_tessellated_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="non_tessellated_tiles_output" />
 
 **Characteristics:**
-- `cellid` is `null`
+- `cellid` is `-1`
 - Represents entire raster or a tile from tiling operations
 - Suitable for processing complete rasters
 

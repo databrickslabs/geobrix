@@ -27,7 +27,7 @@ by every implementation level:
 
 ```
 struct<
-  cellid: bigint,                       -- grid cell id (nullable)
+  cellid: bigint,                       -- grid cell id (-1 when not tessellated)
   raster: binary,                       -- the raster payload (NULL when virtual)
   path: string,                         -- source path (virtual) or provenance (materialized)
   window: struct<col_off,row_off,width,height>,  -- the pixel window

@@ -28,11 +28,11 @@ except ImportError:
 
 
 # SQL constant for cellid example (use your sample raster path)
-SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is null
+SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is -1
 CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}');
 SELECT tile.cellid
 FROM nyc_raster;
--- Returns: null"""
+-- Returns: -1"""
 
 SQL_CELLID_TESSELLATED = f"""-- Tessellated: cellid contains H3 cell ID
 CREATE OR REPLACE TEMP VIEW nyc_raster USING raster_gbx OPTIONS (path '{SAMPLE_NYC_RASTER}');
@@ -277,7 +277,7 @@ def non_tessellated_tiles(spark):
     df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTER)
     
     df.select(
-        f.col("tile.cellid"),      # null
+        f.col("tile.cellid"),      # -1 (not tessellated)
         f.col("tile.raster"),      # binary data
         f.col("tile.metadata")     # {driver: "GTiff", ...}
     ).show()
@@ -435,11 +435,11 @@ def troubleshooting_inspect_raster_field(spark):
 
 
 def troubleshooting_null_cellid(spark):
-    """Troubleshooting: NullPointerException on cellid."""
+    """Troubleshooting: tiles that were not tessellated carry cellid -1, not NULL."""
     df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
     
     # Filter out non-tessellated tiles
-    tessellated_only = df.filter(f.col("tile.cellid").isNotNull())
+    tessellated_only = dX
     return tessellated_only
 
 
@@ -451,7 +451,7 @@ SQL_CELLID_NON_TESSELLATED_output = """
 +------+
 |cellid|
 +------+
-|null  |
+|-1    |
 +------+
 """
 
@@ -508,7 +508,7 @@ accessing_tile_fields_python_output = """
 +------+--------+------------------+-------+
 |cellid|raster  |metadata          |driver |
 +------+--------+------------------+-------+
-|null  |[BINARY]|{driver=GTiff,...}|GTiff  |
+|-1    |[BINARY]|{driver=GTiff,...}|GTiff  |
 +------+--------+------------------+-------+
 """
 
@@ -516,7 +516,7 @@ SQL_ACCESSING_TILE_FIELDS_output = """
 +------+--------+------------------+-------+
 |cellid|raster  |metadata          |driver |
 +------+--------+------------------+-------+
-|null  |[BINARY]|{driver=GTiff,...}|GTiff  |
+|-1    |[BINARY]|{driver=GTiff,...}|GTiff  |
 +------+--------+------------------+-------+
 """
 
@@ -560,7 +560,7 @@ non_tessellated_tiles_output = """
 +----+--------+------------------+
 |cellid|raster |metadata         |
 +----+--------+------------------+
-|null|[BINARY]|{driver=GTiff,...}|
+|-1  |[BINARY]|{driver=GTiff,...}|
 +----+--------+------------------+
 """
 

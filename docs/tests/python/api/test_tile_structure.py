@@ -100,9 +100,10 @@ def test_comparing_fromfile_vs_fromcontent_tiles(spark):
 def test_non_tessellated_tiles(spark):
     """The tiles carry the raster bytes the example selects."""
     df = tile_structure.non_tessellated_tiles(spark)
-    rows = df.select("tile.raster").collect()
+    rows = df.select("tile.raster", "tile.cellid").collect()
     assert rows
     assert all(r["raster"] is not None and len(r["raster"]) > 0 for r in rows)
+    assert all(r["cellid"] == -1 for r in rows)  # the documented value of a tile that was not tessellated
 
 
 def test_tessellated_tiles(spark):

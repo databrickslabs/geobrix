@@ -188,7 +188,7 @@ from databricks.labs.gbx.vizx import plot_tiles
 # Show the first 4 tiles from a GeoTIFF reader result as a 2×2 grid:
 # The reader schema is (source, tile) — path and cellid are nested inside tile.
 df = spark.read.format("gtiff_gbx").load("/Volumes/main/samples/sentinel/")
-plot_tiles(df.filter("tile.cellid is not null"), mode="facet", limit=4)
+plot_tiles(df, mode="facet", limit=4)
 
 # Inspect a single tile quickly:
 plot_tiles(df.filter("tile.path = '/Volumes/main/samples/sentinel/B04.tif'"), mode="first")

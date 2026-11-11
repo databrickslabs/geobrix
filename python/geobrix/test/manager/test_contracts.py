@@ -403,13 +403,40 @@ _PROMOTED_BY_THE_JVM_PASS = (
 )
 
 
-def test_tilexyz_keeps_light_first_its_null_and_error_tiles_need_an_image():
-    """The JVM tilexyz was 2.8x faster at 4x tiles, but the dispatch wrapper that sends a virtual tile to light gives
-    NULL for a NULL or error tile, where the function returns a transparent image: it stays light first.
-    """
+def test_tilexyz_keeps_light_first_until_it_is_measured_against_the_arrow_light_form():
+    """The JVM tilexyz was 2.8x faster at 4x tiles, against the light form that crossed into Python as pickled rows:
+    it stays light first until it is measured again."""
+    assert "L1" not in levels.order(MAN.functions["gbx_rst_tilexyz"])
+
+
+def test_tilexyz_sends_only_a_tile_with_bytes_to_the_jvm():
+    """tilexyz returns a transparent image for a NULL or error tile, where the standard dispatch gives NULL: its wrapper
+    (ready for the JVM level) sends a virtual, NULL or error tile to light, and light gets NULL for z on the rows the
+    JVM serves."""
+    from databricks.labs.gbx.manager import jvm
+
     fn = MAN.functions["gbx_rst_tilexyz"]
-    assert not fn.accepts_virtual_tile
-    assert "L1" not in levels.order(fn)
+    assert fn.accepts_virtual_tile and fn.levels["L1"]["dispatch"] == "bytes_to_jvm"
+    ddl = jvm.dispatch_ddl(fn, "gbx__l1_x", "gbx__l3_x")
+    body = ddl.split(" RETURN ", 1)[1]
+    assert body.startswith(
+        "CASE WHEN tile.raster IS NOT NULL THEN gbx__l1_x((IF(tile.raster IS NOT NULL, tile, NULL))"
+    )
+    assert "ELSE gbx__l3_x(tile, (IF(tile.raster IS NOT NULL, NULL, z)), x, y," in body
+    assert " IS NULL THEN NULL" not in body  # a NULL tile is light's to answer
+
+
+def test_an_unknown_l1_dispatch_is_refused():
+    import dataclasses
+
+    from databricks.labs.gbx.manager import jvm
+
+    fn = MAN.functions["gbx_rst_tilexyz"]
+    bad = dataclasses.replace(
+        fn, levels={**fn.levels, "L1": {**fn.levels["L1"], "dispatch": "sideways"}}
+    )
+    with pytest.raises(ValueError, match="sideways"):
+        jvm.dispatch_ddl(bad, "a", "b")
 
 
 @pytest.mark.parametrize("name", _PROMOTED_BY_THE_JVM_PASS)

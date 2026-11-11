@@ -106,7 +106,7 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 | `gbx_custom_cellfill` | 0.91 / 1.59 | 1.54 / 3.33 | 1.7x / 2.1x |
 | `gbx_bng_kloop` | 2.04 / 6.69 | 3.81 / 11.30 | 1.9x / 1.7x |
 
-The JVM `gbx_rst_tilexyz` was 2.5x and 2.8x faster at 1x and 4x tiles, but it stays light first. The JVM form cannot read a virtual tile. The SQL function that would send one to the light form gives NULL for a NULL tile, where `gbx_rst_tilexyz` returns a transparent image.
+The JVM `gbx_rst_tilexyz` was 2.5x and 2.8x faster at 1x and 4x tiles. That measurement used a lightweight form that passed tiles to Python as pickled rows. `gbx_rst_tilexyz` runs the lightweight form first until it is measured against the Arrow form.
 
 The same pass found nine JVM forms under the line, so the JAR no longer holds them. See the [release notes](../release-notes-0-6).
 

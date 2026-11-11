@@ -26,6 +26,10 @@ def _first_available(fn) -> str:
 
 # The functions whose best level is the JVM and that take a tile: the ones a virtual tile can reach it through.
 L1_TILE_FNS = [f for f in FNS if _takes_tile(f) and _first_available(f) == "L1"]
+# The rows whose wrapper sends every tile without bytes to light, JVM first or not yet (a forced L1 builds the same one).
+BYTES_TO_JVM = [
+    f for f in FNS if f.levels.get("L1", {}).get("dispatch") == "bytes_to_jvm"
+]
 
 
 def test_there_are_jvm_first_tile_functions_to_hold():
@@ -121,7 +125,7 @@ def stand_ins(spark):
         [StructField("v", V2_TILE_SCHEMA), StructField("m", V2_TILE_SCHEMA)]
     )
     spark.createDataFrame([(virt, mat)], schema).createOrReplaceTempView("_gbx_vd")
-    for fn in L1_TILE_FNS:
+    for fn in L1_TILE_FNS + [f for f in BYTES_TO_JVM if f not in L1_TILE_FNS]:
         if _returns_tile(fn):
             answer, rtype = light, V2_TILE_SCHEMA
         else:
@@ -158,6 +162,42 @@ def test_the_dispatch_sends_a_reference_to_light_and_never_to_the_jvm(stand_ins,
         call(
             "m", "array(m, m)"
         )  # the control: a materialized tile does reach the JVM function
+
+
+# An error tile: no bytes, no path, a diagnostic.
+_ERROR_TILE = (
+    "named_struct('cellid', v.cellid, 'raster', CAST(NULL AS BINARY), 'path', CAST(NULL AS STRING), "
+    "'path_mode', v.path_mode, 'window', v.window, 'clip_polygon', v.clip_polygon, 'clip_crs', v.clip_crs, "
+    "'crs', v.crs, 'metadata', map('last_error', 'boom', 'error_message', 'boom'))"
+)
+
+
+@pytest.mark.parametrize("fn", BYTES_TO_JVM, ids=lambda f: f.sql_name)
+def test_a_bytes_to_jvm_dispatch_sends_every_tile_without_bytes_to_light(stand_ins, fn):
+    """Under ``dispatch: "bytes_to_jvm"`` a virtual, a NULL and an error tile are light's to answer (tilexyz renders a
+    transparent image for the last two), where the standard wrapper gives NULL; a tile with bytes reaches the JVM.
+    """
+    spark = stand_ins
+    jvm._create_wrapper(
+        spark, fn, jvm.dispatch_ddl(fn, jvm._priv(fn, "L1"), jvm._priv(fn, "L3"))
+    )
+    light = "light" if _returns_tile(fn) else _LIGHT_VALUE[fn.returns_session]
+
+    def call(tile):
+        args = ", ".join(_literal(p, tile, "") for p in fn.params[: fn.min_args])
+        return spark.sql(f"SELECT {fn.sql_name}({args}) AS out FROM _gbx_vd").collect()[
+            0
+        ]["out"]
+
+    for tile in ("v", "IF(false, v, NULL)", _ERROR_TILE):  # virtual, NULL, error
+        assert _who(fn, call(tile)) == light, tile
+    with pytest.raises(Exception, match="VirtualTileException"):
+        call("m")  # the control: a tile with bytes does reach the JVM function
+
+
+def test_a_function_has_the_bytes_to_jvm_dispatch():
+    """The set is derived: tilexyz holds it, so the check above runs."""
+    assert "gbx_rst_tilexyz" in {f.sql_name for f in BYTES_TO_JVM}
 
 
 # --- the contract rows: a reference in, a correct result out, at every level -----------------------------------------

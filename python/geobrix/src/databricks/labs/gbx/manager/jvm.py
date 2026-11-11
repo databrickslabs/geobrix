@@ -110,8 +110,14 @@ def dispatch_ddl(fn, l1_name: str, l3_name: str) -> str:
     """The wrapper that goes under the SQL name of a tile function served by the JVM: a virtual tile (a path, no raster)
     goes to the light function ``l3_name``, which reads it, and a materialized tile to the JVM function ``l1_name``,
     which cannot (it raises ``VirtualTileException``). The array form (``ARRAY<TILE>``) sends an array with any virtual,
-    NULL or error element to light.
+    NULL or error element to light. A row whose L1 ``dispatch`` is ``"bytes_to_jvm"`` sends every tile without bytes to
+    light, NULL and error tiles included (``sqlwrap.bytes_dispatch``).
     """
+    dispatch = fn.levels["L1"].get("dispatch")
+    if dispatch == "bytes_to_jvm":
+        return sqlwrap.bytes_dispatch(fn, l1_name + "({tile}{rest})", l3_name)
+    if dispatch is not None:
+        raise ValueError(f"{fn.sql_name}: unknown L1 dispatch {dispatch!r}")
     if _is_tiles(fn):
         return sqlwrap.tiles_dispatch(fn, l1_name + "({tiles}{rest})", l3_name)
     return sqlwrap.tile_dispatch(fn, l1_name + "({tile}{rest})", l3_name)

@@ -23,11 +23,14 @@ SCHEMA_VERSION = 2
 # The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
 # would be read with `.get` and silently drop a guard, so a contract test rejects any key
 # outside this table; add a key here in the same change that first uses it.
+# `dispatch` (L1) names how the SQL wrapper of a tile function splits the tiles between the JVM and light: absent, a virtual
+# tile goes to light and a NULL or error tile gives NULL (or itself); `"bytes_to_jvm"`, only a tile with bytes goes to the
+# JVM and light answers every other tile, NULL and error tiles included (see manager/sqlwrap.bytes_dispatch).
 # `engine` marks a light (L3) level that runs the row's `gdal` block on the GDAL spec engine where that engine can
 # serve, and its own implementation (the other keys) elsewhere. The engine has no JVM level (L1).
 LEVEL_KEYS = {
     "L0": frozenset({"sql", "sql_helpers"}),
-    "L1": frozenset({"companion", "needs_gdal", "session_returns"}),
+    "L1": frozenset({"companion", "needs_gdal", "session_returns", "dispatch"}),
     "L3": frozenset(
         {
             "register",

@@ -71,6 +71,36 @@ def tile_dispatch(fn, jvm_call: str, l3_name: str, file_sql: str = "") -> str:
     )
 
 
+def bytes_dispatch(fn, jvm_call: str, l3_name: str) -> str:
+    """CREATE FUNCTION text for a tile-first function that answers for every tile, one without bytes included: the
+    manifest's L1 ``dispatch: "bytes_to_jvm"``. ``gbx_rst_tilexyz`` renders a transparent image for a NULL, error or
+    unreadable tile, where ``tile_dispatch`` would give NULL.
+
+    Only a tile with bytes goes to the JVM (``jvm_call``, placeholders as in ``tile_dispatch``); every other tile, a
+    virtual, NULL or error tile, goes to the light UDF ``l3_name`` as it is, and light answers for it as it does alone.
+    Spark evaluates a Python UDF in a CASE on every row, so on the rows the JVM serves light gets NULL for its first
+    required argument after the tile and returns at once, rendering nothing.
+    """
+    t = fn.params[0].name
+    if fn.min_args < 2:
+        raise ValueError(
+            f"{fn.sql_name}: dispatch 'bytes_to_jvm' needs a required argument after the tile to hand light NULL"
+        )
+    gate = fn.params[1].name
+    others = [p.name for p in fn.params[1:]]
+    rest = "".join(f", {n}" for n in others)
+    has_bytes = f"{t}.raster IS NOT NULL"
+    light = ", ".join(
+        [t] + [f"(IF({has_bytes}, NULL, {n}))" if n == gate else n for n in others]
+    )
+    jvm = jvm_call.format(tile=f"(IF({has_bytes}, {t}, NULL))", rest=rest)
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
+        f"RETURNS {sql_type(fn.returns_session)} RETURN CASE WHEN {has_bytes} THEN {jvm} "
+        f"ELSE {l3_name}({light}) END"
+    )
+
+
 def file_ref_wrapper(fn, private: str, file_sql: str) -> str:
     """CREATE FUNCTION text: the SQL name calls the light UDF ``private`` that also takes a FILE reference, second.
 

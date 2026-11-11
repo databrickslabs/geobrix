@@ -713,9 +713,13 @@ def render_jar_functions(man) -> str:
                     f'<Link id="{jar_anchor(f)}" />`{f.sql_name}`',
                     pkg,
                     (
-                        "A virtual tile runs in Python."
-                        if f.accepts_virtual_tile and f.kind != "generator"
-                        else ""
+                        "A virtual, NULL or error tile runs in Python."
+                        if f.levels["L1"].get("dispatch") == "bytes_to_jvm"
+                        else (
+                            "A virtual tile runs in Python."
+                            if f.accepts_virtual_tile and f.kind != "generator"
+                            else ""
+                        )
                     ),
                 ]
                 for f in group

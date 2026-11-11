@@ -251,7 +251,7 @@ A single trailing-optional **`mode`** enum selects how the walk treats the geome
 | `'hole-out'` | hole boundary → outward into the solid | band around each hole |
 | `'hole-out-ignore-geom'` | hole boundary → outward, unbounded by the outer ring | outward buffer from each hole |
 
-All four grids ride **one shared dilation engine**, so the modes and semantics are identical across H3, quadbin, BNG, and custom. **All four grids run at the Python level, except BNG and custom, whose geometry k-rings, k-loops and their explodes run on the JVM with the JAR.** Cell IDs are `BIGINT` (H3/quadbin/custom) or `STRING` (BNG); the custom variants take the `grid` struct as their second argument. See [GridX Functions](./gridx-functions) for the per-grid signatures and [Benchmarking § Geometry-aware expansion at scale](./benchmarking#geomk-at-scale) for throughput/scaling.
+All four grids ride **one shared dilation engine**, so the modes and semantics are identical across H3, quadbin, BNG, and custom. **All four grids run at the Python level, with one exception.** The BNG and custom geometry k-rings, k-loops and their explodes run on the JVM with the JAR. Cell IDs are `BIGINT` (H3/quadbin/custom) or `STRING` (BNG); the custom variants take the `grid` struct as their second argument. See [GridX Functions](./gridx-functions) for the per-grid signatures and [Benchmarking § Geometry-aware expansion at scale](./benchmarking#geomk-at-scale) for throughput/scaling.
 
 ---
 

@@ -13,6 +13,10 @@ import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 
 # <img src={VectorXIcon} alt="VectorX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
+:::tip Scala tags
+A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces and levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
+:::
+
 ## Overview
 
 VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, authority-string CRS handling, antimeridian normalization, distributed-shapely geometry validity, cleaning, and coverage-validity. It also covers legacy-geometry migration.

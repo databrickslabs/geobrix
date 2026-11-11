@@ -131,6 +131,10 @@ Prefer pure SQL? After `register(spark)`, create the same four views directly so
 
 Each function below carries an `:::note Implementation` admonition. It names the library behind the function and any behavior worth knowing. For how `gbx_rst_derivedband` runs your Python code, see **[VRT Python pixel functions](#vrt-python-pixel-functions)** at the end of this page.
 
+:::tip Scala tags
+A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces and levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
+:::
+
 ## Examples — Conventions
 
 Every function on this page shows one example, expressed on each surface it runs on. This section defines the shared setup so each function tab contains only its invocation — nothing more.

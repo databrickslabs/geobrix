@@ -229,6 +229,13 @@ def dcs_build(tmp_path):
     return DcsCommand(tmp_path, "gbx-dcs-build.sh")
 
 
+def _default_signals():
+    """In a child about to exec: the signals the lock tests send behave as the default (a signal ignored at entry cannot
+    be trapped by bash)."""
+    for sig in (signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, signal.SIG_DFL)
+
+
 class ContainerSandbox:
     """A scratch copy of scripts/commands/ run against a fake `docker` (_fake_docker_local.py).
 
@@ -293,8 +300,10 @@ class ContainerSandbox:
             stderr=subprocess.STDOUT,
             text=True,
             # A runner started with SIGINT ignored (`cmd &` in a non-interactive shell) would hand
-            # that to bash, which cannot trap a signal ignored at entry (see `start` above).
-            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
+            # that to bash, which cannot trap a signal ignored at entry (see `start` above). SIGHUP
+            # is ignored the same way when the test run itself is (`nohup`, a Databricks notebook
+            # or job): the signalled-waiter test then waits out its timeout.
+            preexec_fn=_default_signals,
         )
 
     def run(self, command: str, *args: str, timeout: int = 60, **env):

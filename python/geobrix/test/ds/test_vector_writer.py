@@ -897,3 +897,45 @@ def test_other_drivers_accept_columns_named_shape_and_objectid(tmp_path, driver,
     got = pyogrio.read_dataframe(w.path)
     assert sorted(got["shape"]) == ["a", "b"]
     assert sorted(int(v) for v in got["OBJECTID"]) == [7, 8]
+
+
+_MIXED = [
+    Point(10, 50),
+    LineString([(10, 50), (11, 51), (12, 50)]),
+    Polygon([(10, 50), (11, 50), (11, 51), (10, 51), (10, 50)]),
+]
+
+
+@pytest.mark.parametrize(
+    "driver,name", [("GML", "o.gml"), ("GPKG", "o.gpkg"), ("FlatGeobuf", "o.fgb")]
+)
+@pytest.mark.parametrize(
+    "parts",
+    [[[1], [2, 0]], [[0, 1, 2]], [[2], [0], [1]]],
+    ids=["line-first", "point-first", "polygon-first"],
+)
+def test_a_layer_of_mixed_geometry_types_keeps_each_type(tmp_path, driver, name, parts):
+    """A frame mixing types is written as a layer of any geometry, whatever partition comes
+    first. Typing the layer by the first geometry made GML's schema declare a LineString
+    layer, and GDAL then read the polygon back as its ring."""
+    import pyogrio
+
+    schema = StructType(
+        [
+            StructField("id", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+        ]
+    )
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit(
+        [
+            w.write(iter([(i, bytearray(to_wkb(_MIXED[i])), "4326") for i in part]))
+            for part in parts
+        ]
+    )
+    got = pyogrio.read_dataframe(w.path)
+    assert {g.normalize().wkt for g in got.geometry} == {
+        g.normalize().wkt for g in _MIXED
+    }
+    assert pyogrio.read_info(w.path)["geometry_type"] == "Unknown"

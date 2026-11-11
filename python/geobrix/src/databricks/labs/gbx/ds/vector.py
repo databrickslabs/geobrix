@@ -564,6 +564,18 @@ def _geometry_type_of(wkb: bytes) -> str:
     return from_wkb(bytes(wkb)).geom_type
 
 
+def _geometry_types_of(wkbs) -> Tuple[str, ...]:
+    """The distinct geometry-type names of the non-NULL WKB blobs ``wkbs``, sorted.
+
+    The first five bytes of a WKB (byte order, type code) decide its type, so one blob per
+    distinct header is decoded, not every geometry."""
+    first: Dict[bytes, bytes] = {}
+    for b in wkbs:
+        if b is not None:
+            first.setdefault(bytes(b[:5]), b)
+    return tuple(sorted({_geometry_type_of(b) for b in first.values()}))
+
+
 _OGR_DOMAIN_META = b"GDAL:OGR:domain_name"
 
 # Arrow Binary/String arrays use 32-bit offsets: one array holds at most this many bytes,
@@ -1794,6 +1806,8 @@ class FileGdbGbxDataSource(VectorGbxDataSource):
 @dataclass
 class _VectorCommitMessage(WriterCommitMessage):
     frag_path: str
+    # the geometry types of the partition's non-NULL geometries: the commit types the layer by all of them
+    geom_types: Tuple[str, ...] = ()
 
 
 class VectorGbxWriter(DataSourceWriter):
@@ -1933,7 +1947,9 @@ class VectorGbxWriter(DataSourceWriter):
         tbl = _writer_arrow_table(cols, self._schema, self.geom_col)
         frag = os.path.join(self.scratch_dir, f"frag-{uuid.uuid4().hex}.arrow")
         feather.write_feather(tbl, frag)
-        return _VectorCommitMessage(frag_path=frag)
+        return _VectorCommitMessage(
+            frag_path=frag, geom_types=_geometry_types_of(cols[self.geom_col])
+        )
 
     # ---- driver: merge fragments into one output file ----
     def commit(self, messages: List[Optional[WriterCommitMessage]]) -> None:
@@ -1944,6 +1960,12 @@ class VectorGbxWriter(DataSourceWriter):
             for m in messages
             if isinstance(m, _VectorCommitMessage) and m.frag_path
         ]
+        types = {
+            t
+            for m in messages
+            if isinstance(m, _VectorCommitMessage)
+            for t in m.geom_types
+        }
         local_dir = None
         try:
             if not frags:
@@ -1961,11 +1983,11 @@ class VectorGbxWriter(DataSourceWriter):
                 # it to get the inner path the writer produces alongside.
                 inner = local_out[: -len(".zip")]  # .../roads.shp or .../roads.gdb
                 if _should_stream(self.driver):
-                    geom_type, crs = self._infer_geom_crs_frags(frags)
+                    geom_type, crs = self._infer_geom_crs_frags(frags, types)
                     self._write_streaming(frags, inner, geom_type, crs)
                 else:
                     tables = [feather.read_table(f) for f in frags]
-                    geom_type, crs = self._infer_geom_crs(tables)
+                    geom_type, crs = self._infer_geom_crs(tables, geom_types=types)
                     self._write_local(tables, inner, geom_type, crs)
                 if self.driver == "OpenFileGDB":
                     # .gdb is a directory: pack the whole tree, then drop it so only
@@ -1985,12 +2007,12 @@ class VectorGbxWriter(DataSourceWriter):
                 # Infer geom type + CRS from the first fragment that has a geometry
                 # (bounded: one fragment's geometry columns at a time), then stream
                 # every fragment into one write.
-                geom_type, crs = self._infer_geom_crs_frags(frags)
+                geom_type, crs = self._infer_geom_crs_frags(frags, types)
                 self._write_streaming(frags, local_out, geom_type, crs)
             else:
                 # Infer geom/CRS the same way (bounded memory), then stream the
                 # fragments via generator (lazy, not list).
-                geom_type, crs = self._infer_geom_crs_frags(frags)
+                geom_type, crs = self._infer_geom_crs_frags(frags, types)
                 tables_gen = (feather.read_table(f) for f in frags)
                 self._write_local(tables_gen, local_out, geom_type, crs)
             # Writer is FUSE-only: clear any Spark stub, copy everything pyogrio
@@ -2192,8 +2214,9 @@ class VectorGbxWriter(DataSourceWriter):
                 **kw,
             )
 
-    def _infer_geom_crs_frags(self, frags) -> Tuple[str, Optional[str]]:
-        """Geometry type and CRS from the first fragment that has a geometry.
+    def _infer_geom_crs_frags(self, frags, geom_types=()) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first fragment that has a geometry (``geom_types``: see
+        ``_infer_geom_crs``).
 
         Fragments are read in order, geometry and CRS columns only, one at a time, and the
         scan stops at the first non-NULL geometry; a partition whose geometries are all NULL
@@ -2208,12 +2231,17 @@ class VectorGbxWriter(DataSourceWriter):
             if c in self._col_order
         ]
         tables = (feather.read_table(f, columns=cols) for f in frags)
-        return self._infer_geom_crs(tables, first_geometry_only=True)
+        return self._infer_geom_crs(
+            tables, first_geometry_only=True, geom_types=geom_types
+        )
 
     def _infer_geom_crs(
-        self, tables, first_geometry_only=False
+        self, tables, first_geometry_only=False, geom_types=()
     ) -> Tuple[str, Optional[str]]:
         """Geometry type and CRS of the first non-NULL geometry of each table in turn.
+
+        ``geom_types``: the types of every geometry written (the partitions report them). When
+        there are several, the layer is of any geometry (``Unknown``) instead of the first type.
 
         The CRS comes from that geometry's own row. The scan goes on to the next table while
         the type or the CRS is still unknown, unless ``first_geometry_only``: then it stops
@@ -2247,6 +2275,16 @@ class VectorGbxWriter(DataSourceWriter):
             if geom_type is not None and crs is not None:
                 break
         geom_type = geom_type or "Unknown"
+        if (
+            self.geometry_type_override is None
+            and len(geom_types) > 1
+            and self.driver != "OpenFileGDB"
+        ):
+            # Geometries of several types: a layer of any geometry. Typed by the first geometry, the
+            # layer holds the others under a type they are not; GML's schema then declares that type
+            # and GDAL reads a polygon back as its ring, and FlatGeobuf refuses the write. A FileGDB
+            # layer must have one type: it keeps the first, and GDAL refuses the others.
+            geom_type = "Unknown"
         if self.driver == "OpenFileGDB" and geom_type.lower() == "unknown":
             if self.geometry_type_override is not None:
                 # the option itself says Unknown (any other type would not be "Unknown")

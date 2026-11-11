@@ -601,6 +601,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 - **`vector_gbx` writes KML, GML and DXF from a DataFrame with any number of partitions (fix).** The writer appended each partition to the file. GDAL cannot reopen those formats to append, so a second partition failed. They now write in one pass, as GeoJSON does.
 - **`vector_gbx` writes CSV with a WKT column (fix).** The CSV driver needs the layer option `GEOMETRY=AS_WKT`, and the writer set none. For CSV input, use Databricks' own reader.
 - **A GPX column named like a GPX field is refused with a Fix (fix).** GPX makes `name`, `ele`, `time` and `desc` itself. The error says to rename or drop the column.
+- **`vector_gbx`, `gpkg_gbx`, `geojson_gbx` and `shapefile_gbx` write a DataFrame of mixed geometry types as a layer of any geometry (fix).** The layer took the type of the first geometry. GML then read a polygon back as a line string when a line string came first, and FlatGeobuf refused the write. A layer of one geometry type keeps that type. A FileGDB layer still takes the type of the first geometry, and GDAL refuses the others.
 
 ### Vector function arguments (behavior change) {#vector-arguments}
 

@@ -199,6 +199,86 @@ def _tile_op(*required, check=None, tiles=()):
     return wrap
 
 
+_SCALAR_FIX = (
+    "Fix: filter the NULL tiles out first (WHERE tile IS NOT NULL) and give every tile a cellid, or run on Spark 4.1 "
+    "or later (DBR 19), which hands the integers over exactly."
+)
+
+
+class SessionTileUdf:
+    """A tile-returning row UDF whose TRANSPORT the session that uses it chooses: Arrow batches or pickles.
+
+    The body is the same row function in both forms; only how its rows cross the JVM <-> Python boundary differs.
+    A plain (pickled) UDF groups up to ``spark.sql.execution.python.udf.maxRecordsPerBatch`` (100) rows into ONE
+    pickle that the executor JVM builds on its heap, and reads the outputs back the same way. With tiles of a few MB
+    that pickle is the task's whole partition: 64 tiles of 2.3 MB (a 146 MB file) per task made the JVM spend a third
+    to a half of each task collecting garbage, the Python worker grew to 0.9 GB and a node ran out of memory, so 4x the
+    rows took 8x the time (dedicated DBR 19, 4 x m5d.2xlarge). Arrow keeps the rows in off-heap buffers, and a batch
+    is bounded by ``spark.sql.execution.arrow.maxBytesPerBatch`` (32 MiB on DBR 19): the same op took 3.6x the time
+    for 4x the rows and the worker stayed under 0.5 GB.
+
+    Spark 4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, which can round an
+    H3-sized cell id to another cell. So the Arrow form runs where the ``arrow_tile_transport`` capability holds
+    (server Spark 4.1+, ``GBX_CAP_ARROW_TILE_TRANSPORT`` overrides it) and the pickled form elsewhere; the Arrow form
+    still restores whole numbers below 2**53 and refuses a cell id past that (an error tile naming the fix).
+
+    To the machinery that reads a UDF object (``is_light_udf``, ``carrying``, the oracles' plain-function leg) it looks
+    like the pickled form; a registrar and a Column-API call ask for the session's form with :meth:`for_session`.
+    """
+
+    def __init__(self, func):
+        self._func = func
+        self._forms = {"pickle": f.udf(func, V2_TILE_SCHEMA)}
+        self._lock = threading.Lock()
+        functools.update_wrapper(self, func)
+
+    def form(self, label: str):
+        """The UDF of transport *label* (``pickle`` or ``arrow``), built once."""
+        with self._lock:
+            if label not in self._forms:
+                func = self._func
+
+                @functools.wraps(func)
+                def exact(tile, *rest):
+                    try:
+                        tile = _exact_member(tile, _SCALAR_FIX)
+                    except _LossyCellId as exc:
+                        return _serde.build_error_tile(str(exc), 0)
+                    return func(tile, *rest)
+
+                if label != "arrow":
+                    raise ValueError(
+                        f"no tile UDF transport {label!r}; known: arrow, pickle"
+                    )
+                self._forms[label] = f.udf(exact, V2_TILE_SCHEMA, useArrow=True)
+            return self._forms[label]
+
+    def for_session(self, spark):
+        """The UDF form *spark* runs: the capability registry's choice of transport for that session."""
+        from databricks.labs.gbx.manager import capabilities
+
+        return self.form(capabilities.path(spark, "tile_udf").split(":", 1)[1])
+
+    def __call__(self, *cols):
+        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+        spark = _resolve_session_for_cap()
+        udf = self._forms["pickle"] if spark is None else self.for_session(spark)
+        return udf(*cols)
+
+    def __getattr__(self, name):
+        # the pickled form's attributes (func, returnType, evalType, ...): only for a name not found on the instance
+        forms = self.__dict__.get("_forms")
+        if forms is None or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(forms["pickle"], name)
+
+
+def _tile_udf(func):
+    """Decorator: *func* (a row function returning a v2 tile) as a :class:`SessionTileUdf`."""
+    return SessionTileUdf(func)
+
+
 def _dataset_to_gtiff_bytes(ds) -> bytes:
     """Encode an open rasterio dataset to standalone GTiff bytes (full extent).
 
@@ -647,7 +727,7 @@ def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
         return accessors.histogram(ds, nb, lo, hi, inc)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("name")
 def _getsubdataset_udf(tile, name):
     from databricks.labs.gbx.pyrx import _env
@@ -1362,7 +1442,13 @@ class _LossyCellId(ValueError):
     """A member's cell id arrived as a float64 past 2**53: it may no longer be the id that was sent."""
 
 
-def _exact_member(tile):
+_ARRAY_FIX = (
+    "Fix: take the NULL tiles out of the array first, as in "
+    "gbx_rst_combineavg(filter(tiles, t -> t IS NOT NULL)), and give every tile a cellid."
+)
+
+
+def _exact_member(tile, fix: str = _ARRAY_FIX):
     """One member of an Arrow-delivered array with its integers as integers.
 
     pyspark 4.0 hands a batch to an Arrow-optimized UDF through pandas: an INT or BIGINT field that holds a NULL
@@ -1379,8 +1465,7 @@ def _exact_member(tile):
         if abs(cellid) >= 2**53:
             raise _LossyCellId(
                 f"a tile's cell id came through a float and may have been rounded to another cell ({cellid!r}). "
-                "Fix: take the NULL tiles out of the array first, as in "
-                "gbx_rst_combineavg(filter(tiles, t -> t IS NOT NULL)), and give every tile a cellid."
+                + fix
             )
         d["cellid"] = int(cellid)
     window = d.get("window")
@@ -2123,13 +2208,13 @@ def _setsrid_row(tile, srid, file_ref=None):
     ).to_row()
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("srid", check=_check_srid)
 def _setsrid_udf(tile, srid):
     return _setsrid_row(tile, srid)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("srid", check=_check_srid)
 def _setsrid_v2_udf(tile, srid, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _setsrid_bytes(tile, srid)
@@ -2138,7 +2223,7 @@ def _setsrid_v2_udf(tile, srid, virtualize_dir, virtualize_prefix, materialize):
     )
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("srid", check=_check_srid)
 def _uf_setsrid(tile, file_ref, srid):
     """FILE-aware rst_setsrid (pending-instruction path for virtual tiles)."""
@@ -2187,13 +2272,13 @@ def _setcrs_row(tile, crs_value, file_ref=None):
     ).to_row()
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("crs_value", check=_check_crs)
 def _setcrs_udf(tile, crs_value):
     return _setcrs_row(tile, crs_value)
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("crs_value", check=_check_crs)
 def _uf_setcrs(tile, file_ref, crs_value):
     """FILE-aware rst_setcrs (pending-instruction path for virtual tiles)."""
@@ -2333,7 +2418,7 @@ def _check_band(*, band_index, **_):
         raise ValueError(f"rst_band: band_index {b} out of range (>=1)")
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("band_index", check=_check_band)
 def _band_udf(tile, band_index):
     vt = ot._to_virtual_tile(tile)
@@ -2359,7 +2444,7 @@ def _band_udf(tile, band_index):
     ).to_row()
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_tile_udf
 @_tile_op("band_index", check=_check_band)
 def _band_v2_udf(tile, band_index, virtualize_dir, virtualize_prefix, materialize):
     new_bytes = _band_bytes(tile, band_index)

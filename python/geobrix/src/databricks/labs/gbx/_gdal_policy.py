@@ -366,6 +366,15 @@ def carrying_call(f, allowed: Optional[bool] = None):
     it is."""
     if isinstance(f, CapCarryingCall):
         f = f._f
+    for_session = getattr(f, "for_session", None)
+    if (
+        for_session is not None
+    ):  # a UDF whose form the session chooses (a capability): the form it runs
+        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+        spark = _resolve_session_for_cap()
+        if spark is not None:
+            f = for_session(spark)
     if not is_light_udf(f):
         return f
     return _with_cap(

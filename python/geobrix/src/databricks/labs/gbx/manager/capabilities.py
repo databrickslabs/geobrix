@@ -574,6 +574,15 @@ REGISTRY: Dict[str, Capability] = _caps(
         default_when_present=True,  # as before: FILE wrappers wherever FILE works
     ),
     Capability(
+        "arrow_tile_transport",
+        "a tile op's rows cross the JVM <-> Python boundary as Arrow batches (off the executor heap, a batch bounded "
+        "by spark.sql.execution.arrow.maxBytesPerBatch), not as pickles of up to 100 tiles built on the heap; Spark "
+        "4.0 hands an Arrow UDF an INT or BIGINT field as float64 when a NULL rides in the batch, so 4.0 keeps the "
+        "pickles",
+        min_server=(4, 1),
+        default_when_present=True,  # dedicated DBR 19: 3.6x the time for 4x the rows, where the pickles took 8x
+    ),
+    Capability(
         "arrow_max_bytes_per_batch",
         "the Arrow batch byte cap conf exists (report only: pyrx never sets conf)",
         min_server=(4, 0),
@@ -817,8 +826,15 @@ def _merge_agg_path(spark) -> str:
     return "arrow" if has(spark, "arrow_grouped_agg") else "pandas"
 
 
+def _tile_udf_path(spark) -> str:
+    return "arrow" if has(spark, "arrow_tile_transport") else "pickle"
+
+
 # op -> which path a session takes for it (the label a log line or a bench row carries)
-_PATHS: Dict[str, Callable[[Any], str]] = {"merge_agg": _merge_agg_path}
+_PATHS: Dict[str, Callable[[Any], str]] = {
+    "merge_agg": _merge_agg_path,
+    "tile_udf": _tile_udf_path,
+}
 
 
 def path(spark, op: str) -> str:

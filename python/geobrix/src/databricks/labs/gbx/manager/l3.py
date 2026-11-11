@@ -89,6 +89,9 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
                 "factory" in spec
             ):  # a row built by a factory builds its FILE form the same way
                 file_udf = file_udf(*_factory_args(spec["factory_args"], spark))
+            for_session = getattr(file_udf, "for_session", None)
+            if for_session is not None:  # a UDF whose transport the session chooses
+                file_udf = for_session(spark)
             reg.udf.register(private, file_udf)
             jvm._create_wrapper(
                 spark,

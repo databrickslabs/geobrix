@@ -38,6 +38,97 @@ def test_compute_gridspec_origin_snapped_to_lattice():
     assert abs((ymax / 0.01) - round(ymax / 0.01)) < 1e-9
 
 
+def _offset_custom(bounds_x, bounds_y, root, res, points):
+    """A custom grid that does not start at the origin, the adapter on it, and the cells of `points` at `res`."""
+    from databricks.labs.gbx.pygx import _custom
+
+    conf = _custom.conf_from_row(
+        {
+            "bound_x_min": bounds_x[0],
+            "bound_x_max": bounds_x[1],
+            "bound_y_min": bounds_y[0],
+            "bound_y_max": bounds_y[1],
+            "cell_splits": 2,
+            "root_cell_size_x": root,
+            "root_cell_size_y": root,
+            "srid": 27700,
+        }
+    )
+    cells = [_custom.point_to_cell_id(conf, x, y, res) for x, y in points]
+    return cr._CustomAdapter(conf), cells
+
+
+@pytest.mark.parametrize("mode", ["centroids", "spatial_envelope"])
+def test_a_derived_custom_canvas_follows_the_cell_edges_of_a_grid_off_the_origin(mode):
+    """Bounds of 529000 / 179000 are no multiple of the 2000 m cell: snapped from 0 the canvas put every pixel
+    centre on a cell edge (a 1 x 2 tile of NoData). It is the grid itself, 2 x 2 pixels.
+    """
+    ad, cells = _offset_custom(
+        (529000, 533000), (179000, 183000), 4000, 1,
+        [(530000, 180000), (532000, 180000), (530000, 182000)],
+    )  # fmt: skip
+    gs = cr.compute_gridspec(
+        cells, srid=27700, mode=mode, kring_pad=0, grid="custom", _ad=ad
+    )
+    assert gs == (529000.0, 179000.0, 533000.0, 183000.0, 2000.0, 2, 2, 27700)
+    values = {c: float(i + 1) for i, c in enumerate(cells)}
+    raster = cr.cells_to_raster(values, *gs, resolution=1, _ad=ad)
+    import rasterio
+
+    with rasterio.MemoryFile(raster) as mem, mem.open() as ds:
+        assert ds.read(1).tolist() == [[3.0, -9999.0], [1.0, 2.0]]
+
+
+def test_a_derived_custom_canvas_pads_by_rings_on_the_cell_lattice():
+    ad, cells = _offset_custom(
+        (529000, 537000), (179000, 187000), 8000, 2,
+        [(532000, 182000), (534000, 182000), (532000, 184000)],
+    )  # fmt: skip
+    gs = cr.compute_gridspec(
+        cells, srid=27700, mode="centroids", kring_pad=1, grid="custom", _ad=ad
+    )
+    assert gs == (529000.0, 179000.0, 537000.0, 187000.0, 2000.0, 4, 4, 27700)
+
+
+def test_the_padding_of_a_derived_custom_canvas_holds_the_cells_that_exist():
+    """The grid's own k_ring runs one past its last cell (east: the next row; north: a cell outside the grid), so a
+    canvas padded with it grew past the grid. The three cells of a 2 x 2 grid pad to the grid and no further.
+    """
+    ad, cells = _offset_custom(
+        (529000, 533000), (179000, 183000), 4000, 1,
+        [(530000, 180000), (532000, 180000), (530000, 182000)],
+    )  # fmt: skip
+    gs = cr.compute_gridspec(
+        cells, srid=27700, mode="centroids", kring_pad=1, grid="custom", _ad=ad
+    )
+    assert gs == (529000.0, 179000.0, 533000.0, 183000.0, 2000.0, 2, 2, 27700)
+    from databricks.labs.gbx.pygx import _custom
+
+    ring = _custom.k_ring_in_grid(
+        ad._conf, cells[1], 1
+    )  # the east-most cell of the south row
+    assert sorted(ring) == sorted(
+        cells + [_custom.point_to_cell_id(ad._conf, 532000, 182000, 1)]
+    )
+
+
+def test_a_derived_custom_canvas_in_another_crs_keeps_the_origin_lattice():
+    """The cell edges are the grid's CRS: a canvas in another CRS has none to follow, so it snaps from 0 as before."""
+    ad, cells = _offset_custom(
+        (529000, 533000), (179000, 183000), 4000, 1, [(530000, 180000)]
+    )  # fmt: skip
+    gs = cr.compute_gridspec(
+        cells,
+        srid=3857,
+        mode="centroids",
+        kring_pad=0,
+        grid="custom",
+        pixel_size=100.0,
+        _ad=ad,
+    )
+    assert gs[0] % 100.0 == 0 and gs[3] % 100.0 == 0
+
+
 def test_compute_gridspec_rejects_mixed_resolution():
     import pytest
 

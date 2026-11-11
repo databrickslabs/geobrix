@@ -71,6 +71,24 @@ case class CustomGridSystem(conf: GridConf) extends GridSystem {
     }
 
     /**
+      * The cells within `k` rings of the cell that exist in the grid: positions clamped to `[0, totalCells - 1]`.
+      * [[kRing]] runs to `totalCells` inclusive, one past the last cell, which at the east edge wraps into the next
+      * row and at the north edge names a cell outside the grid. A canvas derived from the cells uses this ring.
+      */
+    def kRingInGrid(cellID: Long, k: Int): Seq[Long] = {
+        if (k < 0) throw new IllegalArgumentException(s"k must be >= 0; got $k")
+        val res      = getCellResolution(cellID)
+        val position = getCellPosition(cellID)
+        val posX     = getCellPositionX(position, res)
+        val posY     = getCellPositionY(position, res)
+        val fromX    = math.max(posX - k, 0L)
+        val toX      = math.min(posX + k, totalCellsX(res) - 1)
+        val fromY    = math.max(posY - k, 0L)
+        val toY      = math.min(posY + k, totalCellsY(res) - 1)
+        (fromX to toX).flatMap(x => (fromY to toY).map(y => getCellId(getCellPositionFromPositions(x, y, res), res)))
+    }
+
+    /**
       * Get the k loop (hollow ring) of indices around the provided cell id.
       *
       * @param cellID

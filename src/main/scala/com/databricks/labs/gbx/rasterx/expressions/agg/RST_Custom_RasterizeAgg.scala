@@ -270,7 +270,7 @@ object RST_Custom_RasterizeAgg extends WithExpressionInfo {
         // Dedup + optional k-ring padding.
         val base = cellIds.toSet
         val cells =
-            if (kringPad > 0) base.flatMap(c => grid.kRing(c, kringPad).toSet)
+            if (kringPad > 0) base.flatMap(c => grid.kRingInGrid(c, kringPad).toSet) // cells that exist, not kRing's one past the edge
             else base
 
         // Collect sample points in the grid's native CRS per mode.
@@ -322,11 +322,18 @@ object RST_Custom_RasterizeAgg extends WithExpressionInfo {
         val pixelSize = pixelSizeOpt.getOrElse(
             math.min(grid.getCellWidth(resolution), grid.getCellHeight(resolution)))
 
-        // snap_bounds: outward snap to the pixel_size lattice.
-        val xmin = math.floor(bxmin / pixelSize) * pixelSize
-        val ymax = math.ceil(bymax / pixelSize) * pixelSize
-        val width  = math.max(1, math.ceil((bxmax - xmin) / pixelSize).toInt)
-        val height = math.max(1, math.ceil((ymax - bymin) / pixelSize).toInt)
+        // snap_bounds: outward snap to the pixel_size lattice. The lattice follows the grid's own cell edges, which
+        // start at (boundXMin, boundYMin), not at the coordinate origin: snapped from 0, the pixel centres sit
+        // half a cell off the cells whenever the bounds are not a multiple of the pixel. That holds in the grid's own
+        // CRS only; a canvas in another CRS has no cell edges to follow. `tol` keeps float noise on an aligned edge
+        // from adding a pixel. The light level (`_CustomAdapter.snap_lattice`) does the same.
+        val (ax, ay, tol) =
+            if (srid == gridCrs) (grid.conf.boundXMin.toDouble, grid.conf.boundYMin.toDouble, 1e-9)
+            else (0.0, 0.0, 0.0)
+        val xmin = ax + math.floor((bxmin - ax) / pixelSize + tol) * pixelSize
+        val ymax = ay + math.ceil((bymax - ay) / pixelSize - tol) * pixelSize
+        val width  = math.max(1, math.ceil((bxmax - xmin) / pixelSize - tol).toInt)
+        val height = math.max(1, math.ceil((ymax - bymin) / pixelSize - tol).toInt)
         val xmax = xmin + width * pixelSize
         val ymin = ymax - height * pixelSize
         (xmin, ymin, xmax, ymax, width, height)

@@ -408,6 +408,27 @@ def k_ring(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     return out
 
 
+def k_ring_in_grid(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
+    """The cells within ``k`` rings of ``cell_id`` that exist in the grid (positions clamped to ``[0, totalCells - 1]``).
+
+    ``k_ring`` runs to ``totalCells`` inclusive, one past the last cell: at the east edge that cell wraps into the
+    next row, and at the north edge it names a cell outside the grid. A canvas derived from the cells uses this ring.
+    """
+    if k < 0:
+        raise ValueError("gbx_custom: k must be at least 0")
+    res = get_cell_resolution(cell_id)
+    cell_position = get_cell_position(cell_id)
+    pos_x = get_cell_position_x(conf, cell_position, res)
+    pos_y = get_cell_position_y(conf, cell_position, res)
+    to_x = min(pos_x + k, total_cells_x(conf, res) - 1)
+    to_y = min(pos_y + k, total_cells_y(conf, res) - 1)
+    return [
+        get_cell_id(get_cell_position_from_positions(conf, x, y, res), res)
+        for x in range(max(pos_x - k, 0), to_x + 1)
+        for y in range(max(pos_y - k, 0), to_y + 1)
+    ]
+
+
 def k_loop(conf: CustomGridConf, cell_id: int, k: int) -> List[int]:
     """Hollow ring of custom-grid cells at EXACTLY Chebyshev distance k.
 

@@ -1067,6 +1067,86 @@ RASTER_AGGREGATE += (
     ),
 )
 
+# --- the custom grid's derived canvas: a grid that does not start at the coordinate origin -----------------------------
+# With NULL canvas arguments the canvas follows the grid's own cell edges. CUSTOM_GRID starts at (0, 0), where a canvas
+# snapped from the origin happens to agree; these grids start at 529000 / 179000, which is no multiple of the 2000 m
+# cell, so a canvas snapped from 0 puts every pixel centre on a cell edge and burns nothing (a 1 x 2 tile of NoData).
+OFFSET_GRID_4KM = {
+    "bound_x_min": 529000,
+    "bound_x_max": 533000,
+    "bound_y_min": 179000,
+    "bound_y_max": 183000,
+    "cell_splits": 2,
+    "root_cell_size_x": 4000,
+    "root_cell_size_y": 4000,
+    "srid": 27700,
+}
+OFFSET_GRID_8KM = {
+    **OFFSET_GRID_4KM,
+    "bound_x_max": 537000,
+    "bound_y_max": 187000,
+    "root_cell_size_x": 8000,
+    "root_cell_size_y": 8000,
+}
+
+
+def _offset_id(columns, col, row, res):
+    """The id of the cell (col, row) of resolution res on an offset grid with `columns` cells in a row."""
+    return row * columns + col | res << 56
+
+
+# resolution 1 of OFFSET_GRID_4KM: 2 x 2 cells of 2000 m, three of them (west to east, south to north) with 1, 2, 3
+_OFFSET_4KM = [
+    (_offset_id(2, 0, 0, 1), 1.0),
+    (_offset_id(2, 1, 0, 1), 2.0),
+    (_offset_id(2, 0, 1, 1), 3.0),
+]
+# resolution 2 of OFFSET_GRID_8KM: 4 x 4 cells of 2000 m; the three cells have every ring-1 neighbour inside the grid
+_OFFSET_8KM = [
+    (_offset_id(4, 1, 1, 2), 1.0),
+    (_offset_id(4, 2, 1, 2), 2.0),
+    (_offset_id(4, 1, 2, 2), 3.0),
+]
+for _n, _m in (("4km", _OFFSET_4KM), ("8km", _OFFSET_8KM)):
+    builder(f"cgr_offset_{_n}")(lambda tmpdir, m=_m: list(m))
+    builder(f"cgrt_offset_{_n}")(lambda tmpdir, m=_m: list(m))
+_NODATA_PX = -9999.0
+_OFFSET_4KM_PIXELS = [[3.0, _NODATA_PX], [1.0, 2.0]]  # north row first
+_OFFSET_8KM_PIXELS = [
+    [_NODATA_PX] * 4,
+    [_NODATA_PX, 3.0, _NODATA_PX, _NODATA_PX],
+    [_NODATA_PX, 1.0, 2.0, _NODATA_PX],
+    [_NODATA_PX] * 4,
+]
+
+
+def _offset_case(name, fn, grid, kind, mode, kring_pad, canvas, pixels, surfaces):
+    """The documented NULL-canvas call: every canvas argument NULL, the canvas and its pixels judged."""
+    return Case(
+        name,
+        fn,
+        (Build(kind), dict(grid), 27700, None, *([None] * 6), mode, kring_pad),
+        "pixels_canvas",
+        lambda: {"canvas": canvas, "pixels": pixels},
+        surfaces,
+    )
+
+
+# the canvas is the whole grid: cell centres 530000 and 532000 snap outward to the cell edges 529000 and 533000
+_OFFSET_4KM_CANVAS = (529000.0, 179000.0, 533000.0, 183000.0, 2, 2)
+_OFFSET_8KM_CANVAS = (529000.0, 179000.0, 537000.0, 187000.0, 4, 4)
+RASTER_AGGREGATE += (
+    _offset_case("cgr_derived_canvas_offset_centroids", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "centroids", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
+    _offset_case("cgr_derived_canvas_offset_envelope", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "spatial_envelope", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
+    _offset_case("cgr_derived_canvas_offset_padded", CGA, OFFSET_GRID_8KM, "cgr_offset_8km", "centroids", 1, _OFFSET_8KM_CANVAS, _OFFSET_8KM_PIXELS, ONLY),
+    # the documented default kring_pad of 1 at the grid edge: the padding holds the cells that exist, so the canvas
+    # stays the grid (the grid's own k_ring runs one past its last cell, into the next row or past the north edge)
+    _offset_case("cgr_derived_canvas_offset_edge_pad", CGA, OFFSET_GRID_4KM, "cgr_offset_4km", "centroids", 1, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, ONLY),
+    _offset_case("cgrt_derived_canvas_offset_edge_pad", CGT, OFFSET_GRID_4KM, "cgrt_offset_4km", "centroids", 1, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, _surfaces(CGT)),
+    _offset_case("cgrt_derived_canvas_offset_centroids", CGT, OFFSET_GRID_4KM, "cgrt_offset_4km", "centroids", 0, _OFFSET_4KM_CANVAS, _OFFSET_4KM_PIXELS, _surfaces(CGT)),
+    _offset_case("cgrt_derived_canvas_offset_padded", CGT, OFFSET_GRID_8KM, "cgrt_offset_8km", "centroids", 1, _OFFSET_8KM_CANVAS, _OFFSET_8KM_PIXELS, _surfaces(CGT)),
+)  # fmt: skip
+
 # --- the BNG twin: the rows of br_dup_max and br_nan_beside_numbers, on the canvas of MVP_A -------------------------
 BNG_CELLS = [
     ("TQ3080", 3.0),

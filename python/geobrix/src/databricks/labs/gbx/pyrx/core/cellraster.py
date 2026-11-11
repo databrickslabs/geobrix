@@ -302,7 +302,9 @@ class _CustomAdapter:
         return res
 
     def k_ring(self, key, k):
-        return self._c.k_ring(self._conf, key, k)
+        # The padding of a derived canvas: the cells that exist. The grid's k_ring runs one past the last cell, which
+        # wraps into the next row or names a cell outside the grid.
+        return self._c.k_ring_in_grid(self._conf, key, k)
 
     def cell_center(self, key):
         # Returns (x, y) in the grid's native CRS (conf.srid).
@@ -320,6 +322,21 @@ class _CustomAdapter:
         # ValueError (the snap_bounds gridspec can extend slightly past the
         # k-ring boundary, producing a few off-grid pixel centroids).
         return self._c.point_to_cell_id_or_none(self._conf, float(x), float(y), res)
+
+    def snap_lattice(self, srid):
+        """The `snap_bounds` lattice of a derived canvas: the grid's own cell edges.
+
+        A custom grid starts at ``(bound_x_min, bound_y_min)``, not at the coordinate origin, so a canvas snapped to
+        multiples of the pixel size from 0 puts the pixel centres half a cell off the cells whenever the bounds are
+        not a multiple of the pixel. The anchor holds only in the grid's own CRS; a canvas in another CRS has no
+        cell edges to follow. ``tol`` keeps float noise on an aligned edge from adding a pixel.
+        """
+        if srid != self.src_crs:
+            return {}
+        return {
+            "anchor": (float(self._conf.bound_x_min), float(self._conf.bound_y_min)),
+            "tol": 1e-9,
+        }
 
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
         # Default pixel = min(cell_width, cell_height) at this resolution.
@@ -408,8 +425,9 @@ def compute_gridspec(
     if pixel_size is None:
         pixel_size = ad.default_pixel_size(cells, res, srid, bymin, bymax)
 
+    lattice = ad.snap_lattice(srid) if hasattr(ad, "snap_lattice") else {}
     xmin, ymin, xmax, ymax, width, height = snap_bounds(
-        bxmin, bymin, bxmax, bymax, pixel_size
+        bxmin, bymin, bxmax, bymax, pixel_size, **lattice
     )
     return (xmin, ymin, xmax, ymax, pixel_size, width, height, srid)
 

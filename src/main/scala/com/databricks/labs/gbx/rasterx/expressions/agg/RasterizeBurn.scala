@@ -142,7 +142,11 @@ object RasterizeBurn {
                             val c  = tp.getCoordinate
                             (c.x, c.y)
                         } else (xGeo, yGeo)
-                    val cellId = grid.pointToCellID(cx, cy, resolution)
+                    // A pixel centre outside the grid (a custom grid's bounds) is in no cell: NoData, as the
+                    // lightweight form gives. A canvas given by the caller may run past the grid.
+                    val cellId =
+                        try grid.pointToCellID(cx, cy, resolution)
+                        catch { case _: IllegalStateException => Long.MinValue }
                     rowBuf(px) = lut.getOrElse(cellId, NoData)
                     px += 1
                 }

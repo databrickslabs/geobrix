@@ -884,6 +884,11 @@ Both tiers apply one rule for which pixels are valid.
 - **The lightweight cell rasterizers keep the largest value when a cell repeats, like the heavyweight tier.** `rst_h3_rasterize_agg`, `rst_quadbin_rasterize_agg`, `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned the row that arrived last. The same data could give a different raster on each run.
   - A cell that appears once, or whose rows all carry the same value, burns as before.
   - Two spellings of one BNG cell, such as `TQ3080` and `TQ 3080`, are one cell.
+- **`gbx_rst_custom_rasterize_agg` and `gbx_rst_custom_rasterize` derive their canvas from the grid's cell edges.** With NULL canvas arguments, a grid whose bounds are not a multiple of the pixel size gave a tile of NoData.
+  - The canvas snapped to multiples of the pixel size from 0, so every pixel centre fell on a cell edge. It now snaps from the grid's `bound_x_min` and `bound_y_min`.
+  - The padding of `kring_pad` holds the cells that exist. The grid's `gbx_custom_kring` runs one past its last cell, so a canvas at the grid edge grew past the grid.
+  - The JVM form gives NoData for a pixel outside the grid, as the lightweight form does. It raised an error.
+  - The JVM and Python forms give the same canvas. A canvas in another CRS than the grid's still snaps from 0.
 - **In the lightweight rasterizers a null value never wins.** A null or `NaN` is ignored whenever the cell has a number, so values `0.5` and `NULL` burn `0.5`.
   - A cell whose values are all null burns `NaN`, also when the whole `value` column is null.
   - Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`.

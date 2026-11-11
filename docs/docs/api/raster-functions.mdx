@@ -1836,7 +1836,7 @@ Powered by **rasterio** + custom-grid cell math. Aggregate — `groupBy(...).agg
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming aggregator that burns custom-grid cell values into one raster tile per group. Cell IDs are BIGINT encoded by the `gbx_custom_grid(...)` layout. This is the **inverse** of `rst_custom_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, `rst_custom_rasterize_agg` reconstructs a raster from per-cell values. Pass the custom-grid struct (from `gbx_custom_grid(...)`) as the third argument; the canvas extent auto-derives from the cell set when all spatial parameters are null.
+Streaming aggregator that burns custom-grid cell values into one raster tile per group. Cell IDs are BIGINT encoded by the `gbx_custom_grid(...)` layout. This is the **inverse** of `rst_custom_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, `rst_custom_rasterize_agg` reconstructs a raster from per-cell values. Pass the custom-grid struct (from `gbx_custom_grid(...)`) as the third argument; the canvas extent auto-derives from the cell set when all spatial parameters are null. The derived canvas follows the cell edges of the grid, from `bound_x_min` and `bound_y_min`, when `out_srid` is the grid's CRS.
 
 <FunctionExamples
   name="rst_custom_rasterize_agg"

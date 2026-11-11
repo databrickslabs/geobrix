@@ -163,6 +163,69 @@ class RST_Custom_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )
 
+    // A derived canvas follows the grid's own cell edges. These grids start at 529000 / 179000, which is no multiple
+    // of the 2000 m cell: a canvas snapped from the coordinate origin put every pixel centre on a cell edge.
+    test("derived canvas follows the cell edges of a grid that does not start at the origin") {
+        val offset = CustomGridSystem(GridConf(529000, 533000, 179000, 183000, 2, 4000, 4000, Some(27700)))
+        val cells  = Seq((530000.0, 180000.0), (532000.0, 180000.0), (530000.0, 182000.0))
+            .map { case (x, y) => offset.pointToCellID(x, y, 1) }
+        val g = RST_Custom_RasterizeAgg.computeGridspec(offset, cells.iterator, 27700, None, "centroids", 0, 1)
+        g shouldBe ((529000.0, 179000.0, 533000.0, 183000.0, 2, 2))
+        val env = RST_Custom_RasterizeAgg.computeGridspec(offset, cells.iterator, 27700, None, "spatial_envelope", 0, 1)
+        env shouldBe ((529000.0, 179000.0, 533000.0, 183000.0, 2, 2))
+    }
+
+    test("derived canvas pads interior cells by kring_pad on the cell lattice") {
+        val offset = CustomGridSystem(GridConf(529000, 537000, 179000, 187000, 2, 8000, 8000, Some(27700)))
+        // res 2 = 2000 m cells, 4 x 4; the cells (1,1), (2,1), (1,2) have every ring-1 neighbour in the grid.
+        val cells = Seq((532000.0, 182000.0), (534000.0, 182000.0), (532000.0, 184000.0))
+            .map { case (x, y) => offset.pointToCellID(x, y, 2) }
+        val g = RST_Custom_RasterizeAgg.computeGridspec(offset, cells.iterator, 27700, None, "centroids", 1, 2)
+        g shouldBe ((529000.0, 179000.0, 537000.0, 187000.0, 4, 4))
+    }
+
+    test("derived canvas at the grid edge pads with the cells that exist") {
+        val offset = CustomGridSystem(GridConf(529000, 533000, 179000, 183000, 2, 4000, 4000, Some(27700)))
+        val cells  = Seq((530000.0, 180000.0), (532000.0, 180000.0), (530000.0, 182000.0))
+            .map { case (x, y) => offset.pointToCellID(x, y, 1) }
+        // kRing runs one past the last cell; kRingInGrid stops at it
+        offset.kRingInGrid(cells(1), 1).toSet shouldBe offset.kRingInGrid(cells(1), 1).toSet.filter(c =>
+            offset.getCellPositionX(offset.getCellPosition(c), 1) < 2 && offset.getCellPositionY(offset.getCellPosition(c), 1) < 2)
+        offset.kRingInGrid(cells(1), 1).size shouldBe 4
+        val g = RST_Custom_RasterizeAgg.computeGridspec(offset, cells.iterator, 27700, None, "centroids", 1, 1)
+        g shouldBe ((529000.0, 179000.0, 533000.0, 183000.0, 2, 2))
+    }
+
+    test("auto-grid burn on a grid that does not start at the origin fills the cells, not NoData") {
+        val offset = CustomGridSystem(GridConf(529000, 533000, 179000, 183000, 2, 4000, 4000, Some(27700)))
+        val pts    = Seq((530000.0, 180000.0), (532000.0, 180000.0), (530000.0, 182000.0))
+        val cells  = pts.map { case (x, y) => offset.pointToCellID(x, y, 1) }
+        val agg = RST_Custom_RasterizeAgg(
+            cellidExpr    = Literal.create(null, LongType),
+            valueExpr     = Literal(0.0),
+            gridExpr      = Custom_Grid(Literal(529000L), Literal(533000L), Literal(179000L), Literal(183000L),
+                Literal(2), Literal(4000), Literal(4000), Literal(27700)),
+            outSridExpr   = Literal(27700),
+            pixelSizeExpr = Literal.create(null, DoubleType),
+            xminExpr      = Literal.create(null, DoubleType),
+            yminExpr      = Literal.create(null, DoubleType),
+            xmaxExpr      = Literal.create(null, DoubleType),
+            ymaxExpr      = Literal.create(null, DoubleType),
+            widthExpr     = Literal.create(null, IntegerType),
+            heightExpr    = Literal.create(null, IntegerType),
+            modeExpr      = Literal("centroids"),
+            kringPadExpr  = Literal(0),
+            exprConfExpr  = Literal.create(encodedEmpty(), StringType)
+        )
+        val buf = agg.createAggregationBuffer()
+        cells.zipWithIndex.foreach { case (c, i) => agg.update(buf, c, (i + 1).toDouble) }
+        val r = readRaster(agg.eval(buf).asInstanceOf[AnyRef])
+        (r.width, r.height) shouldBe ((2, 2))
+        r.gt(0) shouldBe 529000.0
+        r.gt(3) shouldBe 183000.0
+        r.data.toSeq shouldBe Seq(3.0, -9999.0, 1.0, 2.0) // north row first
+    }
+
     test("auto-grid (extent omitted) at out_srid == grid CRS round-trips into the input cell set") {
         val cellIds = points.map { case (x, y) => grid.pointToCellID(x, y, res) }
         val cellSet = cellIds.toSet

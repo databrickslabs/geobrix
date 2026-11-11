@@ -210,7 +210,33 @@ def _table(
                 raise
     if per_file:
         return _spread_if_compacted(spark, full)
+    if rows:
+        return _spread_rows_if_compacted(spark, full)
     return full
+
+
+def _spread_rows_if_compacted(spark, full: str) -> str:
+    """`full`, or a session view of it in a partition per compute slot. An input of narrow rows is written in a file per
+    slot, but table maintenance compacts it later (the 1M-row H3 cells input of one run read as 32 tasks, of the next as
+    ONE), and a 4M-row BNG cells table built on a cluster that had just started read as one task too: a one-task scan
+    runs every form serially (a 4x BNG scalar form ran over 10 min where 1x took 4 s). A table with fewer files than
+    slots is read through a repartition to the slots, the same for every form that reads it.
+    """
+    from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+    want = _bench_parallelism(spark)
+    if (
+        want <= 1
+        or spark.sql(f"DESCRIBE DETAIL {full}").collect()[0]["numFiles"] >= want
+    ):
+        return full
+    view = full.split(".")[-1] + "_spread"
+    spark.table(full).repartition(want).createOrReplaceTempView(view)
+    print(
+        f"[LEVELS input] {full} has fewer files than {want} slots: read spread as {view}",
+        flush=True,
+    )
+    return view
 
 
 def _spread_if_compacted(spark, full: str) -> str:

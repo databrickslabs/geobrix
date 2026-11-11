@@ -8,9 +8,10 @@ from databricks.labs.gbx.bench import levels_family as fam
 from databricks.labs.gbx.bench import levels_forms as lf
 
 
-def _spark():
+def _spark(num_files=32):
     spark = mock.MagicMock()
     spark.catalog.tableExists.return_value = False
+    spark.sql.return_value.collect.return_value = [{"numFiles": num_files}]
     return spark
 
 
@@ -106,4 +107,32 @@ def test_a_virtual_input_already_spread_is_read_as_is():
     ):
         out = lf._table(spark, "s", "mvp_in_virt", lambda: None, per_file=2)
     assert out.startswith("s.mvp_in_virt")
+    spark.table.return_value.repartition.assert_not_called()
+
+
+def test_a_range_input_compacted_below_the_slots_is_read_spread():
+    """Table maintenance compacts a range input too (a 1M-row cells input read as 32 tasks in one run, ONE in the next),
+    and a one-task scan runs every form serially: a range input with fewer files than slots is read repartitioned to
+    the slots."""
+    spark = _spark(num_files=1)
+    spark.catalog.tableExists.return_value = True
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_cells", lambda: None, rows=4_000_000)
+    assert "." not in out  # a session view
+    spark.table.return_value.repartition.assert_called_once_with(32)
+    spark.table.return_value.repartition.return_value.createOrReplaceTempView.assert_called_once_with(
+        out
+    )
+
+
+def test_a_range_input_with_a_file_per_slot_is_read_as_is():
+    spark = _spark(num_files=32)
+    spark.catalog.tableExists.return_value = True
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_cells", lambda: None, rows=4_000_000)
+    assert out.startswith("s.mvp_in_cells")
     spark.table.return_value.repartition.assert_not_called()

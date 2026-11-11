@@ -346,7 +346,11 @@ def test_a_registration_takes_the_session_form_of_a_table_function(
         "databricks.labs.gbx.manager.capabilities.path",
         lambda spark, op: f"{op}:{label}",
     )
-    for name in ("gbx_rst_retile", "gbx_rst_h3_rastertogridavg", "gbx_st_asmvt_pyramid"):
+    for name in (
+        "gbx_rst_retile",
+        "gbx_rst_h3_rastertogridavg",
+        "gbx_st_asmvt_pyramid",
+    ):
         l3.register_l3(object(), manifest.load().functions[name], "-")
         assert registered[name].evalType == eval_type
 

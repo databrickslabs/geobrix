@@ -261,3 +261,18 @@ def test_a_worker_that_still_holds_the_wheels_copy_fails_the_checkout_check(tmp_
     with pytest.raises(RuntimeError) as e:
         g.run_guard({"tree": str(checkout)}, say=say, workers=lambda: [stale], exclude=("_build_info.py",))
     assert "worker w1 imports source digest" in str(e.value) and "driver imports" not in str(e.value)
+
+
+def test_the_env_wheels_version_stamp_is_no_difference_but_any_other_change_is(tmp_path, monkeypatch):
+    """The build writes ``__version__ = "0.6.0+env6"`` into the wheel's __init__.py; a Serverless worker runs that wheel,
+    which the shard cannot overlay. Built from the checkout's commit it reads as the checkout; a real edit still fails."""
+    checkout = _checkout(tmp_path, "checkout")
+    (checkout / "__init__.py").write_text('__version__ = "0.6.0"\n')
+    installed = _install(tmp_path, monkeypatch, "checkout", NEW_SHA)
+    (installed / "__init__.py").write_text('__version__ = "0.6.0+env6"\n')
+    _, say = _says()
+    workers = lambda: [json.loads(g.worker_identity(("_build_info.py",)))]  # noqa: E731
+    assert g.run_guard({"tree": str(checkout)}, say=say, workers=workers, exclude=("_build_info.py",))["ok"]
+    (installed / "__init__.py").write_text('__version__ = "0.6.1+env6"\n')
+    with pytest.raises(RuntimeError, match="__init__.py"):
+        g.run_guard({"tree": str(checkout)}, say=say, workers=workers, exclude=("_build_info.py",))

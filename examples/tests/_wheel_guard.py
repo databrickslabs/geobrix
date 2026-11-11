@@ -41,6 +41,19 @@ def _wanted(rel, exclude=()):
     return rel.endswith(".py") and rel not in exclude and not any(p in _SKIP_PARTS for p in parts)
 
 
+# the build writes the env wheel's local version into the package's __init__.py (``__version__ = "0.6.0+env6"``); the
+# checkout says ``"0.6.0"``. The stamp is left out of the identity, so a Python worker that runs the wheel built from the
+# checkout's commit (Serverless, where the shard cannot copy the checkout onto the workers) reads as that checkout
+_VERSION_STAMP = re.compile(rb'^(__version__\s*=\s*"[^"+]*)\+env\d+(")', re.M)
+
+
+def _file_sha(rel, data):
+    """sha256 of a package file's bytes, the env wheel's version stamp in ``__init__.py`` left out."""
+    if rel == "__init__.py":
+        data = _VERSION_STAMP.sub(rb"\1\2", data)
+    return hashlib.sha256(data).hexdigest()
+
+
 def tree_files(root, exclude=()):
     """{path relative to ``root``: sha256} of the ``.py`` files under ``root`` (the identity's file set)."""
     files = {}
@@ -51,7 +64,7 @@ def tree_files(root, exclude=()):
             rel = os.path.relpath(full, root).replace(os.sep, "/")
             if _wanted(rel, exclude):
                 with open(full, "rb") as fh:
-                    files[rel] = hashlib.sha256(fh.read()).hexdigest()
+                    files[rel] = _file_sha(rel, fh.read())
     return files
 
 
@@ -92,7 +105,7 @@ def wheel_identity(path):
                 if rel == "_build_info.py":
                     info = z.read(name).decode("utf-8", "replace")
                 if _wanted(rel):
-                    files[rel] = hashlib.sha256(z.read(name)).hexdigest()
+                    files[rel] = _file_sha(rel, z.read(name))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     sha, dirty, version = _build_fields(info)

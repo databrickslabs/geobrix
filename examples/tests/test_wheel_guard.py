@@ -204,6 +204,13 @@ def test_a_serverless_run_has_no_pip_cell_and_the_guard_comes_first_with_the_env
     assert cells[1] == "import databricks.labs.gbx\n"
 
 
+def test_the_guard_comes_after_a_run_of_the_notebook_that_installs_geobrix(tmp_path):
+    nb = _nb(tmp_path, "%run ./config_nb", "import databricks.labs.gbx\n")  # config_nb holds the %pip of geobrix
+    cells = _uploaded(nb, strip_pip=False)
+    assert cells[0] == "%run ./config_nb" and "run_guard(" in cells[1]
+    assert cells[2] == "import databricks.labs.gbx\n"
+
+
 def test_the_guard_can_be_switched_off_and_a_run_dependency_notebook_never_gets_it(tmp_path):
     nb = _nb(tmp_path, '%pip install "geobrix @ file://' + WHL + '"', "x = 1\n")
     assert len(_uploaded(nb, strip_pip=False, wheel_guard=False)) == 2

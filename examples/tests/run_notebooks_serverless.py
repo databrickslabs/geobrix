@@ -272,11 +272,11 @@ def _notebook_wheel(nb_bytes: bytes) -> Optional[str]:
     return None
 
 
-_INSTALL_CELL = re.compile(r"^\s*(%pip|%restart_python)|restartPython\(", re.M)
+_INSTALL_CELL = re.compile(r"^\s*(%pip|%restart_python|%run)|restartPython\(", re.M)  # %run: a notebook it runs may install geobrix
 
 
 def _inject_guard_cell(nb_bytes: bytes, wheel: Optional[str]) -> bytes:
-    """Add the guard cell after the last install/restart cell of the notebook (else before its first code cell).
+    """Add the guard cell after the last install, restart or %run cell of the notebook (else before its first code cell).
     With no `wheel` the cell only reports what the driver and the workers import."""
     nb = json.loads(nb_bytes)
     cells = nb.get("cells", [])

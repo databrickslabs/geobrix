@@ -156,6 +156,11 @@ def heavy_ignores(root: Path) -> List[str]:
 _NOT_TESTS = {"__pycache__", "coverage-report", "_plugins"}
 
 
+# The heavy shards run the integration-marked tests too: those are the ones that need the JAR, which the JAR pool's
+# clusters carry (CI's heavy job and the light shards leave them out with "not integration").
+HEAVY_MARKER = ""
+
+
 def heavy_shards(root: Path) -> List[Shard]:
     """One shard per test dir the light tier does not cover, and one for the test files at the top of ``test/``."""
     ignored = {Path(p).name for p in heavy_ignores(root)}
@@ -163,10 +168,12 @@ def heavy_shards(root: Path) -> List[Shard]:
     out = []
     for d in sorted(p for p in test_root.iterdir() if p.is_dir() and p.name not in ignored | _NOT_TESTS):
         if any(d.rglob("test_*.py")) or any(d.rglob("*_test.py")):
-            out.append(Shard(name=f"heavy {d.name}", kind="heavy", paths=[f"test/{d.name}"], pool=POOL_JAR))
+            out.append(Shard(name=f"heavy {d.name}", kind="heavy", paths=[f"test/{d.name}"], pool=POOL_JAR,
+                             marker=HEAVY_MARKER))
     loose = sorted(p.name for p in test_root.glob("test_*.py"))
     if loose:
-        out.append(Shard(name="heavy root files", kind="heavy", paths=[f"test/{n}" for n in loose], pool=POOL_JAR))
+        out.append(Shard(name="heavy root files", kind="heavy", paths=[f"test/{n}" for n in loose], pool=POOL_JAR,
+                         marker=HEAVY_MARKER))
     return out
 
 

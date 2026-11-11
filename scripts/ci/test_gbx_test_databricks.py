@@ -103,6 +103,14 @@ def test_heavy_shards_are_the_test_dirs_the_light_tier_leaves_out(shards):
     assert all(s.pool == ts.POOL_LIGHT for s in shards if s.kind in ("light", "scripts"))
 
 
+def test_the_heavy_shards_run_the_integration_tests_that_need_the_jar(shards):
+    # the JAR-needing tests are marked integration; with CI's "not integration" the heavy vectorx shard collected nothing
+    heavy = [s for s in shards if s.kind == "heavy"]
+    assert heavy and all("not integration" not in ts.pytest_args(s) for s in heavy)
+    light = [s for s in shards if s.kind == "light"]
+    assert light and all(ts.pytest_args(s)[-2:] == ["-m", "not integration"] for s in light if not s.oracle_tables)
+
+
 def test_scala_does_not_run_on_a_cluster(shards):
     scala = next(s for s in shards if s.kind == "scala")
     assert scala.local_only

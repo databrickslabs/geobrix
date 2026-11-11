@@ -136,3 +136,39 @@ def test_a_range_input_with_a_file_per_slot_is_read_as_is():
         out = lf._table(spark, "s", "mvp_in_cells", lambda: None, rows=4_000_000)
     assert out.startswith("s.mvp_in_cells")
     spark.table.return_value.repartition.assert_not_called()
+
+
+def test_a_replicated_tile_input_keeps_its_file_size_at_every_scale(
+    spark_session_local,
+):
+    """The replicated DEM, netCDF and pair inputs were written in a fixed number of partitions, so a file held 16 rows at
+    4x and 64 at 16x (37 MB against 146 MB, one Parquet row group each). The scan reads a row group as ONE columnar batch,
+    and through a Python UDF that made the 16x executors spend 20-45% of their time in garbage collection where the 4x
+    ones spent 2-5%; the same 2048 rows in files of 16 rows ran in 13 s with 3% GC. The rows per file are capped, at
+    every scale, and the table is read as it is (no repartition)."""
+    seen = {}
+
+    def table(spark, schema, name, build, **kw):
+        seen[name] = kw
+        return name
+
+    with (
+        mock.patch.object(lf, "_table", table),
+        mock.patch.object(lf, "client_dataframe", lambda *a, **k: mock.MagicMock()),
+    ):
+        for n in (128, 512, 2048):
+            lf.INPUTS["dem_1024_mem"](spark_session_local, n, "", "s")
+            lf._se_pairs_replicated(512)(spark_session_local, n, "", "s")
+    assert len(seen) == 6
+    for kw in seen.values():
+        assert kw.get("file_rows") == lf.REPLICATED_TILES_PER_FILE
+        assert not kw.get("per_file") and not kw.get("rows")
+
+
+def test_file_rows_caps_the_rows_of_a_file_and_reads_the_table_as_is():
+    spark = _spark(num_files=1)
+    df = mock.MagicMock()
+    out = lf._table(spark, "s", "mvp_in_tiles", lambda: df, file_rows=16)
+    df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 16)
+    assert out.startswith("s.mvp_in_tiles")
+    spark.table.return_value.repartition.assert_not_called()

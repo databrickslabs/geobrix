@@ -146,7 +146,12 @@ def stamped_name(schema: Optional[str], name: str) -> str:
 
 
 def _write_input(
-    spark, df, full: str, rows: Optional[int], per_file: Optional[int] = None
+    spark,
+    df,
+    full: str,
+    rows: Optional[int],
+    per_file: Optional[int] = None,
+    file_rows: Optional[int] = None,
 ) -> None:
     """Write `df` as the Delta table `full`, in at least as many files as the compute has slots when `rows` is given.
 
@@ -160,9 +165,14 @@ def _write_input(
     tiles' outputs in one Arrow batch) is written in files of a few rows, because optimized write packed 1000 virtual
     tiles (13 KB) into ONE file and 250 into files of up to 63 rows: one scan task then held 12 GB of outputs on a
     Serverless 1 GB limit.
+
+    `file_rows` caps the rows of a file too, for an input of multi-MB tiles written in a fixed number of partitions
+    (`_se_dems_replicated`): a file is one Parquet row group, and the scan reads a row group as ONE columnar batch.
     """
     w = df.write.format("delta")
-    if per_file:
+    if file_rows:
+        w = w.option("maxRecordsPerFile", max(1, int(file_rows)))
+    elif per_file:
         w = w.option("maxRecordsPerFile", max(1, int(per_file)))
     elif rows:
         from databricks.labs.gbx.bench.runner import _bench_parallelism
@@ -181,12 +191,14 @@ def _table(
     exact: bool = False,
     rows: Optional[int] = None,
     per_file: Optional[int] = None,
+    file_rows: Optional[int] = None,
 ) -> str:
     """The input as a table of `schema` (or a temp view): built once under a name that holds its stamp, so every form and
     every run that asks for the same input at the same scale shares it. `exact` names the table as given (a companion
     table of an input that already carries its stamp). `rows` is the row count of an input of narrow rows (a range,
     not a tile per row): it is written in a file per compute slot (`_write_input`); `per_file` writes at most that many rows
-    in a file (virtual tiles)."""
+    in a file (virtual tiles), and is read spread if maintenance compacted it; `file_rows` writes at most that many rows
+    in a file and reads the table as it is (`_write_input`)."""
     if schema is None:
         build().createOrReplaceTempView(name)
         return name
@@ -196,7 +208,7 @@ def _table(
     if not spark.catalog.tableExists(full):
         t0 = time.perf_counter()
         try:
-            _write_input(spark, build(), full, rows, per_file)
+            _write_input(spark, build(), full, rows, per_file, file_rows)
             # a tile input of thousands of files takes minutes: say so, so a form cap hit while building is seen as that
             print(
                 f"[LEVELS input] {full} built in {time.perf_counter() - t0:.1f} s",
@@ -1866,6 +1878,14 @@ def release_cached_inputs(spark) -> None:
     _CACHED_INPUTS.clear()
 
 
+# The rows of a file of a replicated tile input, at every scale. Written in a fixed number of partitions, a file held 16
+# 1024 px DEM tiles (37 MB) at 4x and 64 (146 MB) at 16x, one Parquet row group each, and the scan reads a row group as
+# ONE columnar batch: through a Python UDF the 16x executors spent 20-45% of their time in garbage collection (2-5% at
+# 4x), the floor alone went from 1.5 s to 29 s, and the 16x light timings spread 2-3x. The same 2048 rows in files of 16
+# rows took 13 s with 3% GC (dedicated DBR 19). 16 is the 4x file, so the 1x and 4x layouts do not change.
+REPLICATED_TILES_PER_FILE = 16
+
+
 def _se_dems_replicated(
     size: int,
     tile_of=None,
@@ -1875,7 +1895,8 @@ def _se_dems_replicated(
 ):
     """`size` px tiles (DEMs, or what `tile_of(size, seed)` builds), n rows: four distinct tiles built once on the client
     and replicated on the executors, then cached (the rows are not rebuilt by each timed query, and no client cap applies
-    to n). The cache lasts one rung: `release_cached_inputs` frees it. The rows are spread over `parts` partitions.
+    to n). The cache lasts one rung: `release_cached_inputs` frees it. The rows are spread over `parts` partitions, and a
+    table file holds at most `REPLICATED_TILES_PER_FILE` of them.
     With `content`, the one column is `content`: the bytes of each tile (a GTiff), not the tile struct.
     """
     tile_of = tile_of or _se_dem_tile
@@ -1912,7 +1933,7 @@ def _se_dems_replicated(
                 _CACHED_INPUTS[name] = df
             return df
 
-        return _table(spark, schema, name, rows)
+        return _table(spark, schema, name, rows, file_rows=REPLICATED_TILES_PER_FILE)
 
     return build
 
@@ -1923,7 +1944,8 @@ BASE_ROWS["se_dem_1024_mem"] = 16
 
 def _se_pairs_replicated(size: int):
     """`size` px tile pairs, n rows: four distinct pairs built once on the client and replicated on the executors, then
-    cached like `_se_dems_replicated` (no client cap applies to n; `release_cached_inputs` frees the cache).
+    cached like `_se_dems_replicated` (no client cap applies to n; `release_cached_inputs` frees the cache), a table
+    file holding at most `REPLICATED_TILES_PER_FILE` of them.
     """
 
     def build(spark, n, corpus, schema):
@@ -1956,7 +1978,7 @@ def _se_pairs_replicated(size: int):
                 _CACHED_INPUTS[name] = df
             return df
 
-        return _table(spark, schema, name, rows)
+        return _table(spark, schema, name, rows, file_rows=REPLICATED_TILES_PER_FILE)
 
     return build
 

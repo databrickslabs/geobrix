@@ -1345,7 +1345,7 @@ def main() -> int:
             access_mode=args.access_mode,
             user_name=me,
             jar=args.jar,
-            wheel=args.wheel,
+            wheel=None if args.docker_image else args.wheel,  # the image carries the wheel, as on the notebook path
             extra_jars=tuple(args.extra_jars),
             docker_image=args.docker_image,
         )

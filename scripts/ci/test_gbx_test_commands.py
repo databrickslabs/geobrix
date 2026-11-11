@@ -2582,6 +2582,25 @@ def test_a_dcs_image_run_refuses_a_jar_and_needs_a_new_cluster(monkeypatch, caps
         assert "--docker-image needs --new-cluster" in capsys.readouterr().err
 
 
+def test_a_dcs_image_python_task_installs_no_second_geobrix_wheel(monkeypatch, tmp_path):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    py = tmp_path / "entry.py"
+    py.write_text("print('x')\n")
+    got = {}
+    me = type("Me", (), {"user_name": "me@x.com"})
+    client = type("W", (), {"current_user": type("CU", (), {"me": staticmethod(lambda: me)})})
+    sdk = type(sys)("databricks.sdk")
+    sdk.WorkspaceClient = lambda **kw: client
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    monkeypatch.setattr(runner, "snapshot_files", lambda files, prefix: {})
+    monkeypatch.setattr(runner, "run_python_task", lambda w, py, ws, params, cluster, *a: got.update(cluster=cluster) or True)
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--python-task", str(py), "--new-cluster", "19.x-scala2.13",
+                                      "--docker-image", "mjohns797/geobrix:0.6.0-env6-x86"])  # fmt: skip
+    assert runner.main() == 0
+    assert got["cluster"].wheel is None, "the image carries the wheel: a second one is a second geobrix"
+    assert got["cluster"].docker_image == "mjohns797/geobrix:0.6.0-env6-x86"
+
+
 def test_the_serverless_runner_refuses_an_extra_jar_on_a_jar_task(monkeypatch, capsys):
     runner = _launcher("run_notebooks_serverless", monkeypatch)
     monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--jar-task", "a.b.Job",

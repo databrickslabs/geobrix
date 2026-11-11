@@ -105,10 +105,20 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## Known failures on a node
 
-- Spark reads a bare path from DBFS on Databricks. The provided session therefore reads a bare local path (a test's `tmp_path`) as a `file:` URI in `DataFrameReader.load` and `DataStreamReader.load`. A test that writes through Spark to a bare local path still writes to DBFS.
+Run `tst-nodefix-1` (commit `109a45ad80`: the `ds` shards, `bench 3/3` and `scripts/ci`, 19 chunks) passed every test: 4738 passed, 0 failed, 6 skipped. What a node does differently from a local session, and how the tests allow for it:
+
+- Spark resolves a bare path on DBFS. The provided session (`python/geobrix/test/_provided_spark.py`) therefore reads a bare local path (a test's `tmp_path`) as a `file:` URI in `load` and in the format readers (`parquet`, `csv`, `json`, `orc`, `text`), and writes one as a `file:` URI in `DataFrameWriter.save` and the format writers and in `DataStreamWriter.start`. A path in `/Volumes`, `/dbfs` or `/Workspace`, or one with a scheme, is left alone. Not covered: `option("path", ...)`, a `saveAsTable` path, and `CREATE TABLE ... LOCATION '<local path>'`, which Unity Catalog refuses ("Missing cloud file system scheme"). A test that needs a table uses a managed table in the session's default schema.
+- A node probes as a FILE tier (`read_files`), which lists a local path through DBFS. The FILE-leg tests of `test/bench` (`fuse_tier` in its `conftest.py`) pin the FUSE tier they are about.
+- The runtime's own SQL parser accepts the Databricks-only statements that open-source Spark rejects; `test_t28_files` checks that rejection only off Databricks.
+- A node's interpreter reads no `.pth`; the shard runner activates the native payload through a `sitecustomize` on `PYTHONPATH`. A test that starts a Python child keeps that `PYTHONPATH` (the readdir probe of `bench/local_timing.py` does).
+- The wheel's `rasterio` and `osgeo` sit under `_vendor/` in the package. Tests that scan the package source for GeoBrix's own anti-patterns skip it.
+- A run that ignores SIGHUP (a notebook, `nohup`) hands that to a bash child, which cannot trap it: the `scripts/ci` sandbox resets SIGINT and SIGHUP in the children it starts.
+- The Python data source calls `read` once with a bare `InputPartition` when no partition is planned (the open-source session passes `None`); the raster reader returns nothing for either.
+- With 32 slots `DataFrame.repartition(n)` over one-row partitions is not even; `levels_family.spread_evenly` is.
 - The overture tests that mix Spark and file I/O on a bare path skip under the provided session, with the reason.
 - `test/bench/test_levels.py`'s worker-peak tests inspect Spark's local-mode Python workers and cannot pass against the cluster's session.
-- The family oracle chunks need several minutes each; the Scala suites never run here.
+- The skips that remain: no Rust toolchain or vendored crates on the node, no QC judge, no mutation venv, and `/tmp` is not a symlink off macOS.
+- The family oracle chunks need several minutes each, and the GDAL engine tables are heavy (see above); the Scala suites never run here.
 
 ## Limits
 

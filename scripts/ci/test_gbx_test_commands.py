@@ -3278,6 +3278,18 @@ def test_a_notebook_on_a_new_cluster_gets_the_wheel_as_a_cluster_library(
     ]
 
 
+def test_a_pip_wheel_with_no_wheel_is_also_the_cluster_library(runner, monkeypatch, tmp_path):
+    """--pip-wheel alone once left the cluster library at the default wheel, so the workers imported an older geobrix
+    than the notebook's %pip (`No module named databricks.labs.gbx.pyvx._jmath`); a --wheel given still wins."""
+    iso = "/Volumes/c/s/iso/geobrix-0.6.0+env6-py3-none-any.whl"
+    code, seen = _launch(runner, monkeypatch, tmp_path, "--new-cluster", "19.x-scala2.13", "--pip-wheel", iso)
+    assert code == 0 and seen[0]["job_cluster"].wheel == iso
+    code, seen = _launch(
+        runner, monkeypatch, tmp_path, "--new-cluster", "19.x-scala2.13", "--pip-wheel", iso, "--wheel", ENV6
+    )
+    assert code == 0 and seen[0]["job_cluster"].wheel == ENV6
+
+
 def test_no_wheel_installs_only_the_extra_deps_and_no_cluster_library(
     runner, monkeypatch, tmp_path
 ):

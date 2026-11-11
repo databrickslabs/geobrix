@@ -1108,7 +1108,8 @@ def main() -> int:
         default=None,
         help=(
             "Classic modes (%%pip kept): point every `%%pip install ... @ file:///Volumes/....whl` line of the "
-            "uploaded copy at this /Volumes wheel, for example the env6 wheel of an isolated staging folder."
+            "uploaded copy at this /Volumes wheel, for example the env6 wheel of an isolated staging folder. "
+            "Without --wheel it is also the wheel of the environment and the cluster library."
         ),
     )
     parser.add_argument(
@@ -1184,7 +1185,8 @@ def main() -> int:
     if args.no_wheel and args.wheel:
         parser.error("--no-wheel and --wheel are exclusive: --no-wheel installs no geobrix wheel")
     if not args.no_wheel and args.wheel is None:
-        args.wheel = DEFAULT_WHEEL
+        # the %pip wheel is also the cluster library: two different wheels give the workers another geobrix
+        args.wheel = args.pip_wheel or DEFAULT_WHEEL
 
     # Validate --set-var forms early (NAME=VALUE, NAME a valid identifier).
     for sv in args.set_vars or []:

@@ -14,8 +14,20 @@ Contention: a key also keeps, per run, how its actual time compared with its sol
 the expected being the estimate the plan had for it without any contention factor) and how many chunks ran beside it on its cluster
 (``nb``). Its contention factor is the median ``x`` of its last WINDOW runs that had neighbours. A factor of CONTENTION_HEAVY or
 more marks the key contention-heavy: the planner treats it as a heavy unit (at most one heavy chunk per cluster at a time), and
-plans it at its solo time times its factor. A sample taken beside neighbours is deflated by its run's ``x`` before it joins the
-solo estimate, so the factor is never counted twice.
+plans it at its solo time times its factor. The solo estimate is the median of the key's runs without neighbours; a key with none
+takes its samples beside neighbours, each deflated by the key's factor (the median over its runs), so the factor counts once. Never by
+that run's own ``x``: that is the actual over the planned time, so the deflated sample is the planned time again, and the estimate would
+never move.
+
+Test parts: a chunk that runs part ``i/n`` of a file or table (``--target-min`` cut the unit by node id) records its seconds under
+``<key>#i/n`` only, so a part never sets its whole unit's history. When every part of a unit finished in one run, the unit's key gets
+their sum as well. The planner times a part by its own key where it has one.
+
+One run, one sample per key: when several chunks of a run time the same key (``table:*``, which every family chunk runs), ``merge``
+keeps their median (a full sample over lower bounds); and one contention record per key, the median ratio.
+
+Cold starts: a sample from a runner's first chunk is flagged ``first`` (its compute started cold: on Serverless, few task slots and
+an unwarmed environment). An estimate takes the warm samples of a key where it has any, else all of them.
 
 Serverless: a run there records its samples under ``sls:<key>`` (each runner task has compute of its own, so a sample is a chunk
 alone, and no contention record is made). A Serverless plan reads ``view(h, serverless=True)``: a key's ``sls:`` samples where it has
@@ -109,6 +121,7 @@ def merge(path, samples: Iterable[dict], run: dict, contention: Iterable[dict] =
     adds nothing. Returns what was added per kind."""
     run_id = str(run.get("run") or "")
     added = {"keys": 0, "lower_bounds": 0, "contention": 0}
+    samples, contention = per_key(samples), per_key_contention(contention)
     with locked(path):
         h = load(path)
         for c in contention:
@@ -125,13 +138,60 @@ def merge(path, samples: Iterable[dict], run: dict, contention: Iterable[dict] =
                 continue
             slots = int(smp.get("slots") or 1)
             entry["samples"].append({"s": round(float(smp["s"]) / ts.slowdown(slots), 2), "run": run_id, "slots": slots,
-                                     "lb": bool(smp.get("lb")), **({"stop": str(smp["stop"])} if smp.get("stop") else {})})
+                                     "lb": bool(smp.get("lb")), **({"stop": str(smp["stop"])} if smp.get("stop") else {}),
+                                     **({"first": True} if smp.get("first") else {})})
             entry["samples"] = entry["samples"][-KEEP:]
             added["lower_bounds" if smp.get("lb") else "keys"] += 1
         if run_id and not any(r.get("run") == run_id for r in h["runs"]):
             h["runs"] = (h["runs"] + [dict(run, merged=time.strftime("%Y-%m-%d %H:%M:%S"))])[-200:]
         _write_atomic(path, h)
     return added
+
+
+def per_key(samples: Iterable[dict]) -> List[dict]:
+    """One sample per key of one run: the median of its full samples (a lower bound only when it has none: then the largest),
+    ``first`` when every one of them came from a runner's first chunk. Samples of different slots are compared as measured."""
+    by: Dict[str, List[dict]] = {}
+    for x in samples:
+        by.setdefault(x["key"], []).append(x)
+    out = []
+    for k, xs in by.items():
+        if len(xs) == 1:
+            out.append(xs[0])
+            continue
+        full = [x for x in xs if not x.get("lb")]
+        pick = full or xs
+        s = statistics.median(float(x["s"]) for x in full) if full else max(float(x["s"]) for x in xs)
+        stop = next((x["stop"] for x in xs if x.get("stop")), "")
+        out.append({"key": k, "s": s, "slots": int(pick[0].get("slots") or 1), "lb": not full, **({"stop": stop} if stop and not full else {}),
+                    **({"first": True} if all(x.get("first") for x in pick) else {})})
+    return out
+
+
+def per_key_contention(records: Iterable[dict]) -> List[dict]:
+    """One contention record per key of one run: the median ratio, and the most neighbours and the highest peak."""
+    by: Dict[str, List[dict]] = {}
+    for c in records:
+        by.setdefault(c["key"], []).append(c)
+    return [xs[0] if len(xs) == 1 else {"key": k, "x": statistics.median(float(c["x"]) for c in xs), "nb": max(int(c.get("nb") or 0) for c in xs),
+                                        "peak": max(int(c.get("peak") or 0) for c in xs)} for k, xs in by.items()]
+
+
+def part_key(key: str, test_part: str) -> str:
+    """The key of test part ``i/n`` of a unit (``test/x.py#1/4``); the unit's own key without a part."""
+    return f"{key}#{test_part}" if test_part else key
+
+
+def whole_units(samples: Iterable[dict]) -> List[dict]:
+    """The unit samples a run's test parts make: a unit every part ``0..n-1`` of which has a full sample gets their sum (the
+    parts of one run run at one slot count)."""
+    parts: Dict[tuple, Dict[int, dict]] = {}
+    for x in samples:
+        m = re.fullmatch(r"(.+)#(\d+)/(\d+)", x["key"])
+        if m and not x.get("lb"):
+            parts.setdefault((m.group(1), int(m.group(3))), {})[int(m.group(2))] = x
+    return [{"key": k, "s": sum(float(x["s"]) for x in got.values()), "slots": next(iter(got.values())).get("slots", 1), "lb": False}
+            for (k, n), got in parts.items() if set(got) == set(range(n))]
 
 
 # ---------------------------------------------------------------------------------------------- estimates
@@ -172,24 +232,30 @@ def contended(h: dict, threshold: float = CONTENTION_HEAVY) -> set:
 def estimate_of(entry: dict, slots: int, adjust: bool = True) -> Optional[dict]:
     """``{"s": seconds at ``slots``, "n": full samples, "lb": True when a lower bound sets it, "solo": seconds without the
     contention factor, "x": the factor (1.0 without one)}``; None without samples. ``adjust``: ``s`` is the solo time times the
-    factor (when it is above 1), else the solo time. A sample from a run that recorded the key above its expected time beside
-    neighbours is deflated by that ratio first (the factor carries it)."""
+    factor (when it is above 1), else the solo time. A sample from a run that had neighbours is deflated by the factor first (the
+    factor carries the contention). Warm samples win over a runner's first chunk (``first``) where the key has both."""
     smp = entry.get("samples") or []
-    x_of = {c["run"]: float(c["x"]) for c in entry.get("contention") or [] if int(c.get("nb") or 0) >= 1 and c.get("x")}
+    beside = {c["run"] for c in entry.get("contention") or [] if int(c.get("nb") or 0) >= 1 and c.get("x")}
+    f = contention_of(entry) or 1.0
 
-    def solo(x):
-        return x["s"] / max(1.0, x_of.get(x.get("run"), 1.0))
+    def solo(x):  # a sample from a run beside neighbours, deflated by the key's factor (never by that run's own ratio)
+        return x["s"] / max(1.0, f) if x.get("run") in beside else x["s"]
+
+    def warm(xs):  # the samples of warm starts, where there are any: a runner's first chunk starts cold
+        return [x for x in xs if not x.get("first")] or xs
 
     full = [x for x in smp if not x.get("lb")]
+    # the solo time is measured alone where the key has such runs; deflated samples only stand in for them (a ratio over the plan's
+    # own expectation, deflated, gives back that expectation, so contended runs alone would never move it)
+    full = [x for x in full if x.get("run") not in beside] or full
     k = ts.slowdown(slots)
-    est = statistics.median(solo(x) for x in full[-WINDOW:]) if full else 0.0
+    est = statistics.median(solo(x) for x in warm(full)[-WINDOW:]) if full else 0.0
     last_full = max((i for i, x in enumerate(smp) if not x.get("lb")), default=-1)
-    lbs = [solo(x) for x in smp[last_full + 1:] if x.get("lb")]  # bounds a later full run has not answered yet
+    lbs = [solo(x) for x in warm([x for x in smp[last_full + 1:] if x.get("lb")])]  # bounds a later full run has not answered yet
     if not full and not lbs:
         return None
     lb = bool(lbs) and max(lbs) > est
     base = max([est] + lbs) * k
-    f = contention_of(entry) or 1.0
     return {"s": round(base * max(1.0, f) if adjust else base, 2), "n": len(full), "lb": lb, "solo": round(base, 2), "x": f}
 
 

@@ -238,9 +238,58 @@ def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = No
             if local:
                 raise ValueError(f"shard {local[0].name!r} does not run on a cluster: {local[0].local_only}")
             add(hit)
-    if files:  # test files named one by one: one shard of just those files (a light shard, so every file runs where CI runs it)
-        add([Shard(name="files", kind="light", paths=sorted(set(files)))])
+    if files:  # test files named one by one: shards of just those files, each run where CI runs it (files_shards)
+        add(files_shards(shards, sorted(set(files)), root))
     return out
+
+
+def owner_of(shards: List[Shard], rel: str, root: Path) -> Optional[Shard]:
+    """The CI shard that runs test file ``rel`` (from python/geobrix): the first whose paths cover it, its ignores and its part
+    included. None when no shard runs it."""
+    fn = None
+    for s in shards:
+        if s.kind == "scripts" or s.local_only:
+            continue
+        if s.part and fn is None:
+            fn = shard_of(root)
+        if _covers(s, rel, fn):
+            return s
+    return None
+
+
+def files_shards(shards: List[Shard], files: List[str], root: Path) -> List[Shard]:
+    """The shards of test files named one by one: the files of one kind of home shard (its tier, pool, marker and Delta setting)
+    in one shard, ``files`` for the light tier and ``files <kind>`` for another. The family file runs every oracle table its CI
+    shards run, in a shard of its own (``files family``), so the plan times and cuts it by table. A file no CI shard runs counts as
+    light."""
+    groups: Dict[tuple, List[str]] = {}
+    family: List[str] = []
+    for rel in files:
+        home = owner_of(shards, rel, root)
+        if home is not None and home.oracle_tables:
+            family.append(rel)
+            continue
+        key = (home.kind, home.pool, home.marker, home.delta) if home else ("light", POOL_LIGHT, "not integration", False)
+        groups.setdefault(key, []).append(rel)
+    out = []
+    for (kind, pool, marker, delta), paths in sorted(groups.items(), key=lambda kv: kv[0][0] != "light"):
+        out.append(Shard(name="files" if kind == "light" else f"files {kind}", kind=kind, paths=sorted(paths), pool=pool, marker=marker,
+                         delta=delta))
+    for rel in family:
+        tables = sorted({t for s in shards if s.oracle_tables and rel in s.paths for t in s.oracle_tables.split(",") if t})
+        home = owner_of(shards, rel, root)
+        out.append(Shard(name="files family", kind=home.kind, paths=[rel], pool=home.pool, marker=home.marker, delta=home.delta,
+                         oracle_tables=",".join(tables), unsplittable=True))
+    return out
+
+
+def narrow_tables(shards: List[Shard], only: str) -> List[Shard]:
+    """The shards as an ``--env GBX_ORACLE_TABLES=<only>`` run runs them: that variable replaces each oracle-table shard's own
+    tables (the family file reads it), so the plan times and cuts those shards by the tables they run, not by their CI tables."""
+    tables = ",".join(t for t in (only or "").split(",") if t.strip())
+    if not tables:
+        return list(shards)
+    return [Shard(**{**s.__dict__, "oracle_tables": tables}) if s.oracle_tables else s for s in shards]
 
 
 def changed_files(root: Path, base: str, sha: str) -> List[str]:
@@ -451,7 +500,8 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     groups = pack({k: m for k, m in mins.items() if k in hot}, target) + pack({k: m for k, m in mins.items() if k not in hot}, target)
     if len(groups) <= 1 and not (len(mins) == 1 and FIXED_MIN + rest + max(mins.values()) > target):
         est, src = estimate_src(shard, root, file_seconds, lower)
-        return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src, "heavy": bool(hot), "unit_max_min": round(max(mins.values()), 2)})]
+        return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src, "heavy": bool(hot),
+                         "unit_max_min": round(max(mins.values(), default=0.0), 2)})]
     # the hard cap: a unit longer than the target alone is cut into test parts (by node id) of about the target each
     work = max(0.1, target - FIXED_MIN)
     pieces = []
@@ -460,18 +510,21 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
         pieces += [(g, f"{j}/{n}" if n > 1 else "", n) for j in range(n)]
     out = []
     for i, (g, tpart, n) in enumerate(pieces, 1):
+        own = f"{g[0]}#{tpart}" if tpart else ""  # a test part timed by its own key (``_timings.part_key``) where it has one
         timed = sum(1 for k in g if k in file_seconds)
-        src = "lower bound" if lower and any(k in lower for k in g) else ("history" if timed == len(g) else "partial" if timed else "ci")
+        bound = lower and (any(k in lower for k in g) or own in lower)
+        src = "lower bound" if bound else ("history" if timed == len(g) or own in file_seconds else "partial" if timed else "ci")
+        work_min = file_seconds[own] / 60.0 / max(1e-6, min(1.0, shard.share or 1.0)) if own in file_seconds else sum(mins[k] for k in g) / n
         common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src, subset=shard.subset,
                       heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g) / n, 2), test_part=tpart,
                       select_k=shard.select_k, share=shard.share)
         if shard.oracle_tables:
             out.append(Shard(name=f"{shard.name} [{i}/{len(pieces)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
                              oracle_tables=",".join(k.split(":", 1)[1] for k in g), unsplittable=True,
-                             est_min=round(FIXED_MIN + (rest + sum(mins[k] for k in g)) / n, 2), **common))
+                             est_min=round(FIXED_MIN + rest / n + work_min, 2), **common))
         else:
             out.append(Shard(name=f"{shard.name} [{i}/{len(pieces)}]", paths=sorted(g), ignore=[], part="", oracle_tables="",
-                             est_min=round(FIXED_MIN + sum(mins[k] for k in g) / n, 2), **common))
+                             est_min=round(FIXED_MIN + work_min, 2), **common))
     return out
 
 

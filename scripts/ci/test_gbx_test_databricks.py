@@ -173,6 +173,32 @@ def test_test_files_named_in_shards_make_one_shard_of_just_those_files(shards):
         ts.select(shards, "test/pyrx/test_nope.py", [], REPO_ROOT)
 
 
+def test_a_named_file_runs_on_the_tier_of_the_ci_shard_that_owns_it(shards):
+    got = {s.name: s for s in ts.select(shards, "test/vectorx/test_tin_conforming_mode.py,test/pyrx/test_env.py", [], REPO_ROOT)}
+    heavy = got["files heavy"]
+    assert heavy.kind == "heavy" and heavy.pool == ts.POOL_JAR and heavy.marker == ts.HEAVY_MARKER, "a heavy dir's file needs the JAR pool"
+    assert "-m" not in ts.pytest_args(heavy), "and runs its integration tests, as its heavy shard does"
+    assert got["files"].pool == ts.POOL_LIGHT and got["files"].paths == ["test/pyrx/test_env.py"]
+
+
+def test_a_narrowed_family_file_is_planned_by_the_tables_it_runs(shards):
+    fam = ts.select(shards, "test/manager/test_family_cross_tier.py", [], REPO_ROOT)
+    assert [s.name for s in fam] == ["files family"] and set(fam[0].oracle_tables.split(",")) == set(af.family_tables(shards))
+    secs = {"test/manager/test_family_cross_tier.py": 2941.0, "table:RASTER_ACCESSOR": 90.0, "table:*": 2.0}
+    narrowed = ts.narrow_tables(fam, "RASTER_ACCESSOR")
+    est = ts.estimate(narrowed[0], REPO_ROOT, secs)
+    assert est == pytest.approx(ts.FIXED_MIN + 92.0 / 60.0), "the one table the env runs, not the whole file's old time (60 min)"
+    assert ts.narrow_tables(shards, "")[0] is shards[0]
+    plan = _plan(_args("--env", "GBX_ORACLE_TABLES=RASTER_ACCESSOR"), narrowed)
+    assert plan["shards"]["files-family"]["env"]["GBX_ORACLE_TABLES"] == "RASTER_ACCESSOR"
+
+
+def test_a_cut_with_no_units_keeps_the_shard_whole(monkeypatch):
+    monkeypatch.setattr(ts, "_items", lambda *a, **k: ({}, 0, 0.0))
+    s = ts.Shard(name="x", kind="light", paths=["test/x"])
+    assert [c.unit_max_min for c in ts.cut(s, 4.0, REPO_ROOT, {})] == [0.0], "no ValueError from max() of nothing"
+
+
 af = launcher.af  # the module the launcher calls (a second copy would not see a monkeypatch)
 TIN = "python/geobrix/src/databricks/labs/gbx/pyvx/_tin.py"
 RS = "rust/gbxrs/src/tin.rs"
@@ -288,6 +314,11 @@ def test_the_family_file_selects_every_table_and_a_conftest_its_folder(graph, sh
     assert set(sel.tables) == set(af.family_tables(shards)) and af.FAMILY_FILE not in sel.files
     sel = _sel(graph, shards, ["python/geobrix/test/zarr/conftest.py"])
     assert sel.files and all(f.startswith("test/zarr/") for f in sel.files)
+
+
+def test_a_native_payload_input_reaches_the_whole_bank(graph, shards):
+    sel = _sel(graph, shards, ["scripts/native/arch-gate.json"])
+    assert sel.everything == ["scripts/native/arch-gate.json"], "the env wheels carry what scripts/native builds"
 
 
 def test_a_script_maps_to_the_scripts_ci_tests_that_name_it(graph, shards):
@@ -1629,6 +1660,46 @@ def test_a_sample_taken_beside_neighbours_is_deflated_so_the_factor_counts_once(
     assert tm.seconds(tm.load(path), 1, adjust=False) == {k: 120.0}
 
 
+def test_the_solo_estimate_follows_runs_alone_not_the_plan_a_contended_run_was_judged_by(tmp_path):
+    path = tmp_path / "h.json"
+    k = "test/zarr/test_x.py"
+    tm.merge(path, [{"key": k, "s": 100.0, "slots": 1}], {"run": "r1"})
+    tm.merge(path, [{"key": k, "s": 500.0, "slots": 1}], {"run": "r2"}, [{"key": k, "x": 5.0, "nb": 3}])  # judged against 100
+    tm.merge(path, [{"key": k, "s": 300.0, "slots": 1}], {"run": "r3"})  # the unit itself got slower
+    assert tm.estimate_of(tm.load(path)["keys"][k], 1)["solo"] == 200.0, "the runs alone move it (deflating r2 by its own x pins it at 100)"
+
+
+def test_one_run_keeps_one_sample_per_key_the_median_of_its_chunks(tmp_path):
+    path = tmp_path / "h.json"
+    smp = [{"key": tm.REST, "s": s, "slots": 1} for s in (2.0, 90.0, 3.0)] + [{"key": "a.py", "s": 50.0, "slots": 1, "lb": True},
+                                                                               {"key": "a.py", "s": 10.0, "slots": 1}]
+    tm.merge(path, smp, {"run": "r1"}, [{"key": tm.REST, "x": x, "nb": 2, "peak": p} for x, p in ((1.0, 2), (60.0, 4), (2.0, 3))])
+    keys = tm.load(path)["keys"]
+    assert [x["s"] for x in keys[tm.REST]["samples"]] == [3.0], "not the first chunk's: the median of every family chunk's rest"
+    assert keys["a.py"]["samples"] == [{"s": 10.0, "run": "r1", "slots": 1, "lb": False}], "a full sample wins over a lower bound"
+    assert keys[tm.REST]["contention"] == [{"run": "r1", "x": 2.0, "nb": 2, "peak": 4}]
+
+
+def test_a_runners_first_chunk_is_flagged_cold_and_warm_samples_plan_the_key(tmp_path):
+    files = _ds_files(2)
+    picked = [ts.Shard(name=f"ds [{i}/2]", kind="light", paths=[f], est_min=3.0, solo_min=3.0, est_src="history") for i, f in enumerate(files, 1)]
+    plan = _plan(_args("--serverless"), picked)
+    out = tmp_path / "out"
+    _junit(out / "ds-1-2" / "junit.xml", [(_mod(files[0]), "a", 200)])
+    _junit(out / "ds-2-2" / "junit.xml", [(_mod(files[1]), "b", 30)])
+    records = {"serverless": [{"runner": "r0", "shards": [_shard_rec("ds-1-2", 0, 260), _shard_rec("ds-2-2", 260, 300)]}]}
+    rows = [{"name": c.name, "slug": c.slug, "pool": "serverless", "verdict": "ok", "expected_min": 3.0, "passed": 1, "failed": 0, "errors": 0,
+             "skipped": 0, "wall_s": 100, "reason": "", "claims": 1, "est_src": "history", "actual_s": 100, "failures": [], "skip_reasons": {}}
+            for c in picked]
+    launcher.record_timings(tmp_path / "h.json", plan, rows, out, records)
+    keys = tm.load(tmp_path / "h.json")["keys"]
+    assert keys[tm.SLS + files[0]]["samples"][0]["first"] is True and "first" not in keys[tm.SLS + files[1]]["samples"][0]
+    k = tm.SLS + files[0]
+    for run, s in (("w1", 60.0), ("w2", 70.0)):
+        tm.merge(tmp_path / "h.json", [{"key": k, "s": s, "slots": 1}], {"run": run})
+    assert tm.estimate_of(tm.load(tmp_path / "h.json")["keys"][k], 1)["s"] == 65.0, "the cold 200 s does not swing the plan"
+
+
 def test_contention_records_compare_each_unit_with_its_solo_expected_time():
     chunk = {"unit_solo_s": {"a.py": 100.0, "b.py": 100.0, "c.py": 10.0}, "solo_min": 4.0}
     got = tm.contention_records(chunk, 900.0, {"a.py": 500.0, "b.py": 110.0, "c.py": 50.0}, nb=3, peak=4)
@@ -2050,7 +2121,22 @@ def test_a_unit_over_the_target_is_cut_into_test_parts_and_its_samples_count_who
     rows = [{"name": parts[0].name, "slug": slug, "pool": "gbx-test-1n", "verdict": "ok", "expected_min": parts[0].est_min, "passed": 1, "failed": 0,
              "errors": 0, "skipped": 0, "wall_s": 230, "reason": "", "claims": 1, "est_src": "history", "actual_s": 250, "failures": [], "skip_reasons": {}}]
     launcher.record_timings(tmp_path / "h.json", plan, rows, tmp_path / "out", {})
-    assert tm.load(tmp_path / "h.json")["keys"][files[0]]["samples"][0]["s"] == round(800.0 / ts.slowdown(4), 2), "a part's 200 s is a quarter of the file"
+    keys = tm.load(tmp_path / "h.json")["keys"]
+    assert files[0] not in keys, "one part never sets its whole unit's history"
+    assert keys[f"{files[0]}#{parts[0].test_part}"]["samples"][0]["s"] == round(200.0 / ts.slowdown(4), 2), "the part times its own key"
+    # every part ran in one run: the unit gets their sum, and the next cut times each part by its own key
+    rows = []
+    for c, secs in zip(sorted(parts, key=lambda c: c.test_part), (100, 150, 200, 250)):
+        _junit(tmp_path / "out2" / c.slug / "junit.xml", [(_mod(files[0]), "a", secs)])
+        rows.append({"name": c.name, "slug": c.slug, "pool": "gbx-test-1n", "verdict": "ok", "expected_min": c.est_min, "passed": 1, "failed": 0,
+                     "errors": 0, "skipped": 0, "wall_s": secs, "reason": "", "claims": 1, "est_src": "history", "actual_s": secs + 30,
+                     "failures": [], "skip_reasons": {}})
+    launcher.record_timings(tmp_path / "h2.json", dict(plan, run_id="t2"), rows, tmp_path / "out2", {})
+    h = tm.load(tmp_path / "h2.json")
+    assert h["keys"][files[0]]["samples"][0]["s"] == round(700.0 / ts.slowdown(4), 2), "all four parts: the unit is their sum"
+    fsec = tm.seconds(h, 4)
+    again = {c.test_part: c for c in ts.cut(shard, 4.0, REPO_ROOT, dict(fsec, **{files[0]: 600.0}), set()) if c.paths == [files[0]]}
+    assert again["3/4"].est_min == round(ts.FIXED_MIN + fsec[f"{files[0]}#3/4"] / 60.0, 2) > again["0/4"].est_min, "a part's own time plans it"
 
 
 def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower_bounds(tmp_path):
@@ -2071,7 +2157,8 @@ def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower
     h = tm.load(tmp_path / "h.json")
     assert got["contention"] == 0 and rows[0]["nb"] == 0, "Serverless runners have no neighbours"
     assert set(h["keys"]) == {tm.SLS + files[0], tm.SLS + files[1]}, "Serverless samples under their own keys"
-    assert h["keys"][tm.SLS + files[0]]["samples"][0] == {"s": 200.0, "run": "t1", "slots": 1, "lb": False}, "a failed chunk that ran out is a full sample"
+    assert h["keys"][tm.SLS + files[0]]["samples"][0] == {"s": 200.0, "run": "t1", "slots": 1, "lb": False, "first": True}, \
+        "a failed chunk that ran out is a full sample (its runner's first: a cold start)"
     lb = h["keys"][tm.SLS + files[1]]["samples"][0]
     assert lb["lb"] and lb["stop"] == "the first 2 chunks to finish all failed", "--maxfail cut the chunk short: a flagged lower bound"
     assert h["runs"][-1]["stopped_early"] == "the first 2 chunks to finish all failed" and h["runs"][-1]["serverless"]

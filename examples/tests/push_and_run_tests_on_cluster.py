@@ -454,7 +454,7 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
         lines.append(f"  {where}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
                      f"{spec['expected_min']:g} min after the start (the longest shard is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
         lines.append(f"    queue (longest first; each runner takes the next when it is free): "
-                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')}"
+                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} min, {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')}"
                                  + (", heavy" if plan["shards"][s].get("heavy") else "")
                                  + (f", part {plan['shards'][s]['test_part']}" if plan["shards"][s].get("test_part") else "")
                                  + (f", -k {plan['shards'][s]['select_k']}" if plan["shards"][s].get("select_k") else "")
@@ -1413,6 +1413,8 @@ def main(argv=None) -> int:
         if not shards:
             print(f"No failed test in test-logs/databricks-tests/{a.rerun_failed}/*/junit.xml: nothing to run.")
             return 0
+    if extra_env(a).get("GBX_ORACLE_TABLES"):  # --env narrows the family file to those tables: plan its shards by them
+        shards = ts.narrow_tables(shards, extra_env(a)["GBX_ORACLE_TABLES"])
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
@@ -1741,6 +1743,9 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
     per, peaks = tm.neighbours(records or {}, {pool: (max(1, len(recs)) if sls else plan["pools"].get(pool, {}).get("clusters", 1))
                                                for pool, recs in (records or {}).items()})
     samples, cont = [], []
+    # the first chunk of each runner started cold (its runner's compute fresh; on Serverless few task slots): its samples say so
+    firsts = {sorted(rec.get("shards") or [], key=lambda x: float(x.get("start") or 0))[0].get("slug")
+              for recs in (records or {}).values() for rec in recs if rec.get("shards")}
     for r in rows:
         chunk = plan["shards"].get(r["slug"], {})
         slots = 1 if sls else plan["pools"].get(chunk.get("pool"), {}).get("slots", 1)
@@ -1751,8 +1756,10 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         got_s = [] if chunk.get("smoke") or chunk.get("select_k") else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
             chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "")
         n_parts = int(str(chunk.get("test_part") or "0/1").split("/")[1])
-        for x in got_s:  # a test part ran about 1/n of its unit: the unit's time is n times the part's
-            x["s"] = x["s"] * n_parts
+        for x in got_s:  # a test part times its own part only (``<key>#i/n``); a unit all of whose parts ran gets their sum below
+            x["key"] = tm.part_key(x["key"], chunk.get("test_part") or "")
+            if r["slug"] in firsts:
+                x["first"] = True
         samples += got_s
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
@@ -1765,7 +1772,7 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         run["serverless"] = True
     if stop:
         run["stopped_early"] = stop
-    got = tm.merge(path, samples, run, cont)
+    got = tm.merge(path, samples + tm.whole_units(samples), run, cont)
     print(f"Timings: {got['keys']} sample(s), {got['lower_bounds']} lower bound(s) and {got['contention']} contention record(s) from this run merged into {path}")
     return dict(got, peaks=peaks)
 

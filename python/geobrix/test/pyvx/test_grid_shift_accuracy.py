@@ -31,6 +31,7 @@ guards (RED before it, GREEN after).
 """
 
 import os
+from test._provided_spark import wanted as _provided_session
 
 import pytest
 
@@ -240,6 +241,11 @@ print("LAT", wkb.loads(bytes(blob)).y if blob is not None else None)
 """
 
 
+@pytest.mark.skipif(
+    _provided_session(),
+    reason="starts a local-mode Spark session in a child process, which a Databricks node's runtime does not start "
+    "(APPLICATION_NAME_NOT_SET and the node's own configuration)",
+)
 def test_grids_registered_after_the_function_reach_the_live_binding():
     """The documented Serverless order: register the function, then the grids. The function stays at its level and
     its live SQL binding sees the new grid dirs (a re-registered closure), not the dirs of its first registration.

@@ -37,6 +37,16 @@ DEFAULT_EXPECTED_MIN = 12
 FIXED_MIN = 0.7  # what one task costs before its first test: the cluster picks it up, installs the wheel, unpacks, imports
 EXPECTED_MIN = {"pyrx": 17, "zarr": 9, "manager family": 9, "bench 2/3": 9, "bench 1/3": 13, "scripts/ci": 8}
 
+# Heavy chunks: they slow the chunks that share their node's one Spark driver by several times (2026-11-10, family 3/3 beside four
+# other chunks: neighbours about 10x slower, and both parts of the shard stopped at the 45 min cap), so at most one runs on a cluster
+# at a time. A chunk is heavy when it holds a table of this manifest (the GDAL spec engine's oracle tables: it runs gdal on every row,
+# in the driver's process tree), or a file or table whose recorded time alone is HEAVY_UNIT_MIN or more.
+HEAVY_TABLES = frozenset({"SPEC_ANALYSIS", "SPEC_CALC", "SPEC_DEM", "SPEC_GDAL", "SPEC_SE", "SPEC_WARP"})
+HEAVY_UNIT_MIN = 15.0
+# The stall cap (no test finished for n minutes) of a chunk is at least this share of its longest file or table's recorded time: a
+# test can take a good part of its file, and the flat cap would stop a long one that is making progress.
+STALL_SHARE = 0.5
+
 
 @dataclass
 class Shard:
@@ -53,6 +63,8 @@ class Shard:
     est_min: float = 0.0  # measured/estimated minutes (from the timings of earlier runs); 0: use the CI-based table
     unsplittable: bool = False  # one test file the shard cannot be cut below (the family oracle tables)
     est_src: str = ""  # where est_min came from: history | partial (some keys timed) | lower bound | ci (CI's minutes)
+    heavy: bool = False  # holds a table of HEAVY_TABLES or a unit recorded at HEAVY_UNIT_MIN+: one at a time per cluster
+    unit_max_min: float = 0.0  # the longest file or table of the chunk by its recorded time (0: not known)
 
     @property
     def group(self) -> str:
@@ -403,6 +415,27 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     return estimate_src(shard, root, file_seconds)[0]
 
 
+def is_heavy_key(key: str, minutes: float) -> bool:
+    """Whether a unit (``table:<T>`` or a test file) is heavy: a table of the manifest, or a unit recorded at HEAVY_UNIT_MIN or more."""
+    return (key.startswith("table:") and key.split(":", 1)[1] in HEAVY_TABLES) or minutes >= HEAVY_UNIT_MIN
+
+
+def stall_min_for(unit_max_min: float, base: float, shard_cap: float) -> float:
+    """The stall cap of a chunk: ``base``, or STALL_SHARE of its longest unit when that is more, never past the shard cap."""
+    return round(min(max(base, STALL_SHARE * unit_max_min), max(base, shard_cap)), 1)
+
+
+def annotate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> Shard:
+    """``shard`` with its ``heavy`` flag and ``unit_max_min`` from the recorded times (a shard that has no units to look at is
+    heavy when its tables are, and has no longest unit)."""
+    it = _items(shard, root, file_seconds)
+    if it is None:
+        return shard
+    mins, _, _ = it
+    heavy = any(is_heavy_key(k, m) for k, m in mins.items())
+    return Shard(**{**shard.__dict__, "heavy": heavy, "unit_max_min": round(max(mins.values(), default=0.0), 2)})
+
+
 def pack(mins: Dict[str, float], target: float) -> List[List[str]]:
     """Cut units (minutes each) into chunks of about ``target`` minutes: a unit longer than the target is a chunk of its own,
     the rest go longest first onto the lightest of ``ceil(sum / target)`` chunks. So one long file or table never makes a
@@ -430,15 +463,18 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     if it is None:
         return [shard]
     mins, _, rest = it
-    groups = pack(mins, target)
+    hot = {k for k, m in mins.items() if is_heavy_key(k, m)}
+    # the heavy units are packed apart from the others: a chunk is heavy as a whole, so a light table beside one would wait for the gate
+    groups = pack({k: m for k, m in mins.items() if k in hot}, target) + pack({k: m for k, m in mins.items() if k not in hot}, target)
     if len(groups) <= 1:
         est, src = estimate_src(shard, root, file_seconds, lower)
-        return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src})]
+        return [Shard(**{**shard.__dict__, "est_min": round(est, 2), "est_src": src, "heavy": bool(hot), "unit_max_min": round(max(mins.values()), 2)})]
     out = []
     for i, g in enumerate(groups, 1):
         timed = sum(1 for k in g if k in file_seconds)
         src = "lower bound" if lower and any(k in lower for k in g) else ("history" if timed == len(g) else "partial" if timed else "ci")
-        common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src)
+        common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src,
+                      heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g), 2))
         if shard.oracle_tables:
             out.append(Shard(name=f"{shard.name} [{i}/{len(groups)}]", paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
                              oracle_tables=",".join(k.split(":", 1)[1] for k in g), unsplittable=True,
@@ -506,7 +542,7 @@ def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], 
     out: List[Shard] = []
     for s in shards:
         est, src = estimate_src(s, root, file_seconds, lower)
-        whole = Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src})
+        whole = annotate(Shard(**{**s.__dict__, "est_min": round(est, 2), "est_src": src}), root, file_seconds)
         if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min * 1.25:
             out.append(whole)
             continue

@@ -1137,6 +1137,203 @@ def test_a_shard_without_a_result_takes_its_runners_reason_and_one_nobody_ran_sa
     assert "claimed 2 times" in {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}[queue[0]]["reason"]
 
 
+# ---- the watchdog's label: a kill by the watchdog is never read as an out-of-memory
+
+
+def test_a_shard_the_watchdog_killed_says_so_not_what_databricks_guesses(tmp_path):
+    hb = tmp_path / "hb"
+    hb.mkdir()
+    oom = "com.databricks.NotebookExecutionException: FAILED: Execution ran out of memory or the kernel became unresponsive (exit code 137)"
+
+    def killed():
+        raise RuntimeError(oom)
+
+    (hb / "a.json").write_text(json.dumps({"passed": 3, "reason": "killed by watchdog: shard cap 45 min", "watchdog": "shard cap 45 min"}))
+    (hb / "b.json").write_text(json.dumps({"passed": 3, "reason": "", "watchdog": ""}))
+    (hb / "c.json").write_text("{not json")
+    got = sr.run_shard(killed, 3300, watchdog=lambda: sr.heartbeat_watchdog(str(hb / "a.json")))
+    assert got["rc"] is None and got["reason"] == "killed by watchdog: shard cap 45 min"
+    assert "out of memory" in got["platform_message"] and "out of memory" not in got["reason"]
+    for name in ("b.json", "c.json", "absent.json"):  # the watchdog did not fire (or the heartbeat is unreadable): the platform's message stands
+        other = sr.run_shard(killed, 3300, watchdog=lambda n=name: sr.heartbeat_watchdog(str(hb / n)))
+        assert "ended without a result" in other["reason"] and "out of memory" in other["reason"]
+    assert sr.watchdog_reason("killed by watchdog: x") == sr.watchdog_reason("x") == "killed by watchdog: x", "the label is added once"
+    # a notebook that returned nothing, after a stall kill, is the same kill
+    assert sr.run_shard(lambda: "", 3300, watchdog=lambda: "no test finished for 10 min (last: t)")["reason"] == "killed by watchdog: no test finished for 10 min (last: t)"
+    assert sr.run_shard(lambda: json.dumps({"rc": 0, "passed": 1}), 3300, watchdog=lambda: "shard cap 45 min")["rc"] == 0, "a result is the result"
+    rec = sr.run_loop(sr.DirQueue(str(tmp_path / "q"), ["a"]), "r0", lambda slug: sr.run_shard(killed, 3300, watchdog=lambda: "shard cap 45 min"))
+    assert rec["shards"][0]["reason"] == "killed by watchdog: shard cap 45 min", "the runner's record carries it to the summary"
+
+
+def test_the_shard_notebook_labels_what_its_watchdog_does_and_scales_the_stall_cap(shards):
+    plan = _plan(_args(), ts.select(shards, "ds"))
+    src = launcher.run_source(plan)
+    assert 'state["watchdog"] = why' in src and 'state["reason"] = "killed by watchdog: " + why' in src
+    assert 'STALL_MIN = S.get("stall_min") or CAPS["stall_min"]' in src and "STALL_MIN * 60" in src and 'CAPS["stall_min"] * 60' not in src
+    ast = __import__("ast")
+    ast.parse(src.replace("dbutils.", "d."))  # the cell is valid Python once formatted
+    runner = launcher.runner_source(plan)
+    assert "heartbeat_watchdog(STAGE" in runner and "HeavyGate(" in runner
+
+
+def test_a_stalled_summary_names_the_kill():
+    reason = "killed by watchdog: no test finished for 10 min (last: t.py::t)"
+    row = dict(name="ds", slug="ds", pool="gbx-test-1n", verdict="INCOMPLETE", expected_min=12, passed=3, failed=0, errors=0, skipped=0,
+               wall_s="-", reason=reason, failures=[], skip_reasons={}, est_src="ci")
+    plan = {"run_id": "t1", "sha": "a" * 40, "wheel": {"name": "w.whl", "built_from": "b" * 40}, "purpose": "p", "jar": None}
+    md = launcher.summary_md(plan, [row], {})
+    assert "| ds | gbx-test-1n | INCOMPLETE |" in md and f"- {reason}" in md and "out of memory" not in md
+
+
+# ---- heavy chunks: one at a time per cluster, and a stall cap that follows the recorded time
+
+
+def test_the_gdal_engine_tables_are_heavy_and_packed_apart_from_the_light_ones(shards):
+    fam = next(s for s in shards if s.name == "manager family 3/3")
+    tables = fam.oracle_tables.split(",")
+    assert {"SPEC_CALC", "SPEC_GDAL", "SPEC_SE"} <= set(tables) and {"SPEC_CALC", "SPEC_GDAL", "SPEC_SE"} <= ts.HEAVY_TABLES
+    secs = {f"table:{t}": 60.0 for t in tables}  # a minute each: all fit one chunk of 12 min
+    out = ts.auto_split([fam], REPO_ROOT, secs, 3.0)
+    heavy = [c for c in out if c.heavy]
+    assert heavy and all(set(c.oracle_tables.split(",")) <= ts.HEAVY_TABLES for c in heavy), "a chunk is heavy as a whole: no light table waits beside one"
+    assert [c for c in out if not c.heavy] and not any(set(c.oracle_tables.split(",")) & ts.HEAVY_TABLES for c in out if not c.heavy)
+    assert sorted(t for c in out for t in c.oracle_tables.split(",")) == sorted(tables)
+    # a whole shard is judged the same way (annotate), and a file recorded long is heavy by the history alone
+    whole = ts.annotate(fam, REPO_ROOT, secs)
+    assert whole.heavy and whole.unit_max_min == 1.0
+    ds = next(s for s in shards if s.name == "ds")
+    f = ts.files_of(ds, REPO_ROOT)[0]
+    assert not ts.annotate(ds, REPO_ROOT, {f: 60.0 * (ts.HEAVY_UNIT_MIN - 1)}).heavy
+    assert ts.annotate(ds, REPO_ROOT, {f: 60.0 * ts.HEAVY_UNIT_MIN}).heavy
+
+
+def test_the_stall_cap_follows_the_longest_unit_of_a_chunk_up_to_the_shard_cap():
+    assert ts.stall_min_for(0.0, 10.0, 45.0) == 10.0 and ts.stall_min_for(8.0, 10.0, 45.0) == 10.0, "never below the flat cap"
+    assert ts.stall_min_for(30.0, 10.0, 45.0) == 15.0 and ts.stall_min_for(200.0, 10.0, 45.0) == 45.0, "half the unit, never past the shard cap"
+
+
+def test_the_plan_marks_heavy_chunks_and_scales_stall_caps_and_explain_shows_both(shards):
+    fam = next(s for s in shards if s.name == "manager family 3/3")
+    tables = fam.oracle_tables.split(",")
+    secs = {f"table:{t}": 60.0 for t in tables}
+    secs["table:SPEC_GDAL"] = 3000.0  # 50 min alone
+    chunks = ts.auto_split([fam, next(s for s in shards if s.name == "ds")], REPO_ROOT, secs, 8.0)
+    plan = _plan(_args("--clusters", "2"), chunks)
+    spec = plan["pools"]["gbx-test-1n"]
+    heavy = {s for s, v in plan["shards"].items() if v["heavy"]}
+    assert heavy and spec["heavy"] == [s for s in spec["queue"] if s in heavy]
+    gdal = next(v for v in plan["shards"].values() if v["tables"] == ["SPEC_GDAL"])
+    assert gdal["heavy"] and gdal["stall_min"] == 25.0 and gdal["unit_max_min"] == 50.0
+    assert all(v["stall_min"] == 10.0 for v in plan["shards"].values() if v["unit_max_min"] <= 20)
+    text = launcher.explain(plan, [], [])
+    assert "heavy)" in text and "at most one runs on a cluster at a time" in text and "stall cap: 10 min" in text and "SPEC_GDAL" not in text.split("stall cap:")[0].split("heavy:")[0]
+
+
+def test_the_expected_wall_waits_for_heavy_chunks_one_at_a_time_per_cluster():
+    exp = {"h1": 20.0, "h2": 20.0, "h3": 20.0, "l1": 5.0, "l2": 5.0}
+    queue = sr.queue_order(exp)
+    free = launcher.schedule_wall(exp, queue, set(), runners=4, n_clusters=1)
+    one = launcher.schedule_wall(exp, queue, {"h1", "h2", "h3"}, runners=4, n_clusters=1)
+    two = launcher.schedule_wall(exp, queue, {"h1", "h2", "h3"}, runners=4, n_clusters=2)
+    assert free == 20.0 and one == 60.0, "three heavy chunks of 20 min on one cluster run one after the other"
+    assert two == 40.0, "two clusters: one runs two of them, the other one"
+    spec = {}
+    launcher.size_pool(spec, exp, 4, 1, 45.0, {"h1", "h2", "h3"})
+    assert spec["expected_min"] == 60.0 and spec["heavy"] == ["h1", "h2", "h3"]
+    plain = {}
+    launcher.size_pool(plain, exp, 4, 1, 45.0)
+    assert plain["heavy"] == [] and plain["expected_min"] == 20.0 and spec["cap_min"] > plain["cap_min"], "the runner timeout allows for the waits"
+
+
+def _run_runners(queue_for, n, execute, heavy, gate_path, tmp_path):
+    """n runner threads of one cluster, each with its own gate object on the cluster's one lock file."""
+    recs, lock = [], threading.Lock()
+
+    def runner(i):
+        rec = sr.run_loop(queue_for(), f"r{i}", execute, offset=i, heavy=heavy, gate=sr.HeavyGate(gate_path), wait_s=0.01)
+        with lock:
+            recs.append(rec)
+
+    threads = [threading.Thread(target=runner, args=(i,)) for i in range(n)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(30)
+        assert not th.is_alive(), "a runner never ended: a waiting runner must wake when the heavy chunk ends"
+    return recs
+
+
+def test_runners_of_a_cluster_never_run_two_heavy_chunks_at_once_and_light_ones_go_on(tmp_path):
+    import time
+
+    order = ["h1", "l1", "h2", "l2", "h3", "l3", "l4", "l5"]
+    heavy = {"h1", "h2", "h3"}
+    live, peak, ran, started = set(), [0], [], threading.Event()
+    seen = {}
+    lock = threading.Lock()
+
+    def execute(slug):
+        with lock:
+            live.add(slug)
+            peak[0] = max(peak[0], len(live & heavy))
+            ran.append(slug)
+        if slug in heavy:
+            started.set()
+            time.sleep(0.3)
+        elif slug == "l1":
+            # a light chunk is taken while a heavy one is running: it waits for the heavy one to start, so a runner that could not
+            # take light chunks beside a heavy one would stall here (and fail the check below)
+            seen["heavy_started"] = started.wait(10)
+            with lock:
+                seen["heavy_live"] = bool(live & heavy)
+        else:
+            time.sleep(0.02)
+        with lock:
+            live.discard(slug)
+        return {"rc": 0}
+
+    q = tmp_path / "q"
+    recs = _run_runners(lambda: sr.DirQueue(str(q), order, heavy), 4, execute, heavy, str(tmp_path / "node" / "heavy.lock"), tmp_path)
+    assert sorted(ran) == sorted(order), "every chunk ran once"
+    assert peak[0] == 1, "never two heavy chunks at once"
+    assert seen == {"heavy_started": True, "heavy_live": True}, "the other slots took light chunks while a heavy one ran"
+    assert all(r["done"] and not r["error"] for r in recs) and {s["slug"] for r in recs for s in r["shards"] if s["heavy"]} == heavy
+
+
+def test_a_runner_waits_when_only_heavy_chunks_are_left_and_the_gate_is_taken(tmp_path):
+    gate_path = str(tmp_path / "heavy.lock")
+    other = sr.HeavyGate(gate_path)
+    assert other.try_acquire() and not sr.HeavyGate(gate_path).try_acquire(), "one holder per lock file"
+    q = sr.DirQueue(str(tmp_path / "q"), ["h", "l"], {"h"})
+    assert q.claim("r0", heavy_ok=False) == "l" and q.claim("r0", heavy_ok=False) is sr.WAIT
+    assert q.claim("r0", heavy_ok=True) == "h" and q.claim("r0", heavy_ok=False) is None
+    # run_loop: while the other holder has the gate it waits; once released it takes the heavy chunk
+    waits = []
+
+    def sleep(s):
+        waits.append(s)
+        if len(waits) == 3:
+            other.release()
+
+    q2 = sr.DirQueue(str(tmp_path / "q2"), ["l", "h"], {"h"})
+    rec = sr.run_loop(q2, "r1", lambda slug: {"rc": 0}, heavy={"h"}, gate=sr.HeavyGate(gate_path), wait_s=7.0, sleep=sleep)
+    assert [s["slug"] for s in rec["shards"]] == ["l", "h"] and waits == [7.0] * 3
+    assert sr.HeavyGate(gate_path).try_acquire(), "the runner let the gate go"
+    # a runner killed with the gate held does not keep it: the lock goes with the descriptor
+    holder = sr.HeavyGate(str(tmp_path / "g2"))
+    assert holder.try_acquire()
+    holder.release()
+    assert sr.HeavyGate(str(tmp_path / "g2")).try_acquire()
+
+
+def test_the_delta_queue_leaves_heavy_chunks_to_a_runner_that_holds_the_gate():
+    fake = _FakeDelta()
+    fake.sql(sr.DeltaQueue.create_sql("t", ["h", "l"], {"h": 9.0, "l": 1.0}))
+    q = sr.DeltaQueue(fake.sql, "t", sleep=lambda s: None, heavy={"h"})
+    assert q.claim("r0", heavy_ok=False) == "l" and q.claim("r0", heavy_ok=False) is sr.WAIT
+    assert q.claim("r1", heavy_ok=True) == "h" and q.claim("r1", heavy_ok=False) is None
+
+
 class _Exit(Exception):
     pass
 

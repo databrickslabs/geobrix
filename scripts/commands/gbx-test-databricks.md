@@ -57,6 +57,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - No slot idles while a shard waits, however far the actual times stray from the estimates.
 - The queue is a Delta table in the Volume's schema (`gbx_test_queue_<run id>_<pool kind>`). A claim is an `UPDATE` of one row, from no owner to the runner.
 - Delta commits are atomic, and two writes to the same row conflict: one claim wins, the other retries. A UC Volume's FUSE mount documents no exclusive create or atomic rename, so the claim does not use files.
+- At most one heavy chunk runs on a cluster at a time (see "Heavy chunks").
 - Each shard runs as a notebook run of its own (`dbutils.notebook.run`). It has its own Python process and Spark session, as a task of its own had.
 - A failed, stopped or timed-out shard never stops its runner. The runner records it as not finished and takes the next.
 - Reports the wall time against the longest shard and against running the shards one after another.
@@ -78,6 +79,14 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Each runner adds about 6 s per shard: the claim and the start of the shard's notebook run (2026-11-10: 107 s over 18 shards on 4 slots).
 - The order of the queue follows the estimates. A long shard estimated short starts last and makes the tail; the next run's timings correct it.
 - `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
+
+## Heavy chunks and the watchdog
+
+- A chunk is heavy when it holds a table of the GDAL spec engine (`SPEC_*`, listed in `HEAVY_TABLES` of `_test_shards.py`) or a file or table the timing history records at 15 min or more on its own. On 2026-11-10 the engine tables of family 3/3 slowed the chunks beside them by about 10x on the node's one driver, and both parts of that shard stopped at the 45 min cap.
+- Heavy units are cut into chunks apart from the light ones, so a chunk is heavy as a whole. `--explain-only` marks them (`, heavy`) and lists them.
+- The runners of one cluster share a lock on the node's local disk. A runner takes it before it claims, and keeps it only for a heavy chunk, so at most one heavy chunk runs per cluster. The other slots take light chunks meanwhile; when only heavy chunks are left, a runner waits for the one that runs. The expected wall in the plan counts those waits, and the runner task's timeout allows for them.
+- The stall cap (`--stall-min`, no test finished) of a chunk is at least half of the recorded time of its longest file or table, never past `--shard-cap-min`. `--explain-only` lists the chunks whose cap is above the flat one.
+- When the shard's watchdog stops a shard (the shard cap or the stall cap), the shard's reason, the runner's record and `summary.md` say `killed by watchdog: <why>`. The watchdog ends a stuck process with SIGKILL (exit 137), which Databricks reports as "Execution ran out of memory" or "kernel unresponsive": that message is the platform's label for any killed process, and is not an out-of-memory.
 
 ## Timing history
 

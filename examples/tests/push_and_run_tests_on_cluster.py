@@ -193,7 +193,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         jar_pool = bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless)
         kind = "serverless" if name == "serverless" else ("jar" if jar_pool else "light")
         pools[name] = {"jar": jar_pool, "table": queue_table(volroot, run_id, kind)}
-        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, max(1, a.clusters), a.shard_cap_min)
+        size_pool(pools[name], {s.slug: s.expected_min for s in items}, slots, max(1, a.clusters), a.shard_cap_min, {s.slug for s in items if s.heavy})
     return {
         "run_id": run_id, "sha": sha, "purpose": " ".join(a.purpose.split()), "stage": stage, "caps": caps,
         "wheel": {"local": str(wheel) if wheel else "", "name": wheel.name if wheel else "",
@@ -207,7 +207,9 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "shards": {
             s.slug: {
                 "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": ts.shard_env(s), "expected_min": round(s.expected_min, 1),
-                "est_src": s.est_src or "ci", "files": [] if s.oracle_tables else (ts.files_of(s, root) or []),
+                "est_src": s.est_src or "ci", "heavy": bool(s.heavy), "unit_max_min": round(s.unit_max_min, 1),
+                "stall_min": ts.stall_min_for(s.unit_max_min, a.stall_min, a.shard_cap_min),
+                "files": [] if s.oracle_tables else (ts.files_of(s, root) or []),
                 "tables": [t for t in s.oracle_tables.split(",") if t],
                 "cwd": "." if s.kind == "scripts" else ts.PKG, "pool": "serverless" if a.serverless else pool_of(s, a),
             }
@@ -227,19 +229,48 @@ def queue_table(volroot: str, run_id: str, kind: str) -> str:
     return f"`{catalog}`.`{schema}`.`{name}`"
 
 
-def size_pool(spec: dict, expected: Dict[str, float], slots: int, n_clusters: int, shard_cap_min: float) -> None:
+def schedule_wall(expected: Dict[str, float], queue: List[str], heavy: set, runners: int, n_clusters: int) -> float:
+    """The wall of the queue as the runners take it: the earliest-free runner takes the first chunk it may (runner i is on cluster
+    i % n_clusters, and a heavy chunk may start only while no other heavy chunk runs there). A runner with nothing it may take waits
+    for the end of the heavy chunk on its cluster."""
+    free = [0.0] * runners
+    busy_until = [0.0] * max(1, n_clusters)  # when the heavy chunk of each cluster ends
+    todo = list(queue)
+    while todo:
+        r = min(range(runners), key=lambda i: free[i])
+        c = r % max(1, n_clusters)
+        now = free[r]
+        pick = next((s for s in todo if s not in heavy or busy_until[c] <= now), None)
+        if pick is None:  # only heavy chunks are left and one runs here: wait for it
+            free[r] = busy_until[c]
+            continue
+        todo.remove(pick)
+        free[r] = now + expected[pick]
+        if pick in heavy:
+            busy_until[c] = free[r]
+    return max(free)
+
+
+def size_pool(spec: dict, expected: Dict[str, float], slots: int, n_clusters: int, shard_cap_min: float, heavy: Optional[set] = None) -> None:
     """Fill a pool's plan: the queue (longest expected first), the runners (clusters x slots, never more than the shards), and the
     expected wall: the longest-first schedule onto the slot that frees first, which is what the runners do. The cap is the
-    runner task's timeout: every shard of the busiest runner at the shard cap, plus one more when the shards outnumber the runners."""
+    runner task's timeout: every shard of the busiest runner at the shard cap, plus one more when the shards outnumber the runners.
+    ``heavy`` names the chunks that run one at a time per cluster: the wall waits for them in turn, and the cap allows for it."""
     queue = sr.queue_order(expected)
     runners = max(1, min(slots * n_clusters, len(queue)))
+    heavy = {s for s in (heavy or ()) if s in expected}
     est = [ts.Shard(name=slug, kind="light", est_min=m) for slug, m in expected.items()]
     load = [sum(s.expected_min for s in lane) for lane in ts.lanes(est, runners)]
+    wall = max(load)
     per_runner = math.ceil(len(queue) / runners) + (1 if len(queue) > runners else 0)
+    cap = per_runner * (shard_cap_min + 10)
+    if heavy:
+        wall = max(wall, schedule_wall(expected, queue, heavy, runners, n_clusters))
+        cap += math.ceil(len(heavy) / max(1, n_clusters)) * (shard_cap_min + 10)  # a runner may wait out the heavy chunks of its cluster
     spec.update(
-        queue=queue, slots=slots, clusters=n_clusters, runners=runners,
+        queue=queue, slots=slots, clusters=n_clusters, runners=runners, heavy=[s for s in queue if s in heavy],
         serial_min=round(sum(expected.values()), 1), longest_min=round(max(expected.values()), 1),
-        expected_min=round(max(load), 1), cap_min=per_runner * (shard_cap_min + 10),
+        expected_min=round(wall, 1), cap_min=cap,
     )
 
 
@@ -255,8 +286,16 @@ def explain(plan: dict, local_only: List[ts.Shard], notes: List[str]) -> str:
         lines.append(f"  {where}: {len(spec['queue'])} shard(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots = {spec['runners']} runner(s); expected wall about "
                      f"{spec['expected_min']:g} min after the start (the longest shard is {spec['longest_min']:g} min, the serial sum {spec['serial_min']:g} min), at most {spec['cap_min']:g} min")
         lines.append(f"    queue (longest first; each runner takes the next when it is free): "
-                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')})" for s in spec["queue"]))
+                     + ", ".join(f"{plan['shards'][s]['name']} (~{plan['shards'][s]['expected_min']:g} {SRC_MARK.get(plan['shards'][s].get('est_src'), 'ci')}"
+                                 + (", heavy" if plan["shards"][s].get("heavy") else "") + ")" for s in spec["queue"]))
         lines.append("    (estimates: h = history, p = history for some of its files, lb = a lower bound from a stopped chunk, ci = CI's minutes)")
+        if spec.get("heavy"):
+            lines.append(f"    heavy: {len(spec['heavy'])} chunk(s) ({', '.join(plan['shards'][s]['name'] for s in spec['heavy'])}) hold the GDAL engine's tables or a "
+                         f"unit recorded at {ts.HEAVY_UNIT_MIN:g} min or more; at most one runs on a cluster at a time, the other slots of the node take light chunks meanwhile")
+        longer = [s for s in spec["queue"] if plan["shards"][s].get("stall_min", c["stall_min"]) > c["stall_min"]]
+        if longer:
+            lines.append(f"    stall cap: {c['stall_min']:g} min, and {ts.STALL_SHARE:g} of the longest file or table of a chunk when that is more: "
+                         + ", ".join(f"{plan['shards'][s]['name']} {plan['shards'][s]['stall_min']:g} min" for s in longer))
         lines.append(f"    queue table: {spec['table']} (made by the job's first task, dropped at the end)")
     lines.append(f"  staging: {plan['stage']}/ (source tarball, plan.json); removed at the end")
     lines.append(f"  wheel: {plan['wheel']['name'] or '-'}"
@@ -306,6 +345,7 @@ SLUG = dbutils.widgets.get("shard")
 PLAN = json.load(open(STAGE + "/plan.json"))
 S = PLAN["shards"][SLUG]
 CAPS = PLAN["caps"]
+STALL_MIN = S.get("stall_min") or CAPS["stall_min"]  # scaled to the chunk's longest file or table (see _test_shards.stall_min_for)
 t0 = time.time()
 root = "/local_disk0/gbxtest/%%s/%%s" %% (PLAN["run_id"], SLUG)
 shutil.rmtree(root, ignore_errors=True)
@@ -375,7 +415,7 @@ class Tee:
 sys.stdout = Tee(sys.stdout, log)
 sys.stderr = Tee(sys.stderr, log)  # a usage error of pytest is only on stderr
 
-state = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total": 0, "last": "", "last_t": time.time(), "reason": "", "done": False}
+state = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total": 0, "last": "", "last_t": time.time(), "reason": "", "watchdog": "", "done": False}
 beat_lock = threading.Lock()  # the watchdog thread and the pytest hooks both beat: one write at a time
 def beat():
     with beat_lock:
@@ -421,10 +461,12 @@ def watchdog():
         why = ""
         if time.time() - t0 > CAPS["shard_min"] * 60:
             why = "shard cap %%g min" %% CAPS["shard_min"]
-        elif time.time() - state["last_t"] > CAPS["stall_min"] * 60:
-            why = "no test finished for %%g min (last: %%s)" %% (CAPS["stall_min"], state["last"])
+        elif time.time() - state["last_t"] > STALL_MIN * 60:
+            why = "no test finished for %%g min (last: %%s)" %% (STALL_MIN, state["last"])
         if why:
-            state["reason"] = why
+            # the label says who ended the shard: Databricks reports a process the watchdog kills as "ran out of memory"
+            state["watchdog"] = why
+            state["reason"] = "killed by watchdog: " + why
             print("\\nWATCHDOG: " + why + "; stacks follow", flush=True)
             faulthandler.dump_traceback(file=log, all_threads=True); log.flush()
             beat(); keep_log()
@@ -526,12 +568,16 @@ else:
 
     def execute(slug):
         print("+%ds" % (time.time() - T0), WHO, "runs", PLAN["shards"][slug]["name"], flush=True)
-        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug}), TIMEOUT_S)
+        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug}), TIMEOUT_S,
+                        watchdog=lambda: heartbeat_watchdog(STAGE + "/hb/" + slug + ".json"))
         print("+%ds" % (time.time() - T0), WHO, "ran", PLAN["shards"][slug]["name"], "rc", res.get("rc"), res.get("reason") or "", flush=True)
         return res
 
-    q = DeltaQueue(sql, TABLE)
-    rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save)
+    HEAVY = SPEC.get("heavy") or []
+    q = DeltaQueue(sql, TABLE, heavy=HEAVY)
+    # the runners of one cluster share the node's disk: one lock there lets one heavy chunk run at a time
+    gate = HeavyGate("/local_disk0/gbxtest/" + PLAN["run_id"] + "-" + POOL + "/heavy.lock") if HEAVY else None
+    rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save, heavy=HEAVY, gate=gate)
     rec["conflicts"] = q.conflicts
     save(rec)
     print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s); the queue is empty", flush=True)
@@ -853,7 +899,8 @@ def main(argv=None) -> int:
         shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower)
         split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)")
     elif shards:
-        shards = [ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}) for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
+        shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec)
+                  for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
     if shards:
         split_notes.append(estimate_note(shards, hist, a.timings))
     if not shards:
@@ -1056,7 +1103,8 @@ def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:
     """Size the pool's runners again for the clusters actually leased and the cores they have (the queue stays as it is)."""
     spec = plan["pools"][pool]
     before = list(spec["queue"])
-    size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min)
+    size_pool(spec, {slug: plan["shards"][slug]["expected_min"] for slug in before}, a.max_parallel or ts.slots_for(cores), n_clusters, a.shard_cap_min,
+              {slug for slug in before if plan["shards"][slug].get("heavy")})
     assert sorted(spec["queue"]) == sorted(before), "relane lost or invented a shard"
 
 

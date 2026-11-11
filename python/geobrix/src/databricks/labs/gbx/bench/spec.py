@@ -432,7 +432,6 @@ _NODATA = _PYRX + "_nodata.py"
 # have no dedicated core module; their behavior is the _serde tile round-trip.
 _PYRX_SERDE = "python/geobrix/src/databricks/labs/gbx/pyrx/_serde.py"
 _DEM_HELPER = _HEAVY + "dem/RST_DEMProcessingHelper.scala"
-_GDAL_BLOCK = _GDAL + "GDALBlock.scala"
 
 # pyrx core module + shared _nodata, by module (added to per-function sources
 # together with that function's heavy Scala expression / helpers).
@@ -1489,8 +1488,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: edit.init_nodata(ds),
         col_fn=lambda t, a: rx.rst_initnodata(t),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_InitNoData.scala",),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_setsrid": FnSpec(
         "rst_setsrid",
@@ -1553,8 +1553,9 @@ REGISTRY: Dict[str, FnSpec] = {
         # (auto-lit covers only numeric scalars), so an unwrapped "Float64" resolves
         # as a column in spark-path. Numeric args may stay raw.
         col_fn=lambda t, a: rx.rst_updatetype(t, F.lit(a["new_type"])),
-        sources=_EDIT_LIGHT + (_HEAVY + "RST_UpdateType.scala",),
+        sources=_EDIT_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- stretch (stretch.py) ---
     "rst_percentile_stretch": FnSpec(
@@ -1602,7 +1603,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: focal.filt(ds, a["kernel_size"], a["operation"]),
         # F.lit the STRING operation arg (kernel_size is numeric -> auto-lit).
         col_fn=lambda t, a: rx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
-        sources=_FOCAL_LIGHT + (_GDAL_BLOCK,),
+        sources=_FOCAL_LIGHT,
         core=False,
         heavy=False,
     ),
@@ -1618,9 +1619,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_convolve(
             t, F.array(*[F.array(*[F.lit(c) for c in row]) for row in _CONVOLVE_KERNEL])
         ),
-        sources=_FOCAL_LIGHT
-        + (_HEAVY + "RST_Convolve.scala", _OPS + "Convolve.scala", _GDAL_BLOCK),
+        sources=_FOCAL_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     # --- format (ops.py / analysis.py) ---
     "rst_asformat": FnSpec(
@@ -1631,8 +1632,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {"new_format": "GTiff"},
         core_fn=lambda ds, a: ops.as_format(ds, a["new_format"]),
         col_fn=lambda t, a: rx.rst_asformat(t, a["new_format"]),
-        sources=_OPS_LIGHT + (_HEAVY + "RST_AsFormat.scala",),
+        sources=_OPS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_cog_convert": FnSpec(
         "rst_cog_convert",
@@ -2104,13 +2106,10 @@ REGISTRY: Dict[str, FnSpec] = {
             [(i, _ds_to_gtiff_bytes(ds)) for i, ds in enumerate(dss)]
         ),
         col_fn=lambda arr, a: rx.rst_frombands(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "constructor/RST_FromBands.scala",
-            _OPS + "MergeBands.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
         input_kind="tile_array",
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_combineavg": FnSpec(
         "rst_combineavg",
@@ -3830,7 +3829,7 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="geometry_scalar",
         geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header-only, no pixel read
-        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_Crs.scala",),
+        sources=_PYVX_CRS_LIGHT,
     ),
     "st_setcrs": FnSpec(
         "st_setcrs",
@@ -3845,7 +3844,7 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="geometry_scalar",
         geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header edit only
-        sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_SetCrs.scala",),
+        sources=_PYVX_CRS_LIGHT,
     ),
     "st_transformcrs": FnSpec(
         "st_transformcrs",

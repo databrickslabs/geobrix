@@ -59,13 +59,9 @@ _VALUE = {
     "round": "xxhash64(round({o}, 6))",
     "sorted": "xxhash64(array_sort({o}))",
     "wkb": "gbx_bench_vfp_wkb({o})",
-    # an EWKB: the normalised geometry and the four SRID bytes after the type word
-    "ewkb": "xxhash64(gbx_bench_vfp_wkb({o}), substring({o}, 6, 4))",
-    "bbox": "xxhash64(round({o}.xmin, 6), round({o}.ymin, 6), round({o}.xmax, 6), round({o}.ymax, 6))",
     "chip": "xxhash64({o}.cellid, {o}.core, gbx_bench_vfp_wkb({o}.chip))",
     "raster": "gbx_bench_vfp_raster({o}.raster)",
     "png": "gbx_bench_vfp_raster({o})",
-    "pmtiles": "gbx_bench_vfp_pmtiles({o})",
 }
 # the inputs that replicate a few distinct rows: a decode is done once per distinct input row, not per replica
 _REPLICATED = {
@@ -144,28 +140,14 @@ SPECS: List[Spec] = [
         )
     ],
     # -- the tile operations, over the replicated 1024 px DEM tiles (as TRI and the engine rows)
-    Spec("gbx_rst_asformat", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'COG')", "raster", "tile"),
     Spec("gbx_rst_band", "dem_1024_mem", "dem", "tile", "{fn}(tile, 1)", "raster", "tile"),
-    Spec(
-        "gbx_rst_convolve", "dem_1024_mem", "dem", "tile",
-        "{fn}(tile, array(array(0D, 0.125D, 0D), array(0.125D, 0.5D, 0.125D), array(0D, 0.125D, 0D)))",
-        "raster", "tile",
-    ),  # fmt: skip
     Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
-    Spec("gbx_rst_initnodata", "dem_1024_mem", "dem", "tile", "{fn}(tile)", "raster", "tile"),
     Spec("gbx_rst_setcrs", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'EPSG:32633')", "raster", "tile"),
     Spec("gbx_rst_setsrid", "dem_1024_mem", "dem", "tile", "{fn}(tile, 32633)", "raster", "tile"),
-    Spec("gbx_rst_updatetype", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'Float64')", "raster", "tile"),
-    # -- an array of single-band tiles to one multi-band tile (the 512 px pairs of the map-algebra input)
-    Spec("gbx_rst_frombands", "se_pair_512_mem", "pair", "tile", "{fn}(tiles)", "raster", "tile", "tiles[0]"),
     # -- the web tiles: the DEM tiles lie in z12 tile (2088, 1384) of web mercator (EPSG:3857)
     Spec(
         "gbx_rst_tilexyz", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 12, 2088, 1384, 'PNG', 256, 'bilinear', 'auto')",
         "png", "udf:binary", "tile",
-    ),  # fmt: skip
-    Spec(
-        "gbx_pmtiles_agg", "jv_pm_tiles", "pm", "agg", "{fn}(bytes, z, x, y, '{{\"name\": \"bench\"}}')", "pmtiles",
-        "scan:bytes",
     ),  # fmt: skip
     # -- the grid-cell aggregates and the cell rasterize aggregates, over (key, cell, value) rows in 200 keys
     Spec("gbx_h3_cellfill", "jv_h3_cells", "h3", "agg", "{fn}(cellid, value, 1, 'mean', 2.0)", "hash", "scan:cellid"),
@@ -257,11 +239,7 @@ SPECS: List[Spec] = [
         "gbx_custom_geomkloopexplode", "jv_custom_polys", "cgpolys", "gen", "{fn}(s.wkt, s." + _G + ", 0, 1)", "hash",
         "scan:wkt",
     ),  # fmt: skip
-    # -- H3: the cell's bounding box (resolution 7 cells around London)
-    Spec("gbx_h3_cell_bbox", "jv_h3_cells", "h3", "scalar", "{fn}(cellid, 4326, 'centroids', 0)", "bbox", "udf:binary"),
     # -- the vector scalars: EWKT polygons in EPSG:27700, and the Mosaic legacy struct of a polygon
-    Spec("gbx_st_crs", "jv_srid_polys", "srid", "scalar", "{fn}(wkt)", "hash", "udf:string", "wkt"),
-    Spec("gbx_st_setcrs", "jv_srid_polys", "srid", "scalar", "{fn}(wkt, 'EPSG:4326')", "ewkb", "udf:binary", "wkt"),
     Spec("gbx_st_legacyaswkb", "jv_legacy_polys", "legacy", "scalar", "{fn}(geom)", "wkb", "udf:binary", "id"),
     # -- the TIN elevation grid over a bounding box: 16 x 16 cells of each TIN of 60 points
     Spec(
@@ -285,12 +263,9 @@ BASE_ROWS = {
     "jv_custom_polys": 100_000,
     "jv_h3_cells": 1_000_000,
     "jv_quadbin_cells": 1_000_000,
-    "jv_srid_polys": 250_000,
     "jv_legacy_polys": 250_000,
-    "jv_pm_tiles": 20_000,
 }
 _KEYS = 200  # the groups of a (key, cell, value) input, as `bng_cells`
-_PM_KEYS = 20  # archives of the PMTiles input
 # the custom grid the custom-grid inputs carry, as the struct `gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)`
 # returns (a column, not a call: the call would be timed with every form)
 GRID = (0, 1_000_000, 0, 1_000_000, 2, 1000, 1000, 27700)
@@ -563,33 +538,6 @@ def _quadbin_cells(spark, n, corpus, schema):
     )
 
 
-def _srid_polys(spark, n, corpus, schema):
-    """`n` EWKT rectangles in EPSG:27700 (`SRID=27700;POLYGON(...)`), 2.8 x 1.8 km at random places in Great Britain."""
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx.bench import levels_forms as lf
-
-    x = (F.rand(75) * 500000 + 100000).alias("x")
-    y = (F.rand(76) * 800000 + 100000).alias("y")
-    return lf._table(
-        spark,
-        schema,
-        f"mvp_in_jv_srid_polys_v{lf.RECIPE_VERSION}_{n}",
-        lambda: spark.range(n)
-        .select(x, y)
-        .select(
-            F.format_string(
-                "SRID=27700;POLYGON((%1$f %2$f, %3$f %2$f, %3$f %4$f, %1$f %4$f, %1$f %2$f))",
-                "x",
-                "y",
-                F.col("x") + 2800,
-                F.col("y") + 1800,
-            ).alias("wkt")
-        ),
-        rows=n,
-    )
-
-
 def _legacy_polys(spark, n, corpus, schema):
     """`n` Mosaic legacy structs of a square with a square hole (typeId 5, srid 0), at random places, and an `id`."""
     from pyspark.sql import functions as F
@@ -614,50 +562,6 @@ def _legacy_polys(spark, n, corpus, schema):
 
     return lf._table(
         spark, schema, f"mvp_in_jv_legacy_polys_v{lf.RECIPE_VERSION}_{n}", build, rows=n
-    )
-
-
-def _png(seed: int) -> bytes:
-    """A 256 px RGB PNG of one colour per seed: what a PMTiles archive of raster tiles holds."""
-    import numpy as np
-    from rasterio.io import MemoryFile
-
-    arr = np.full((3, 256, 256), 40 * (seed + 1), dtype="uint8")
-    with MemoryFile() as mf:
-        with mf.open(driver="PNG", width=256, height=256, count=3, dtype="uint8") as ds:
-            ds.write(arr)
-        return mf.read()
-
-
-def _pm_tiles(spark, n, corpus, schema):
-    """`(key, bytes, z, x, y)`: `n` PNG tiles at zoom 14 in 20 archives, each (z, x, y) once per archive."""
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx.bench import levels_forms as lf
-    from databricks.labs.gbx.bench.clientcap import client_dataframe
-
-    pngs = [(i, _png(i)) for i in range(4)]
-
-    def build():
-        four = client_dataframe(
-            spark, pngs, "idx int, bytes binary", what="jv_pm_tiles PNGs"
-        )
-        r = F.floor(F.col("id") / _PM_KEYS)
-        return (
-            spark.range(n)
-            .select(
-                (F.col("id") % _PM_KEYS).cast("string").alias("key"),
-                (F.col("id") % 4).cast("int").alias("idx"),
-                F.lit(14).alias("z"),
-                (F.lit(8000) + r % 64).cast("int").alias("x"),
-                (F.lit(5000) + F.floor(r / 64)).cast("int").alias("y"),
-            )
-            .join(F.broadcast(four), "idx")
-            .select("key", "bytes", "z", "x", "y")
-        )
-
-    return lf._table(
-        spark, schema, f"mvp_in_jv_pm_tiles_v{lf.RECIPE_VERSION}_{n}", build, rows=n
     )
 
 
@@ -700,31 +604,6 @@ def setup_floors(spark):
     for ddl in sorted({*_FLOOR_VALUE, "tile"}):
         out = TILE_SQL if ddl == "tile" else ddl
         spark.udf.register(floor_name(ddl), F.pandas_udf(_floor_udf(ddl), out))
-
-
-def setup_pmtiles_fp(spark):
-    """Register `gbx_bench_vfp_pmtiles`: an archive by its tiles, ((z, x, y), a digest of the bytes), sorted."""
-    from pyspark.sql import functions as F
-    from pyspark.sql.types import LongType
-
-    @F.udf(returnType=LongType())
-    def _fp(blob):
-        return None if blob is None else pmtiles_fp(blob)
-
-    spark.udf.register("gbx_bench_vfp_pmtiles", _fp)
-
-
-def pmtiles_fp(blob) -> int:
-    import hashlib
-
-    from databricks.labs.gbx.bench import value_fp
-    from databricks.labs.gbx.pmtiles._directory import iter_tiles
-
-    tiles = sorted(
-        (zxy, hashlib.blake2b(bytes(b), digest_size=8).hexdigest())
-        for zxy, b in iter_tiles(bytes(blob))
-    )
-    return value_fp._digest(repr(tiles).encode())
 
 
 # --- the forms -------------------------------------------------------------------------------------------------------
@@ -847,18 +726,17 @@ def jv_forms() -> List[Form]:
         if row is None or "L1" not in row.levels:
             continue  # culled since (the manifest-pin test names the drift)
         common = dict(mvp=MVP, fn=s.fn, input=s.inp)
-        extra = {"setup": _ME + "setup_pmtiles_fp"} if s.value == "pmtiles" else {}
         out.append(
             Form(
                 level="L1", variant=f"l1@{s.tag}", sql=_sql(s, s.fn), vsql=_vsql(s, s.fn),
-                nullsql=_nullsql(s, s.fn), computes=("dedicated",), allows_null=True, **common, **extra,
+                nullsql=_nullsql(s, s.fn), computes=("dedicated",), allows_null=True, **common,
             )
         )  # fmt: skip
         for v in _l3_variants(row):
             out.append(
                 Form(
                     level="L3", variant=f"{v}@{s.tag}", sql=_sql(s, s.fn), vsql=_vsql(s, s.fn),
-                    nullsql=_nullsql(s, s.fn), allows_null=True, **common, **extra,
+                    nullsql=_nullsql(s, s.fn), allows_null=True, **common,
                 )
             )  # fmt: skip
         out.append(_floor(s, common))
@@ -886,9 +764,7 @@ def install(lf) -> None:
             "jv_custom_polys": _custom_polys,
             "jv_h3_cells": _h3_cells,
             "jv_quadbin_cells": _quadbin_cells,
-            "jv_srid_polys": _srid_polys,
             "jv_legacy_polys": _legacy_polys,
-            "jv_pm_tiles": _pm_tiles,
         }
     )
     lf.BASE_ROWS.update(BASE_ROWS)
@@ -919,11 +795,11 @@ PARTS: Dict[str, Tuple[str, ...]] = {
         )
     ),  # fmt: skip
     "dem2": tuple(
-        f"gbx_rst_{n}" for n in ("asformat", "convolve", "initnodata", "setcrs", "setsrid", "updatetype")
+        f"gbx_rst_{n}" for n in ("setcrs", "setsrid")
     ),
-    "tiles": ("gbx_rst_getsubdataset", "gbx_rst_frombands", "gbx_pmtiles_agg"),
+    "tiles": ("gbx_rst_getsubdataset",),
     "cells": (
-        "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg", "gbx_h3_cell_bbox", "gbx_custom_cellfill",
+        "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg", "gbx_custom_cellfill",
         "gbx_rst_custom_rasterize_agg", "gbx_rst_quadbin_rasterize_agg",
     ),  # fmt: skip
     "bngscalar": tuple(
@@ -941,7 +817,7 @@ PARTS: Dict[str, Tuple[str, ...]] = {
     "cgpolys": tuple(f"gbx_custom_{n}" for n in ("geomkring", "geomkloop", "polyfill")),
     "cgexplode": tuple(f"gbx_custom_{n}" for n in ("geomkringexplode", "geomkloopexplode")),
     "vector": (
-        "gbx_bng_kringexplode", "gbx_bng_kloopexplode", "gbx_st_crs", "gbx_st_setcrs", "gbx_st_legacyaswkb",
+        "gbx_bng_kringexplode", "gbx_bng_kloopexplode", "gbx_st_legacyaswkb",
         "gbx_st_interpolateelevationbbox",
     ),  # fmt: skip
 }

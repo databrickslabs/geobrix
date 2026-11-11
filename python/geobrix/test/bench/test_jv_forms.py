@@ -46,12 +46,7 @@ def test_the_set_covers_both_halves_of_the_list():
         "gbx_rst_quadbin_rasterize_agg",
         "gbx_rst_custom_rasterize_agg",
     } <= never
-    assert {
-        "gbx_st_crs",
-        "gbx_st_setcrs",
-        "gbx_rst_frombands",
-        "gbx_h3_cell_bbox",
-    } <= first
+    assert {"gbx_rst_crs", "gbx_bng_aswkb"} <= first
 
 
 @pytest.mark.parametrize("fn", FNS)
@@ -140,17 +135,6 @@ def test_output_flags_name_a_difference_and_a_missing_fingerprint():
 def test_no_input_of_the_jv_forms_is_built_on_the_client_at_16x():
     forms = tuple(f.variant for f in lf.FORMS[jv.MVP])
     assert preflight.client_cap_problems(jv.MVP, (4, 16), forms=forms) == []
-
-
-def test_a_pmtiles_archive_is_fingerprinted_by_its_tiles_not_its_layout():
-    from databricks.labs.gbx.pmtiles._agg_light import _assemble_archive
-
-    tiles = [(jv._png(i), 14, 8000 + i, 5000) for i in range(3)]
-    one = _assemble_archive(*zip(*tiles))
-    other = _assemble_archive(*zip(*reversed(tiles)), metadata={"name": "x"})
-    assert jv.pmtiles_fp(one) == jv.pmtiles_fp(other)
-    fewer = _assemble_archive(*zip(*tiles[:2]))
-    assert jv.pmtiles_fp(fewer) != jv.pmtiles_fp(one)
 
 
 def test_the_run_parts_cover_every_function_once():

@@ -234,6 +234,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         *_HV_SETS,
     } - {*_JV_SETS} - {
         # no function of these families has a JVM level left: their sets time the light forms
+        "raster-array-op",  # combineavg
         "raster-file-op",  # cog_convert
         "raster-generator",  # retile
         "raster-stat",  # avg

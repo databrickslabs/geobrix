@@ -477,10 +477,8 @@ _JV_NS = {  # small n per input: the pass checks that every form runs, scales an
     "jv_custom_cells": (50_000, 200_000, 800_000),
     "jv_h3_cells": (50_000, 200_000, 800_000),
     "jv_quadbin_cells": (50_000, 200_000, 800_000),
-    "jv_srid_polys": (10_000, 40_000, 160_000),
     "jv_legacy_polys": (10_000, 40_000, 160_000),
     "tin_points": (100, 400, 1_600),
-    "jv_pm_tiles": (2_000, 8_000, 32_000),
 }
 
 

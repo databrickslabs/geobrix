@@ -919,7 +919,6 @@ def render_drivers_subpage(snapshot: dict, kind: str) -> str:
     """The generated body of one driver page (docs/docs/gdal-drivers/<kind>.mdx): the tables of the vector or raster
     drivers in their three groups, or the one table of the other drivers. A driver of both kinds links to its row on
     the other page. The columns are few so that the table fits the content width: one \"Can\" cell holds read, write and tile bytes."""
-    yes = "✓"
     out: List[str] = []
     if kind == "other":
         out += ["## Other drivers", ""]

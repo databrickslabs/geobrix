@@ -39,7 +39,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--max-failures <n>` - stop the run when n tests have failed or errored. Default: 20. 0 turns it off.
 - `--maxfail <n>` - pytest's `--maxfail` in each chunk, so a broken chunk stops early. Default: 3, and 1 with `--rerun-failed`. 0 turns it off.
 - `--test-timeout <s>` - fail a test whose call runs longer than s seconds (setup and teardown get 3x). Default: 120. 0 turns it off.
-- `--overrun-x <x>` - stop a chunk at x times its estimate, never under 3 min. Its times become lower bounds. Default: 2. 0 turns it off.
+- `--overrun-x <x>` - stop a chunk at x times its estimate, never under 3 min (5 min on Serverless). Its times become lower bounds. Default: 2. 0 turns it off.
 - `--max-wall-min <n>` - stop the run at n minutes of wall after the submit. Default: 20. 0 turns it off.
 - `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all.
 - `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.
@@ -134,7 +134,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## The ramp and the caps
 
-- Only 2 runners start after the smoke (`--start-chunks`). The others start once 2 chunks have passed, or once nothing is left to wait for.
+- Only 2 runners start after the smoke (`--start-chunks`). The others start once 2 chunks have passed (the smoke counts), or once nothing is left to wait for.
 - No chunk is planned over `--target-min`. A file or table longer than that alone is cut into test parts: each part runs the tests whose node id hashes to it.
 - A part's times count for its whole file or table (times the parts).
 - A test that runs past `--test-timeout` fails, and the chunk goes on. The shard raises an exception inside the test. pytest-timeout does it where the env has it. A test that does not stop stops its chunk 60 s later.
@@ -147,6 +147,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
 - Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
 - The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.
+- A Serverless chunk spends 1.5-3 min before its first test: the runner task's start, the chunk's notebook run, and the checkout's unpack and overlay. A 3-5 min chunk there is about half setup.
 - A Serverless run records its times under `sls:<key>` in the timing history. A Serverless plan uses them, else the pools' solo times; a pool plan never reads them.
 - Run `t26-eq-sls3` (2026-11-11) planned 26 chunks of 30-76 min each from the pools' contention factors. The same selection now plans 22 chunks of 2-16 min.
 

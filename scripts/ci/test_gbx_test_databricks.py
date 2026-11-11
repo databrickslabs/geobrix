@@ -2084,8 +2084,11 @@ def test_collect_says_which_chunks_the_stop_left_unrun(shards, monkeypatch, tmp_
     asked = []
     monkeypatch.setattr(launcher.mut, "download_dir", lambda w, remote, local: asked.append(remote.rsplit("/", 1)[-1]) or [])
     recs = {"gbx-test-1n": [{"runner": "r0", "shards": [{"slug": queue[0], "start": 0, "end": 9}]}]}
+    recs["gbx-test-1n"].append({"runner": "r1", "current": queue[2], "done": False, "shards": []})  # cancelled while it ran
     rows = {r["slug"]: r for r in launcher.collect(None, plan, {}, tmp_path, recs)}
-    assert asked == [queue[0]], "a chunk the stop left unrun has no files to fetch"
+    assert sorted(asked) == sorted([queue[0], queue[2]]), "a chunk the stop left unrun has no files to fetch"
+    assert rows[queue[2]]["reason"].endswith("while it ran") and rows[queue[2]]["claims"] == 1, "a chunk that ran at the stop is not 'not run'"
+    assert launcher.fail_fast(_args("--serverless"))["overrun_floor_min"] == 5.0 and launcher.fail_fast(_args())["overrun_floor_min"] == 3.0
     assert rows[queue[0]]["reason"] == "stopped early (3 chunks failed (--max-failed-chunks 3)) while it ran"
     assert rows[queue[1]]["reason"] == "not run: stopped early (3 chunks failed (--max-failed-chunks 3))" and rows[queue[1]]["verdict"] == "INCOMPLETE"
 

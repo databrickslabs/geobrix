@@ -158,6 +158,7 @@ def parse(argv):
 TEST_TIMEOUT_S = 120.0  # --test-timeout: a test (its call; setup and teardown get 3x) that runs longer fails
 OVERRUN_X = 2.0  # --overrun-x: a chunk stops at 2x its estimate, never under OVERRUN_FLOOR_MIN
 OVERRUN_FLOOR_MIN = 3.0
+SERVERLESS_OVERRUN_FLOOR_MIN = 5.0  # a Serverless chunk spends 1.5-3 min before its first test (measured 2026-11-11)
 MAX_WALL_MIN = 20.0  # --max-wall-min: the run stops itself at this wall time
 
 
@@ -168,7 +169,8 @@ def fail_fast(a) -> dict:
     maxfail = a.maxfail if a.maxfail is not None else (0 if a.no_fail_fast else default_maxfail)
     return {"first_k": a.first_failed, "max_failed_chunks": a.max_failed_chunks, "max_failures": a.max_failures, "maxfail": maxfail,
             "off": bool(a.no_fail_fast), "smoke": not a.no_smoke, "start_chunks": a.start_chunks, "test_timeout_s": a.test_timeout,
-            "overrun_x": a.overrun_x, "overrun_floor_min": OVERRUN_FLOOR_MIN, "max_wall_min": a.max_wall_min}
+            "overrun_x": a.overrun_x, "overrun_floor_min": SERVERLESS_OVERRUN_FLOOR_MIN if a.serverless else OVERRUN_FLOOR_MIN,
+            "max_wall_min": a.max_wall_min}
 
 
 def fail_fast_text(ff: dict) -> str:
@@ -2236,6 +2238,8 @@ def claims_of(records: Dict[str, List[dict]]) -> Dict[str, List[dict]]:
         for r in recs:
             for x in r.get("shards", []):
                 out.setdefault(x["slug"], []).append(dict(x, runner=r.get("runner")))
+            if r.get("current") and not r.get("done"):  # the chunk a runner was on when its task ended (a stop, a cancel)
+                out.setdefault(r["current"], []).append({"slug": r["current"], "runner": r.get("runner"), "start": None, "end": None})
     return out
 
 

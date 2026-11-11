@@ -45,7 +45,7 @@ Behavior changes that alter results or signatures:
 - [WKB is little-endian and cell rings start south-west](#output-formats)
 - [`bng_tessellateexplode` returns `core` and `chip`](#bng-explode)
 - [`bng_tessellate` defaults `keep_core_geom` to false](#bng-tessellate-default)
-- [Centroid tiles are cropped; heavyweight tiling keeps all-NoData windows](#tessellation-parity)
+- [Centroid tiles are cropped; tiling keeps all-NoData windows](#tessellation-parity)
 - [NoData, alpha and mask bands follow one rule](#nodata-alpha-mask)
 - [`rst_viewshed` runs GDAL's `raster viewshed`](#viewshed)
 
@@ -73,7 +73,7 @@ New:
   - `databricks.labs.gbx.gridx.helpers`: `h3_los_visible` and `h3_viewshed_towers`.
 - **Python-only modules moved.** `pyrx.checkpoint`, `mvs`, `ortho`, `sfm`, `imagery` and `file_table` are now `rasterx.<same name>`. `pyvx.file_read` and `pyvx.file_write` are now `vectorx.<same name>`. `Manifest`, `checkpoint_skip` and `input_signature` live in `rasterx.checkpoint`. The `dense_*` functions, `gpu_infra` and `recommend_dense_allocation` live in `rasterx.mvs`.
 - **`gridx.h3.functions.h3_geomkring` and `h3_geomkloop` replace `geomkring` and `geomkloop`.** They take an optional `coverage` argument. `mode` stays.
-- **`gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)` replaces `gbx_h3_cell_bbox` in the old modules.** The lightweight function called its `srid` argument `out_srid`. The heavyweight function had no `out_crs`.
+- **`gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)` replaces `gbx_h3_cell_bbox` in the old modules.** The lightweight function called its `srid` argument `out_srid`. The v0.5.2 Scala function had no `out_crs`.
 - **`vectorx.functions.st_setcrs` and `st_transformcrs` read a bare string as a CRS.** `vectorx.jts.legacy.functions.st_legacyaswkb` is gone. Use `vectorx.functions.st_legacyaswkb`.
 
 See the [migration guide](./migration-0-6) for the old and new import for each entry point.
@@ -99,7 +99,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - Grid: `bng_eastnorthasbng`.
   - The `com.databricks.labs.gbx.gridx.quadbin` package. Call `call_function("gbx_quadbin_<name>", ...)`.
   - The expression classes behind these functions, and `BNG_CellUnionAgg`, `BNG_CellIntersectionAgg`, `RST_MergeAgg`, `RST_DTMFromGeoms`, `RST_DTMFromGeomsAgg` and `RST_GridFromPointsAgg`. The SQL names run on the lightweight level.
-- **The JAR no longer holds the Scala expressions `RST_AlignTo`, `RST_CogConvert`, `RST_TransformCrs` and `ST_AsMvt`, or the `RstTransformCrsBytesUdf` Java UDF.** Their JVM forms measured slower than the lightweight forms at every scale tried on a dedicated cluster. GeoBrix keeps JVM code only where it is faster. `gbx_rst_binpoints` and `gbx_rst_cog_convert` ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call these functions with `call_function("gbx_<name>", ...)`. The aggregate `gbx_rst_binpoints_agg` keeps its JVM form.
+- **The JAR no longer holds the Scala expressions `RST_AlignTo`, `RST_CogConvert`, `RST_TransformCrs` and `ST_AsMvt`, or the `RstTransformCrsBytesUdf` Java UDF.** Their JVM forms measured slower than the lightweight forms at every scale tried on a dedicated cluster. GeoBrix keeps JVM code only where it is faster. `gbx_rst_binpoints` and `gbx_rst_cog_convert` ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call these functions with `call_function("gbx_<name>", ...)`.
 - **16 more functions run the JVM form by default with the JAR.** On a dedicated cluster, each JVM form was at least 1.2x faster than the best lightweight form at 4x rows. The decoded output is the same. Without the JAR they run the lightweight form, as before.
   - The BNG `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_kloop` and `gbx_bng_polyfill`.
   - The custom-grid `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_polyfill`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode` and `gbx_custom_cellfill`.
@@ -148,7 +148,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - A NULL number gives NULL. A tile that declares no NoData value and has no mask band comes back as it is.
   - A tile whose validity is its own mask band keeps it. One example is a reprojection of a tile with no NoData value. The filled pixels become valid, and the pixels the search did not reach stay masked. Before, the mask was dropped and every pixel read as valid.
 - **A virtual tile whose file is missing is retried, then raises with a `Fix:`. It is never a silent NULL.** This holds for every function that runs GDAL's own algorithm, such as slope, aspect, color relief, `raster calc` and contour. A Volume path can lag a write, so the read retries about 10 times. If the file is still missing, the error names the path. Check that it exists and is readable from the workers. A corrupt file still gives an error tile or NULL.
-- **The JAR no longer holds the seven `RST_Combine*` expressions or `RST_BNG_Tessellate`.** On a dedicated cluster, the JVM `gbx_rst_combineavg` took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows. The times were 131.56 s against 122.16 s, and 576.44 s against 387.95 s. The DataFrame helper `combine_by_key` took 261.07 s at 16x rows. The raster `gbx_rst_bng_tessellate` took 0.97x and 1.03x the time of the lightweight form, a tie. These eight functions ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`. `gbx_rst_combineavg_agg` and the grid `gbx_bng_tessellate` keep their JVM forms. `gbx_rst_frombands` keeps its JVM form: it is not measured yet.
+- **The JAR no longer holds the seven `RST_Combine*` expressions or `RST_BNG_Tessellate`.** On a dedicated cluster, the JVM `gbx_rst_combineavg` took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows. The times were 131.56 s against 122.16 s, and 576.44 s against 387.95 s. The DataFrame helper `combine_by_key` took 261.07 s at 16x rows. The raster `gbx_rst_bng_tessellate` took 0.97x and 1.03x the time of the lightweight form, a tie. These eight functions ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`. The grid `gbx_bng_tessellate` keeps its JVM form.
 - **The JAR no longer holds `RST_BuildOverviews`.** On a dedicated cluster the lightweight `gbx_rst_buildoverviews` was 2.2x faster than the JVM form. The function already ran the lightweight form by default and still does. The JVM form wrote the overviews in a sidecar file that the tile bytes did not carry. From Scala, call it with `call_function("gbx_rst_buildoverviews", ...)`.
 - **The JAR no longer holds `RST_PercentileStretch`.** Its JVM form took the nearest-rank percentile and rounded the rescale, where the lightweight `gbx_rst_percentile_stretch` interpolates the percentile and truncates. On an 8-bit test tile the two differed by up to 1.24 levels. The function already ran the lightweight form by default and still does. From Scala, call it with `call_function("gbx_rst_percentile_stretch", ...)`.
 - **The JAR no longer holds `RST_Filter`.** Its JVM mean filter of a gray + alpha tile left a different NoData mask than the lightweight `gbx_rst_filter` at a window with no valid pixel. The JVM form was never timed against it. The function already ran the lightweight form by default and still does. From Scala, call it with `call_function("gbx_rst_filter", ...)`.
@@ -604,7 +604,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 ### Vector function arguments (behavior change) {#vector-arguments}
 
 - **A negative or non-finite tolerance raises and names the value.** This covers `st_simplifypreservetopology`, `st_removerepeatedpoints` and `st_snap`, and the grid size of `st_reduceprecision`. They returned garbage or a bare GEOS error. NULL still gives NULL. A NULL `st_removerepeatedpoints` tolerance is the default 0.
-- **Geometry text that mixes 2D and 3D keeps the Z values it has, on both levels.** `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The Z that exists is kept and the missing one is `NaN`, never `0`. Before, the JVM level gave NULL for `gbx_st_crs`, `gbx_st_setcrs` and `gbx_st_transformcrs`. The lightweight `st_transformcrs` dropped every Z of such a geometry, and so of any geometry with a Z on some vertices only. Now `st_transformcrs` reprojects X and Y of every vertex and keeps the Z of each vertex that has one. A `st_setcrs` then `st_transformcrs` chain no longer loses its elevations. The other `gbx_st_*` functions that take geometry text read it the same way.
+- **Geometry text that mixes 2D and 3D keeps the Z values it has, on both levels.** `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The Z that exists is kept and the missing one is `NaN`, never `0`. Before, the JVM `gbx_st_transformcrs` gave NULL. The lightweight `st_transformcrs` dropped every Z of such a geometry, and so of any geometry with a Z on some vertices only. Now `st_transformcrs` reprojects X and Y of every vertex and keeps the Z of each vertex that has one. A `st_setcrs` then `st_transformcrs` chain no longer loses its elevations. The other `gbx_st_*` functions that take geometry text read it the same way.
 - **Geometry text whose dimension tag contradicts its coordinates is refused, not read as 3D.** `POINT Z (1 2)` has a Z tag and two ordinates. Both levels now raise the parse error instead of reading a `NaN` Z. Only text that mixes 2D and 3D coordinates is repaired.
 - **`st_transformcrs` takes X, Y and Z of a vertex that has a Z from the 3D transform.** A target that moves the height, such as a geocentric CRS, changes X and Y with Z. A vertex of a partial-Z geometry now gets the result the same vertex gets alone. Both levels agree.
 - **The lightweight H3 geometry functions refuse a geometry whose SRID is not 4326.** EWKT with `SRID=27700` was read as longitude and latitude. The error names the SRID and says to reproject with `st_transformcrs`. SRID 0 still reads as 4326.
@@ -637,7 +637,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - Before, the `constrained` mode merged the points in one grid cell of `merge_tolerance`. Points closer than it could stay apart, and a snapped point could be lost.
 - **The `constrained` mode makes every break line segment a triangle edge (fix).** Before, it often left a segment that crossed more than one edge without that edge, and gave no error. A point exactly on a break line now splits it there.
 - **The `constrained` mode raises with a `Fix:` where break lines cross (behavior change).** Before, one of the crossing segments was not an edge, and it gave no error.
-- **The `constrained` mode gives the same triangles on every level (fix).** Where four or more points lie on one circle, as in a grid, the Python level and Unity Catalog now pick the triangles the JVM level picks. Before, they could pick other, equally valid triangles.
+- **The `constrained` mode gives the same triangles on every level (fix).** Where four or more points lie on one circle, as in a grid, the Python level and Unity Catalog now pick the JVM level's triangles. Before, they could pick other, equally valid triangles.
 - **The `constrained` mode raises with a `Fix:` where JTS cannot locate a point (behavior change).** Sites very close together are the cause. The JVM level raised JTS's own exception.
 - **The TIN functions run up to 80x faster on the Python level (performance).** The env wheel triangulates with a Rust port of JTS, with the JVM level's triangles. A 250,000-point grid takes about 2 seconds, down from about 150. [Performance](./api/performance#the-rust-kernel-for-tin-triangulation) has the numbers.
 - **The elevation functions sample Z in batches (performance).** Before, the Python level tested each grid cell against every triangle. 400 cells on a 40,000-point surface took 28 seconds, and now take under 1 second.
@@ -680,7 +680,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 
 ### Heavyweight tile size (fix) {#l1-parity}
 
-- **Heavyweight rasterize and `rst_binpoints_agg` tiles are compressed.** They were raw bytes. They now use the heavyweight default (DEFLATE with the dtype's predictor). A 64 x 64 `rst_binpoints_agg` tile of four points is 630 bytes, not 16,776. Pixels are unchanged.
+- **Heavyweight rasterize tiles are compressed.** They were raw bytes. They now use the heavyweight default (DEFLATE with the dtype's predictor). Pixels are unchanged.
 
 ### `rst_sample` on virtual tiles (fix) {#rst-sample}
 
@@ -712,14 +712,13 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **Call a generator with `FROM t, LATERAL f(...)`.** This works on every compute for `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_custom_tessellate`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the `rst_*_rastertogrid*` reducers.
   - These functions have no JVM form, so they have no select-list or `LATERAL VIEW` form.
   - The `rst_*_rastertogrid*` reducers no longer return an `ARRAY`. See [Generators and aggregates change shape](#shape-changes).
-- **Heavyweight tiling and tessellation functions return their error row (fix).** They failed with a `ClassCastException` when a tile cannot be read. These functions are `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four `rst_*_tessellate` functions. Each now returns one row whose `tile` holds the error tile, as [Error handling](./api/error-handling#generators) describes.
-  - `rst_maketiles` with a size of 0 or less returns the tile unchanged as one readable row.
 - **Bad arguments raise their own message.**
   - An unknown `format`, `resampling` or `rescale` raises.
   - A `size` outside (0, 4096], a `max_z` above the cap, or a tile count above the limit raises.
   - Heavyweight `rst_tilexyz` now raises for them too, as `rst_xyzpyramid` and the lightweight tier do. It returned a transparent PNG.
   - A tile that cannot be read or rendered still returns a transparent PNG, never NULL.
-- **Corrupt tiles yield an error row again (fix).** The lightweight `rst_separatebands`, `rst_retile` and `rst_tooverlappingtiles` failed with `UDTF_RETURN_SCHEMA_MISMATCH` on an unreadable input. They emit one error tile (NULL raster, error in `metadata.last_error`).
+- **A tile that cannot be read gives one error row (fix).** This holds for `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four `rst_*_tessellate` functions. The row's `tile` holds the error tile (NULL raster, error in `metadata.last_error`), as [Error handling](./api/error-handling#generators) describes. The lightweight forms used to fail with `UDTF_RETURN_SCHEMA_MISMATCH`.
+  - `rst_maketiles` with a size of 0 or less returns the tile unchanged as one readable row.
 
 ### `rst_gdal` runs an allowlisted GDAL `raster` command (new) {#rst-gdal}
 
@@ -757,32 +756,32 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **Smaller changes.**
   - `rst_viewshed_towers` gives no row for a tower in a grid cell with no DSM tile.
 
-### Raster tessellation and tiling: tier parity and large rasters (behavior change) {#tessellation-parity}
+### Raster tessellation and tiling: large rasters (behavior change) {#tessellation-parity}
 
-- **Centroid tiles are cropped to their cell.** With `assignment='centroid'` (default), `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate` and `rst_custom_tessellate` crop each tile to the window of the pixels assigned to its cell, in both tiers. Pixel values and positions are unchanged.
+- **Centroid tiles are cropped to their cell.** With `assignment='centroid'` (default), `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate` and `rst_custom_tessellate` crop each tile to the window of the pixels assigned to its cell. Pixel values and positions are unchanged.
   - A tile's width, height and geotransform are now its own, not the source's.
   - Code that assumes every tile has the source extent must change. An example is stacking tiles as same-shape arrays.
   - Tiles are about 5 times smaller on an 11k × 11k pixel scene.
-- **Empty cells.** With `coverage='complete'`, a covered cell that received no pixel is a 1×1 all-NoData tile at the cell's centroid pixel in both tiers. The heavyweight tier emitted a source-sized tile.
-- **Scene-sized tiles no longer time out.** Tiles are built from their own window. Pixels are assigned to cells a strip of about one million pixels at a time. Memory grows with the pixel count, at about 23 bytes per pixel in the lightweight tier.
+- **Empty cells.** With `coverage='complete'`, a covered cell that received no pixel is a 1×1 all-NoData tile at the cell's centroid pixel. In v0.5.2 it was a source-sized tile.
+- **Scene-sized tiles no longer time out.** Tiles are built from their own window. Pixels are assigned to cells a strip of about one million pixels at a time. Memory grows with the pixel count, at about 23 bytes per pixel.
   - For very large scenes, run `gbx_rst_retile` first to spread the work across tasks.
   - A cell on a seam between tiles then appears once per tile it overlaps.
   - See [Grid Raster Tessellation](./api/grid-raster-tessellation#large-rasters).
-- **Both tiers keep the same covered cells.** `coverage='complete'` and `assignment='covering'` keep a cell when it overlaps the raster footprint.
+- **Covered cells follow the raster footprint.** `coverage='complete'` and `assignment='covering'` keep a cell when it overlaps the raster footprint.
   - The footprint is the raster's edges, reprojected to the grid's CRS with points along each edge. It follows the curved edges of a projected scene, for example UTM.
   - `rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when the footprint crosses the antimeridian or encloses a pole. Reproject the raster first (for example to EPSG:4326), or split it.
-- **Tiling keeps all-NoData windows in both tiers.** The lightweight tier already did. The heavyweight tier dropped them, so row counts differed. A retile-then-merge round trip could lose part of a scene's edge. Both tiers now emit every window in these functions:
+- **Tiling keeps all-NoData windows.** The v0.5.2 heavyweight forms dropped them, so a retile-then-merge round trip could lose part of a scene's edge. These functions now emit every window:
   - `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` (with `size_in_mb > 0`).
 
   To drop the all-NoData windows, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
-- **Retile tiles carry the parent's `cellid`** in both tiers (0 when the parent has none). This covers `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles` and `rst_separatebands`. The lightweight tier numbered them 0, 1, 2, ….
-- **Quadbin cells agree between tiers.** A latitude within 1e-6 of a whole web-mercator row is decided exactly and identically in both tiers. In `rst_quadbin_rastertogrid*`:
+- **Retile tiles carry the parent's `cellid`** (0 when the parent has none). This covers `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles` and `rst_separatebands`. They used to be numbered 0, 1, 2, ….
+- **Quadbin cells are decided exactly.** A latitude within 1e-6 of a whole web-mercator row is decided exactly. In `rst_quadbin_rastertogrid*`:
   - A pixel centre at longitude 180 lands in the easternmost tile instead of tile 0.
-  - A pixel on a tile edge falls in the same cell as in the heavyweight tier and in `rst_quadbin_tessellate`.
+  - A pixel on a tile edge falls in the same cell as in `rst_quadbin_tessellate`.
 
 ### NoData, alpha and mask bands (behavior change) {#nodata-alpha-mask}
 
-Both tiers apply one rule for which pixels are valid.
+GeoBrix applies one rule for which pixels are valid.
 
 - **One NoData fallback for sources without NoData.** Source pixels equal to the fallback become NoData. The fallback by type:
   - `uint8`: 0.
@@ -793,15 +792,15 @@ Both tiers apply one rule for which pixels are valid.
   - `float32` and `float64`: the type's minimum.
 
   Further changes:
-  - Heavyweight centroid tessellation used 0 for every integer type. Real zero pixels of `uint16`, `int16`, `uint32` and `int32` sources now stay valid. Float tiles carry the type's minimum, not NaN.
-  - `covering` tiles carry this NoData in both tiers, so pixels outside each cell read as NoData.
+  - In v0.5.2, centroid tessellation used 0 for every integer type. Real zero pixels of `uint16`, `int16`, `uint32` and `int32` sources now stay valid. Float tiles carry the type's minimum, not NaN.
+  - `covering` tiles carry this NoData, so pixels outside each cell read as NoData.
   - The lightweight `rst_initnodata` and `rst_threshold` use the same table.
   - The lightweight `rst_filter` min, max and median of a `uint8` source blank a window with no valid pixel with 0.
   - In the [EO series](./notebooks/eo-series) notebooks 03 and 04, `uint16` bands that pass through `rst_initnodata` carry NoData 65535.
 - **A source's own mask band is kept.** This is a mask band that is not an alpha band, as JPEG-compressed aerial imagery often carries. Masked pixels used to read as valid data in these places:
   - `rst_initnodata`.
   - The warps of `rst_bng_tessellate` and the raster-to-grid reducers.
-  - Heavyweight `assignment='covering'`.
+  - `assignment='covering'`.
   - Lightweight `gbx_rst_transform` and `gbx_rst_transformcrs`.
   - The `raster_gbx` encoder and re-encode.
   - `cog_gbx` mosaic windows.
@@ -823,13 +822,12 @@ Both tiers apply one rule for which pixels are valid.
   - Tiles and clips also copy the colour interpretation of every band.
 - **A transparent pixel belongs to no cell and counts for no band, at every band count.** A pixel is valid when its alpha is above 0 and a data band is valid by its NoData or mask. GDAL derives a mask from an alpha band only for two- and four-band rasters, so other band counts used to read as entirely valid.
   - `rst_*_tessellate` with `coverage='sparse'` no longer emits cells that hold only transparent pixels (`centroid`). It no longer keeps fully transparent tiles (`covering`).
-  - These functions judge each band this way in both tiers:
+  - These functions judge each band this way:
     - The raster-to-grid reducers: `rst_h3_rastertogrid*`, `rst_quadbin_rastertogrid*`, `rst_bng_rastertogrid*` and the custom-grid variants.
     - `gbx_rst_pixelcount`, `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max` and `gbx_rst_histogram`.
     - The percentiles of `gbx_rst_percentile_stretch`.
     - The neighbours of `gbx_rst_filter` and `gbx_rst_convolve`.
     - The pixels that `gbx_rst_polygonize` and `gbx_rst_isoband` vectorise.
-  - The heavyweight statistics used to count transparent pixels. They now leave out a band masked by its own mask band. The alpha band itself is summarised over every pixel.
   - `gbx_rst_isempty` is true for a raster with no valid pixel.
   - The lightweight `gbx_rst_summary` takes its statistics over the valid pixels.
   - `gbx_rst_derivedband` of one raster is invalid where its input is.
@@ -843,8 +841,8 @@ Both tiers apply one rule for which pixels are valid.
   - The retile family: `gbx_rst_retile`, `gbx_rst_tooverlappingtiles` and `gbx_rst_maketiles`.
   - The reads of a lazily read tile.
   - The tile encoders of the `raster_gbx` and `cog_gbx` writers.
-- **A band selection writes the alpha band as data, unless it is selected last with a data band.** `gbx_rst_band` and `gbx_rst_separatebands` extract a band for its values. The alpha band of an RGBA raster comes out as an ordinary band in both tiers. A multi-band selection keeps the alpha label only when the source's alpha band is selected last with at least one other band.
-- **A raster with an alpha band and its own mask band keeps both.** This holds in the lightweight encoders, writers and reprojections. It also holds in the heavyweight warp behind covering and the raster-to-grid reducers. A pixel is valid when a data band is valid, its alpha is above 0 and the mask says so.
+- **A band selection writes the alpha band as data, unless it is selected last with a data band.** `gbx_rst_band` and `gbx_rst_separatebands` extract a band for its values. The alpha band of an RGBA raster comes out as an ordinary band. A multi-band selection keeps the alpha label only when the source's alpha band is selected last with at least one other band.
+- **A raster with an alpha band and its own mask band keeps both.** This holds in the encoders, writers and reprojections, in the warp behind covering and in the raster-to-grid reducers. A pixel is valid when a data band is valid, its alpha is above 0 and the mask says so.
   - The remaining lightweight writers also keep the alpha label and the mask:
     - `cog_gbx` quadbin, h3 and BNG cells, and its `pruneEmpty` check. A window or cell with no valid pixel is not written.
     - The COG re-encode of the `raster_gbx` writer.
@@ -861,12 +859,12 @@ Both tiers apply one rule for which pixels are valid.
   - `gbx_rst_merge` of tiles in two coordinate systems takes its size and pixel size from the reference system, whichever tile sorts first. It reprojects the other tile onto the reference tile's pixel grid, in memory and streamed alike. That tile can grow by up to a pixel on each side.
 - **A lightweight merge no longer overwrites valid pixels with zeros** when a tile is reprojected. The reprojected tile carries its warp footprint as a mask. The mosaic has a mask band, and a pixel no tile covers is invalid.
 - **A streamed lightweight merge reads each tile by its own NoData,** as the in-memory merge does. The `cog_gbx` mosaic index masks a multi-band tile only where every band is NoData. The layout still differs: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews), and the in-memory one a striped GeoTIFF.
-- **Heavyweight focal defects are fixed.**
+- **Focal defects are fixed.**
   - `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window.
   - `gbx_rst_convolve` no longer writes each block's result shifted.
-  - In both tiers it adds only the neighbours on the raster, so the tiers agree at the edges. The lightweight one replicated the edge.
+  - A focal window adds only the neighbours on the raster. v0.5.2 replicated the edge.
 - **`gbx_rst_merge_agg` refuses an oversize group on Serverless.** A Serverless task holds the whole group before any merge. A group of tiles that add up (decoded) to more than the task's memory cap used to end the query with a memory-limit error. It is now refused first, with a `Fix:` that names `merge_by_key(method="vrt")`. The SQL call raises, and the Python call returns the group's error tile.
-- **`gbx_rst_merge` runs on the lightweight level by default, also on a cluster with the JAR.** The heavyweight merge refuses a group over the memory budget with an error tile. A hot key of a skewed table then came back with no raster. The lightweight merge streams the group and returns the mosaic. Force the heavyweight level to compare.
+- **`gbx_rst_merge` runs on the lightweight level, also on a cluster with the JAR.** The merge streams a group over the memory budget and returns the mosaic. In v0.5.2 a hot key of a skewed table came back with no raster.
 - **A merge of virtual tiles skips the sidecar look-up for files the reader marked sidecar-free.** Tiles from `raster_gbx` carry `path_sidecar_free`. The merge now honors it for the member headers and for the streamed read. It no longer lists a large folder once per worker for them.
 - **Grouped functions apply a virtual tile's clip.** On runtimes with the FILE type, the lightweight `*_grouped` functions skipped the `clipPolygons` polygon of a `raster_gbx` or `cog_gbx` virtual tile. These include `rst_clip_grouped`, `rst_memsize_grouped` and `rst_resample_grouped`.
   - They now read the tile clipped, and reproject a tile whose `crs` differs from its source's.
@@ -918,7 +916,7 @@ Every raster function follows the same order of checks on both implementations.
   - An `out_srid` that is not a positive EPSG or ESRI code.
   - `gbx_rst_slope` raises for a unit other than `degrees` or `percent`; it used to treat any other value as degrees.
   - The Python Column API raises the same errors as SQL.
-  - Heavyweight functions that gave an error tile for a wrong argument now fail the call.
+  - A function that gave an error tile for a wrong argument now fails the call.
 - **An aggregate of only error tiles gives the first error tile.** `rst_combine*` and `rst_frombands` skip a NULL element, an error tile or a tile that cannot be opened, and combine the others.
   - They give NULL for a NULL or empty array.
   - Tiles of different shape raise. `rst_combineavg` no longer resamples.
@@ -978,7 +976,9 @@ Every raster function follows the same order of checks on both implementations.
 
 - **Light band mean and standard deviation are exact to double.** They were off in the 7th digit for `float32` bands.
 - **Heavyweight changes.**
-  - `gbx_rst_srid` is NULL when the CRS has no authority code (it was 0). `gbx_rst_getnodata` is NULL when no band declares NoData (it was NaN per band).
+  - `gbx_rst_srid` is NULL when the CRS has no authority code (it was 0).
+- **Changes from v0.5.2 for functions that now run on the lightweight level.**
+  - `gbx_rst_getnodata` is NULL when no band declares NoData (it was NaN per band).
   - `gbx_rst_sample` raises for a non-point geometry. A longitude/latitude point (EWKT, EWKB or the `crs` argument) lands on the right pixel. It used the authority's axis order and missed the raster.
   - `gbx_rst_convolve` returns `Float64`. The median filter of an even number of valid pixels is the mean of the two middle values.
   - `gbx_rst_initnodata` keeps a NoData value every band declares, NaN included. `gbx_rst_percentile_stretch` declares NoData 0.
@@ -990,7 +990,7 @@ Every raster function follows the same order of checks on both implementations.
   - `rst_getsubdataset` on a tile with a window, clip or pending edits gives an error tile with a `Fix:`.
   - `rst_filter` with a fractional window such as 3.9 raises. `rst_derivedband` finds a function defined inside `if`, `try`, `with`, `for` or `while`.
   - `gbx_rst_histogram` with a bucket count below 1 raises. `gbx_rst_bandmetadata(tile, NULL)` is NULL.
-  - Resampling words match at both levels: `near` (or `nearest`), `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` and `q3`, in any case. Words such as `gauss`, `sum` and `rms` raise and list the words that work.
+  - Resampling words match in every function: `near` (or `nearest`), `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` and `q3`, in any case. Words such as `gauss`, `sum` and `rms` raise and list the words that work.
   - `gbx_rst_transform` and `gbx_rst_to_webmercator` give an error tile with a `Fix:` for a tile with no CRS.
   - `gbx_rst_proximity` with a NaN or NULL `max_distance` means no cap. It agrees with GDAL to within a pixel's diagonal.
   - `gbx_rst_clip` with a cutline that cannot be read, or a `clip_crs` that names no CRS, gives the tile's error tile.
@@ -1000,19 +1000,18 @@ Every raster function follows the same order of checks on both implementations.
   - `gbx_rst_color_relief` takes the color table as text and runs GDAL's own color-map algorithm. NoData pixels take the `nv` color. Without an `nv` line they are transparent in an RGBA result and black in an RGB one.
   - `gbx_rst_polygonize` defaults band 1 and connectedness 4. It raises for another connectedness or a band the tile lacks.
   - `gbx_rst_tooverlappingtiles` raises for a window below one pixel and for an overlap outside 0 to 99 percent.
-  - `gbx_rst_viewshed_towers` fails the query when the DSM tile of a tower cannot be read, on every level.
+  - `gbx_rst_viewshed_towers` fails the query when the DSM tile of a tower cannot be read.
 - **`gbx_rst_gridfrompoints` and `gbx_rst_binpoints` give NULL for a NULL extent, size or SRID.** With no `out_srid` and no `out_crs`, the output has no CRS.
 - **`gbx_rst_rasterize` reprojects an EWKT geometry into the output CRS,** as it did EWKB. A geometry that cannot be read, or an empty string, raises and names it.
 - **A rasterize aggregate with the `value` left out burns 1.0 (the presence mask).** A typed NULL burns NaN.
 - **A GCP-georeferenced raster is warped from its points** by `gbx_rst_transform` and `gbx_rst_to_webmercator`.
 - **A tile's alpha band keeps its label through the band selection of `rst_band`.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
-- **The heavyweight and lightweight `rst_merge` overlap winner does not depend on the array order.** The bytes that sort last win. The old text said the first tile wins.
+- **The `rst_merge` overlap winner does not depend on the array order.** The bytes that sort last win. The old text said the first tile wins.
 - **`gbx_rst_asformat` takes the driver name in any case.** It resolves the name to GDAL's spelling and leaves a tile that is already in that driver unchanged. The `driver` in the result is the driver the bytes open as (`GTiff` for `COG`).
 - **The JVM cell rasterizers read `out_crs` as `EPSG:<n>` or a bare integer.** They refuse `ESRI:<n>` and WKT with a `Fix:`. The lightweight level accepts them.
 - **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
 - **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
 - **`SHOW USER FUNCTIONS` works on DBR 17.3 after `gbx.register`.** The SQL tile functions that mint a `FILE` argument (`gbx_rst_avg`, `gbx_rst_width` and 32 more) run a check once per session. The check asks whether the runtime can list a function with `FILE` in its body. Where it cannot, they pass NULL and read the tile by its path.
-- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram` and `gbx_rst_metadata` keep results that differ from the lightweight ones. The differences are an even-count median, the top histogram edge and GDAL's merged metadata. None is a default level.
 
 ## Grid functions {#grid-functions}
 
@@ -1028,10 +1027,10 @@ Every grid function follows one contract for its resolution and its input.
 - **The geometry explodes follow the rules of their array functions.** An unknown mode or an undefined resolution raises. A non-finite point or unreadable geometry gives no rows. The BNG and custom explodes raise for an unknown `coverage` before they run, and read a `BIGINT` `k`. A `k` past INT raises.
 - **`gbx_rst_bng_tessellate` raises for a resolution BNG does not define.**
 - **A bad `coverage` and a negative `k` now raise on the JAR level too.** `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_custom_geomkring` and `gbx_custom_geomkloop` raise for an unknown `coverage`, and `gbx_custom_kring`, `gbx_custom_kloop` raise for a `k` below 0, each naming the value. Before, the JAR level returned NULL where the lightweight level raised. `gbx_bng_tessellate` also raises for an integer resolution BNG does not define.
-- **A bad argument now raises on the JAR level for five more raster functions.** Before, the JAR level returned an error tile, a NULL or a tile that could not be opened where the lightweight level raises.
+- **A bad argument raises in more raster functions.** v0.5.2 returned an error tile, a NULL or a tile that could not be opened.
   - `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate` and `gbx_rst_custom_tessellate` raise for an `assignment` or `coverage` they do not know, naming the value. A NULL `resolution` gives the row's error tile, not a tessellation at resolution 0.
-  - `gbx_rst_tooverlappingtiles` raises for a window below 1 pixel and for an overlap outside 0 to below 100 percent. A NULL window or overlap gives the row's error tile. A NULL size in `gbx_rst_maketiles` does the same, where the JAR level passed the tile through unsplit.
-  - `gbx_rst_asformat` refuses a format whose bytes GeoBrix does not open as a tile, such as `VRT`, with a `Fix:`. The JAR level wrote a VRT tile that could not be opened again.
+  - `gbx_rst_tooverlappingtiles` raises for a window below 1 pixel and for an overlap outside 0 to below 100 percent. A NULL window or overlap gives the row's error tile. A NULL size in `gbx_rst_maketiles` does the same.
+  - `gbx_rst_asformat` refuses a format whose bytes GeoBrix does not open as a tile, such as `VRT`, with a `Fix:`.
 - **The TIN generators and `gbx_st_asmvt_pyramid` give no rows for a NULL required argument.** They failed the query before.
 
 ### Exact cell ids (fix) {#exact-cell-ids}
@@ -1081,7 +1080,6 @@ Every grid function follows one contract for its resolution and its input.
 - **`quadbin_pointascell` and `custom_pointascell` answer the rows beside a NULL too.**
   - `quadbin_pointascell` also answered a NULL longitude or latitude with a made-up cell.
   - A resolution that is not a whole number (3.5) is refused instead of cut to 3.
-  - The heavyweight `quadbin_pointascell` still cuts such a resolution. Pass an `INT` resolution there until a later release makes it refuse one.
   - `custom_pointascell` no longer rounds a cell id above 2^53 when its batch holds a NULL.
 
 ### Other grid changes (behavior change, new) {#grid-other}

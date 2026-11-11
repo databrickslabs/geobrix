@@ -18,7 +18,7 @@ Each item below has the measurement behind it. The [release notes](../release-no
 - **Raster tile functions.** The Python implementation is the default. A JVM companion stays only where it measured at least 1.2x faster on a dedicated cluster. `gbx_rst_gridfrompoints` lost its JVM form, because it measured slower.
 - **Grid functions.** The JVM (Catalyst) form stays for BNG tessellate, the BNG explodes, `gbx_bng_kring` and `gbx_bng_cellfill`, where it measured at least 1.2x faster. `gbx_bng_eastnorthasbng` lost its JVM form, because the Python batch form is faster. The other grids use the Python form.
 - **Aggregates and generators.** Each compute has its own route. [Aggregates by compute](#aggregates-by-compute) lists them.
-- **Rust.** A compute kernel is used only where it clears a 2x bar over the Python form. Today that is one function, `gbx_bng_eastnorthasbng`.
+- **Rust.** A compute kernel is used only where it measured clearly faster than the Python form. Today that is `gbx_bng_eastnorthasbng` and the triangulation of the TIN functions.
 - **SQL registration.** One registrar, written in Python. `register(spark)` installs every function, and the compute chooses the level.
 
 ## Performance by level
@@ -110,6 +110,27 @@ The functions not listed above have no cluster measurement of the heavy level. M
 | Serverless | 7.6x | 20.3x | 16.8x |
 
 The Rust form runs at the cost of moving the rows, so these ratios are a lower bound on the kernel gain. Rust did not clear its bar for raster decode: the Python decode ran at 1.03x on dedicated, 0.97x on standard and 0.90x on Serverless.
+
+#### The Rust kernel for TIN triangulation
+
+`gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom` triangulate with a Rust port of JTS 1.20 in the env wheel. It gives the JVM level's triangles exactly, in both modes. Without the Rust module, the Python level takes SciPy's triangles where they are provably the only Delaunay triangulation. Otherwise it runs a pure-Python port of JTS.
+
+A grid is the slow case for the pure-Python port, because its points lie four to a circle. The times below are seconds for one triangulation, in one process on Linux aarch64. Each input has one break line of 20 vertices.
+
+| Input | Mode | Rust | Pure Python | JVM |
+|---|---|---|---|---|
+| 5,000 random points | constrained | 0.017 | 0.023 | 0.034 |
+| 5,000 random points | conforming | 0.008 | 0.030 | 0.021 |
+| 100,000 random points | constrained | 0.67 | 0.80 | 0.67 |
+| 100,000 random points | conforming | 0.47 | 1.69 | 0.81 |
+| 40,000-point grid | constrained | 0.22 | 9.9 | 0.26 |
+| 40,000-point grid | conforming | 0.26 | 11.1 | 0.39 |
+| 250,000-point grid | constrained | 1.8 | 145 | 6.5 |
+| 250,000-point grid | conforming | 1.8 | 152 | 10.8 |
+| 1,000,000-point grid | constrained | 13.0 | not run | 42.5 |
+| 1,000,000-point grid | conforming | 19.3 | not run | 78.8 |
+
+The pure-Python port was not run on the 1,000,000-point grid, because the 250,000-point grid took over 60 seconds. The elevation functions sample Z in batches through a triangle index, at the same Z as before.
 
 ### UC functions
 
@@ -403,7 +424,7 @@ The compute under each UDF shape comes from established Python libraries.
 |---|---|
 | **rasterio** | Tile open and decode, clip, COG conversion, band I/O |
 | **NumPy** | Array operations |
-| **SciPy** | Focal filters (`rst_filter`, `rst_convolve`). Delaunay triangulation and interpolation for the TIN functions. |
+| **SciPy** | Focal filters (`rst_filter`, `rst_convolve`). Delaunay triangulation for the TIN functions where the env wheel's Rust module is absent. |
 | **rio-tiler** | XYZ and web-tile output (`rst_tilexyz`, `rst_xyzpyramid`) |
 | **GDAL** (`raster` algorithms) | Terrain, color relief, band math, warp and resample, fill NoData, summary, contour, polygonize, viewshed, and `gbx_rst_gdal` |
 | **shapely** | WKB geometry handling: clip, rasterize, grid aggregation, legacy-struct decode |

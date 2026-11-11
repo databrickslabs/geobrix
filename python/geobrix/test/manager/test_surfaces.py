@@ -376,9 +376,17 @@ def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
         '| <Link id="gbx_bng_kringexplode" />`gbx_bng_kringexplode` | GridX |  |'
         in rows
     )
-    # an L1 block the level table orders after L3, and one whose JVM form returns another shape, are not listed
+    # an L1 block the level table orders after L3 (or leaves out), and a function with no JVM form, are not listed
+    from databricks.labs.gbx.manager import levels
+
+    never = [
+        f.sql_name
+        for f in manifest.load().functions.values()
+        if "L1" in f.levels and "L1" not in levels.order(f)
+    ]
+    assert never
     assert not any(
-        n in out for n in ("`gbx_rst_merge`", "`gbx_bng_kloop`", "`gbx_rst_maketiles`")
+        f"`{n}`" in out for n in (*never, "gbx_rst_merge", "gbx_rst_maketiles")
     )
 
 

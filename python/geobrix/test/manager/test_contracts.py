@@ -370,6 +370,37 @@ def test_a_function_the_jvm_pass_culled_runs_light_with_the_jar(name):
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
+# The JVM levels that measured past the 1.2x line against the best light form at 4x rows in the same pass, with equal
+# output: they run first with the JAR, and light without it.
+_PROMOTED_BY_THE_JVM_PASS = (
+    "gbx_bng_geomkloop",
+    "gbx_bng_geomkring",
+    "gbx_bng_kloop",
+    "gbx_bng_polyfill",
+    "gbx_custom_cellfill",
+    "gbx_custom_geomkloop",
+    "gbx_custom_geomkloopexplode",
+    "gbx_custom_geomkring",
+    "gbx_custom_geomkringexplode",
+    "gbx_custom_kloop",
+    "gbx_custom_kring",
+    "gbx_custom_polyfill",
+    "gbx_rst_custom_rasterize_agg",
+    "gbx_rst_quadbin_rasterize_agg",
+    "gbx_rst_h3_rasterize_agg",
+    "gbx_rst_tilexyz",
+    "gbx_st_legacyaswkb",
+)
+
+
+@pytest.mark.parametrize("name", _PROMOTED_BY_THE_JVM_PASS)
+def test_a_function_the_jvm_pass_promoted_runs_the_jvm_first_with_the_jar(name):
+    fn = MAN.functions[name]
+    assert levels.order(fn) == ("L1", "L3")
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L1"
+    assert levels.select(fn, _caps()).level == "L3"  # no JAR: light
+
+
 def test_the_array_family_is_light_and_the_engine_rows_are_light():
     # frombands, the family's last JVM level, measured 0.62x and 0.57x of light: the family is light
     assert levels.FAMILY_PREFERENCE["raster-array-op"] == ("L3",)

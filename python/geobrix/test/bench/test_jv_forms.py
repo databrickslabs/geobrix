@@ -41,12 +41,8 @@ def test_the_set_covers_both_halves_of_the_list():
     never = {fn for fn in FNS if "L1" not in levels.order(rows[fn])}
     first = {fn for fn in FNS if levels.order(rows[fn])[0] == "L1"}
     assert never | first == set(FNS)
-    assert {
-        "gbx_rst_h3_rasterize_agg",
-        "gbx_rst_quadbin_rasterize_agg",
-        "gbx_rst_custom_rasterize_agg",
-    } <= never
-    assert {"gbx_rst_crs", "gbx_bng_aswkb"} <= first
+    assert {"gbx_rst_band", "gbx_rst_setcrs"} <= never
+    assert {"gbx_rst_crs", "gbx_bng_aswkb", "gbx_rst_h3_rasterize_agg"} <= first
 
 
 @pytest.mark.parametrize("fn", FNS)

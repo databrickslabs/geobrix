@@ -59,7 +59,7 @@ Every function runs on every compute through its Python level. On a dedicated cl
 | `st_interpolateelevationgeom` | Python | Both modes run on every level |
 | `st_crs`, `st_setcrs` | Python | |
 | `st_transformcrs` | Python, JVM | JVM level by default on a dedicated cluster |
-| `st_legacyaswkb` | Python, Unity Catalog | |
+| `st_legacyaswkb` | Python, JVM, Unity Catalog | JVM level by default on a dedicated cluster |
 | `st_makevalid`, `st_explainvalidity` | Python, Unity Catalog | |
 | `st_wrapx` | Python, Unity Catalog | |
 | `st_coverageisvalid`, `st_coverageinvalidedges` | Python | |
@@ -1188,7 +1188,7 @@ See [Antimeridian](./antimeridian).
 ### st_legacyaswkb
 
 {/* BEGIN GENERATED gbx_st_legacyaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python scala jar="gbx_st_legacyaswkb" />
 
 | Surface | Call | Returns |
 |---|---|---|

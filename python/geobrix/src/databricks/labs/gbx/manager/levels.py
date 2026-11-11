@@ -31,19 +31,39 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_transformcrs": ("L3",),
     # transformcrs is 5.7x and 6.4x faster on the JVM at 4x and 16x rows (dedicated compute). crs and setcrs have no
     # JVM level: it took 0.77x and 0.59x (crs, at 1x and 4x) and 1.00x, 0.88x and 0.85x (setcrs, at 1x, 4x and 16x) of
-    # the light time (Task 25), so their JVM expressions are deleted. The other vector scalars have no companion (the
-    # legacy decode is light by family).
+    # the light time (Task 25), so their JVM expressions are deleted. The other vector scalars have no companion.
     "gbx_st_transformcrs": ("L1", "L3"),
+    # The legacy Mosaic decode: the JVM form is 3.86x and 5.81x faster than light at 1x and 4x rows (Task 25, dedicated,
+    # 1 + 4 x m5d.2xlarge, DBR 19, medians of 3, equal decoded output).
+    "gbx_st_legacyaswkb": ("L1", "L3"),
     # tessellate and its explode: the JVM form takes 0.47x and 0.42x of the best light form at 4x rows and 0.46x and 0.45x
     # at 16x (dedicated, 1 + 4 x m5d.2xlarge, DBR 19). kring: 0.82x at 4x and 0.79x at 16x (3 iterations), that is 1.21x
-    # and 1.27x faster, past the 1.2x line at both scales. cellfill: 0.71x and 0.73x (3 iterations). The other grid arrays and
-    # the cell aggregates stay light by family.
+    # and 1.27x faster, past the 1.2x line at both scales. cellfill: 0.71x and 0.73x (3 iterations). The grid arrays and
+    # cell aggregates below are measured in the Task 25 pass; the others stay light by family.
     "gbx_bng_tessellate": ("L1", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
     "gbx_bng_kring": ("L1", "L3"),
     "gbx_bng_cellfill": ("L1", "L3"),
-    # The five BNG explodes are 1.5x to 2.7x faster on the JVM on a cluster (0.37x to 0.67x). The other explodes
-    # (quadbin, custom, H3) are light by family: unmeasured, and the quadbin companions are not conformed.
+    # The Task 25 JVM pass (dedicated, 1 + 4 x m5d.2xlarge, DBR 19, medians of 3, equal decoded output), as how many times
+    # faster the JVM form is than the best light form at 1x and 4x rows; each passes the 1.2x line.
+    # The BNG arrays: geomkloop 5.44x / 5.01x, geomkring 4.66x / 5.97x, kloop 1.87x / 1.69x, polyfill 4.97x / 5.05x.
+    "gbx_bng_geomkloop": ("L1", "L3"),
+    "gbx_bng_geomkring": ("L1", "L3"),
+    "gbx_bng_kloop": ("L1", "L3"),
+    "gbx_bng_polyfill": ("L1", "L3"),
+    # The custom-grid arrays: geomkloop 4.30x / 5.05x, geomkring 3.13x / 4.95x, kloop 5.20x / 7.45x, kring 4.60x / 8.12x,
+    # polyfill 4.19x / 9.80x; the explodes: geomkloopexplode 4.26x / 5.02x, geomkringexplode 4.12x / 5.11x; the cell
+    # fill aggregate 1.69x / 2.10x (Task 25).
+    "gbx_custom_geomkloop": ("L1", "L3"),
+    "gbx_custom_geomkring": ("L1", "L3"),
+    "gbx_custom_kloop": ("L1", "L3"),
+    "gbx_custom_kring": ("L1", "L3"),
+    "gbx_custom_polyfill": ("L1", "L3"),
+    "gbx_custom_geomkloopexplode": ("L1", "L3"),
+    "gbx_custom_geomkringexplode": ("L1", "L3"),
+    "gbx_custom_cellfill": ("L1", "L3"),
+    # The five BNG explodes are 1.5x to 2.7x faster on the JVM on a cluster (0.37x to 0.67x). The quadbin and H3 explodes
+    # are light by family (no JVM level); the custom ones are above.
     "gbx_bng_kringexplode": ("L1", "L3"),
     "gbx_bng_kloopexplode": ("L1", "L3"),
     "gbx_bng_geomkringexplode": ("L1", "L3"),
@@ -53,7 +73,7 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_st_triangulate": ("L1", "L3"),
     "gbx_st_interpolateelevationbbox": ("L1", "L3"),
     # Quadbin cell math is at parity with light on a cluster (0.89x to 1.33x), so it stays on light; the other
-    # grid scalars (custom grid, H3) are L1 first through their family. The quadbin arrays are light by family.
+    # grid scalars (BNG, custom grid) are L1 first through their family. The quadbin arrays are light by family.
     "gbx_quadbin_pointascell": ("L3",),
     "gbx_quadbin_aswkb": ("L3",),
     "gbx_quadbin_centroid": ("L3",),
@@ -65,11 +85,20 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_quadbin_kloop": ("L0", "L3"),
     "gbx_quadbin_cellunion": ("L3",),
     # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
-    # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.
+    # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does. The BNG
+    # and custom-grid ones are above.
     "gbx_h3_cellfill": ("L1", "L3"),
     # The BNG rasterize aggregate: the JVM form took 0.40x of the light grouped aggregate with the cells as input and 0.50x
-    # with the groups as input at 16M rows (dedicated). The raster aggregates stay light by family: merge has no JVM level.
+    # with the groups as input at 16M rows (dedicated). The other cell rasterize aggregates are faster on the JVM than the
+    # best light form at 1x and 4x rows (Task 25): custom 4.36x / 4.50x, quadbin 2.46x / 2.41x, H3 1.10x / 2.24x. The
+    # other raster aggregates stay light by family: merge has no JVM level.
     "gbx_rst_bng_rasterize_agg": ("L1", "L3"),
+    "gbx_rst_custom_rasterize_agg": ("L1", "L3"),
+    "gbx_rst_quadbin_rasterize_agg": ("L1", "L3"),
+    "gbx_rst_h3_rasterize_agg": ("L1", "L3"),
+    # The web tile: tilexyz is 2.54x and 2.84x faster on the JVM than light at 1x and 4x tiles (Task 25). It returns one
+    # BINARY, so the SQL dispatch wrapper sends a virtual tile to light.
+    "gbx_rst_tilexyz": ("L1", "L3"),
     # The rasterize family is light: gridfrompoints measured 1.78x and 1.91x slower on the JVM than on light at 4x and 16x
     # rows (3 iterations, equal output), and binpoints 1.85x and 1.68x slower, so neither keeps a Catalyst expression.
     # The terrain model is 18x faster on light, and rasterize is 15x faster in the pure-core timing (no cluster number;

@@ -139,18 +139,16 @@ def uc_view(
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
 # pass must be dropped from here.
-# A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
-_L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
-    "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
     "cg_grid_null_arg": {
         "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
     },
 }
 
-# The aggregates of the Task 18 batch whose JVM companion differs from the contract, and is not selected for it.
-# A NULL cell id next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells,
-# so it refuses; the JVM reads exact longs and answers, rightly.
+# The aggregates of the Task 18 batch whose JVM companion differs from the contract in one hazard row. A NULL cell id
+# next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells, so it
+# refuses; the JVM reads exact longs and answers, rightly. The custom-grid, quadbin and H3 rasterize aggregates and the
+# custom-grid cell fill run the JVM first since the Task 25 pass; the H3 cell fill always did.
 _EXACT_IDS_L1 = "the JVM aggregate reads exact long ids, so a NULL cell id beside ids past 2**53 is no hazard there: it answers where the lightweight level refuses"
 HEAVY_PENDING.update(
     {

@@ -35,7 +35,7 @@ A few functions are not measured yet. They run the JVM level until a measurement
 A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
 
 {/* BEGIN GENERATED jar-functions: edit manifest/functions.json, then run gbx:manifest:gen */}
-51 functions run on the JVM when the JAR is present.
+68 functions run on the JVM when the JAR is present.
 
 ### RasterX
 
@@ -44,13 +44,16 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_rst_bng_rasterize_agg" />`gbx_rst_bng_rasterize_agg` | RasterX |  |
 | <Link id="gbx_rst_boundingbox" />`gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_crs" />`gbx_rst_crs` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_custom_rasterize_agg" />`gbx_rst_custom_rasterize_agg` | RasterX |  |
 | <Link id="gbx_rst_format" />`gbx_rst_format` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_fromcontent" />`gbx_rst_fromcontent` | RasterX |  |
+| <Link id="gbx_rst_h3_rasterize_agg" />`gbx_rst_h3_rasterize_agg` | RasterX |  |
 | <Link id="gbx_rst_height" />`gbx_rst_height` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_memsize" />`gbx_rst_memsize` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_numbands" />`gbx_rst_numbands` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_pixelheight" />`gbx_rst_pixelheight` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_pixelwidth" />`gbx_rst_pixelwidth` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_quadbin_rasterize_agg" />`gbx_rst_quadbin_rasterize_agg` | RasterX |  |
 | <Link id="gbx_rst_rastertoworldcoordx" />`gbx_rst_rastertoworldcoordx` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_rastertoworldcoordy" />`gbx_rst_rastertoworldcoordy` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_rotation" />`gbx_rst_rotation` | RasterX | A virtual tile runs in Python. |
@@ -59,6 +62,7 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_rst_skewx" />`gbx_rst_skewx` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_skewy" />`gbx_rst_skewy` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_srid" />`gbx_rst_srid` | RasterX | A virtual tile runs in Python. |
+| <Link id="gbx_rst_tilexyz" />`gbx_rst_tilexyz` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_tri" />`gbx_rst_tri` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_upperleftx" />`gbx_rst_upperleftx` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_upperlefty" />`gbx_rst_upperlefty` | RasterX | A virtual tile runs in Python. |
@@ -79,20 +83,32 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_bng_centroid" />`gbx_bng_centroid` | GridX |  |
 | <Link id="gbx_bng_distance" />`gbx_bng_distance` | GridX |  |
 | <Link id="gbx_bng_euclideandistance" />`gbx_bng_euclideandistance` | GridX |  |
+| <Link id="gbx_bng_geomkloop" />`gbx_bng_geomkloop` | GridX |  |
 | <Link id="gbx_bng_geomkloopexplode" />`gbx_bng_geomkloopexplode` | GridX |  |
+| <Link id="gbx_bng_geomkring" />`gbx_bng_geomkring` | GridX |  |
 | <Link id="gbx_bng_geomkringexplode" />`gbx_bng_geomkringexplode` | GridX |  |
+| <Link id="gbx_bng_kloop" />`gbx_bng_kloop` | GridX |  |
 | <Link id="gbx_bng_kloopexplode" />`gbx_bng_kloopexplode` | GridX |  |
 | <Link id="gbx_bng_kring" />`gbx_bng_kring` | GridX |  |
 | <Link id="gbx_bng_kringexplode" />`gbx_bng_kringexplode` | GridX |  |
 | <Link id="gbx_bng_pointascell" />`gbx_bng_pointascell` | GridX |  |
+| <Link id="gbx_bng_polyfill" />`gbx_bng_polyfill` | GridX |  |
 | <Link id="gbx_bng_tessellate" />`gbx_bng_tessellate` | GridX |  |
 | <Link id="gbx_bng_tessellateexplode" />`gbx_bng_tessellateexplode` | GridX |  |
 | <Link id="gbx_custom_cellaswkb" />`gbx_custom_cellaswkb` | GridX |  |
 | <Link id="gbx_custom_cellaswkt" />`gbx_custom_cellaswkt` | GridX |  |
+| <Link id="gbx_custom_cellfill" />`gbx_custom_cellfill` | GridX |  |
 | <Link id="gbx_custom_centroid" />`gbx_custom_centroid` | GridX |  |
 | <Link id="gbx_custom_distance" />`gbx_custom_distance` | GridX |  |
+| <Link id="gbx_custom_geomkloop" />`gbx_custom_geomkloop` | GridX |  |
+| <Link id="gbx_custom_geomkloopexplode" />`gbx_custom_geomkloopexplode` | GridX |  |
+| <Link id="gbx_custom_geomkring" />`gbx_custom_geomkring` | GridX |  |
+| <Link id="gbx_custom_geomkringexplode" />`gbx_custom_geomkringexplode` | GridX |  |
 | <Link id="gbx_custom_grid" />`gbx_custom_grid` | GridX |  |
+| <Link id="gbx_custom_kloop" />`gbx_custom_kloop` | GridX |  |
+| <Link id="gbx_custom_kring" />`gbx_custom_kring` | GridX |  |
 | <Link id="gbx_custom_pointascell" />`gbx_custom_pointascell` | GridX |  |
+| <Link id="gbx_custom_polyfill" />`gbx_custom_polyfill` | GridX |  |
 | <Link id="gbx_h3_cellfill" />`gbx_h3_cellfill` | GridX |  |
 
 ### VectorX
@@ -100,6 +116,7 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | Function | Package | Notes |
 |---|---|---|
 | <Link id="gbx_st_interpolateelevationbbox" />`gbx_st_interpolateelevationbbox` | VectorX |  |
+| <Link id="gbx_st_legacyaswkb" />`gbx_st_legacyaswkb` | VectorX |  |
 | <Link id="gbx_st_transformcrs" />`gbx_st_transformcrs` | VectorX |  |
 | <Link id="gbx_st_triangulate" />`gbx_st_triangulate` | VectorX |  |
 {/* END GENERATED jar-functions */}

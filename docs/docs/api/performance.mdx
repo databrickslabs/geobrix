@@ -16,7 +16,7 @@ Each item below has the measurement behind it. The [release notes](../release-no
 
 - **Readers and writers.** Python everywhere. The Scala readers and writers are retired because the bytes-free Python path was faster.
 - **Raster tile functions.** The Python implementation is the default. A JVM companion stays only where it measured at least 1.2x faster on a dedicated cluster. `gbx_rst_gridfrompoints` lost its JVM form, because it measured slower.
-- **Grid functions.** The JVM (Catalyst) form stays for BNG tessellate, the BNG explodes, `gbx_bng_kring` and `gbx_bng_cellfill`, where it measured at least 1.2x faster. `gbx_bng_eastnorthasbng` lost its JVM form, because the Python batch form is faster. The other grids use the Python form.
+- **Grid functions.** The JVM (Catalyst) form stays for the BNG and custom-grid functions that have one, where it measured at least 1.2x faster. Those are the cell scalars, tessellate, the rings, polyfill, the explodes and the cell fill. `gbx_bng_eastnorthasbng` lost its JVM form, because the Python batch form is faster. H3 and quadbin use the Python form, except `gbx_h3_cellfill`.
 - **Aggregates and generators.** Each compute has its own route. [Aggregates by compute](#aggregates-by-compute) lists them.
 - **Rust.** A compute kernel is used only where it measured clearly faster than the Python form. Today that is `gbx_bng_eastnorthasbng` and the triangulation of the TIN functions.
 - **SQL registration.** One registrar, written in Python. `register(spark)` installs every function, and the compute chooses the level.
@@ -85,6 +85,30 @@ These are the measurements. [Functions the JAR speeds up](./jar-functions) lists
 
 A later run re-measured `gbx_bng_cellfill`, `gbx_bng_kring` and the rasterize aggregate. Its figures replace the single-sample figures of an earlier run.
 
+A later pass timed every other JVM form at 1x and 4x rows on the same cluster, with the same decoded output. These 17 functions passed the 1.2x line at 4x rows, so they run on the JVM by default too:
+
+| Function | Heavy 1x / 4x (s) | Best light 1x / 4x (s) | Heavy is faster by |
+|---|---|---|---|
+| `gbx_custom_polyfill` | 0.48 / 0.68 | 2.03 / 6.65 | 4.2x / 9.8x |
+| `gbx_custom_kring` | 0.72 / 1.34 | 3.33 / 10.91 | 4.6x / 8.1x |
+| `gbx_custom_kloop` | 0.79 / 1.99 | 4.12 / 14.81 | 5.2x / 7.4x |
+| `gbx_bng_geomkring` | 5.28 / 17.46 | 24.60 / 104.24 | 4.7x / 6.0x |
+| `gbx_st_legacyaswkb` | 0.61 / 0.97 | 2.35 / 5.66 | 3.9x / 5.8x |
+| `gbx_custom_geomkringexplode` | 4.13 / 14.39 | 16.99 / 73.47 | 4.1x / 5.1x |
+| `gbx_bng_polyfill` | 0.80 / 2.48 | 3.98 / 12.54 | 5.0x / 5.1x |
+| `gbx_custom_geomkloop` | 3.81 / 13.63 | 16.40 / 68.88 | 4.3x / 5.1x |
+| `gbx_custom_geomkloopexplode` | 3.94 / 14.20 | 16.81 / 71.21 | 4.3x / 5.0x |
+| `gbx_bng_geomkloop` | 4.57 / 17.16 | 24.85 / 86.00 | 5.4x / 5.0x |
+| `gbx_custom_geomkring` | 5.37 / 14.10 | 16.77 / 69.74 | 3.1x / 4.9x |
+| `gbx_rst_custom_rasterize_agg` | 1.56 / 2.02 | 6.78 / 9.10 | 4.4x / 4.5x |
+| `gbx_rst_tilexyz` | 0.68 / 1.45 | 1.73 / 4.13 | 2.5x / 2.8x |
+| `gbx_rst_quadbin_rasterize_agg` | 0.96 / 1.39 | 2.36 / 3.34 | 2.5x / 2.4x |
+| `gbx_rst_h3_rasterize_agg` | 2.96 / 1.72 | 3.24 / 3.86 | 1.1x / 2.2x |
+| `gbx_custom_cellfill` | 0.91 / 1.59 | 1.54 / 3.33 | 1.7x / 2.1x |
+| `gbx_bng_kloop` | 2.04 / 6.69 | 3.81 / 11.30 | 1.9x / 1.7x |
+
+The same pass found nine JVM forms under the line, so the JAR no longer holds them. See the [release notes](../release-notes-0-6).
+
 The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the light form:
 
 | Function | JVM time as a fraction of light | Compute |
@@ -98,7 +122,7 @@ A raster accessor that returns one value (a number, a string or a WKB polygon) r
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 
-The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. These run the JVM first: the BNG and custom-grid cell scalars that have a JVM form.
+The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. The BNG and custom-grid cell scalars run the JVM first too. In the same pass their JVM forms were 2.0x to 18x faster at 4x rows.
 
 #### The Rust kernel for BNG cells
 

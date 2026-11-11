@@ -800,9 +800,11 @@ def elevation_wkbs(
     parsed=None,
     mode="constrained",
     split_point_finder="NONENCROACHING",
+    on_sites=None,
 ):
     """The WKB point (with Z) at the centre of every grid cell inside the surface, in the order of ``cell_iter``; a cell
     outside the hull gives none. ``flavor="iso"`` writes type 1001 for a point with Z (the form the warehouse parses).
+    ``on_sites`` as for :func:`triangulate`.
     """
     import itertools
 
@@ -818,6 +820,7 @@ def elevation_wkbs(
         float(snap_tolerance),
         mode,
         split_point_finder,
+        on_sites,
     )
     tri_arr = np.asarray(tris, dtype=float).reshape(-1, 3, 3)
     cells = iter(cell_iter)

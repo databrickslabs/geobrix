@@ -1275,6 +1275,24 @@ def _tin_finder(fn: str, split_point_finder) -> None:
         raise _parameter(fn, str(exc)) from None
 
 
+def _tin_site_check(fn: str, what: str):
+    """``check(sites)``: refuse a surface of ``sites`` points whose triangles (at most two for every point) are over the
+    cap, before they are made. Called on the input sites, and again by the conforming mode as it adds split points
+    (``on_sites``)."""
+    from databricks.labs.gbx.uc.handlers import _check_bytes
+
+    def check(sites: int) -> None:
+        _check_bytes(
+            fn,
+            2 * sites * _TRIANGLE_ROW_BYTES,
+            what,
+            lower="pass fewer points",
+            cap=DECODED_CAP,
+        )
+
+    return check
+
+
 def _tin_rows(fn: str, rows, what: str):
     """The rows within the cap; a triangulation that gives up (either mode) raises with the function's name and its
     Fix."""
@@ -1324,7 +1342,6 @@ def st_triangulate_rows(
     as an array, in the session's order. NULL points, an empty array, or a NULL tolerance, finder or mode give no rows.
     """
     from databricks.labs.gbx.pyvx import _tin
-    from databricks.labs.gbx.uc.handlers import _check_bytes
 
     fn = "gbx_st_triangulate"
     _tin_mode(fn, mode)
@@ -1341,16 +1358,9 @@ def st_triangulate_rows(
     if coords is None:
         return None
     _tin_finder(fn, split_point_finder)
-
-    def check(sites: int) -> None:
-        _check_bytes(
-            fn,
-            2 * sites * _TRIANGLE_ROW_BYTES,
-            "the triangles it returns (an upper estimate, two for every point)",
-            lower="pass fewer points",
-            cap=DECODED_CAP,
-        )
-
+    check = _tin_site_check(
+        fn, "the triangles it returns (an upper estimate, two for every point)"
+    )
     check(len(coords) + sum(len(b) for b in bls))
     return _tin_rows(
         fn,
@@ -1389,6 +1399,11 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
     if parsed[0] is None:
         return None
     _tin_finder(fn, spf)
+    check = _tin_site_check(
+        fn,
+        "the triangles of the surface it interpolates (an upper estimate, two for every point)",
+    )
+    check(len(parsed[0]) + sum(len(b) for b in parsed[1]))
     return _tin_rows(
         fn,
         _tin.elevation_wkbs(
@@ -1402,6 +1417,7 @@ def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter,
             parsed=parsed,
             mode=mode,
             split_point_finder=spf,
+            on_sites=check,
         ),
         "the points it returns",
     )

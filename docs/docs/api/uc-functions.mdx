@@ -348,7 +348,7 @@ These functions keep the 64 MiB limit of a pixel function, not the 256 MiB of th
 
 Each triangle comes out as 2D WKB and each elevation point as WKB with its Z. Wrap a column in `st_geomfromwkb` to get a `GEOMETRY`. The bytes carry no SRID, as in the session. Both modes, `'constrained'` and `'conforming'`, run here.
 
-The result is sized before the surface is built. A triangulation can have at most two triangles for each point, and an elevation grid has one point for each cell. The grid estimate is never under the real size, so it can refuse a grid with cells outside the surface. The `'conforming'` mode can add points, so it checks the estimate again as it adds them, before it builds any triangle. Past 64 MiB the `Fix:` says to use fewer points, a coarser grid, or the session function.
+The result is sized before the surface is built. A triangulation can have at most two triangles for each point, and an elevation grid has one point for each cell. The grid estimate is never under the real size, so it can refuse a grid with cells outside the surface. The elevation functions also build a surface, so they check the same triangle estimate before they build it. The `'conforming'` mode can add points, so it checks the estimate again as it adds them, before it builds any triangle. Past 64 MiB the `Fix:` says to use fewer points, a coarser grid, or the session function.
 
 ## Python and Scala handlers
 

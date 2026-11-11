@@ -464,6 +464,100 @@ def test_the_elevation_forms_name_the_function_on_a_bad_finder_and_a_give_up(fn,
     assert call([], None, "SIDEWAYS", "constrained") is None
 
 
+@pytest.mark.parametrize(
+    "fn,call",
+    [
+        (
+            "gbx_st_interpolateelevationbbox",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationbbox_rows(
+                pts, bl, 0.0, 0.0, spf, 0.0, -5.0, 10.0, 5.0, 2, 2, 0, mode
+            ),
+        ),
+        (
+            "gbx_st_interpolateelevationgeom",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationgeom_rows(
+                pts,
+                bl,
+                0.0,
+                0.0,
+                spf,
+                _geoms(["POINT (0 5)"])[0],
+                2,
+                2,
+                5.0,
+                -5.0,
+                mode,
+            ),
+        ),
+    ],
+)
+def test_the_elevation_surface_is_refused_from_the_point_count_before_it_is_built(
+    fn, call, monkeypatch
+):
+    """The surface of n points has at most 2 n triangles: in either mode the same estimate as the triangulation's is
+    checked against the cap before any triangle is made (the grid's own cap is apart).
+    """
+    import databricks.labs.gbx.pyvx._tin as tin
+
+    monkeypatch.setattr(forms, "DECODED_CAP", 500)
+    monkeypatch.setattr(
+        tin,
+        "triangulate",
+        lambda *a, **k: pytest.fail("triangulated before the estimate"),
+    )
+    for mode in ("constrained", "conforming"):
+        with pytest.raises(
+            _Refusal, match=f"{fn}: .*upper estimate.*Fix: pass fewer points"
+        ):
+            call(_geoms(_BOX), None, "NONENCROACHING", mode)
+
+
+@pytest.mark.parametrize(
+    "fn,call",
+    [
+        (
+            "gbx_st_interpolateelevationbbox",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationbbox_rows(
+                pts, bl, 0.0, 0.0, spf, 0.0, -5.0, 10.0, 5.0, 2, 2, 0, mode
+            ),
+        ),
+        (
+            "gbx_st_interpolateelevationgeom",
+            lambda pts, bl, spf, mode: forms.st_interpolateelevationgeom_rows(
+                pts,
+                bl,
+                0.0,
+                0.0,
+                spf,
+                _geoms(["POINT (0 5)"])[0],
+                2,
+                2,
+                5.0,
+                -5.0,
+                mode,
+            ),
+        ),
+    ],
+)
+def test_the_conforming_elevation_surface_is_refused_as_its_split_points_pass_the_estimate(
+    fn, call, monkeypatch
+):
+    import databricks.labs.gbx.pyvx._conforming as conforming
+
+    sites = len(_BOX) + 4
+    monkeypatch.setattr(
+        forms, "DECODED_CAP", 2 * (sites + 2) * forms._TRIANGLE_ROW_BYTES
+    )  # the sites pass, a few split points more do not
+    for name in ("jts_delaunay", "unique_delaunay"):
+        monkeypatch.setattr(
+            conforming,
+            name,
+            lambda *a, **k: pytest.fail("triangulated past the estimate"),
+        )
+    with pytest.raises(_Refusal, match=f"{fn}: .*upper estimate.*Fix:"):
+        call(_geoms(_BOX), _geoms(_CROSSING), "NONENCROACHING", "conforming")
+
+
 def test_the_conforming_mode_runs_here():
     # no break lines: the conforming triangulation is the Delaunay one, the four triangles round the centre
     rows = forms.st_triangulate_rows(

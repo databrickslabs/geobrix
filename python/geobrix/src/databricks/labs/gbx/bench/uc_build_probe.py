@@ -160,11 +160,23 @@ def assert_installed_build(
 
     Returns the identity the function reported. Raises RuntimeError with a Fix when a UC function imports another build.
     """
-    from databricks.labs.gbx import __version__, manifest, uc
+    from databricks.labs.gbx import uc
     from databricks.labs.gbx.uc import ddl
 
     wheel = uc._single_wheel(volume_dir)
     want = wheel_identity(wheel)
+    q = f"{ddl.quote_ident('catalog', catalog)}.{ddl.quote_ident('schema', schema)}"
+    try:
+        return _check(spark, catalog, schema, volume_dir, wheel, want, q, say)
+    finally:
+        # The probe is scaffolding: never leave it next to the product functions, pass or fail.
+        spark.sql(f"DROP FUNCTION IF EXISTS {q}.{PROBE_NAME}")
+
+
+def _check(spark, catalog, schema, volume_dir, wheel, want, q, say):
+    """Create the probe, call it, and raise unless it imports `want`; the caller drops it."""
+    from databricks.labs.gbx import __version__, manifest
+
     spark.sql(
         probe_ddl(
             catalog,
@@ -174,7 +186,6 @@ def assert_installed_build(
             __version__.split("+", 1)[0],
         )
     )
-    q = f"{ddl.quote_ident('catalog', catalog)}.{ddl.quote_ident('schema', schema)}"
     got = json.loads(spark.sql(f"SELECT {q}.{PROBE_NAME}()").collect()[0][0])
     say(
         "[UC build probe] function imports commit %s dirty=%s digest %s; %s has commit %s dirty=%s digest %s"

@@ -155,3 +155,35 @@ def test_the_install_check_passes_for_the_staged_build_and_fails_for_another(
         probe.assert_installed_build(
             stale, "c", "s", "/Volumes/c/s/v/f", say=lambda m: None
         )
+
+
+class _FailingSelect(_Spark):
+    def collect(self):
+        raise RuntimeError("the function could not start")
+
+
+def test_the_install_check_drops_its_probe_function_whatever_the_outcome(
+    tmp_path, monkeypatch
+):
+    """Fail on revert: the probe left gbx_probe_build in the schema next to the product functions."""
+    wheel = _wheel(tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl", "c" * 40)
+    monkeypatch.setattr(uc, "_single_wheel", lambda folder: wheel)
+    want = probe.wheel_identity(wheel)
+    drop = "DROP FUNCTION IF EXISTS `c`.`s`.gbx_probe_build"
+    ok = _Spark({k: want[k] for k in ("git_sha", "dirty", "digest")})
+    probe.assert_installed_build(ok, "c", "s", "/Volumes/c/s/v/f", say=lambda m: None)
+    assert ok.calls[-1] == drop
+    stale = _Spark(
+        {**{k: want[k] for k in ("git_sha", "dirty", "digest")}, "git_sha": "d" * 40}
+    )
+    with pytest.raises(RuntimeError, match="another geobrix build"):
+        probe.assert_installed_build(
+            stale, "c", "s", "/Volumes/c/s/v/f", say=lambda m: None
+        )
+    assert stale.calls[-1] == drop
+    broken = _FailingSelect({})
+    with pytest.raises(RuntimeError, match="could not start"):
+        probe.assert_installed_build(
+            broken, "c", "s", "/Volumes/c/s/v/f", say=lambda m: None
+        )
+    assert broken.calls[-1] == drop

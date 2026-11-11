@@ -21,7 +21,6 @@ from databricks.labs.gbx._geom import parse_geom
 from databricks.labs.gbx.pyrx.core import accessors as acc
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import coords, edit
-from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import warp
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -91,11 +90,6 @@ def _wkb_box(x0, y0, x1, y1):
     return parse_geom(wkb.dumps(geometry.box(x0, y0, x1, y1)))
 
 
-def _mapalgebra(ds):
-    b = _bytes_of(ds)
-    return mapalgebra_core.mapalgebra([b], "A * 2")
-
-
 def _frombands(ds):
     b = _bytes_of(ds)
     return agg_core.frombands_tiles([(0, b), (1, b)])
@@ -144,7 +138,6 @@ PIXEL_OPS = [
     ("setcrs", False, lambda ds: edit.set_crs(ds, "EPSG:32632"), "tile", 0),
     ("frombands", False, _frombands, "tile", 0),
     ("merge", False, _merge, "tile", 0),
-    ("mapalgebra", False, _mapalgebra, "tile", 1e-5),
 ]
 
 # Header operations read no pixel; a window reports its own size and origin.

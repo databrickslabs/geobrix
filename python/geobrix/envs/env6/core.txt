@@ -24,6 +24,7 @@ typing_extensions>=4.13
 #   advisories;
 
 # The light tier.
+# numexpr: rio-tiler imports it, and the env wheel vendors rio-tiler (vendor-pure.txt) without its requirements.
 numexpr>=2.14.1
 h3>=4.1,<5
 quadbin>=0.2,<0.3

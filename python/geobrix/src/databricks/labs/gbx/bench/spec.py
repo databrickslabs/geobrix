@@ -36,7 +36,6 @@ from databricks.labs.gbx.pyrx.core import (
     features,
     focal,
     gridagg,
-    mapalgebra,
     ops,
     stretch,
     tessellate,
@@ -130,7 +129,7 @@ _INDEX_NAME = "ndvi"
 _INDEX_BAND_MAP = {"red": 1, "nir": 2}
 
 # rst_mapalgebra: band 1 of the (single) input binds to A; "A*2" is CRS- and
-# band-count-independent. Same expression on both engines.
+# band-count-independent. The GDAL engine's muparser reads it.
 _MAPALGEBRA_EXPR = "A*2"
 
 # rst_derivedband: a GDAL VRT Python pixel-function body. Both engines exec this
@@ -240,10 +239,10 @@ def _land_cover_classify_bytes(ds, method, n_clusters, smooth) -> bytes:
 def _ds_to_gtiff_bytes(ds) -> bytes:
     """Re-serialize an open rasterio DatasetReader to GTiff bytes.
 
-    ``mapalgebra`` (and rst_mapalgebra) consume raster *bytes*, but the bench
-    runner hands core_fn an already-open ``DatasetReader``. Round-trip the open
-    dataset through an in-memory GTiff so the single-input map-algebra call gets
-    the bytes it expects, byte-for-byte the same grid the column path sees.
+    The core functions that take raster *bytes* (``frombands``, ``merge``, ...) get them here, but the
+    bench runner hands core_fn an already-open ``DatasetReader``. Round-trip the open
+    dataset through an in-memory GTiff so the call gets the bytes it expects,
+    byte-for-byte the same grid the column path sees.
     """
     from rasterio.io import MemoryFile
 
@@ -449,7 +448,6 @@ _FEATURES_LIGHT = (_PYRX + "features.py", _NODATA)
 # TIN / IDW constructors (gridfrompoints -> idw_grid, dtmfromgeoms ->
 # delaunay_dtm) live in core/tin.py; it does NOT import _nodata (grep-confirmed).
 _TIN_LIGHT = (_PYRX + "tin.py",)
-_MAPALGEBRA_LIGHT = (_PYRX + "mapalgebra.py", _NODATA)
 # these core modules do NOT import _nodata (grep-confirmed)
 _WARP_LIGHT = (_PYRX + "warp.py",)
 _COORDS_LIGHT = (_PYRX + "coords.py",)
@@ -1718,9 +1716,9 @@ REGISTRY: Dict[str, FnSpec] = {
     # function args (10) --------------------------------------------------------
     # SIX are full raster comparisons (both modes): the arguments are CRS- and
     # band-count-independent and the two engines run the *same* algorithm.
-    #   evi, savi      -- band indices + coefficients (same numexpr formula)
+    #   evi, savi      -- band indices + coefficients (same formula)
     #   index          -- formula name + band-map (hardcoded identically; "ndvi")
-    #   mapalgebra     -- single-input expression "A*2" (same numexpr/gdal_calc)
+    #   mapalgebra     -- single-input expression "A*2" (the GDAL engine's muparser)
     #   derivedband    -- same Python VRT pixel-function body, exec'd in-process
     #   proximity      -- value-set + distunits (no geometry; CRS-independent)
     # FOUR are timing-only (pure-core-only, fingerprint suppressed). Reason per
@@ -1814,20 +1812,19 @@ REGISTRY: Dict[str, FnSpec] = {
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
-    # --- map algebra (mapalgebra.py): full comparison ---
-    # Single-input "A*2": CRS- and band-count-independent. core consumes bytes
-    # (round-trip the open ds); the column form wraps the single tile in an array.
+    # --- map algebra (the GDAL spec engine, muparser): full comparison ---
+    # Single-input "A*2": CRS- and band-count-independent; the column form wraps the single tile in an array.
     "rst_mapalgebra": FnSpec(
         "rst_mapalgebra",
         "gbx_rst_mapalgebra",
         "format",
         _BOTH,
         {"expr": _MAPALGEBRA_EXPR},
-        core_fn=lambda ds, a: mapalgebra.mapalgebra(
-            [_ds_to_gtiff_bytes(ds)], a["expr"]
-        ),
-        col_fn=lambda t, a: prx._light_rst_mapalgebra(F.array(t), a["expr"]),
-        sources=_MAPALGEBRA_LIGHT,
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_mapalgebra", {"expression": a["expr"]}
+        )(ds),
+        col_fn=lambda t, a: rx.rst_mapalgebra(F.array(t), a["expr"]),
+        sources=_ENGINE_LIGHT,
         heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),

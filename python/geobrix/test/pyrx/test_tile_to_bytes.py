@@ -168,41 +168,6 @@ def test_virtual_clip_pixels_identical(tmp_path):
     assert np.array_equal(ref_pix, opt_pix)
 
 
-def test_mapalgebra_bytes_virtual_matches_materialized(tmp_path):
-    """_mapalgebra_bytes with virtual inputs gives the same pixel result as with
-    materialized inputs — regression guard for the _tile_to_bytes optimization."""
-    from databricks.labs.gbx.pyrx.functions import _mapalgebra_bytes
-
-    path_a = _write_src(tmp_path, "a.tif")
-    path_b = str(tmp_path / "b.tif")
-
-    # b values = a values * 2
-    with rasterio.open(path_a) as ds:
-        data_a = ds.read(1)
-        prof = ds.profile.copy()
-    with rasterio.open(path_b, "w", **prof) as ds:
-        ds.write((data_a * 2).astype("float32"), 1)
-
-    # Build both virtual and materialized tile inputs (full extent).
-    vt_a = VirtualTile(cellid=0, path=path_a, window=(0, 0, W, H))
-    vt_b = VirtualTile(cellid=0, path=path_b, window=(0, 0, W, H))
-
-    mat_a = ot.materialize_to_bytes(vt_a).raster
-    mat_b = ot.materialize_to_bytes(vt_b).raster
-    mat_ta = VirtualTile(cellid=0, raster=mat_a)
-    mat_tb = VirtualTile(cellid=0, raster=mat_b)
-
-    out_virtual = _mapalgebra_bytes([vt_a.to_row(), vt_b.to_row()], "A + B")
-    out_mat = _mapalgebra_bytes([mat_ta.to_row(), mat_tb.to_row()], "A + B")
-
-    assert out_virtual is not None
-    assert out_mat is not None
-    with _serde.open_tile(out_virtual) as ov, _serde.open_tile(out_mat) as om:
-        assert np.allclose(
-            ov.read(1), om.read(1), atol=1e-5
-        ), "mapalgebra_bytes virtual != materialized"
-
-
 # ---------------------------------------------------------------------------
 # window=None deferred whole-file virtual tile
 # ---------------------------------------------------------------------------

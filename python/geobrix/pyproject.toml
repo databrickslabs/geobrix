@@ -50,7 +50,8 @@ dependencies = [
     # 21.0.0, so the floor moves nothing on Databricks.
     "pyarrow>=14.0.1",
     "scipy>=1.11.0",
-    # The safe expression evaluator of rst_mapalgebra (no arbitrary-code exec).
+    # rio-tiler imports it (rio_tiler.expression, loaded by every rio_tiler import). The env wheels vendor
+    # rio-tiler without its requirements, so it is declared here. GeoBrix code does not import it.
     "numexpr>=2.14.1",
     "h3>=4.1",
     "quadbin>=0.2",

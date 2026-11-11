@@ -47,10 +47,9 @@ shapely==2.1.2
 # Dep-free, pure Python. Matches the pyproject base-dependency floor + dev container.
 defusedxml==0.7.1
 
-# --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
+# --- band math: focal filters / convolution (scipy.ndimage) + numexpr (rio-tiler imports it) ---
 # scipy pinned to the DBR 17.3 installed version. numexpr is NOT in DBR's
-# library set, so it is pinned independently (safe math-expression evaluator for
-# rst_mapalgebra — no arbitrary-code exec).
+# library set, so it is pinned independently (rio_tiler.expression imports it).
 scipy==1.15.3
 numexpr==2.14.2
 

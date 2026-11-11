@@ -1073,3 +1073,30 @@ def test_a_geopackage_write_and_read_leave_the_sqlite_journal_option_as_they_fou
     finally:
         pyogrio.write_arrow = saved
         pyogrio.set_gdal_config_options({key: None})
+
+
+def test_two_interleaved_reads_hold_the_sqlite_journal_until_the_last_one_ends():
+    """Two generator reads open at once (a zip of two layers): the first to end must not put the session's value back
+    while the other still reads; the last to end does."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds import vector
+
+    key = "OGR_SQLITE_JOURNAL"
+    pyogrio.set_gdal_config_options({key: "WAL"})
+
+    @vector._sqlite_delete_journal
+    def read(n):
+        for i in range(n):
+            yield pyogrio.get_gdal_config_option(key)
+
+    try:
+        a, b = read(2), read(2)
+        assert next(a) == "DELETE"
+        assert next(b) == "DELETE"
+        assert list(a) == ["DELETE"]  # A ends
+        assert pyogrio.get_gdal_config_option(key) == "DELETE"  # B still reads
+        assert list(b) == ["DELETE"]  # B ends
+        assert pyogrio.get_gdal_config_option(key) == "WAL"
+    finally:
+        pyogrio.set_gdal_config_options({key: None})

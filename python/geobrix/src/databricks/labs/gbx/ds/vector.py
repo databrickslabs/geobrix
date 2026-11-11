@@ -9,6 +9,7 @@ import functools
 import inspect
 import os
 import shutil
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -1173,46 +1174,63 @@ _UNREADABLE_WKB = _quarantine.UNREADABLE_WKB
 
 
 _SQLITE_JOURNAL = "OGR_SQLITE_JOURNAL"
+# The calls inside _sqlite_delete_journal now, and the session's value the first of them found. A depth count under a
+# lock: reads that overlap (two generators open at once, a read during a write, threads) set DELETE once, and only the
+# last to end puts the value back, whatever order they end in.
+_JOURNAL_LOCK = threading.Lock()
+_JOURNAL_DEPTH = 0
+_JOURNAL_BEFORE: Optional[str] = None
+
+
+def _journal_enter() -> None:
+    global _JOURNAL_DEPTH, _JOURNAL_BEFORE
+    with _JOURNAL_LOCK:
+        if _JOURNAL_DEPTH == 0:
+            pyogrio = _gdal_policy.pyogrio()
+            v = pyogrio.get_gdal_config_option(_SQLITE_JOURNAL)
+            _JOURNAL_BEFORE = ("ON" if v else "OFF") if isinstance(v, bool) else v
+            pyogrio.set_gdal_config_options({_SQLITE_JOURNAL: "DELETE"})
+        _JOURNAL_DEPTH += 1
+
+
+def _journal_exit() -> None:
+    global _JOURNAL_DEPTH
+    with _JOURNAL_LOCK:
+        _JOURNAL_DEPTH -= 1
+        if _JOURNAL_DEPTH == 0:
+            _gdal_policy.pyogrio().set_gdal_config_options(
+                {_SQLITE_JOURNAL: _JOURNAL_BEFORE}
+            )
 
 
 def _sqlite_delete_journal(fn):
     """Run ``fn`` (a function, or a generator to its end) with ``OGR_SQLITE_JOURNAL=DELETE``, then put back the value
-    the session had (none included).
+    the session had (none included) once no such call is still running.
 
     A GeoPackage (SQLite) written with a WAL journal leaves a WAL for its first reader to checkpoint, a write that a
     read-only Volume refuses; DELETE leaves none, and a read with it attempts no journal write. The option is
-    process-wide in GDAL, so it is held only for the GDAL work of one call: set for good, it changed every SQLite open
-    of the user's session. Harmless for the drivers that are not SQLite.
+    process-wide in GDAL, so it is held only while vector reads or writes run: set for good, it changed every SQLite
+    open of the user's session. Harmless for the drivers that are not SQLite.
     """
-
-    def _set(value):
-        _gdal_policy.pyogrio().set_gdal_config_options({_SQLITE_JOURNAL: value})
-
-    def _held():
-        v = _gdal_policy.pyogrio().get_gdal_config_option(_SQLITE_JOURNAL)
-        return ("ON" if v else "OFF") if isinstance(v, bool) else v
-
     if inspect.isgeneratorfunction(fn):
 
         @functools.wraps(fn)
         def gen(*a, **k):
-            before = _held()
-            _set("DELETE")
+            _journal_enter()
             try:
                 yield from fn(*a, **k)
             finally:
-                _set(before)
+                _journal_exit()
 
         return gen
 
     @functools.wraps(fn)
     def call(*a, **k):
-        before = _held()
-        _set("DELETE")
+        _journal_enter()
         try:
             return fn(*a, **k)
         finally:
-            _set(before)
+            _journal_exit()
 
     return call
 

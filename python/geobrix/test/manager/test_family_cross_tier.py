@@ -131,11 +131,36 @@ def _run(spark, fn, cases, tmpdir, column_of=None):
 ROWS = list(_rows())
 
 
+def _serverless_refusal(fn, level) -> str:
+    """Why an L3 row cannot run on Serverless by design ("" when it can): its table function over TABLE(...) PARTITION BY
+    refuses there (`pyrx.functions._refuse_serverless_partition_by`, the `refusal` gate of `_compat/classic_only.toml`) and
+    names its aggregate as the Serverless route. Elsewhere it runs as usual."""
+    import inspect
+
+    l3 = fn.levels.get("L3", {})
+    if level != "L3" or not l3.get("udtf") or not capabilities.is_serverless():
+        return ""
+    cls = manifest.resolve_ref(l3["udtf"])
+    cls = getattr(cls, "func", cls)  # the class behind pyspark's @udtf wrapper
+    try:
+        src = inspect.getsource(cls.__init__)
+    except (OSError, TypeError):
+        return ""
+    if "_refuse_serverless_partition_by" not in src:
+        return ""
+    return (
+        f"{fn.sql_name} refuses Serverless by design (TABLE(...) PARTITION BY; its aggregate is the Serverless form): "
+        "the refusal gate in _compat/classic_only.toml"
+    )
+
+
 @pytest.mark.parametrize("sql_name,level,variant,api", ROWS)
 def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     if (level, variant) == ("L3", "d") and _rs.unavailable_reason():
         pytest.skip(_rs.unavailable_reason())
     fn = manifest.load().functions[sql_name]
+    if _serverless_refusal(fn, level):
+        pytest.skip(_serverless_refusal(fn, level))
     # an engine row, or a row that calls the engine inside its own UDF (rst_chm needs osgeo)
     if level == "L3" and (
         variant.startswith("engine") or "osgeo" in fn.levels["L3"].get("needs", ())
@@ -768,3 +793,21 @@ def test_towers_to_crs_adds_the_counts_of_the_reprojected_viewshed(spark, tmp_pa
             after,
             dict(row.asDict()),
         )
+
+
+def test_a_table_function_that_refuses_serverless_is_skipped_there_only(monkeypatch):
+    """gbx_rst_merge_tvf and gbx_rst_bng_rasterize_tvf refuse Serverless by design; their rows ran there anyway and
+    failed on the refusal (2026-11-12, tst-sls-b6: bng_rasterize_tvf bt_dup_max, bt_nan_beside_numbers, bt_empty).
+    """
+    fns = manifest.load().functions
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.6.0")
+    for name in ("gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"):
+        assert "refuses Serverless by design" in _serverless_refusal(fns[name], "L3")
+    assert (
+        _serverless_refusal(fns["gbx_rst_retile"], "L3") == ""
+    ), "a table function with no refusal runs on Serverless"
+    assert _serverless_refusal(fns["gbx_rst_merge_agg"], "L3") == ""
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "19.0")
+    assert (
+        _serverless_refusal(fns["gbx_rst_merge_tvf"], "L3") == ""
+    ), "a cluster runs it"

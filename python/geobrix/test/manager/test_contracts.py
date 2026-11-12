@@ -557,11 +557,27 @@ def test_the_accessors_that_return_one_value_run_on_the_jvm_first():
     assert names == {
         f"gbx_rst_{n}"
         for n in (
-            "boundingbox crs format height memsize numbands pixelheight pixelwidth rastertoworldcoordx "
-            "rastertoworldcoordy rotation scalex scaley skewx skewy srid upperleftx upperlefty width "
-            "worldtorastercoordx worldtorastercoordy"
+            "boundingbox numbands rastertoworldcoordx upperlefty width worldtorastercoordx worldtorastercoordy"
         ).split()
     }
+
+
+# The one-value accessors culled under the 1.2x keep rule against the Arrow light form (1.05x to 1.19x at 4x and 16x).
+_CULLED_ONE_VALUE_ACCESSORS = [
+    f"gbx_rst_{n}"
+    for n in (
+        "crs format height memsize pixelheight pixelwidth rotation scalex scaley skewx skewy srid upperleftx "
+        "rastertoworldcoordy"
+    ).split()
+]
+
+
+@pytest.mark.parametrize("name", _CULLED_ONE_VALUE_ACCESSORS)
+def test_a_culled_one_value_accessor_has_no_jvm_level_and_runs_light(name):
+    fn = MAN.functions[name]
+    assert fn.returns_session in _ONE_VALUE
+    assert "L1" not in fn.levels
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
 @pytest.mark.parametrize("fn", JVM_FIRST_ACCESSORS, ids=lambda f: f.sql_name)

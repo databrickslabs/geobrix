@@ -36,8 +36,8 @@ BYTES_TO_JVM = [
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # the 21 accessors and coordinate functions that return one value
-    assert len(L1_TILE_FNS) >= 21, [f.sql_name for f in L1_TILE_FNS]
+    # the 7 accessors and coordinate functions that return one value
+    assert len(L1_TILE_FNS) >= 7, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)

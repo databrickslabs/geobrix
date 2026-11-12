@@ -93,11 +93,16 @@ _SCALAR_V = (
 # The few tiles are the first `_VFP_TILE_ROWS` BY A KEY OF THE INPUT, not of the scan: an unordered LIMIT takes whichever
 # rows the scan meets first (the file order of the table, the task that finishes first), so two levels or two runs hashed
 # different tiles and differed in value while every output was equal. The key is a function of the row's own content.
+# The rows after the LIMIT sit in one partition, so they are dealt over `_VFP_TILE_ROWS` tasks before the call: the call
+# and the decode of 64 tiles in one task took over 6 min for a light form on a cluster. The fingerprint is a sum, so the
+# spread does not change it.
 _TILE_V = (
     "SELECT count(*) AS n, sum(pmod({udf}(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
-    "FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} ORDER BY {order} LIMIT "
+    "FROM (SELECT {call} AS t FROM (SELECT /*+ REPARTITION("
     + str(_VFP_TILE_ROWS)
-    + "))"
+    + ") */ * FROM (SELECT * FROM {{src}} ORDER BY {order} LIMIT "
+    + str(_VFP_TILE_ROWS)
+    + ")))"
 )
 # the ordering key of each input a tile-producing representative reads (a tile's path, then a hash of its bytes: a
 # virtual tile has no bytes, a path-less one has no path)

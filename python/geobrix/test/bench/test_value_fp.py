@@ -218,6 +218,24 @@ def test_the_tile_value_query_picks_the_same_tiles_whatever_order_the_scan_meets
     assert fwd == rev
 
 
+def test_the_tile_value_query_spreads_its_tiles_over_tasks_and_keeps_the_value(
+    spark_session_local,
+):
+    """The 64 tiles after the ORDER BY ... LIMIT sit in ONE partition: the function and the decoder then ran in one task
+    (a light rst_fromcontent value pass took over 6 min on dedicated DBR 19). They are dealt over 64 tasks first; the
+    fingerprint is a sum, so it does not change."""
+    rep = next(r for r in fam.REPS if r.fn == "gbx_rst_proximity")
+    _stub_vfp_udfs(spark_session_local, rep.fn)
+    sql = fam._vsql(rep, rep.fn)
+    src = _tile_table(spark_session_local, "vfp_spread", False)
+    df = spark_session_local.sql(sql.format(src=src, uc=""))
+    plan = df._jdf.queryExecution().executedPlan().toString()
+    assert "RoundRobinPartitioning(" + str(fam._VFP_TILE_ROWS) in plan
+    one_task = sql.replace("/*+ REPARTITION(" + str(fam._VFP_TILE_ROWS) + ") */ ", "")
+    assert one_task != sql
+    assert _fp(spark_session_local, sql, src) == _fp(spark_session_local, one_task, src)
+
+
 def test_the_transformcrs_value_query_picks_the_same_tiles_whatever_order_the_scan_meets_them(
     spark_session_local,
 ):

@@ -100,5 +100,7 @@ def test_a_reprojection_that_gives_an_error_tile_fails_the_query(dsm):
     with pytest.raises(Exception) as caught:
         _towers(dsm, 999999).collect()
     text = str(caught.value)
-    assert "rst_viewshed_towers: the reprojection of tower 1 to EPSG:999999 failed" in text
+    assert (
+        "rst_viewshed_towers: the reprojection of tower 1 to EPSG:999999 failed" in text
+    )
     assert "999999" in text.split("failed:", 1)[1]

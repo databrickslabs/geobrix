@@ -363,7 +363,9 @@ def test_the_block_cache_is_capped_while_gdal_reads_a_file_by_its_path(
     assert gdal.GetCacheMax() == before
 
 
-def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(tmp_path, monkeypatch):
+def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(
+    tmp_path, monkeypatch
+):
     """GDAL's viewshed reads its DEM a line at a time, across the whole window. Over tiled sources a line touches a row
     of blocks, and a cache smaller than that row decodes each block again for each of its lines: a 25-tile window of
     512-pixel float32 blocks took minutes under the 4 MiB share. The cache takes what the call's budget leaves after its
@@ -380,7 +382,9 @@ def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(tmp_path, monk
     gdal = run._gdal()
     rng = np.random.default_rng(0)
     paths = []
-    for i in range(4):  # 4 tiles side by side: a line of the window crosses 8 blocks of 128 x 128 float32 (512 KiB)
+    for i in range(
+        4
+    ):  # 4 tiles side by side: a line of the window crosses 8 blocks of 128 x 128 float32 (512 KiB)
         p = str(tmp_path / f"t{i}.tif")
         with rasterio.open(
             p,
@@ -409,7 +413,9 @@ def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(tmp_path, monk
 
     def viewshed():
         with contextlib.ExitStack() as stack:
-            rasters, _, _ = l3._inputs(fn, _file_tile(vrt), 1 << 30, None, None, values, stack)
+            rasters, _, _ = l3._inputs(
+                fn, _file_tile(vrt), 1 << 30, None, None, values, stack
+            )
             res = run.run(fn, rasters, values)
         assert res.error is None, res.error
         return res.raster
@@ -421,7 +427,9 @@ def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(tmp_path, monk
     before = gdal.GetCacheMax()
     got = viewshed()
     row_of_blocks = 8 * 128 * 128 * 4
-    assert row_of_blocks < seen[0] <= 8 << 20  # one 1024 x 256 Byte output (256 KiB) held beside it
+    assert (
+        row_of_blocks < seen[0] <= 8 << 20
+    )  # one 1024 x 256 Byte output (256 KiB) held beside it
     assert gdal.GetCacheMax() == before
     with MemoryFile(reference) as a, a.open() as x, MemoryFile(got) as b, b.open() as y:
         assert (x.read(1) == y.read(1)).all()

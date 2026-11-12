@@ -255,3 +255,14 @@ def test_a_serverless_or_cgroup_worker_keeps_its_own_call_budget(monkeypatch):
     )  # a cap lowered on the driver still holds
     monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: None)
     assert budget.call_decoded_budget() == int(_1_GIB * 0.15)
+
+
+def test_a_streaming_cache_takes_what_the_call_budget_leaves(monkeypatch):
+    """A streaming engine call's GDAL cache: the budget less what the call holds, under the 128 MiB ceiling, never less
+    than the tile share (block_cache_bytes); a call with no budget gets the ceiling."""
+    monkeypatch.setattr(budget, "block_cache_bytes", lambda *a, **k: 4 * _MIB)
+    assert budget.streaming_cache_bytes(64 * _MIB, 17 * _MIB) == 47 * _MIB
+    assert budget.streaming_cache_bytes(64 * _MIB, 62 * _MIB) == 4 * _MIB
+    assert budget.streaming_cache_bytes(64 * _MIB, 80 * _MIB) == 4 * _MIB
+    assert budget.streaming_cache_bytes(1536 * _MIB, 17 * _MIB) == 128 * _MIB
+    assert budget.streaming_cache_bytes(0, 17 * _MIB) == 128 * _MIB

@@ -1395,7 +1395,7 @@ def _probe_direct_open(path: str) -> None:
             with open_data(path) as ds:
                 ds.read(1, window=Window(0, 0, 1, 1))
 
-    _retry_transient(_do)
+    _retry_transient(_do, path=path)  # a GDAL open's error names no file
 
 
 class StageTooLargeError(Exception):

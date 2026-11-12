@@ -107,6 +107,88 @@ def test_retry_sleeps_with_linear_backoff(monkeypatch):
     assert sleeps == [0.5, 1.0, 1.5]
 
 
+def test_a_path_found_missing_is_retried_once_not_once_per_layer(monkeypatch, tmp_path):
+    """A virtual tile's missing /Volumes file paid each layer's full retry budget in turn (2026-11-12: the open probe, then
+    the staging copy, 45 s per task; on Serverless an isoband_missing_path test past 120 s). Once one retry loop ran out on
+    a missing path, the next loops for that path try it once: the budget is paid once, not once per layer.
+    """
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    with pytest.raises(
+        OSError
+    ):  # a GDAL open names no file: the caller passes the path
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(
+                OSError(f"{gone}: No such file or directory")
+            ),
+            path=gone,
+        )
+    assert sum(sleeps) == pytest.approx(22.5), "the first loop waits its whole budget"
+    calls = []
+
+    def _copy():
+        calls.append(1)
+        with open(gone, "rb"):
+            pass
+
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_copy)  # open() names the file itself
+    assert calls == [1] and sum(sleeps) == pytest.approx(
+        22.5
+    ), "a second loop on the same path does not wait again"
+    # a file that is there again reads at once and clears the record
+    (tmp_path / "gbx_missing_tile.tif").write_bytes(b"x")
+    assert _listing._retry_transient(lambda: open(gone, "rb").read(), path=gone) == b"x"
+    assert gone not in _retry._MISSING
+    # past the hold, a missing path gets its whole budget again (a Volume that lags a write)
+    _retry._MISSING[gone] = _retry._monotonic() - _retry.MISSING_HOLD_S - 1
+    (tmp_path / "gbx_missing_tile.tif").unlink()
+    sleeps.clear()
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_copy)
+    assert sum(sleeps) == pytest.approx(22.5)
+
+
+def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
+    monkeypatch, tmp_path
+):
+    """The two layers a missing /Volumes file met in a row (the direct-open probe, then the staging copy): 22.5 s in all,
+    not 45 s (the probe's GDAL error names no file; it passes the path)."""
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.pyrx.core import local_temp
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    with pytest.raises(OSError):
+        file_gbx._probe_direct_open(gone)
+    with pytest.raises(FileNotFoundError):
+        local_temp.copy_source_sequential(gone, str(tmp_path / "staged.tif"))
+    assert sum(sleeps) == pytest.approx(22.5)
+
+
+def test_another_failure_on_a_recorded_path_still_retries(monkeypatch, tmp_path):
+    """Only a missing file is recorded: an I/O error that is not ENOENT (a FUSE hiccup) keeps its retries."""
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(_retry, "_MISSING", {})
+    p = str(tmp_path / "f.tif")
+    with pytest.raises(OSError):
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(OSError(5, "Input/output error", p)),
+            attempts=3,
+        )
+    assert p not in _retry._MISSING and len(sleeps) == 2
+
+
 def test_retry_transient_lives_in_the_light_core_and_is_re_exported():
     """The zarr package retries Volume reads without importing the ds package."""
     from databricks.labs.gbx.core import _retry

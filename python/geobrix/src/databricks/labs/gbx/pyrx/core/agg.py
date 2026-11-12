@@ -984,7 +984,7 @@ def _plain_ref(vt):
             _probe_direct_open(local)
         except Exception:  # noqa: BLE001 - the file needs staging: not plain
             return None
-    src = _retry_transient(lambda: ot.open_raster(local))
+    src = _retry_transient(lambda: ot.open_raster(local), path=local)
     try:
         t = src.transform
         if (

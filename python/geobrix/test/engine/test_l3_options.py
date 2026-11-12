@@ -311,6 +311,21 @@ def test_gdals_own_missing_file_message_is_retried_the_same(monkeypatch):
     assert len(calls) == 10
 
 
+def test_a_file_found_missing_is_tried_once_by_the_next_read_of_it(monkeypatch):
+    """GDAL's missing-file error names no file, so the read passes the tile's path: the next read of a path whose retries
+    just ran out tries it once (a missing /Volumes file paid each layer's 22.5 s in turn: 2026-11-12).
+    """
+    err = OSError("Read failed. See previous exception")
+    err.__cause__ = RuntimeError("/tmp/gbx_v1.tif: No such file or directory")
+    calls, sleeps = _read_script(monkeypatch, 99, err)
+    with pytest.raises(run.MissingSourceError):
+        l3._virtual_raster(SLOPE, _virtual(1), None)
+    assert len(calls) == 10 and sum(sleeps) == pytest.approx(22.5)
+    with pytest.raises(run.MissingSourceError):
+        l3._virtual_raster(SLOPE, _virtual(1), None)
+    assert len(calls) == 11 and sum(sleeps) == pytest.approx(22.5)
+
+
 def test_unreadable_bytes_stay_an_error_tile_and_are_not_retried(monkeypatch):
     calls, sleeps = _read_script(
         monkeypatch, 99, OSError("x.tif: TIFFReadDirectory: corrupt directory")

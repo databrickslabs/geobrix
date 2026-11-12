@@ -233,7 +233,7 @@ def _virtual_raster(
 
             failure = None
             try:
-                return _retry_transient(attempt)
+                return _retry_transient(attempt, path=vt.path)
             except _Settled as settled:
                 failure = settled.exc
             raise failure  # the failure itself, for the classification below

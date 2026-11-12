@@ -324,6 +324,16 @@ def volume_like_tmp(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _no_path_recorded_missing():
+    """Each test starts with no path recorded missing: ``core._retry`` tries a path once for a minute after its retries
+    ran out on it, and tests reuse paths (``/tmp/gbx_v1.tif``), so one test's missing file would cut another's retries.
+    """
+    from databricks.labs.gbx.core import _retry
+
+    _retry._MISSING.clear()
+
+
 @pytest.fixture
 def no_backoff_sleep(monkeypatch):
     """The retry back-offs of the code under test without the waiting.

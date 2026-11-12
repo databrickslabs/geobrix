@@ -1087,7 +1087,7 @@ class _Unreadable(Exception):
         self.exc = exc
 
 
-def _retry_miss(fn):
+def _retry_miss(fn, path=None):
     """``_retry_transient(fn)`` for the failures a Volume's FUSE gives for a while (a missing file, a failed system
     call), not for a raster GDAL reads and refuses: rasterio raises that as an ``OSError`` too (``RasterioIOError``,
     "not recognized as being in a supported file format", a truncated header), and ten tries with their waits would make
@@ -1106,7 +1106,7 @@ def _retry_miss(fn):
             raise _Unreadable(exc) from None
 
     try:
-        return _retry_transient(attempt)
+        return _retry_transient(attempt, path=path)
     except _Unreadable as unreadable:
         raise unreadable.exc from None
 
@@ -1160,7 +1160,7 @@ def sidecars_alter_open(path) -> bool:
             with open_data(path) as ds:
                 return view(ds)
 
-    a, b = _retry_miss(with_sidecars), _retry_miss(alone)
+    a, b = _retry_miss(with_sidecars, path), _retry_miss(alone, path)
 
     def same(x, y):
         if isinstance(x, tuple):

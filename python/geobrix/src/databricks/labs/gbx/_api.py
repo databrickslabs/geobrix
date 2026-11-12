@@ -2,7 +2,8 @@
 
 Every generated function calls the SQL function GeoBrix registers under the same manifest name, so the
 Python API and SQL run one implementation at one level. The first call of a name in a session registers
-it through the manager; later calls are a set lookup. Nothing here touches the JVM.
+it through the manager; later calls are a set lookup. In a Lakeflow pipeline the first call in each flow registers
+(see ``_flow``). Nothing here touches the JVM.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import weakref
 from typing import Any, Dict, Iterable, Set
 
 _DONE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
-_DONE_BY_ID: Dict[int, Set[str]] = {}
+_DONE_BY_ID: Dict[int, Dict[tuple, Set[str]]] = {}
 _CHOSEN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _CHOSEN_BY_ID: Dict[int, Dict[str, tuple]] = {}
 
@@ -23,11 +24,54 @@ def _active():
     return SparkSession.getActiveSession() or SparkSession.builder.getOrCreate()
 
 
-def _done(spark) -> Set[str]:
+_PIPELINE_CONTEXT = ".PipelineAnalysisContext"
+
+
+def _client(spark):
+    """The Spark Connect client of ``spark``; None for a classic session (its ``client`` raises)."""
     try:
-        return _DONE.setdefault(spark, set())
+        return getattr(spark, "client", None)
+    except Exception:  # noqa: BLE001 - a classic session raises
+        return None
+
+
+def thread_extensions(spark) -> list:
+    """The user-context extensions the calling thread's Spark Connect requests carry (thread-local ones only).
+
+    Lakeflow runs each dataset function under one: a ``PipelineAnalysisContext`` naming the flow. A classic session,
+    or a Connect client without the extensions API, has none. Reads client state only; no round trip.
+    """
+    local = getattr(_client(spark), "thread_local", None)
+    return [ext for _id, ext in getattr(local, "user_context_extensions", None) or ()]
+
+
+def _flow(spark) -> tuple:
+    """The Lakeflow flow whose analysis a registration made now belongs to, ``()`` outside a pipeline.
+
+    A pipeline runs every dataset function on one session object. A function registered while one flow's body ran does
+    not resolve in another flow's analysis, so the cache of ``ensure`` is kept per flow too.
+    """
+    client = _client(spark)
+    if client is None:
+        return ()
+    exts = [
+        e for _id, e in getattr(client, "global_user_context_extensions", None) or ()
+    ]
+    exts += thread_extensions(spark)
+    return tuple(
+        (e.type_url, e.value)
+        for e in exts
+        if str(getattr(e, "type_url", "")).endswith(_PIPELINE_CONTEXT)
+    )
+
+
+def _done(spark) -> Set[str]:
+    """The names registered in ``spark``, in the Lakeflow flow the calling thread runs (see ``_flow``)."""
+    try:
+        by_flow = _DONE.setdefault(spark, {})
     except TypeError:  # a session object that cannot be weakly referenced
-        return _DONE_BY_ID.setdefault(id(spark), set())
+        by_flow = _DONE_BY_ID.setdefault(id(spark), {})
+    return by_flow.setdefault(_flow(spark), set())
 
 
 def chosen(spark) -> Dict[str, tuple]:

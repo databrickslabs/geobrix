@@ -233,6 +233,7 @@ def _each(spark, items: list, work, prepare=None) -> list:
     if prepare is not None:
         for i in items:
             prepare(i)
+    work = _carrying_thread_context(spark, work)
     with ThreadPoolExecutor(
         max_workers=workers, thread_name_prefix="gbx-register"
     ) as pool:
@@ -247,6 +248,30 @@ def _each(spark, items: list, work, prepare=None) -> list:
     if first is not None:
         raise first
     return results
+
+
+def _carrying_thread_context(spark, work):
+    """``work`` run on a worker thread with the calling thread's Spark Connect user-context extensions.
+
+    Lakeflow tags each dataset function's requests with a thread-local ``PipelineAnalysisContext``. A request from a
+    worker thread would not carry it, so each worker adds the same extensions for its call and removes them after.
+    """
+    from databricks.labs.gbx import _api
+
+    exts = _api.thread_extensions(spark)
+    if not exts:
+        return work
+    client = _api._client(spark)
+
+    def carried(item):
+        ids = [client.add_threadlocal_user_context_extension(e) for e in exts]
+        try:
+            return work(item)
+        finally:
+            for i in ids:
+                client.remove_user_context_extension(i)
+
+    return carried
 
 
 def _warm_imports(fn) -> None:

@@ -41,12 +41,16 @@ GDAL_STACK_LIB = re.compile(
 )
 
 
-# the SQL functions the checks call
-_CHECKED = (
-    "gbx_rst_width",
-    "gbx_rst_height",
-    "gbx_rst_fromcontent",
-    "gbx_rst_mapalgebra",
+# The SQL functions the checks call. The extent check's two keep a JVM level, so the heavy check forces them to L1;
+# the band math has no JVM level and runs light in both checks.
+_JVM_CHECKED = ("gbx_rst_boundingbox", "gbx_rst_fromcontent")
+_CHECKED = _JVM_CHECKED + ("gbx_rst_mapalgebra",)
+# the oracle GeoTIFF's extent (xmin, ymin, xmax, ymax), from its origin, size and pixel size
+EXTENT = (
+    ORIGIN[0],
+    ORIGIN[1] - HEIGHT * RES,
+    ORIGIN[0] + WIDTH * RES,
+    ORIGIN[1],
 )
 
 
@@ -54,7 +58,9 @@ def _register_at(spark, level):
     """The checked functions at one level (L3 light, L1 heavy), through the manager."""
     from databricks.labs.gbx import register
 
-    register(spark, only=_CHECKED, _levels={n: (level, "-") for n in _CHECKED})
+    levels = {n: (level, "-") for n in _JVM_CHECKED}
+    levels.update({n: ("L3", "-") for n in _CHECKED if n not in _JVM_CHECKED})
+    register(spark, only=_CHECKED, _levels=levels)
 
 
 def _light_register(spark):
@@ -532,22 +538,30 @@ def natives():
     return {"ok": all(c["ok"] for c in checks.values()), "checks": checks}
 
 
-_SIZE_SQL = (
-    "SELECT gbx_rst_width(gbx_rst_fromcontent(content, 'GTiff')) AS w, "
-    "gbx_rst_height(gbx_rst_fromcontent(content, 'GTiff')) AS h FROM {view}"
-)
+_EXTENT_SQL = "SELECT gbx_rst_boundingbox(gbx_rst_fromcontent(content, 'GTiff')) AS bbox FROM {view}"
 
 
-def _size_sql(spark, df, view):
+def _extent_sql(spark, df, view):
+    """The oracle GeoTIFF's bounding box through the SQL functions, against its known extent."""
+    import shapely
+
     df.select("content").createOrReplaceTempView(view)
-    row = spark.sql(_SIZE_SQL.format(view=view)).first()
-    return {"ok": (row.w, row.h) == (WIDTH, HEIGHT), "width": row.w, "height": row.h}
+    row = spark.sql(_EXTENT_SQL.format(view=view)).first()
+    bounds = (
+        None
+        if row is None or row.bbox is None
+        else [float(v) for v in shapely.from_wkb(bytes(row.bbox)).bounds]
+    )
+    ok = bounds is not None and all(
+        math.isclose(a, b, abs_tol=1e-6) for a, b in zip(bounds, EXTENT)
+    )
+    return {"ok": ok, "bounds": bounds}
 
 
 def light_sql(spark):
-    """The light functions over the oracle GeoTIFF's bytes: (388, 385)."""
+    """The light functions over the oracle GeoTIFF's bytes: its extent."""
     _light_register(spark)
-    return _size_sql(
+    return _extent_sql(
         spark,
         spark.createDataFrame([(geotiff_bytes(),)], "content binary"),
         "gbx_selfcheck_light",
@@ -610,7 +624,7 @@ def heavy_sql(spark, scratch_dir):
     # always: an earlier run on a Volume may have left a header-only Shapefile
     _publish_points(shp_dir)
     _heavy_register(spark)
-    size = _size_sql(
+    size = _extent_sql(
         spark, spark.read.format("binaryFile").load(tif), "gbx_selfcheck_heavy"
     )
     from databricks.labs.gbx import manager
@@ -619,7 +633,7 @@ def heavy_sql(spark, scratch_dir):
     count = spark.read.format("shapefile_gbx").load(shp_dir).count()
     jvm = _jvm_gdal(spark)
     calc = '{"calc": "A + 1", "A_index": 0, "A_band": 1}'
-    try:  # recorded, not gating: heavy band math shells out to gdal_calc.py
+    try:  # recorded, not gating: the band math (light only, GDAL raster calc) over a tile the JVM built
         q = f"SELECT gbx_rst_mapalgebra(array(gbx_rst_fromcontent(content, 'GTiff')), '{calc}') AS t FROM gbx_selfcheck_heavy"
         gdal_calc = {"ok": spark.sql(q).first().t is not None, "error": None}
     except Exception as exc:  # noqa: BLE001

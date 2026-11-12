@@ -56,8 +56,8 @@ def _offline(monkeypatch):
     monkeypatch.setattr(_selfcheck, "_heavy_register", lambda spark: None)
     monkeypatch.setattr(
         _selfcheck,
-        "_size_sql",
-        lambda spark, df, view: {"ok": True, "width": 388, "height": 385},
+        "_extent_sql",
+        lambda spark, df, view: {"ok": True, "bounds": list(_selfcheck.EXTENT)},
     )
     monkeypatch.setattr(_selfcheck, "_jvm_gdal", lambda spark: {"ok": True})
 
@@ -103,3 +103,16 @@ def test_heavy_sql_replaces_a_torn_shapefile_left_by_an_earlier_run(
     report = _selfcheck.heavy_sql(_Spark(), str(tmp_path))
 
     assert report["shapefile_count"] == len(_selfcheck.POINTS_27700)
+
+
+def test_the_heavy_check_forces_the_jvm_level_only_where_the_function_keeps_one():
+    """``heavy_sql`` forces its raster functions to L1: each must keep a JVM level, or the forced install fails."""
+    from databricks.labs.gbx import manifest
+
+    rows = manifest.load().functions
+    assert _selfcheck._JVM_CHECKED
+    for name in _selfcheck._JVM_CHECKED:
+        assert "L1" in rows[name].levels, name
+    # the rest of the checked functions are light only, and registered at their light level
+    for name in set(_selfcheck._CHECKED) - set(_selfcheck._JVM_CHECKED):
+        assert "L1" not in rows[name].levels, name

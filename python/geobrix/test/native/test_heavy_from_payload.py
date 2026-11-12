@@ -4,7 +4,7 @@
   and only the session's ``spark.databricks.labs.gbx.native.dir`` loads that payload's GDAL (``ConfOnlyProbe``).
 - guard: a JVM that already loaded another GDAL's JNI is refused the payload's (``DoubleLoadProbe``, exit 3).
 - oracle: one Spark session on the staged JAR whose JVM sees the payload only through that conf. The light and then the
-  heavy SQL functions give the oracle's answers (388 x 385, 3 Shapefile features), the JVM's GDAL is the pinned
+  heavy SQL functions give the oracle's answers (the GeoTIFF's extent, 3 Shapefile features), the JVM's GDAL is the pinned
   build, PROJ in the JVM transforms 27700 -> 4326 as pyproj does, and the JVM maps the payload's libgdal and no other.
   It needs the JAR built with the payload build's GDAL classes (pom.xml's gdal.java.version); else it skips.
 
@@ -371,7 +371,9 @@ def test_light_and_heavy_give_the_oracle_answer(spark, native_dir, tmp_path):
     light = _selfcheck.light_sql(spark)
     heavy = _selfcheck.heavy_sql(spark, str(tmp_path))
 
-    assert light == {"ok": True, "width": 388, "height": 385}
+    # the GeoTIFF's extent (origin 699960 5700000, 388 x 385 pixels of 10 m) from gbx_rst_boundingbox, which keeps its
+    # JVM level: heavy forces it and gbx_rst_fromcontent to L1
+    assert light == {"ok": True, "bounds": [699960.0, 5696150.0, 703840.0, 5700000.0]}
     assert heavy["raster"] == light
     assert heavy["shapefile_count"] == 3
     jvm = spark._jvm

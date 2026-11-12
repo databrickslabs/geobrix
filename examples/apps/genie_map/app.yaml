@@ -13,8 +13,11 @@ env:
     valueFrom: sql-warehouse-id
   - name: DATABRICKS_GENIE_SPACE_ID
     valueFrom: genie-space-id
-  - name: DATABRICKS_SERVING_ENDPOINT_NAME
-    value: databricks-gpt-5-2
+  # Build-time: the AI Assistant's chat model, a Unity Catalog model service
+  # (system.ai.<model>) on the AI Gateway. Keep it equal to the bundle var
+  # llm_model, which grants the app EXECUTE on it.
+  - name: DATABRICKS_LLM_MODEL
+    value: system.ai.gpt-5-2
   # Build-time (Vite loadEnv reads process.env): the on-compute `pnpm build`
   # bakes these into the client bundle, so they MUST be set here (databricks.env
   # is local-only and not present on the app compute).

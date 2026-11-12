@@ -60,8 +60,8 @@ The prototype was a coherent kepler.gl + AppKit app wired to a placeholder NYC-t
 dataset through a hardcoded column schema. We kept its strong parts and replaced the
 data binding:
 
-- **Reused unchanged:** the AppKit server plugin composition (analytics + Genie + serving
-  proxy), the analytics-query → kepler-dataset bridge (`useKeplerDataset`), the AI
+- **Reused unchanged:** the AppKit server plugin composition (analytics + Genie + the
+  AI Gateway chat proxy), the analytics-query → kepler-dataset bridge (`useKeplerDataset`), the AI
   Assistant (Genie) panel, and the viewport-bounds/layer-visibility machinery.
 - **Rewritten:** the hardcoded taxi column schema became a **config-driven layer
   registry**; the two taxi-specific data hooks were replaced by one generic,
@@ -173,8 +173,12 @@ so the same variables reach both the Vite build and the server.
 - **SRID 0 is invisible.** Native geometry that round-trips through a materialized view can
   come back without its SRID and then silently won't render. Re-tag with SRID 4326 at the
   gold layer.
-- **The serving model is baked at build time.** The chat model name is compiled into the
+- **The chat model is baked at build time.** `DATABRICKS_LLM_MODEL` is compiled into the
   client bundle, so changing it requires a rebuild, not just a runtime setting.
+- **The chat model is a Unity Catalog model service.** The AI Gateway route takes
+  `system.ai.<model>` names, such as `system.ai.gpt-5-2`. It refuses legacy endpoint names
+  like `databricks-gpt-5-2` with "no longer available". Set the same name in `app.yaml` and
+  the bundle variable `llm_model`. That variable grants the app `EXECUTE` on the model.
 - **Environment file naming.** The committed template `databricks.env.example` holds only
   placeholders. Copy it to `databricks.env` (which is git-ignored) and fill in real values.
   Because the tooling reads variables from the shell, the `gbx:app:*` commands source

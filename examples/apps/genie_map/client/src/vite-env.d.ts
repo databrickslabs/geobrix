@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 
-// Compile-time constant injected by vite.config.ts from DATABRICKS_SERVING_ENDPOINT_NAME.
+// Compile-time constant injected by vite.config.ts from DATABRICKS_LLM_MODEL
+// (a Unity Catalog model service name, system.ai.<model>).
 declare const __LLM_MODEL__: string;
 
 // Compile-time constant injected by vite.config.ts from VITE_GENIE_SPACE_NAME —

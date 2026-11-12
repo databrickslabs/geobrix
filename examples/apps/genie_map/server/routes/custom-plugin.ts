@@ -5,14 +5,17 @@
  * Required because openassistant's <AiAssistant> / useAssistant expects an
  * OpenAI-compatible streaming + tool-calling endpoint at a relative URL.
  *
- * Auth is obtained from AppKit's workspace client (reads DATABRICKS_HOST +
- * DATABRICKS_TOKEN via the Databricks SDK — no manual env reads here).
+ * Auth is obtained from AppKit's execution-context workspace client. This route
+ * does not call asUser(req), so on Databricks Apps it is the app's service
+ * principal (locally, DATABRICKS_HOST + DATABRICKS_TOKEN). The SP's EXECUTE on
+ * the model service comes from the bundle's `llm-model` app resource.
  *
  * Route mounted under /api/custom:
  * - POST /llm/chat/completions  → ${DATABRICKS_HOST}/ai-gateway/mlflow/v1/chat/completions
+ *   The body's `model` is a Unity Catalog model service (system.ai.<model>,
+ *   from DATABRICKS_LLM_MODEL); this route serves no legacy endpoint names.
  *
  * Genie:   handled by the AppKit `genie()` plugin  (/api/genie/:alias/messages)
- * Serving: handled by the AppKit `serving()` plugin (/api/serving/:alias/invoke|stream)
  */
 import type express from 'express';
 import type { IAppRouter, PluginManifest } from '@databricks/appkit';

@@ -1,4 +1,4 @@
-import { createApp, server, analytics, genie, serving } from '@databricks/appkit';
+import { createApp, server, analytics, genie } from '@databricks/appkit';
 // Explicit .js extension: the compiled output is ESM ("type":"module") and Node's
 // ESM loader requires extensions on relative imports at runtime. tsc (module:
 // ESNext) emits this path verbatim, so it must already carry .js.
@@ -16,9 +16,11 @@ if (!GENIE_SPACE_ID) {
 // Create AppKit server with plugins:
 // - /api/analytics/query/:query_key      SQL queries from config/queries/
 // - /api/genie/default/messages           Databricks AI/BI Genie (SSE)
-// - /api/serving/default/invoke|stream    Databricks Model Serving (SDK-authenticated)
 // - /api/custom/llm/chat/completions      OpenAI-compat pass-through to AI Gateway
 //                                         (required for openassistant's useAssistant)
+// No AppKit serving() plugin: it targets a serving endpoint and demands a
+// serving_endpoint resource, while the assistant calls a Unity Catalog model
+// service through the custom route above.
 createApp({
   plugins: [
     // staticPath bypasses AppKit's built-in Vite in dev. Frontend runs on
@@ -26,13 +28,11 @@ createApp({
     server({ port: PORT, staticPath: 'dist/client' }),
     analytics({}),
     ...(GENIE_SPACE_ID ? [genie({ spaces: { default: GENIE_SPACE_ID } })] : []),
-    serving({}),
     customRoutes({}),
   ],
 }).then(() => {
   console.log(`🚀 AppKit server listening on http://localhost:${PORT}`);
   console.log(`   Analytics:  /api/analytics/query/:key`);
-  console.log(`   Serving:    /api/serving/default/invoke|stream`);
   console.log(`   LLM Proxy:  /api/custom/llm/chat/completions`);
   if (GENIE_SPACE_ID) {
     console.log(`   Genie:      /api/genie/default/messages`);

@@ -188,7 +188,8 @@ JSON only:
 // Fixed Databricks configuration - uses our local LLM proxy
 const DATABRICKS_CONFIG = {
   provider: 'openai' as const, // OpenAI-compatible API format
-  // Model name is injected at build time from DATABRICKS_SERVING_ENDPOINT_NAME (.env).
+  // Model name is injected at build time from DATABRICKS_LLM_MODEL (app.yaml / .env):
+  // a Unity Catalog model service, system.ai.<model>, served by the AI Gateway.
   // To change the model, update that env var and rebuild — no code change required.
   model: __LLM_MODEL__,
   baseUrl: '/api/custom/llm', // Our proxy endpoint (no /v1 suffix needed)

@@ -70,12 +70,13 @@ resources:
       # otherwise returns 403 'Invalid scope, required scopes: genie'. NOTE:
       # `dashboards.genie` is NOT a valid app scope — it is rejected/unavailable
       # in the app scope picker and does not grant Genie access. sql is for the
-      # viewport warehouse queries; serving.serving-endpoints for the LLM proxy.
+      # viewport warehouse queries. The LLM proxy calls the AI Gateway as the
+      # app's service principal (not on the user's behalf), so it needs no user
+      # scope; its access comes from the llm-model resource below.
       # (iam.* defaults are granted automatically and must NOT be listed here.)
       user_api_scopes:
         - genie
         - sql
-        - serving.serving-endpoints
       resources:
         - name: sql-warehouse-id
           sql_warehouse:
@@ -89,13 +90,15 @@ resources:
             # and wires the app to it — no manual space id to paste.
             space_id: ${resources.genie_spaces.vapor_eyes_genie.id}
             permission: CAN_RUN
-        # The AI Assistant proxies chat completions through the AI Gateway to this
-        # serving endpoint; declaring it as an app resource grants the app's service
-        # principal CAN_QUERY so the LLM calls aren't rejected.
-        - name: serving-endpoint
-          serving_endpoint:
-            name: ${var.serving_endpoint_name}
-            permission: CAN_QUERY
+        # The AI Assistant proxies chat completions through the AI Gateway
+        # (/ai-gateway/mlflow/v1/chat/completions) to this Unity Catalog model
+        # service. Declaring it grants the app's service principal EXECUTE on it,
+        # so the LLM calls aren't rejected.
+        - name: llm-model
+          uc_securable:
+            securable_type: MODEL_SERVICE
+            securable_full_name: ${var.llm_model}
+            permission: EXECUTE
 
   # The curated Genie Space the AI Assistant queries — created/managed by the
   # bundle from a committed definition (genie_space.geniespace.json = the sorted
@@ -123,6 +126,6 @@ variables:
   warehouse_id:
     description: "SQL warehouse id the app queries (also injected as the sql-warehouse-id app resource)"
     default: "d5dd41002fc1ca02"
-  serving_endpoint_name:
-    description: "Foundation-model serving endpoint the AI Assistant queries"
-    default: "databricks-gpt-5-2"
+  llm_model:
+    description: "Unity Catalog model service (system.ai.<model>) the AI Assistant queries; keep equal to DATABRICKS_LLM_MODEL in app.yaml"
+    default: "system.ai.gpt-5-2"

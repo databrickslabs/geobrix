@@ -39,11 +39,11 @@ If your gold tables live in a catalog/schema other than
 databricks bundle deploy -p <profile>          # from examples/apps/genie_map/
 ```
 
-This creates/updates: the **Databricks App**, its **OAuth scopes**
-(`genie`, `sql`, `serving.serving-endpoints`), its **resource grants**
-(warehouse `CAN_USE`, serving endpoint `CAN_QUERY`, the Genie space `CAN_RUN`), and
-the **Genie Space** itself (table set from `genie_space.geniespace.json` + the guardrail
-description). The app is wired to the space it just created — no space id to paste.
+This creates/updates the **Databricks App** and its **OAuth scopes** (`genie`, `sql`).
+It also sets the app's **resource grants**: warehouse `CAN_USE`, Genie space `CAN_RUN`, and
+`EXECUTE` on the AI Assistant's model service (`system.ai.gpt-5-2`).
+Last, it creates the **Genie Space** itself, from `genie_space.geniespace.json` plus the
+guardrail description. The app is wired to the space it just created — no space id to paste.
 
 ### 2. 🤖 Build + start the app
 
@@ -131,7 +131,7 @@ same step clears the error if it reappears after a redeploy.
 
 | Concern | Where | Auto? |
 |---|---|---|
-| App, scopes, warehouse/serving/genie resources | `databricks.yml` | 🤖 |
+| App, scopes, warehouse/genie/model-service resources | `databricks.yml` | 🤖 |
 | Genie Space + table set + guardrail description | `databricks.yml` + `genie_space.geniespace.json` | 🤖 |
 | Client build config (catalog/model baked in) | `app.yaml` | 🤖 |
 | App SP catalog/schema grants | `gbx:app:setup` | 🤖 (script) |

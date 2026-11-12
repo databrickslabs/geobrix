@@ -15,7 +15,7 @@ variables:
   full_aoi: {default: "true"}
   simplify: {default: "true"}
   # empty → derived under the LDP volume; set to the series path to share
-  # already-staged LiDAR and skip a second ~830 MB download.
+  # already-staged LiDAR and skip a second ~4.9 GB download (about 24,000 LAZ tiles for the full city).
   laz_dir: {default: ""}
   water_mask_dir: {default: ""}
   # The pipeline runs on the PREVIEW Lakeflow channel (DBR 19) with the +env6 wheel; the land/siting

@@ -134,7 +134,7 @@ targets:
       # schema: my_wireless_coverage_lf
       # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.6.0+env6-py3-none-any.whl
 
-      # Reuse already-staged LiDAR from the notebook series (skip the ~830 MB download):
+      # Reuse already-staged LiDAR from the notebook series (skip the ~4.9 GB download (about 24,000 LAZ tiles for the full city)):
       # laz_dir: /Volumes/geospatial_docs/wireless_coverage/data/lidar/sf/laz
       # water_mask_dir: /Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/overture-water-bay
 ```
@@ -142,7 +142,7 @@ targets:
 The override file is layered in automatically via `include: ["*.override.yml"]`. A fresh clone with no override file still validates/deploys.
 
 - **Schedule**: the job ships with a daily schedule (`0 0 7 * * ?`, America/Chicago) but **paused** (`pause_status: PAUSED`) — unpause it in the workspace (or in `databricks.yml`) once you've confirmed a manual run.
-- **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download.
+- **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~4.9 GB download (about 24,000 LAZ tiles for the full city).
 - **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ### Streaming `wc_lidar_pts`: upgrade and resets

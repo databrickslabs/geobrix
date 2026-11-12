@@ -26,7 +26,9 @@ The rules, for every code cell the harvest covers (the whole notebook, or the pi
 The runner's own cells are never matched: the wheel guard (``# Wheel guard:``), the ``--set-var`` override cell and
 a piece's carried setup statements.
 The guard's ``WHEEL GUARD provenance: {json}`` line is the provenance; it lands in ``metadata.geobrix_run`` (version,
-git_sha, wheel, wheel_sha256, runtime, and the run id and cell range of each piece) and in the install cell's line.
+git_sha, wheel, wheel_sha256, runtime) and in the install cell's line. Each piece (run id and cell range) records its own
+wheel and runtime, so pieces run on different wheels all keep theirs: ``wheels`` lists the distinct wheel sha256s,
+``mixed_wheels`` is true when there are several, and the install line then names each build.
 The file's JSON serialization is preserved.
 """
 
@@ -246,29 +248,66 @@ def provenance_line(prov: Optional[dict], run_context: Optional[dict]) -> Option
     return "GeoBrix %s installed%s on %s\n" % (prov.get("version") or "?", detail, where)
 
 
+# what a piece records of the wheel and runtime that ran it (beside its run id and cell range)
+_PIECE_FIELDS = ("version", "git_sha", "dirty", "wheel", "wheel_sha256", "runtime", "runtime_version",
+                 "environment_version", "spark_version", "harvested", "guard")
+
+
+def _wheel_id(piece: dict):
+    return piece.get("wheel_sha256") or piece.get("git_sha")
+
+
+def _cell_start(piece: dict) -> int:
+    return int(str(piece["cells"]).split(":")[0])
+
+
+def _upgrade_runs(old: dict) -> list[dict]:
+    """The piece entries of a recorded block. The older shape named one wheel at the top and only the run id and cells
+    per piece: each piece takes that wheel (and runtime) as its own."""
+    pieces = []
+    for r in old.get("runs") or []:
+        if not r.get("cells"):
+            continue
+        piece = dict(r)
+        for k in _PIECE_FIELDS:
+            if k not in piece and old.get(k) is not None:
+                piece[k] = old[k]
+        pieces.append(piece)
+    return pieces
+
+
+def mixed_provenance_line(pieces: list[dict], run_context: Optional[dict] = None) -> str:
+    """The install cell's line when the pieces ran on more than one wheel: each build, and the cells it ran."""
+    builds: dict = {}
+    for p in sorted(pieces, key=_cell_start):
+        builds.setdefault(_wheel_id(p), []).append(p)
+    parts = []
+    for ps in builds.values():
+        first = ps[0]
+        who = "%s build %s" % (first.get("version") or "?", (first.get("git_sha") or first.get("wheel_sha256") or "?")[:12])
+        parts.append("%s (cells %s)" % (who, ", ".join(str(p["cells"]) for p in ps)))
+    runtimes = {p.get("runtime") for p in pieces}
+    where = (run_context or {}).get("label") or (runtimes.pop() if len(runtimes) == 1 else None) or "Databricks"
+    return "GeoBrix installed from %d wheels: %s, on %s\n" % (len(builds), "; ".join(parts), where)
+
+
 def stamp_provenance(nb: dict, prov: Optional[dict], run_id, cells: Optional[range], run_context: Optional[dict],
                      n_cells: int) -> None:
-    """Record the run in ``metadata.geobrix_run``: the wheel and runtime, and one entry per piece (run id, cell range).
+    """Record the run in ``metadata.geobrix_run``: one entry per piece, each with the run id, the cell range and the wheel
+    and runtime that ran it, and a top-level summary (``wheels``, the distinct wheel sha256s, and ``mixed_wheels`` when
+    there is more than one).
 
-    A piece from another wheel than the pieces recorded drops their entries (and says so): the record names one wheel."""
+    A piece replaces only the entry of the same cells (or run id); a whole-notebook run replaces them all. With one wheel
+    the top level also names it (version, git_sha, wheel, wheel_sha256, runtime); with several it does not, as no one
+    wheel is the notebook's."""
     meta = nb.setdefault("metadata", {})
     prov = prov or {}
     ctx = run_context or {}
     rng = cells if cells is not None else range(0, n_cells)
-    entry = {"run_id": run_id, "cells": f"{rng.start + 1}:{rng.stop}"}
-    old = meta.get(META_KEY) or {}
-    runs = list(old.get("runs") or [])
-    if old and (old.get("wheel_sha256"), old.get("git_sha")) != (prov.get("wheel_sha256"), prov.get("git_sha")):
-        if runs and cells is not None:
-            print("    note: this piece ran on another wheel than the pieces recorded (%s); their run entries are "
-                  "dropped from %s: rerun those pieces" % (", ".join(r["cells"] for r in runs), META_KEY),
-                  file=sys.stderr, flush=True)
-        runs = []
-    if cells is None:
-        runs = []
-    runs = [r for r in runs if r.get("cells") != entry["cells"]] + [entry]
-    runs.sort(key=lambda r: int(str(r["cells"]).split(":")[0]))
-    record = {
+    harvested = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = {
+        "run_id": run_id,
+        "cells": f"{rng.start + 1}:{rng.stop}",
         "version": prov.get("version"),
         "git_sha": prov.get("git_sha"),
         "dirty": prov.get("dirty"),
@@ -276,16 +315,52 @@ def stamp_provenance(nb: dict, prov: Optional[dict], run_id, cells: Optional[ran
         "wheel_sha256": prov.get("wheel_sha256"),
         "runtime": ctx.get("label") or prov.get("runtime"),
         "runtime_version": prov.get("runtime"),
-        "harvested": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "runs": runs,
+        "harvested": harvested,
     }
     if ctx.get("environment_version"):
-        record["environment_version"] = str(ctx["environment_version"])
+        entry["environment_version"] = str(ctx["environment_version"])
     if ctx.get("spark_version"):
-        record["spark_version"] = ctx["spark_version"]
+        entry["spark_version"] = ctx["spark_version"]
     if not prov:
-        record["guard"] = "off: the wheel was not checked on the compute"
+        entry["guard"] = "off: the wheel was not checked on the compute"
+    entry = {k: v for k, v in entry.items() if v is not None}
+    runs = _upgrade_runs(meta.get(META_KEY) or {}) if cells is not None else []
+    runs = [r for r in runs if r["cells"] != entry["cells"] and (run_id is None or r.get("run_id") != run_id)] + [entry]
+    runs.sort(key=_cell_start)
+    wheels = list(dict.fromkeys(r["wheel_sha256"] for r in runs if r.get("wheel_sha256")))
+    mixed = len({_wheel_id(r) for r in runs if _wheel_id(r)}) > 1
+    record = {"harvested": harvested, "wheels": wheels or None, "mixed_wheels": True if mixed else None}
+    if not mixed:
+        record.update({k: entry.get(k) for k in _PIECE_FIELDS if k != "harvested"})
+    record["runs"] = runs
     meta[META_KEY] = {k: v for k, v in record.items() if v is not None}
+
+
+def refresh_install_line(nb: dict, run_context: Optional[dict] = None) -> Optional[int]:
+    """Make the install cell's provenance line agree with ``metadata.geobrix_run``: the one-wheel line, or, when the pieces
+    ran on several wheels, the line naming each build. It also corrects a piece that was not rerun (its cell is outside the
+    harvested piece), which would otherwise keep a line from an earlier mix. Returns the cell's index, or None."""
+    rec = (nb.get("metadata") or {}).get(META_KEY) or {}
+    runs = rec.get("runs") or []
+    if not runs:
+        return None
+    for i, cell in enumerate(nb.get("cells", [])):
+        outs = cell.get("outputs") or []
+        if cell.get("cell_type") != "code" or not outs or not _GEOBRIX_PIP.search(_src(cell.get("source"))):
+            continue
+        last = outs[-1]
+        text = _src(last.get("text"))
+        if last.get("output_type") != "stream" or not text.startswith("GeoBrix ") or " installed" not in text:
+            continue
+        if rec.get("mixed_wheels"):
+            line = mixed_provenance_line(runs, run_context)
+        else:
+            known = [r for r in runs if _wheel_id(r)]  # a piece run without the guard names no wheel
+            line = provenance_line(known[-1], run_context) if known else None
+        if line:
+            last["text"] = [line]
+        return i
+    return None
 
 
 # ---------------------------------------------------------------------------------------------- applying one run
@@ -409,5 +484,6 @@ def harvest_run_outputs(run_id, profile: str, local_nb_path, settle_s: int = 20,
     nb = json.loads(original)
     rep = apply_outputs(nb, model, cells=cells, provenance=prov, run_context=run_context)
     stamp_provenance(nb, prov, run_id, cells, run_context, len(nb.get("cells", [])))
+    refresh_install_line(nb, run_context)
     path.write_text(_dump_like(nb, original), encoding="utf-8")
     return rep

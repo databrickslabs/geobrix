@@ -231,26 +231,129 @@ def test_the_guard_line_is_the_provenance_and_the_runner_cells_never_count():
     assert hno.provenance_from_model({"commands": [_cmd(1, "print(1)", ANSI)]}) is None
 
 
+CTX = {"compute": "serverless", "environment_version": "6", "label": "Serverless environment 6"}
+OTHER = dict(PROV, wheel_sha256="0" * 64, git_sha="9" * 40, wheel=WHEEL.replace("0.6.0", "0.6.1"))
+
+
+def _piece(run_id, cells):
+    return {"run_id": run_id, "cells": cells}
+
+
 def test_the_notebook_metadata_records_the_wheel_the_runtime_and_each_piece():
     nb = {"cells": [_code("a()"), _code("b()")], "metadata": {"kernelspec": {}}}
-    ctx = {"compute": "serverless", "environment_version": "6", "label": "Serverless environment 6"}
-    hno.stamp_provenance(nb, PROV, run_id=11, cells=None, run_context=ctx, n_cells=2)
+    hno.stamp_provenance(nb, PROV, run_id=11, cells=None, run_context=CTX, n_cells=2)
     meta = nb["metadata"]["geobrix_run"]
     assert meta["version"] == "0.6.0+env6" and meta["git_sha"] == PROV["git_sha"]
     assert meta["wheel_sha256"] == "f" * 64 and meta["wheel"] == WHEEL
-    assert meta["runtime"] == "Serverless environment 6" and meta["runs"] == [{"run_id": 11, "cells": "1:2"}]
+    assert meta["runtime"] == "Serverless environment 6" and meta["wheels"] == ["f" * 64]
+    assert "mixed_wheels" not in meta
+    (piece,) = meta["runs"]
+    assert piece["run_id"] == 11 and piece["cells"] == "1:2" and piece["wheel_sha256"] == "f" * 64
+    assert piece["git_sha"] == PROV["git_sha"] and piece["version"] == "0.6.0+env6"
+    assert piece["runtime"] == "Serverless environment 6"
     assert nb["metadata"]["kernelspec"] == {}
-    hno.stamp_provenance(nb, PROV, run_id=12, cells=range(1, 2), run_context=ctx, n_cells=2)
-    assert nb["metadata"]["geobrix_run"]["runs"] == [{"run_id": 11, "cells": "1:2"}, {"run_id": 12, "cells": "2:2"}]
+    hno.stamp_provenance(nb, PROV, run_id=12, cells=range(1, 2), run_context=CTX, n_cells=2)
+    runs = nb["metadata"]["geobrix_run"]["runs"]
+    assert [(r["run_id"], r["cells"]) for r in runs] == [(11, "1:2"), (12, "2:2")]
 
 
-def test_a_piece_from_another_wheel_drops_the_older_runs_and_says_so(capsys):
+def test_two_pieces_on_two_wheels_each_keep_their_own_wheel():
     nb = {"cells": [_code("a()"), _code("b()")], "metadata": {}}
-    hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context={"label": "x"}, n_cells=2)
-    other = dict(PROV, wheel_sha256="0" * 64, git_sha="9" * 40)
-    hno.stamp_provenance(nb, other, run_id=12, cells=range(1, 2), run_context={"label": "x"}, n_cells=2)
-    assert nb["metadata"]["geobrix_run"]["runs"] == [{"run_id": 12, "cells": "2:2"}]
-    assert "another wheel" in capsys.readouterr().err
+    hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context=CTX, n_cells=2)
+    hno.stamp_provenance(nb, OTHER, run_id=12, cells=range(1, 2), run_context=CTX, n_cells=2)
+    meta = nb["metadata"]["geobrix_run"]
+    first, second = meta["runs"]
+    assert (first["run_id"], first["cells"], first["wheel_sha256"], first["git_sha"]) == (11, "1:1", "f" * 64, PROV["git_sha"])
+    assert (second["run_id"], second["cells"], second["wheel_sha256"], second["git_sha"]) == (12, "2:2", "0" * 64, "9" * 40)
+    assert first["version"] == second["version"] == "0.6.0+env6" and second["runtime"] == "Serverless environment 6"
+    assert meta["wheels"] == ["f" * 64, "0" * 64] and meta["mixed_wheels"] is True
+    assert "wheel_sha256" not in meta and "git_sha" not in meta  # no single wheel to name at the top
+
+
+def test_re_harvesting_one_piece_replaces_only_its_entry():
+    nb = {"cells": [_code("a()"), _code("b()"), _code("c()")], "metadata": {}}
+    hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context=CTX, n_cells=3)
+    hno.stamp_provenance(nb, OTHER, run_id=12, cells=range(1, 3), run_context=CTX, n_cells=3)
+    hno.stamp_provenance(nb, PROV, run_id=13, cells=range(1, 3), run_context=CTX, n_cells=3)  # piece 2 again, on wheel 1
+    meta = nb["metadata"]["geobrix_run"]
+    assert [(r["run_id"], r["cells"], r["wheel_sha256"]) for r in meta["runs"]] == [(11, "1:1", "f" * 64), (13, "2:3", "f" * 64)]
+    assert meta["wheels"] == ["f" * 64] and "mixed_wheels" not in meta and meta["wheel_sha256"] == "f" * 64
+    hno.stamp_provenance(nb, OTHER, run_id=14, cells=range(0, 1), run_context=CTX, n_cells=3)  # piece 1 on the other wheel
+    runs = nb["metadata"]["geobrix_run"]["runs"]
+    assert [(r["run_id"], r["wheel_sha256"]) for r in runs] == [(14, "0" * 64), (13, "f" * 64)]
+    assert nb["metadata"]["geobrix_run"]["mixed_wheels"] is True
+
+
+def test_a_whole_notebook_run_replaces_every_piece():
+    nb = {"cells": [_code("a()"), _code("b()")], "metadata": {}}
+    hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context=CTX, n_cells=2)
+    hno.stamp_provenance(nb, OTHER, run_id=12, cells=range(1, 2), run_context=CTX, n_cells=2)
+    hno.stamp_provenance(nb, OTHER, run_id=15, cells=None, run_context=CTX, n_cells=2)
+    meta = nb["metadata"]["geobrix_run"]
+    assert [(r["run_id"], r["cells"]) for r in meta["runs"]] == [(15, "1:2")] and "mixed_wheels" not in meta
+
+
+def test_an_old_shape_metadata_block_upgrades_with_its_wheel_on_every_piece():
+    old = {"version": "0.6.0+env6", "git_sha": PROV["git_sha"], "dirty": False, "wheel": WHEEL, "wheel_sha256": "f" * 64,
+           "runtime": "Serverless environment 6", "runtime_version": "client.6.1", "harvested": "2026-11-11T00:00:00Z",
+           "environment_version": "6", "runs": [_piece(11, "1:1"), _piece(12, "2:2")]}
+    nb = {"cells": [_code("a()"), _code("b()"), _code("c()")], "metadata": {"geobrix_run": old}}
+    hno.stamp_provenance(nb, OTHER, run_id=13, cells=range(2, 3), run_context=CTX, n_cells=3)
+    meta = nb["metadata"]["geobrix_run"]
+    kept = meta["runs"][:2]
+    assert [(r["run_id"], r["cells"], r["wheel_sha256"], r["git_sha"], r["runtime_version"]) for r in kept] == [
+        (11, "1:1", "f" * 64, PROV["git_sha"], "client.6.1"), (12, "2:2", "f" * 64, PROV["git_sha"], "client.6.1")]
+    assert kept[0]["wheel"] == WHEEL and kept[0]["version"] == "0.6.0+env6" and kept[0]["harvested"] == "2026-11-11T00:00:00Z"
+    assert meta["runs"][2]["run_id"] == 13 and meta["runs"][2]["wheel_sha256"] == "0" * 64
+    assert meta["wheels"] == ["f" * 64, "0" * 64] and meta["mixed_wheels"] is True
+
+
+def test_an_old_shape_block_re_harvested_on_its_own_wheel_stays_unmixed():
+    old = {"version": "0.6.0+env6", "git_sha": PROV["git_sha"], "wheel": WHEEL, "wheel_sha256": "f" * 64,
+           "runtime": "Serverless environment 6", "runs": [_piece(11, "1:1")]}
+    nb = {"cells": [_code("a()"), _code("b()")], "metadata": {"geobrix_run": old}}
+    hno.stamp_provenance(nb, PROV, run_id=12, cells=range(1, 2), run_context=CTX, n_cells=2)
+    meta = nb["metadata"]["geobrix_run"]
+    assert "mixed_wheels" not in meta and meta["wheel_sha256"] == "f" * 64 and meta["wheels"] == ["f" * 64]
+    assert [r["wheel_sha256"] for r in meta["runs"]] == ["f" * 64, "f" * 64]
+
+
+def test_the_provenance_line_is_unchanged_for_one_wheel_and_names_both_builds_for_mixed_wheels():
+    one = hno.provenance_line(PROV, CTX)
+    assert one == "GeoBrix 0.6.0+env6 installed (build 1234567890ab, wheel sha256 ffffffffffff) on Serverless environment 6\n"
+    pieces = [dict(PROV, cells="1:4"), dict(OTHER, cells="5:9")]
+    line = hno.mixed_provenance_line(pieces, CTX)
+    assert line.count("\n") == 1 and line.endswith("\n")
+    assert "build 1234567890ab" in line and "cells 1:4" in line and "build 999999999999" in line and "cells 5:9" in line
+    assert "Serverless environment 6" in line and len(line) < 200
+
+
+def _install_nb():
+    return {"cells": [_code('%pip install "geobrix @ file:///Volumes/x/geobrix-0.6.0+env6-py3-none-any.whl"', STALE),
+                      _code("a()", STALE), _code("b()", STALE)], "metadata": {}}
+
+
+def _install_text(nb):
+    return "".join(nb["cells"][0]["outputs"][-1]["text"])
+
+
+def test_harvesting_pieces_on_two_wheels_rewrites_the_install_line_to_name_both_builds(monkeypatch, tmp_path):
+    path = tmp_path / "nb.ipynb"
+    path.write_text(json.dumps(_install_nb(), indent=1))
+    ctx = {"label": "Serverless environment 6"}
+    m1 = {"commands": [_guard_cmd(prov=PROV), _cmd(2, "a()", ANSI)]}
+    m2 = {"commands": [_guard_cmd(prov=OTHER), _cmd(3, "b()", ANSI)]}
+    hno.harvest_run_outputs(11, "p", path, cells=range(0, 2), run_context=ctx, model=m1)
+    assert "build 1234567890ab" in _install_text(json.loads(path.read_text())) and "999999999999" not in _install_text(json.loads(path.read_text()))
+    hno.harvest_run_outputs(12, "p", path, cells=range(2, 3), run_context=ctx, model=m2)  # install cell is NOT in this piece
+    nb = json.loads(path.read_text())
+    assert "build 1234567890ab" in _install_text(nb) and "build 999999999999" in _install_text(nb)
+    assert nb["metadata"]["geobrix_run"]["mixed_wheels"] is True and len(nb["metadata"]["geobrix_run"]["runs"]) == 2
+    assert nb["cells"][1]["outputs"][0]["text"] == ["a\n", "b\n"] and nb["cells"][2]["outputs"][0]["text"] == ["a\n", "b\n"]
+    hno.harvest_run_outputs(13, "p", path, cells=range(2, 3), run_context=ctx, model={"commands": [_guard_cmd(prov=PROV), _cmd(3, "b()", ANSI)]})
+    nb = json.loads(path.read_text())  # piece 2 rerun on wheel 1: one wheel again, the install line is the plain one
+    assert "999999999999" not in _install_text(nb) and _install_text(nb).startswith("GeoBrix 0.6.0+env6 installed (build 1234567890ab")
+    assert "mixed_wheels" not in nb["metadata"]["geobrix_run"]
 
 
 def test_the_guard_prints_a_provenance_line_with_the_wheel_sha256(tmp_path, monkeypatch):

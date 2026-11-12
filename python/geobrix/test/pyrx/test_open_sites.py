@@ -295,12 +295,13 @@ OPEN_SITES = {
     ),
     (
         "bench/oracle_tables/spec_warp.py",
-        'with rasterio.open(path, "w", **profile) as dst:',
+        'with rasterio.open(local, "w", **profile) as dst:',
     ): (
         1,
-        "the dem_cog_overviews fixture: writes a GeoTIFF in the builder's scratch directory (GeoBrix's own fixture)",
+        "the dem_cog_overviews fixture: writes a GeoTIFF in a local temp directory (GeoBrix's own fixture), then copies "
+        "it whole to the builder's scratch directory (a UC Volume takes no random-access writes)",
     ),
-    ("bench/oracle_tables/spec_warp.py", 'with rasterio.open(path, "r+") as dst:'): (
+    ("bench/oracle_tables/spec_warp.py", 'with rasterio.open(local, "r+") as dst:'): (
         1,
         "the dem_cog_overviews fixture: adds the overview to the GeoTIFF written a line above",
     ),

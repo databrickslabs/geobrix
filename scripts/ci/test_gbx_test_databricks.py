@@ -1958,6 +1958,8 @@ def test_the_chunk_records_its_setup_phases_in_order(shards):
         assert 'phase("%s")' % hook in run
     assert "phases=PHASES_OUT()" in run, "the result carries the phases"
     assert run.index('print("phases so far:"') > run.index("sys.stderr = Tee("), "a killed chunk's log holds its early phases"
+    write = run.index('json.dump(result, open(root + "/out/result.json", "w"))')
+    assert run.index('os.makedirs(root + "/out", exist_ok=True)', run.index("result = dict(shard=") - 600) < write, "a lost scratch is named, not a crash"
 
 
 def test_a_serverless_chunk_checks_its_workers_while_it_unpacks(shards):

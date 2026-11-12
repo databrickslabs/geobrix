@@ -1066,6 +1066,11 @@ except Exception as exc:
 ran_n = state["passed"] + state["failed"] + state["skipped"]
 # pytest stopped at --maxfail before the end of the chunk: its times are partial (lower bounds), not a full sample
 maxfail_hit = bool(MAXFAIL) and state["failed"] + state["errors"] >= MAXFAIL and ran_n < state["total"]
+if not os.path.isdir(root + "/out"):  # 2026-11-12 (tst-sls-b2, Serverless): the chunk's scratch went during its run; say so
+    LOST = {"root": os.path.isdir(root), "base": os.path.isdir(base), "scratch": os.path.isdir(scratch), "uid": os.getuid()}
+    os.makedirs(root + "/out", exist_ok=True)
+    state["reason"] = state["reason"] or "the chunk's scratch %%s went during its run, its junit and log with it (%%s)" %% (root, LOST)
+    print(state["reason"], flush=True)
 result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,

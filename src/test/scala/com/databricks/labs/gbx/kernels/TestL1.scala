@@ -11,16 +11,11 @@ object TestL1 {
     private val companions: Seq[String] = Seq(
         // rasterx
         "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox",
-        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_NumBands",
-        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_UpperLeftY",
-        "com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Width",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_H3_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Quadbin_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_BNG_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.agg.RST_Custom_RasterizeAgg",
         "com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX",
         "com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY",
         "com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ",
         // gridx/bng

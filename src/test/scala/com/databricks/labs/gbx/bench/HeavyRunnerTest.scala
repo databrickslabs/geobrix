@@ -27,14 +27,15 @@ class HeavyRunnerTest extends AnyFunSuite with BeforeAndAfterAll {
     val rows = HeavyRunner.runPureCore(
       corpusRoot = dir.toString,
       corpus = BenchManifest.read(dir.resolve("corpus.json").toString),
-      fns = Seq("rst_width", "rst_numbands"),
+      fns = Seq("rst_fromcontent", "rst_boundingbox"),
       runId = "t", warmup = 1, measured = 2, argsByFn = Map.empty)
 
     assert(rows.nonEmpty)
     assert(rows.forall(_.api == "heavyweight"))
     val byFn = rows.groupBy(_.fn)
-    assert(byFn("rst_width").head.status == "ok")
-    assert(byFn("rst_width").head.output_fingerprint.contains("scalar"))
+    assert(byFn("rst_fromcontent").head.status == "ok")
+    assert(byFn("rst_fromcontent").head.output_fingerprint.contains("raster"))
+    assert(byFn("rst_boundingbox").head.status == "ok")
   }
 
   test("sink is invoked per row and JsonlAppender flushes byte-identical lines") {
@@ -47,7 +48,7 @@ class HeavyRunnerTest extends AnyFunSuite with BeforeAndAfterAll {
          | "row_pool":{"tile_px":1200,"bands":1,"dtype":"float32","tiles":[]}}""".stripMargin
     Files.write(dir.resolve("corpus.json"), json.getBytes)
     val corpus = BenchManifest.read(dir.resolve("corpus.json").toString)
-    val fns = Seq("rst_width", "rst_numbands")
+    val fns = Seq("rst_boundingbox", "rst_worldtorastercoordy")
 
     // Sink fires once per produced row, in order.
     val sunk = scala.collection.mutable.ArrayBuffer.empty[BenchRow]
@@ -128,12 +129,12 @@ class HeavyRunnerTest extends AnyFunSuite with BeforeAndAfterAll {
       val corpus = BenchManifest.read(dir.resolve("corpus.json").toString)
 
       val rows = HeavyRunner.runSparkPath(
-        spark, dir.toString, corpus, fns = Seq("rst_width"),
+        spark, dir.toString, corpus, fns = Seq("rst_boundingbox"),
         runId = "t", rowCounts = Seq(4, 8), warmup = 1, measured = 1, argsByFn = Map.empty)
 
       assert(rows.nonEmpty)
-      assert(rows.filter(_.fn == "rst_width").forall(_.status == "ok"),
-        s"all rst_width spark-path rows should be ok: ${rows.map(r => r.fn -> r.status)}")
+      assert(rows.filter(_.fn == "rst_boundingbox").forall(_.status == "ok"),
+        s"all rst_boundingbox spark-path rows should be ok: ${rows.map(r => r.fn -> r.status)}")
       assert(rows.exists(_.rows == 8L))
     } finally spark.stop()
   }

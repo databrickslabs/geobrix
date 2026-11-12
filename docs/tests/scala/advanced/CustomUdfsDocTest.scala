@@ -40,9 +40,9 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
         val dsFromBytes = RasterDriver.readFromBytes(bytes, Map.empty[String, String])
 
         // Use execute methods as shown in docs
-        val width = RST_Width.execute(dsFromBytes)
+        val width = dsFromBytes.GetRasterXSize()
         val height = dsFromBytes.GetRasterYSize()
-        val numBands = RST_NumBands.execute(dsFromBytes)
+        val numBands = dsFromBytes.GetRasterCount()
 
         width should be > 0
         height should be > 0
@@ -55,9 +55,9 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
         val customStatsUDF = udf((tileBytes: Array[Byte]) => {
             val ds: Dataset = RasterDriver.readFromBytes(tileBytes, Map.empty[String, String])
             try {
-                val width = RST_Width.execute(ds)
+                val width = ds.GetRasterXSize()
                 val height = ds.GetRasterYSize()
-                val numBands = RST_NumBands.execute(ds)
+                val numBands = ds.GetRasterCount()
 
                 Map(
                   "width" -> width.toString,
@@ -82,9 +82,9 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("basic accessor execute methods") {
-        val width = RST_Width.execute(testDataset)
+        val width = testDataset.GetRasterXSize()
         val height = testDataset.GetRasterYSize()
-        val numBands = RST_NumBands.execute(testDataset)
+        val numBands = testDataset.GetRasterCount()
         val format = testDataset.GetDriver().getShortName
 
         width shouldBe 2400
@@ -104,7 +104,7 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
     test("coordinate accessor execute methods") {
         val gt = testDataset.GetGeoTransform()
         val upperLeftX = gt(0)
-        val upperLeftY = RST_UpperLeftY.execute(testDataset)
+        val upperLeftY = testDataset.GetGeoTransform()(3)
         val scaleX = gt(1)
         val scaleY = gt(5)
 
@@ -126,7 +126,7 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
             }
         }
 
-        val result = safeExecute(ds => RST_Width.execute(ds))(bytes)
+        val result = safeExecute(ds => ds.GetRasterXSize())(bytes)
         result should be > 0
     }
 

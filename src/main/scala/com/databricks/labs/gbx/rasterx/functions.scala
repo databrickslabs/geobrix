@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors._
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Custom_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg}
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromContent
 import com.databricks.labs.gbx.rasterx.expressions.web._
@@ -10,7 +10,7 @@ import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.Column
 
 /**
-  * RasterX API entry point: Column-based helpers (e.g. `rst_width`) for the `gbx_rst_*` functions.
+  * RasterX API entry point: Column-based helpers (e.g. `rst_boundingbox`) for the `gbx_rst_*` functions.
   *
   * The helpers call the functions by SQL name, so they need the session to have them. Registration belongs to
   * the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
@@ -19,9 +19,6 @@ object functions extends Serializable {
 
     // Accessors
     def rst_boundingbox(tile: Column): Column = ColumnAdapter(RST_BoundingBox.name, Seq(tile))
-    def rst_numbands(tile: Column): Column = ColumnAdapter(RST_NumBands.name, Seq(tile))
-    def rst_upperlefty(tile: Column): Column = ColumnAdapter(RST_UpperLeftY.name, Seq(tile))
-    def rst_width(tile: Column): Column = ColumnAdapter(RST_Width.name, Seq(tile))
 
     // Aggregators
     /** UDAF: rasterize a group's H3 cells into one tile (pixel-centroid burn).
@@ -165,10 +162,6 @@ object functions extends Serializable {
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper (see register/#34).
 
     // Operations
-    def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
-    def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
-        ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
     def rst_worldtorastercoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_WorldToRasterCoordY.name, Seq(tile, x, y))
 
@@ -178,10 +171,6 @@ object functions extends Serializable {
     def rst_fromcontent(content: Column, driver: String): Column = rst_fromcontent(content, lit(driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper or scalar
     // overloads (the JVM cannot read UC Volumes -- see register/#34). Use the Python/SQL binding.
-    def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
-        rst_rastertoworldcoordx(tile, lit(x), lit(y))
-    def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
-        rst_worldtorastercoordx(tile, lit(x), lit(y))
     def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordy(tile, lit(x), lit(y))
 

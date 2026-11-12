@@ -49,8 +49,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
             base.collect()
             Seq(
               rst_boundingbox(col("clipped")),
-              rst_rastertoworldcoordx(col("clipped"), lit(10), lit(10)),
-              rst_worldtorastercoordx(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0))
             ).foreach(f => base.select(f).collect())
             base.unpersist()

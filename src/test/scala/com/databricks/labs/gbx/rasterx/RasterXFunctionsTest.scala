@@ -21,21 +21,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_numbands should create Column") {
-        val result = functions.rst_numbands(col("tile"))
-        result should not be null
-    }
-
-    test("rst_upperlefty should create Column") {
-        val result = functions.rst_upperlefty(col("tile"))
-        result should not be null
-    }
-
-    test("rst_width should create Column") {
-        val result = functions.rst_width(col("tile"))
-        result should not be null
-    }
-
     // ====== Constructor Functions ======
 
     test("rst_fromcontent should accept content and driver") {
@@ -45,16 +30,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     // ====== Operation Functions ======
 
-    test("rst_rastertoworldcoordx should accept tile, pixelX, and pixelY") {
-        val result = functions.rst_rastertoworldcoordx(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
-    test("rst_worldtorastercoordx should accept tile, worldX, and worldY") {
-        val result = functions.rst_worldtorastercoordx(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
     test("rst_worldtorastercoordy should accept tile, worldX, and worldY") {
         val result = functions.rst_worldtorastercoordy(col("tile"), col("x"), col("y"))
         result should not be null
@@ -63,10 +38,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
     // ====== Scalar Literal Overloads ======
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
-        // int scalars
-        functions.rst_rastertoworldcoordx(col("tile"), 1, 2) should not be null
-        // double scalars
-        functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null
+        functions.rst_worldtorastercoordy(col("tile"), 1.0, 2.0) should not be null
     }
 
     // ====== Registration Tests ======

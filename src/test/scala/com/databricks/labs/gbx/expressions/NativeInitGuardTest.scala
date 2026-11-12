@@ -51,7 +51,7 @@ class NativeInitGuardTest extends AnyFunSuite {
         }
         // the scan must see the known native expressions, or it checks nothing
         val names = exprFiles.map(_._1)
-        Seq("ST_TransformCrs.scala", "RST_BoundingBox.scala", "RST_FromContent.scala", "RST_Width.scala").foreach { n =>
+        Seq("ST_TransformCrs.scala", "RST_BoundingBox.scala", "RST_FromContent.scala", "RST_WorldToRasterCoordY.scala").foreach { n =>
             assert(names.exists(_.endsWith("/" + n)), s"$n not seen as a native expression: the guard is blind")
         }
         val missing = exprFiles.collect { case (p, s) if initCall.findFirstIn(s).isEmpty => p }

@@ -75,9 +75,9 @@ val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobri
 val metadata = rasters.select(
   col("path"),
   rx.rst_boundingbox(col("tile")).alias("bbox"),
-  rx.rst_width(col("tile")).alias("width"),
+  call_function("gbx_rst_width", col("tile")).alias("width"),
   call_function("gbx_rst_height", col("tile")).alias("height"),
-  rx.rst_numbands(col("tile")).alias("num_bands"),
+  call_function("gbx_rst_numbands", col("tile")).alias("num_bands"),
   call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 )
 
@@ -116,9 +116,9 @@ val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobri
 val catalog = rasters.select(
   col("path"),
   rx.rst_boundingbox(col("tile")).alias("bbox"),
-  rx.rst_width(col("tile")).alias("width"),
+  call_function("gbx_rst_width", col("tile")).alias("width"),
   call_function("gbx_rst_height", col("tile")).alias("height"),
-  rx.rst_numbands(col("tile")).alias("bands"),
+  call_function("gbx_rst_numbands", col("tile")).alias("bands"),
   call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 ).filter(
   col("width") > 1000 && col("height") > 1000
@@ -266,64 +266,6 @@ result.show(truncate = false)
 (WKB binary — bounding POLYGON of the raster extent in EPSG:32618)
 """.trim
 
-  val rst_numbands_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands: red, NIR, green).
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_numbands(col("tile")).alias("num_bands"))
-result.show()
-""".trim
-
-  val rst_numbands_scala_example_output: String =
-    """
-+---------+
-|num_bands|
-+---------+
-|3        |
-+---------+
-""".trim
-
-  val rst_width_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_width(col("tile")).alias("width"))
-result.show()
-""".trim
-
-  val rst_width_scala_example_output: String =
-    """
-+-----+
-|width|
-+-----+
-|236  |
-+-----+
-""".trim
-
-  val rst_upperlefty_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_upperlefty(col("tile")).alias("upper_left_y"))
-result.show()
-""".trim
-
-  val rst_upperlefty_scala_example_output: String =
-    """
-+---------------+
-|upper_left_y   |
-+---------------+
-|-10790470.0    |
-+---------------+
-""".trim
-
   // ===========================================================================
   // Tile ops & constructors family (Scala)
   // ===========================================================================
@@ -449,44 +391,6 @@ result.show()
   // ========================================================================
   // Coordinate Transforms & Tiling
   // ========================================================================
-
-  val rst_rastertoworldcoordx_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_rastertoworldcoordx(col("tile"), lit(100), lit(80)).alias("easting"))
-result.show(truncate = false)
-""".trim
-
-  val rst_rastertoworldcoordx_scala_example_output: String =
-    """
-+-------+
-|easting|
-+-------+
-|500980 |
-+-------+
-"""
-
-  val rst_worldtorastercoordx_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_worldtorastercoordx(col("tile"), lit(554880), lit(4545120)).alias("pixel_col"))
-result.show(truncate = false)
-""".trim
-
-  val rst_worldtorastercoordx_scala_example_output: String =
-    """
-+---------+
-|pixel_col|
-+---------+
-|5490     |
-+---------+
-"""
 
   val rst_worldtorastercoordy_scala_example: String =
     """
@@ -1452,11 +1356,11 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-// The wrapper calls gbx_rst_width by name. A Python step ran gbx.register(spark)
+// The wrapper calls gbx_rst_boundingbox by name. A Python step ran gbx.register(spark)
 // in this session, so the name resolves.
-val widths = spark.table("main.geobrix.rasters")
-  .select(col("path"), rx.rst_width(col("tile")).alias("width"))
-widths.show()
+val boxes = spark.table("main.geobrix.rasters")
+  .select(col("path"), rx.rst_boundingbox(col("tile")).alias("bbox"))
+boxes.show()
 """.trim
 
   val jvm_job_uc_example: String =

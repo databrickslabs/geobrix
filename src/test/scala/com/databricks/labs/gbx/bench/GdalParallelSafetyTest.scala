@@ -52,7 +52,7 @@ class GdalParallelSafetyTest extends AnyFunSuite {
         .select(col("raster"))
 
       // Run a spark-path column over them concurrently; noop sink so it's pure compute.
-      df.select(BenchDispatch.column("rst_width", col("raster"), Map.empty).alias("o"))
+      df.select(BenchDispatch.column("rst_boundingbox", col("raster"), Map.empty).alias("o"))
         .write.format("noop").mode("overwrite").save()
 
       // Reaching here = parallel GDAL in one JVM is safe; a driver race would have SIGSEGV'd

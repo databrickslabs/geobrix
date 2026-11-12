@@ -38,10 +38,10 @@ registered = gbx.register(spark)
 
 # Each name maps to the level it runs at
 print(len(registered), "functions registered")
-print("gbx_rst_width runs at level", registered["gbx_rst_width"].level)
+print("gbx_rst_boundingbox runs at level", registered["gbx_rst_boundingbox"].level)
 
 # Read the signature of one function
-spark.sql("DESCRIBE FUNCTION gbx_rst_width").show(truncate=False)"""
+spark.sql("DESCRIBE FUNCTION gbx_rst_boundingbox").show(truncate=False)"""
 
 VERIFY_SQL_FUNCTIONS = """-- Read the signature of one function
 DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
@@ -49,11 +49,11 @@ DESCRIBE FUNCTION EXTENDED gbx_rst_boundingbox;"""
 # Example output (displayed under code via CodeFromTest outputConstant)
 VERIFY_PYTHON_INSTALLATION_output = """
 <N> functions registered
-gbx_rst_width runs at level L1
+gbx_rst_boundingbox runs at level L1
 +------------------------------------+
 |function_desc                       |
 +------------------------------------+
-|Function: gbx_rst_width             |
+|Function: gbx_rst_boundingbox       |
 |...                                 |
 +------------------------------------+"""
 

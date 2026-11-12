@@ -156,8 +156,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
           .select(
             col("tile"),
             col("tile.metadata").alias("metadata_direct"),
-            rst_width(col("tile")).alias("width"),
-            rst_numbands(col("tile")).alias("bands")
+            rst_boundingbox(col("tile")).alias("bbox")
           )
 
         val result = df.collect()
@@ -168,10 +167,9 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
         metadataDirect should contain key "driver"
 
         // Verify accessor functions work with tile
-        val width = result(0).getAs[Int]("width")
-        val bands = result(0).getAs[Int]("bands")
-        width should be > 0
-        bands should be > 0
+        val bbox = result(0).getAs[Array[Byte]]("bbox")
+        bbox should not be null
+        bbox.length should be > 0
     }
 
     test("Filter tiles by metadata fields") {

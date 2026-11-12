@@ -15,15 +15,15 @@ def test_verify_python_installation_constant():
     assert hasattr(verify_installation, "VERIFY_PYTHON_INSTALLATION")
     s = verify_installation.VERIFY_PYTHON_INSTALLATION
     assert "gbx.register(spark)" in s
-    assert "DESCRIBE FUNCTION gbx_rst_width" in s and "SHOW" not in s
+    assert "DESCRIBE FUNCTION gbx_rst_boundingbox" in s and "SHOW" not in s
 
 
 def test_verify_python_snippet_runs(spark):
-    """Installation doc: the verify snippet runs and reports gbx_rst_width at a level."""
+    """Installation doc: the verify snippet runs and reports gbx_rst_boundingbox at a level."""
     s = verify_installation.VERIFY_PYTHON_INSTALLATION
     ns = {"spark": spark}
     exec(compile(s, "VERIFY_PYTHON_INSTALLATION", "exec"), ns)
-    assert ns["registered"]["gbx_rst_width"].level in ("L0", "L1", "L3")
+    assert ns["registered"]["gbx_rst_boundingbox"].level in ("L0", "L1", "L3")
 
 
 def test_verify_sql_functions_constant():

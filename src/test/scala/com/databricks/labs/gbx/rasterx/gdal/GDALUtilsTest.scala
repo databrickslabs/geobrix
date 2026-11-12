@@ -98,29 +98,6 @@ class GDALUtilsTest extends AnyFunSuite {
         GDAL.getNoDataConstant(GDT_Float64) shouldBe Double.MinValue
     }
 
-    test("GDAL toWorldCoord should convert pixel to geographic coordinates") {
-        // Simple identity transform with 1-degree resolution
-        val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 10.5 +- 0.01
-        yGeo shouldBe 20.5 +- 0.01
-    }
-
-    test("GDAL toWorldCoord should handle offset geotransform") {
-        // Start at (100, 200) with 0.1-degree resolution
-        val gt = Array(100.0, 0.1, 0.0, 200.0, 0.0, 0.1)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 101.05 +- 0.01
-        yGeo shouldBe 202.05 +- 0.01
-    }
-
-    test("GDAL toWorldCoord should handle rotated geotransform") {
-        val gt = Array(0.0, 1.0, 0.5, 0.0, 0.5, 1.0)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 10, 20)
-        xGeo shouldBe 20.75 +- 0.01 // 0 + (10.5)*1 + (20.5)*0.5
-        yGeo shouldBe 25.75 +- 0.01 // 0 + (10.5)*0.5 + (20.5)*1
-    }
-
     test("GDAL fromWorldCoord should convert geographic to pixel coordinates") {
         val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
         val (x, y) = GDAL.fromWorldCoord(gt, 10.5, 20.5)
@@ -142,9 +119,10 @@ class GDALUtilsTest extends AnyFunSuite {
         y shouldBe -1
     }
 
-    test("GDAL fromWorldCoord should invert toWorldCoord") {
+    test("GDAL fromWorldCoord should give the pixel whose centre it is given") {
         val gt = Array(50.0, 0.5, 0.0, 100.0, 0.0, 0.5)
-        val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 15, 25)
+        // the centre of pixel (15, 25)
+        val (xGeo, yGeo) = (50.0 + 15.5 * 0.5, 100.0 + 25.5 * 0.5)
         val (xPix, yPix) = GDAL.fromWorldCoord(gt, xGeo, yGeo)
         xPix shouldBe 15
         yPix shouldBe 25

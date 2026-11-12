@@ -151,14 +151,6 @@ object GDAL {
         if (nd.undeclared.isEmpty) Seq.empty else Seq("-dstnodata", nd.list)
     }
 
-    /** Converts pixel (x, y) to geographic (xGeo, yGeo) using the 6-element geotransform. */
-    def toWorldCoord(gt: Array[Double], x: Int, y: Int): (Double, Double) = {
-        val offset = 0.5 // offset to center of the pixel
-        val xGeo = gt(0) + (x + offset) * gt(1) + (y + offset) * gt(2)
-        val yGeo = gt(3) + (x + offset) * gt(4) + (y + offset) * gt(5)
-        (xGeo, yGeo)
-    }
-
     /** Converts geographic (xGeo, yGeo) to pixel (x, y) using the 6-element geotransform. */
     def fromWorldCoord(gt: Array[Double], xGeo: Double, yGeo: Double): (Int, Int) = {
         val det = gt(1) * gt(5) - gt(2) * gt(4)

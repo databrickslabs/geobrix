@@ -74,7 +74,7 @@ def basic_python_udf_example(spark):
             # Use execute methods
             metadata = {}
             # metadata["format"] = dataset.GetDriver().ShortName
-            # metadata["width"] = str(accessors.RST_Width.execute(dataset))
+            # metadata["width"] = str(dataset.RasterXSize)
             # metadata["height"] = str(dataset.RasterYSize)
             
             # Add custom logic

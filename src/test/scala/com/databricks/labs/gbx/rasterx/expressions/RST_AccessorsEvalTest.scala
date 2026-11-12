@@ -23,10 +23,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
             val base = df.cache()
             base.collect()
             Seq(
-              rst_boundingbox(col("raster")),
-              rst_numbands(col("raster")),
-              rst_upperlefty(col("raster")),
-              rst_width(col("raster"))
+              rst_boundingbox(col("raster"))
             ).foreach(f => base.select(f).collect())
             base.unpersist()
         }
@@ -49,7 +46,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
 
     }
 
-    test("RST_Width returns NULL (not 0) on a corrupt raster") {
+    test("RST_BoundingBox returns NULL on a corrupt raster") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
@@ -57,8 +54,8 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-        val res = df.select(rst_width(col("raster")).as("w")).collect()
-        assert(res.head.get(0) == null, "corrupt raster width must be NULL, not the 0 sentinel")
+        val res = df.select(rst_boundingbox(col("raster")).as("b")).collect()
+        assert(res.head.get(0) == null, "corrupt raster bounding box must be NULL")
     }
 
 }

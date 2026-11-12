@@ -19,7 +19,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   override def afterAll(): Unit = if (ds != null) ds.delete()
 
   test("registry covers the ds-in functions with categories + min_bands") {
-    assert(BenchDispatch.all.toSet.contains("rst_width"))
+    assert(BenchDispatch.all.toSet.contains("rst_boundingbox"))
     // 19 representative + 15 Task 2 scalar + 7 Task 3 coord + 6 Task 4 map/struct
     // + 13 Task 5 tile-out scalar-args + 10 Task 6 tile-out complex-args
     // + 5 bucket-C C1/C2 (readers + buildoverviews + subdataset fns; rst_fromfile
@@ -78,7 +78,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // band, setsrid, setcrs, getsubdataset and tri left too (0.28x to 1.16x of light on dedicated compute): 33 - 5 = 28.
     // crs, format, height, memsize, pixelheight, pixelwidth, rotation, scalex, scaley, skewx, skewy, srid, upperleftx and
     // rastertoworldcoordy left too (1.05x to 1.19x of the Arrow light form on dedicated compute): 28 - 14 = 14.
-    assert(BenchDispatch.all.size == 14)
+    // width, numbands, upperlefty, rastertoworldcoordx and worldtorastercoordx left too (pooled 1.07x to 1.20x of the
+    // Arrow light form on dedicated compute, under 1.2x at both scales): 14 - 5 = 9.
+    assert(BenchDispatch.all.size == 9)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -100,9 +102,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.minBands("rst_width") == 1)
-    assert(BenchDispatch.category("rst_upperlefty") == "accessor")
-    assert(BenchDispatch.inputKind("rst_upperlefty") == "tile")
+    assert(BenchDispatch.minBands("rst_boundingbox") == 1)
+    assert(BenchDispatch.category("rst_worldtorastercoordy") == "accessor")
+    assert(BenchDispatch.inputKind("rst_worldtorastercoordy") == "tile")
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
@@ -124,9 +126,11 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.bngRasterizeCells().toSet.size == BenchDispatch.bngRaggNCells)
   }
 
-  test("pureCore runs an accessor, returning a fingerprint") {
-    val wfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_width", ds, Map.empty))
-    assert(wfp.get("kind").asText() == "scalar")
+  test("pureCore runs a timing-only accessor, and pureCoreBytes fingerprints the constructor's raster") {
+    assert(BenchDispatch.pureCore("rst_boundingbox", ds, Map.empty) == BenchFingerprint.empty)
+    val bytes = com.databricks.labs.gbx.rasterx.gdal.RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff"))
+    val fp = new ObjectMapper().readTree(BenchDispatch.pureCoreBytes("rst_fromcontent", bytes, Map.empty))
+    assert(fp.get("kind").asText() == "raster")
   }
 
 }

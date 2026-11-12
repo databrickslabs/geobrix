@@ -220,7 +220,7 @@ val ds = RasterDriver.readFromBytes(bytes, Map.empty)
 ```scala
 // BAD - leaks GDAL resources
 val ds = gdal.Open(path)
-RST_Width.execute(ds)
+RST_BoundingBox.execute(ds)
 // forgotten cleanup!
 ```
 
@@ -230,7 +230,7 @@ RST_Width.execute(ds)
 // GOOD - explicit cleanup
 val ds = gdal.Open(path)
 try {
-  RST_Width.execute(ds)
+  RST_BoundingBox.execute(ds)
 } finally {
   RasterDriver.releaseDataset(ds)
 }

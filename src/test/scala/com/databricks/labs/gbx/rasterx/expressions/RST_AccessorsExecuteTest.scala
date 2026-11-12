@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_NumBands, RST_UpperLeftY, RST_Width}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -27,23 +27,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val bbox = RST_BoundingBox.execute(ds)
         bbox should not be null
         bbox.isEmpty shouldBe false
-    }
-
-    test("RST_NumBands should return the number of bands of the raster") {
-        val bandCount = RST_NumBands.execute(ds)
-        bandCount should be > 0
-        bandCount shouldBe ds.GetRasterCount()
-    }
-
-    test("RST_UpperLeftY should return the upper left y coordinate of the raster") {
-        val uly = RST_UpperLeftY.execute(ds)
-        uly shouldBe ds.GetGeoTransform()(3)
-    }
-
-    test("RST_Width should return width of the raster") {
-        val width = RST_Width.execute(ds)
-        width should be > 0
-        width shouldBe ds.GetRasterXSize()
     }
 
 }

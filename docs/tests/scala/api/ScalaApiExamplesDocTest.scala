@@ -25,8 +25,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("RasterX accessor signatures compile") {
     val _: Column = rx.rst_boundingbox(col("tile"))
-    val _: Column = rx.rst_width(col("tile"))
-    val _: Column = rx.rst_numbands(col("tile"))
+    val _: Column = rx.rst_worldtorastercoordy(col("tile"), col("x"), col("y"))
     succeed
   }
 
@@ -70,14 +69,10 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("ScalaApiExamples RasterX per-function snippet vals are non-empty") {
     assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_numbands_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_width_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples RasterX per-function output vals are non-empty") {
     assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_numbands_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_width_scala_example_output.nonEmpty)
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance snippet vals are non-empty") {
@@ -143,35 +138,25 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("RasterX rst_boundingbox rst_numbands rst_width signatures compile") {
-    val _: Column = rx.rst_boundingbox(col("tile"))
-    val _: Column = rx.rst_numbands(col("tile"))
-    val _: Column = rx.rst_width(col("tile"))
-    succeed
-  }
-
-  test("RasterX accessor signatures compile — the accessors with a wrapper") {
-    val _: Column = rx.rst_upperlefty(col("tile"))
-    succeed
-  }
-
   test("ScalaApiExamples accessor snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_upperlefty_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_worldtorastercoordy_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples accessor output vals are non-empty") {
-    assert(ScalaApiExamples.rst_upperlefty_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_worldtorastercoordy_scala_example_output.nonEmpty)
   }
 
   test("JVM job examples compile and are non-empty") {
     // Compile-only, like the rest of this suite: the signatures are the ones the docs show.
-    def widths(spark: SparkSession) =
+    def boxes(spark: SparkSession) =
       spark.table("main.geobrix.rasters")
-        .select(col("path"), rx.rst_width(col("tile")).alias("width"))
+        .select(col("path"), rx.rst_boundingbox(col("tile")).alias("bbox"))
     def ring(spark: SparkSession) =
       spark.sql("SELECT main.geobrix.gbx_bng_kring('TQ3080', 1) AS cells")
-    val _ = (widths _, ring _)
-    assert(ScalaApiExamples.jvm_job_dataframe_example.contains("rx.rst_width"))
+    val _ = (boxes _, ring _)
+    assert(ScalaApiExamples.jvm_job_dataframe_example.contains("rx.rst_boundingbox"))
     assert(ScalaApiExamples.jvm_job_uc_example.contains("main.geobrix.gbx_bng_kring"))
   }
 }

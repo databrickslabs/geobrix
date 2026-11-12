@@ -1,10 +1,8 @@
 package com.databricks.labs.gbx.bench
 
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
-import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
-import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
-import com.databricks.labs.gbx.rasterx.expressions.accessors._
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_BoundingBox
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.web.RST_TileXYZ
 import com.databricks.labs.gbx.rasterx.functions
@@ -32,13 +30,10 @@ object BenchDispatch {
   private val multiBand: Set[String] = Set.empty
 
   private val cats: Map[String, String] = Map(
-    "rst_width" -> ACC, "rst_numbands" -> ACC,
-    // scalar accessors (crs, format, height, memsize, pixelheight, pixelwidth, rotation, scalex, scaley, skewx, skewy,
-    // srid and upperleftx have no heavyweight level: they measured under 1.2x of the Arrow light form.)
-    "rst_upperlefty" -> ACC,
-    // coordinate / index accessors (rastertoworldcoordy has no heavyweight level, as above)
-    "rst_rastertoworldcoordx" -> ACC,
-    "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
+    // (the other accessors that return one value have no heavyweight level: they measured under 1.2x of the Arrow
+    // light form.)
+    // coordinate / index accessors
+    "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
     // timing-only accessors
     "rst_boundingbox" -> ACC,
@@ -257,17 +252,7 @@ object BenchDispatch {
     // "No such file or directory" and returns a null dataset.
     Files.createDirectories(NodeFilePathUtil.rootPath)
     fn match {
-    case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
-    case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    // scalar accessors
-    case "rst_upperlefty"  => BenchFingerprint.ofScalar(RST_UpperLeftY.execute(ds))
-    // coordinate / index accessors.
-    // raster->world: forward affine; X = pair._1.
-    case "rst_rastertoworldcoordx" =>
-      BenchFingerprint.ofScalar(RST_RasterToWorldCoordX.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._1)
     // world->raster: timing-only (CRS-dependent inverse-affine index; not comparable).
-    case "rst_worldtorastercoordx" =>
-      RST_WorldToRasterCoordX.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
     case "rst_worldtorastercoordy" =>
       RST_WorldToRasterCoordY.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
     // rst_tilexyz: timing-only (render/encode-dependent bytes; not comparable).
@@ -368,15 +353,8 @@ object BenchDispatch {
   def column(fn: String, tile: Column, a: Map[String, String]): Column = {
     import functions._
     fn match {
-      case "rst_width"      => rst_width(tile)
-      case "rst_numbands"   => rst_numbands(tile)
-      // scalar accessors
-      case "rst_upperlefty"  => rst_upperlefty(tile)
-      // coordinate / index accessors
-      case "rst_rastertoworldcoordx" => rst_rastertoworldcoordx(tile, argI(a, "x", 64), argI(a, "y", 64))
       // world->raster + tilexyz are pure-core-only; the column form is here only
       // to keep the match exhaustive (the spark-path runner filters by modes).
-      case "rst_worldtorastercoordx" => rst_worldtorastercoordx(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_worldtorastercoordy" => rst_worldtorastercoordy(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
       case "rst_boundingbox"   => rst_boundingbox(tile)

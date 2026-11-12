@@ -35,7 +35,7 @@ A few functions are not measured yet. They run the JVM level until a measurement
 A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
 
 {/* BEGIN GENERATED jar-functions: edit manifest/functions.json, then run gbx:manifest:gen */}
-53 functions run on the JVM when the JAR is present.
+48 functions run on the JVM when the JAR is present.
 
 ### RasterX
 
@@ -46,13 +46,8 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 | <Link id="gbx_rst_custom_rasterize_agg" />`gbx_rst_custom_rasterize_agg` | RasterX |  |
 | <Link id="gbx_rst_fromcontent" />`gbx_rst_fromcontent` | RasterX |  |
 | <Link id="gbx_rst_h3_rasterize_agg" />`gbx_rst_h3_rasterize_agg` | RasterX |  |
-| <Link id="gbx_rst_numbands" />`gbx_rst_numbands` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_quadbin_rasterize_agg" />`gbx_rst_quadbin_rasterize_agg` | RasterX |  |
-| <Link id="gbx_rst_rastertoworldcoordx" />`gbx_rst_rastertoworldcoordx` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_tilexyz" />`gbx_rst_tilexyz` | RasterX | A virtual, NULL or error tile runs in Python. |
-| <Link id="gbx_rst_upperlefty" />`gbx_rst_upperlefty` | RasterX | A virtual tile runs in Python. |
-| <Link id="gbx_rst_width" />`gbx_rst_width` | RasterX | A virtual tile runs in Python. |
-| <Link id="gbx_rst_worldtorastercoordx" />`gbx_rst_worldtorastercoordx` | RasterX | A virtual tile runs in Python. |
 | <Link id="gbx_rst_worldtorastercoordy" />`gbx_rst_worldtorastercoordy` | RasterX | A virtual tile runs in Python. |
 
 ### GridX
@@ -114,7 +109,7 @@ A note "A virtual tile runs in Python" marks a tile function that reads bytes on
 from databricks.labs.gbx import register
 
 chosen = register(spark)
-chosen["gbx_rst_width"].level   # 'L1' on dedicated compute with the JAR, else 'L3'
+chosen["gbx_rst_boundingbox"].level   # 'L1' on dedicated compute with the JAR, else 'L3'
 ```
 
 When the JVM level cannot run, `register` prints one line that names the level and the reason. See [GeoBrix says why](./execution-tiers#geobrix-says-why).

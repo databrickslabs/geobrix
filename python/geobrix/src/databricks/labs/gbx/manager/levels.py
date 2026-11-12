@@ -157,27 +157,18 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # filter has no JVM level: its mean filter of a gray + alpha tile left a different NoData mask at the empty window
     # than light, the cause was not traced, and it was never measured against light. It takes the family order, light.
     "gbx_rst_filter": ("L3",),
-    # The accessors below that return one value (a number or a polygon's WKB) are JVM first: reading a header was 0.26x
-    # (boundingbox) and 0.18x (width) of the pickled light time at 4x rows (dedicated, 1 + 4 x m5d.2xlarge, DBR 19, equal
-    # output). A value of this kind cannot sit under `explode`, so the SQL dispatch wrapper that sends a virtual tile to
-    # light (the JVM raises `VirtualTileException` for one) is usable. Against the light form that carries tiles as Arrow
-    # batches, both levels are bound by the scan of the tile, and 14 accessors took 1.05x to 1.19x less time on the JVM at
-    # 4x and 16x tiles, under the 1.2x line at both: crs, format, height, memsize, pixelheight, pixelwidth, rotation,
-    # scalex, scaley, skewx, skewy, srid, upperleftx and rastertoworldcoordy. Their JVM expressions are deleted and they
-    # take the family order, light. Accessors that return an `ARRAY`, a `MAP` or a `STRUCT` can sit under `explode` and
-    # `inline`, where that wrapper is refused (UNSUPPORTED_SQL_UDF_USAGE), so they are light only and keep no JVM level.
-    **{
-        f"gbx_rst_{n}": ("L1", "L3")
-        for n in (
-            "boundingbox",
-            "numbands",
-            "rastertoworldcoordx",
-            "upperlefty",
-            "width",
-            "worldtorastercoordx",
-            "worldtorastercoordy",
-        )
-    },
+    # Two raster accessors that return one value are JVM first. Against the light form that moves tiles as Arrow batches
+    # (dedicated, 1 + 4 x m5d.2xlarge, DBR 19, equal output), boundingbox took 1.27x less time on the JVM at 4x rows and
+    # worldtorastercoordy 1.22x less at 16x rows. A value of this kind cannot sit under `explode`, so the SQL dispatch
+    # wrapper that sends a virtual tile to light (the JVM raises `VirtualTileException` for one) is usable. Both levels
+    # are bound by the scan of the tile, and 19 other one-value accessors took 1.05x to just under 1.2x less time on the
+    # JVM at 4x and 16x rows, under the 1.2x line at both: crs, format, height, memsize, numbands, pixelheight, pixelwidth,
+    # rotation, scalex, scaley, skewx, skewy, srid, upperleftx, upperlefty, width, rastertoworldcoordx,
+    # rastertoworldcoordy and worldtorastercoordx. Their JVM expressions are deleted and they take the family order,
+    # light. Accessors that return an `ARRAY`, a `MAP` or a `STRUCT` can sit under `explode` and `inline`, where that
+    # wrapper is refused (UNSUPPORTED_SQL_UDF_USAGE), so they are light only and keep no JVM level.
+    "gbx_rst_boundingbox": ("L1", "L3"),
+    "gbx_rst_worldtorastercoordy": ("L1", "L3"),
 }
 # The order a function with no PREFERENCE row takes, by its manifest family (measured on-cluster where a record or
 # the benchmark tables have the family; the spec's "highest available" where not). Per-name exceptions are

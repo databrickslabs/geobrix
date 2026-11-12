@@ -46,6 +46,7 @@ The light level runs every function on every compute. It is the default for most
 | `gbx_rst_transform`, `gbx_rst_resample`, `gbx_rst_resample_to_res` | GDAL `raster reproject` in the worker | The JVM form ran at 0.71x (transform), 1.18x and 0.84x (resample) and 1.10x and 1.01x (resample_to_res) the speed. It is no longer shipped. |
 | `gbx_rst_to_webmercator`, `gbx_rst_resample_to_size` | GDAL `raster reproject` in the worker | The JVM form ran at 0.98x the speed at 4x rows. It is no longer shipped. |
 | Terrain (aspect, hillshade, TRI, TPI, roughness, color relief) | GDAL algorithm in the worker | The JVM form was 1.05x to 1.17x faster at 16x rows, under the 1.2x bar. It is no longer shipped. |
+| `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_rastertoworldcoordy` | Arrow scalar UDF | Both forms spend most of the time reading the tile. The JVM form was 1.05x to 1.19x faster at 4x and 16x rows, under the 1.2x bar. It is no longer shipped. |
 | `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` | Python | The JVM form ran at 0.43x and 0.46x (band), 0.39x and 0.28x (setsrid), 0.38x and 0.37x (setcrs), and 0.53x and 0.45x (getsubdataset) the speed at 4x and 16x rows. It is no longer shipped. |
 | `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the lightweight forms returned none. It is no longer shipped |
 | `gbx_rst_fillnodata` | GDAL fill in the worker | The JVM form ran at 0.32x and 0.18x the speed at 4x and 16x rows. It is no longer shipped. |
@@ -114,7 +115,7 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 
 A virtual, NULL or error tile goes to the lightweight form, which returns a transparent image for it.
 
-The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. See the [release notes](../release-notes-0-6).
+The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. A pass against the Arrow lightweight form found 14 raster accessors under the line. See the [release notes](../release-notes-0-6).
 
 The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the light form:
 
@@ -123,9 +124,15 @@ The same JAR also serves these functions, measured on earlier runs by the time t
 | The five BNG `*explode` generators | 0.37 to 0.67 | Dedicated |
 | `gbx_st_interpolateelevationbbox` | 0.75 | Dedicated |
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
-| The raster accessors that return one value (`gbx_rst_width` and `gbx_rst_boundingbox` measured) | 0.18 to 0.26 | Dedicated |
+| `gbx_rst_width` and `gbx_rst_boundingbox` | 0.18 to 0.26 | Dedicated |
 
-A raster accessor that returns one value (a number, a string or a WKB polygon) runs on the JVM for a materialized tile. A virtual tile goes to the light form, because the JVM level reads bytes only. The accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` have no JVM form.
+Seven raster accessors that return one value run on the JVM for a materialized tile:
+
+- `gbx_rst_width` and `gbx_rst_boundingbox`;
+- `gbx_rst_numbands` and `gbx_rst_upperlefty`;
+- `gbx_rst_rastertoworldcoordx`, `gbx_rst_worldtorastercoordx` and `gbx_rst_worldtorastercoordy`.
+
+A virtual tile goes to the light form, because the JVM level reads bytes only. The last five were measured against the lightweight form that moves tiles in Arrow batches. They took 1.20x to 1.29x less time on the JVM at 4x or 16x rows, in at least one run. Fourteen other accessors stayed under the 1.2x bar against that form, so they run the light form only. The accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` have no JVM form.
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 

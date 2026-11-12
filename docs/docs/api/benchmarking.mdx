@@ -177,6 +177,8 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 | `gbx_rst_bng_rasterize_agg`, group input | not run | 0.50 | Heavy default |
 | `gbx_rst_width` | 0.18 | 0.24 | Heavy default for a materialized tile; a virtual tile goes to light |
 | `gbx_rst_boundingbox` | 0.26 | 0.24 | Heavy default for a materialized tile; a virtual tile goes to light |
+| `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx` (three iterations, against the Arrow lightweight form) | 0.84 to 0.95 | 0.85 to 0.89 | Heavy form removed (under the 1.2x bar) |
+| `gbx_rst_rastertoworldcoordy` (five iterations, against the Arrow lightweight form) | 0.88 | 0.87 | Heavy form removed (under the 1.2x bar) |
 | `gbx_rst_avg` | 0.59 | 0.65 | Heavy form removed (an array result cannot take the routing function) |
 | `gbx_bng_eastnorthasbng` (three iterations) | 1.17 | 1.35 | Heavy form removed |
 | `gbx_rst_gridfrompoints` (three iterations) | 1.78 | 1.91 | Heavy form removed |
@@ -192,7 +194,7 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 
 On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the light batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
 
-The same rule keeps the JVM form of every raster accessor that returns one value, by its return type. `gbx_rst_width` and `gbx_rst_boundingbox` are the measured ones. A function in that group runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was.
+The same rule decides each raster accessor that returns one value. Against the lightweight form that moves tiles in Arrow batches, 14 of them stayed under the 1.2x bar, so they have no JVM form. Seven keep it: `gbx_rst_width`, `gbx_rst_boundingbox`, `gbx_rst_numbands`, `gbx_rst_upperlefty`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_worldtorastercoordx` and `gbx_rst_worldtorastercoordy`. Such a function runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was.
 
 On Serverless, the grouped merge of tiles with bytes failed at every size tried, and the by-reference form ran. Read this as a per-task failure, not as a timing.
 

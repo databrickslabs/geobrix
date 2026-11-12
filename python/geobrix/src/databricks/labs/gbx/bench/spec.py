@@ -789,7 +789,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core=True,
         core_fn=lambda ds, a: accessors.width(ds),
         col_fn=lambda t, a: rx.rst_width(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Width.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
     ),
     "rst_avg": FnSpec(
         "rst_avg",
@@ -880,7 +881,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_NumBands.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: accessors.numbands(ds),
         col_fn=lambda t, a: rx.rst_numbands(t),
@@ -1127,7 +1129,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.upperlefty(ds),
         col_fn=lambda t, a: rx.rst_upperlefty(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_UpperLeftY.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_scalex": FnSpec(
@@ -1269,7 +1272,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {"x": 64, "y": 64},
         core_fn=lambda ds, a: coords.raster_to_world_x(ds, a["x"], a["y"]),
         col_fn=lambda t, a: rx.rst_rastertoworldcoordx(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_RasterToWorldCoordX.scala",),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rastertoworldcoordy": FnSpec(
@@ -1317,7 +1321,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {"x": -73.985, "y": 40.745},
         core_fn=lambda ds, a: coords.world_to_raster_x(ds, a["x"], a["y"]),
         col_fn=lambda t, a: rx.rst_worldtorastercoordx(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_WorldToRasterCoordX.scala",),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),

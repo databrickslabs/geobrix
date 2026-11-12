@@ -15,7 +15,7 @@ FNS = jv.FUNCTIONS
 # the functions whose JVM level is the default with a dedicated 4x and 16x record and equal output (performance.mdx)
 PROVEN = {
     "gbx_bng_cellfill", "gbx_bng_kring", "gbx_bng_tessellate", "gbx_bng_tessellateexplode",
-    "gbx_rst_boundingbox", "gbx_rst_width", "gbx_rst_bng_rasterize_agg", "gbx_rst_fromcontent",
+    "gbx_rst_boundingbox", "gbx_rst_bng_rasterize_agg", "gbx_rst_fromcontent",
     "gbx_st_triangulate", "gbx_st_transformcrs",
 }  # fmt: skip
 
@@ -40,7 +40,7 @@ def test_the_set_covers_the_jvm_levels_ordered_first_and_never():
     # the last JVM level the level order never picked (tilexyz) runs first since its Arrow re-measure
     assert not never
     assert {
-        "gbx_rst_numbands",
+        "gbx_rst_worldtorastercoordy",
         "gbx_bng_aswkb",
         "gbx_rst_h3_rasterize_agg",
         "gbx_rst_tilexyz",
@@ -111,8 +111,8 @@ def test_each_function_has_a_local_set_that_compares_the_outputs(fn):
 
 
 def test_set_names_expand_by_list_by_input_and_all():
-    assert lt.expand_sets("JV-rst_numbands, JV-bng_aswkb") == [
-        "JV-rst_numbands",
+    assert lt.expand_sets("JV-rst_worldtorastercoordy, JV-bng_aswkb") == [
+        "JV-rst_worldtorastercoordy",
         "JV-bng_aswkb",
     ]
     assert len(lt.expand_sets("JV")) == len(FNS)
@@ -144,12 +144,14 @@ def test_the_run_parts_cover_every_function_once():
 
 
 def test_a_part_times_one_floor_per_input_and_every_form_of_its_functions():
-    names = jv.part_forms(jv.PARTS["acc1"])
-    assert [n for n in names if ":floor@" in n] == ["gbx_rst_numbands:floor@n"]
-    assert {n.split(":")[0] for n in names} == set(jv.PARTS["acc1"])
-    assert all(lf.form_named(f, names) for fn in jv.PARTS["acc1"] for f in _of(fn)[:-1])
+    names = jv.part_forms(jv.PARTS["dem1"])
+    assert [n for n in names if ":floor@" in n] == [
+        "gbx_rst_worldtorastercoordy:floor@dem"
+    ]
+    assert {n.split(":")[0] for n in names} == set(jv.PARTS["dem1"])
+    assert all(lf.form_named(f, names) for fn in jv.PARTS["dem1"] for f in _of(fn)[:-1])
     assert not [
-        n for n in jv.part_forms(jv.PARTS["acc1"], floors=False) if ":floor@" in n
+        n for n in jv.part_forms(jv.PARTS["dem1"], floors=False) if ":floor@" in n
     ]
 
 
@@ -170,14 +172,20 @@ CULLED_TILE_OPS = (
     "gbx_rst_setcrs",
     "gbx_rst_setsrid",
 )
-# the accessors culled after the Arrow re-measure (under 1.2x of the Arrow light form at 4x and 16x)
+# the accessors culled after the Arrow re-measures (under 1.2x of the Arrow light form at 4x and 16x)
 CULLED_ACCESSORS = tuple(
     f"gbx_rst_{n}"
     for n in (
-        "crs", "format", "height", "memsize", "pixelheight", "pixelwidth", "rotation", "scalex", "scaley", "skewx",
-        "skewy", "srid", "upperleftx", "rastertoworldcoordy",
+        "crs", "format", "height", "memsize", "numbands", "pixelheight", "pixelwidth", "rotation", "scalex", "scaley",
+        "skewx", "skewy", "srid", "upperleftx", "upperlefty", "width", "rastertoworldcoordx", "rastertoworldcoordy",
+        "worldtorastercoordx",
     )
 )  # fmt: skip
+_DEM_COORDS = {
+    "gbx_rst_rastertoworldcoordx": "{fn}(tile, 500, 300)",
+    "gbx_rst_rastertoworldcoordy": "{fn}(tile, 500, 300)",
+    "gbx_rst_worldtorastercoordx": "{fn}(tile, 405005D, 5756995D)",
+}
 CULLED = CULLED_TILE_OPS + CULLED_ACCESSORS
 
 
@@ -211,12 +219,13 @@ def test_the_cull_check_times_the_calls_and_inputs_of_the_old_jvm_verdict():
 
 
 def test_the_culled_accessors_keep_the_calls_and_inputs_of_their_arrow_re_measure():
-    """The one-argument accessors over the corpus tiles, rastertoworldcoordy over the DEM tiles (its old JV spec)."""
+    """The one-argument accessors over the corpus tiles, the coordinate ones over the DEM tiles (their old JV specs)."""
+    assert len(CULLED_ACCESSORS) == 19
     for fn in CULLED_ACCESSORS:
         s = jv.spec_of(fn)
         assert s.shape == "scalar" and s.floor_args == "tile", fn
-        if fn == "gbx_rst_rastertoworldcoordy":
-            assert (s.inp, s.call) == ("dem_1024_mem", "{fn}(tile, 500, 300)")
+        if fn in _DEM_COORDS:
+            assert (s.inp, s.call) == ("dem_1024_mem", _DEM_COORDS[fn]), fn
         else:
             assert (s.inp, s.call) == ("tiles_n", "{fn}(tile)"), fn
 
@@ -229,7 +238,7 @@ TILE_UDF_FNS = _ACCESSORS + CULLED + ("gbx_rst_tri",)
 
 
 def test_the_tile_udf_functions_are_the_accessors_tilexyz_the_culls_and_tri():
-    assert len(_ACCESSORS) == 6 and "gbx_rst_tilexyz" in _ACCESSORS
+    assert set(_ACCESSORS) == {"gbx_rst_worldtorastercoordy", "gbx_rst_tilexyz"}
 
 
 @pytest.mark.parametrize("fn", TILE_UDF_FNS)

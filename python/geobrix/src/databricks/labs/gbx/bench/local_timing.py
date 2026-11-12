@@ -382,9 +382,10 @@ def _family_sets() -> Dict[str, SetSpec]:
         )
 
     return {
+        # width, the other representative, has no JVM level since the Arrow re-measure: boundingbox keeps one
         "raster-accessor": tile_fn(
             "raster-accessor",
-            "gbx_rst_width",
+            "gbx_rst_boundingbox",
             # the light level opens the tile (~20 ms) where the JVM reads a header: a finding, not a scaling defect
             peer_exempt=("c0@n",),
         ),

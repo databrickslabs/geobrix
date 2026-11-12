@@ -110,24 +110,12 @@ _GRID_LIT = (
 _NULLS_D, _NULLS_I = "CAST(NULL AS DOUBLE)", "CAST(NULL AS INT)"
 
 SPECS: List[Spec] = [
-    # -- the raster accessors that return one value: a header read (the one-argument ones over the corpus tiles, as the
-    # width and bounding-box record; the coordinate ones over the replicated DEM tiles, whose grid is known)
-    *[
-        Spec(f"gbx_rst_{n}", "tiles_n", "n", "scalar", "{fn}(tile)", v, f"udf:{t}", "tile")
-        for n, t, v in (
-            ("numbands", "int", "hash"),
-            ("upperlefty", "double", "round"),
-        )
-    ],
-    # pixel (500, 300) of a DEM tile, and the world point at its centre (origin 400000 5760000, 10 m pixels)
-    *[
-        Spec(f"gbx_rst_{n}", "dem_1024_mem", "dem", "scalar", c, v, f"udf:{t}", "tile")
-        for n, c, t, v in (
-            ("rastertoworldcoordx", "{fn}(tile, 500, 300)", "double", "round"),
-            ("worldtorastercoordx", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
-            ("worldtorastercoordy", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
-        )
-    ],
+    # -- the raster accessor that returns one value and keeps its JVM level, over the replicated DEM tiles: the world point
+    # at the centre of pixel (500, 300) of a DEM tile (origin 400000 5760000, 10 m pixels)
+    Spec(
+        "gbx_rst_worldtorastercoordy", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 405005D, 5756995D)", "hash",
+        "udf:int", "tile",
+    ),  # fmt: skip
     # -- the web tiles: the DEM tiles lie in z12 tile (2088, 1384) of web mercator (EPSG:3857)
     Spec(
         "gbx_rst_tilexyz", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 12, 2088, 1384, 'PNG', 256, 'bilinear', 'auto')",
@@ -238,7 +226,7 @@ FUNCTIONS: Tuple[str, ...] = tuple(s.fn for s in SPECS)
 
 # The functions whose JVM level was culled (no L1 left): their light forms and a floor, on the calls and inputs of the old
 # JVM verdict, so a change of the light transport can be checked against the old L1 medians. The tile ops are the t25f
-# re-measure's; the accessors are the Arrow re-measure's (corpus tiles; rastertoworldcoordy over the DEM tiles).
+# re-measure's; the accessors are the Arrow re-measures' (corpus tiles; the coordinate ones over the DEM tiles).
 CULLED_SPECS: List[Spec] = [
     Spec("gbx_rst_band", "dem_1024_mem", "dem", "tile", "{fn}(tile, 1)", "raster", "tile"),
     Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
@@ -251,6 +239,7 @@ CULLED_SPECS: List[Spec] = [
             ("format", "string", "hash"),
             ("height", "int", "hash"),
             ("memsize", "bigint", "hash"),
+            ("numbands", "int", "hash"),
             ("pixelheight", "double", "round"),
             ("pixelwidth", "double", "round"),
             ("rotation", "double", "round"),
@@ -260,12 +249,18 @@ CULLED_SPECS: List[Spec] = [
             ("skewy", "double", "round"),
             ("srid", "int", "hash"),
             ("upperleftx", "double", "round"),
+            ("upperlefty", "double", "round"),
+            ("width", "int", "hash"),
         )
     ],
-    Spec(
-        "gbx_rst_rastertoworldcoordy", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 500, 300)", "round", "udf:double",
-        "tile",
-    ),
+    *[
+        Spec(f"gbx_rst_{n}", "dem_1024_mem", "dem", "scalar", c, v, f"udf:{t}", "tile")
+        for n, c, t, v in (
+            ("rastertoworldcoordx", "{fn}(tile, 500, 300)", "double", "round"),
+            ("rastertoworldcoordy", "{fn}(tile, 500, 300)", "double", "round"),
+            ("worldtorastercoordx", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
+        )
+    ],
 ]  # fmt: skip
 
 
@@ -805,11 +800,7 @@ def by_input() -> Dict[str, List[str]]:
 # where they can (an input is built once per scale and read by every form of the part), and a part times the floor of its
 # first function per input only (the floors of one input and shape cost the same).
 PARTS: Dict[str, Tuple[str, ...]] = {
-    "acc1": tuple(f"gbx_rst_{n}" for n in ("numbands", "upperlefty")),
-    "dem1": tuple(
-        f"gbx_rst_{n}"
-        for n in ("rastertoworldcoordx", "worldtorastercoordx", "worldtorastercoordy", "tilexyz")
-    ),
+    "dem1": tuple(f"gbx_rst_{n}" for n in ("worldtorastercoordy", "tilexyz")),
     "cells": (
         "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg", "gbx_custom_cellfill",
         "gbx_rst_custom_rasterize_agg", "gbx_rst_quadbin_rasterize_agg",

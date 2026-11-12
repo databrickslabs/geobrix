@@ -2774,27 +2774,30 @@ for _fn in HV_FUNCTIONS:
     )
 
 
-# Probe: do the heavy-first functions that are kept return silent NULLs under load? One form runs four accessors (width,
-# bounding box, band count, upper-left y) in a single scan of the corpus tiles, each through its JVM level under a private name;
-# an accessor's NULL has no text, so the report names how many NULLs each gave and which tiles. `fromcontent`, which
-# returns a tile, runs over replicated bytes and the report names the `last_error` texts with their counts. They run only
-# when `--levels-forms` names them.
-_ACC_PKG = "com.databricks.labs.gbx.rasterx.expressions.accessors."
-DEM_PROBE_ACCESSORS = (
-    "gbx_rst_width",
-    "gbx_rst_boundingbox",
-    "gbx_rst_numbands",
-    "gbx_rst_upperlefty",
+# Probe: do the heavy-first functions that are kept return silent NULLs under load? One form runs the accessors that keep a
+# JVM level (bounding box, the row of a world point) in a single scan of the corpus tiles, each through its JVM level under
+# a private name; an accessor's NULL has no text, so the report names how many NULLs each gave and which tiles.
+# `fromcontent`, which returns a tile, runs over replicated bytes and the report names the `last_error` texts with their
+# counts. They run only when `--levels-forms` names them.
+_EXPR_PKG = "com.databricks.labs.gbx.rasterx.expressions."
+# (SQL name, companion under the expressions package, the call's arguments after the tile)
+_DEM_PROBE = (
+    ("gbx_rst_boundingbox", "accessors.RST_BoundingBox", ""),
+    ("gbx_rst_worldtorastercoordy", "RST_WorldToRasterCoordY", ", 0D, 0D"),
 )
-_DEM_PROBE_COMPANION = {fn: _ACC_PKG + "RST_" + c for fn, c in zip(
-    DEM_PROBE_ACCESSORS, ("Width", "BoundingBox", "NumBands", "UpperLeftY"))}  # fmt: skip
-DEM_PROBE_FUNCTIONS = ("gbx_rst_width", "gbx_rst_fromcontent")
-_ACC = [dem_l1_name(fn) for fn in DEM_PROBE_ACCESSORS]
-_ACC_ROW = ", ".join(f"{n}(tile) AS a{i}" for i, n in enumerate(_ACC))
+DEM_PROBE_ACCESSORS = tuple(fn for fn, _, _ in _DEM_PROBE)
+_DEM_PROBE_COMPANION = {fn: _EXPR_PKG + c for fn, c, _ in _DEM_PROBE}
+# the probe form sits under worldtorastercoordy (boundingbox's own forms carry a value fingerprint, this one does not)
+DEM_PROBE_FUNCTIONS = ("gbx_rst_worldtorastercoordy", "gbx_rst_fromcontent")
+_ACC_COLS = [f"a{i}" for i in range(len(_DEM_PROBE))]
+_ACC_ROW = ", ".join(
+    f"{dem_l1_name(fn)}(tile{args}) AS a{i}"
+    for i, (fn, _, args) in enumerate(_DEM_PROBE)
+)
 
 
 def setup_probe_accessors(spark):
-    """Install the four accessors under their private names."""
+    """Install the probe's accessors under their private names."""
     from databricks.labs.gbx.manager import jvm
 
     for fn, fqn in _DEM_PROBE_COMPANION.items():
@@ -2804,7 +2807,9 @@ def setup_probe_accessors(spark):
 
 
 _DEM_PROBE_SCALAR = (
-    "SELECT count(*) AS n, sum(pmod(xxhash64(a0, a1, a2, a3), 2147483647)) AS fp, count(a0) AS n_out "
+    "SELECT count(*) AS n, sum(pmod(xxhash64("
+    + ", ".join(_ACC_COLS)
+    + "), 2147483647)) AS fp, count(a0) AS n_out "
     "FROM (SELECT " + _ACC_ROW + " FROM {src})"
 )
 _DEM_PROBE_NULLS = (
@@ -2815,14 +2820,16 @@ _DEM_PROBE_NULLS = (
         for i, fn in enumerate(DEM_PROBE_ACCESSORS)
     )
     + "), array_sort(collect_list(p))), 1, 12) AS first FROM "
-    "(SELECT tile.path AS p, a0, a1, a2, a3 FROM (SELECT tile, "
+    "(SELECT tile.path AS p, "
+    + ", ".join(_ACC_COLS)
+    + " FROM (SELECT tile, "
     + _ACC_ROW
     + " FROM {src})) "
-    "WHERE a0 IS NULL OR a1 IS NULL OR a2 IS NULL OR a3 IS NULL"
+    "WHERE " + " OR ".join(f"{c} IS NULL" for c in _ACC_COLS)
 )
 FORMS["DEM"].append(
     _dem(
-        "gbx_rst_width",
+        "gbx_rst_worldtorastercoordy",
         "L1",
         "nulls-accessors@mat",
         "tiles_mat",

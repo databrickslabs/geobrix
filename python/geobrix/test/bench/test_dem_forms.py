@@ -65,13 +65,19 @@ def test_the_probe_forms_run_only_when_named_and_report_nulls():
         assert f.nullsql.format(src="t", uc="")
         assert f.sql.format(src="t", uc="")
     assert not [f for f in lf.select_forms("DEM") if f.opt_in]
-    named = lf.select_forms("DEM", ("gbx_rst_width:nulls-accessors@mat",))
+    named = lf.select_forms("DEM", ("gbx_rst_worldtorastercoordy:nulls-accessors@mat",))
     assert [f.variant for f in named] == ["nulls-accessors@mat"]
 
 
-def test_the_accessor_probe_reads_four_accessors_in_one_scan():
+def test_the_accessor_probe_reads_the_jvm_kept_accessors_in_one_scan():
     (f,) = [f for f in lf.FORMS["DEM"] if f.variant == "nulls-accessors@mat"]
+    from databricks.labs.gbx import manifest
+
+    rows = manifest.load().functions
     for fn in lf.DEM_PROBE_ACCESSORS:
+        assert (
+            "L1" in rows[fn].levels
+        ), fn  # a culled JVM level has no companion to install
         assert lf.dem_l1_name(fn) in f.sql and lf.dem_l1_name(fn) in f.nullsql
     assert f.sql.count("FROM {src}") == 1
     assert "tile.path" in f.nullsql  # which tiles

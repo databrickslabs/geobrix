@@ -507,14 +507,20 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     pieces = []
     for g in groups:
         n = math.ceil(mins[g[0]] / work - 1e-9) if len(g) == 1 and FIXED_MIN + rest + mins[g[0]] > target else 1
-        pieces += [(g, f"{j}/{n}" if n > 1 else "", n) for j in range(n)]
+        total = sum(mins[k] for k in g)
+        if n > 1:  # its parts' own times (a lower bound of a stopped part among them) may sum past the unit's: cut it finer
+            parts_min = sum(file_seconds[f"{g[0]}#{j}/{n}"] / 60.0 / max(1e-6, min(1.0, shard.share or 1.0))
+                            if f"{g[0]}#{j}/{n}" in file_seconds else mins[g[0]] / n for j in range(n))
+            if parts_min > total + 1e-9:
+                total, n = parts_min, max(n, math.ceil(parts_min / work - 1e-9))
+        pieces += [(g, f"{j}/{n}" if n > 1 else "", n, total) for j in range(n)]
     out = []
-    for i, (g, tpart, n) in enumerate(pieces, 1):
+    for i, (g, tpart, n, total) in enumerate(pieces, 1):
         own = f"{g[0]}#{tpart}" if tpart else ""  # a test part timed by its own key (``_timings.part_key``) where it has one
         timed = sum(1 for k in g if k in file_seconds)
         bound = lower and (any(k in lower for k in g) or own in lower)
         src = "lower bound" if bound else ("history" if timed == len(g) or own in file_seconds else "partial" if timed else "ci")
-        work_min = file_seconds[own] / 60.0 / max(1e-6, min(1.0, shard.share or 1.0)) if own in file_seconds else sum(mins[k] for k in g) / n
+        work_min = file_seconds[own] / 60.0 / max(1e-6, min(1.0, shard.share or 1.0)) if own in file_seconds else total / n
         common = dict(kind=shard.kind, delta=shard.delta, pool=shard.pool, marker=shard.marker, est_src=src, subset=shard.subset,
                       heavy=any(k in hot for k in g), unit_max_min=round(max(mins[k] for k in g) / n, 2), test_part=tpart,
                       select_k=shard.select_k, share=shard.share)

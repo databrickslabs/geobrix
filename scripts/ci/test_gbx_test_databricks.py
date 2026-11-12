@@ -4,6 +4,7 @@ and the runners that take shards from it, the notebooks and the result files. No
 import contextlib
 import importlib.util
 import json
+import math
 import multiprocessing
 import os
 import subprocess
@@ -2645,6 +2646,24 @@ def test_a_unit_over_the_target_is_cut_into_test_parts_and_its_samples_count_who
     fsec = tm.seconds(h, 4)
     again = {c.test_part: c for c in ts.cut(shard, 4.0, REPO_ROOT, dict(fsec, **{files[0]: 600.0}), set()) if c.paths == [files[0]]}
     assert again["3/4"].est_min == round(ts.FIXED_MIN + fsec[f"{files[0]}#3/4"] / 60.0, 2) > again["0/4"].est_min, "a part's own time plans it"
+
+
+def test_a_unit_whose_parts_sum_past_it_is_cut_into_more_parts():
+    """tst-sls-d7: RASTER_RASTERIZE's part 4/10 stopped at a lower bound of 575 s, and the next plan kept 10 parts with that one at
+    18.6 min, past the hard cap. The parts' own times now set the unit's total and the count of parts."""
+    files = _ds_files(1)
+    shard = ts.Shard(name="files", kind="light", paths=files)
+    work = 4.0 - ts.FIXED_MIN
+    first = ts.cut(shard, 4.0, REPO_ROOT, {files[0]: 600.0}, set())
+    assert sorted(c.test_part for c in first) == [f"{j}/4" for j in range(4)]
+    fsec = {files[0]: 600.0, **{f"{files[0]}#{j}/4": 150.0 for j in range(3)}, f"{files[0]}#3/4": 1200.0}  # part 3 stopped late
+    again = ts.cut(shard, 4.0, REPO_ROOT, fsec, {f"{files[0]}#3/4"})
+    n = math.ceil((3 * 150.0 + 1200.0) / 60.0 / work - 1e-9)
+    assert sorted(c.test_part for c in again) == sorted(f"{j}/{n}" for j in range(n)) and n > 4
+    assert all(c.est_min <= 4.0 + 1e-9 for c in again), [(c.test_part, c.est_min) for c in again]
+    assert sum(c.est_min - ts.FIXED_MIN for c in again) == pytest.approx((3 * 150.0 + 1200.0) / 60.0, abs=0.05), "the parts carry the total"
+    same = ts.cut(shard, 4.0, REPO_ROOT, {files[0]: 600.0, **{f"{files[0]}#{j}/4": 150.0 for j in range(4)}}, set())
+    assert sorted(c.test_part for c in same) == [f"{j}/4" for j in range(4)], "parts that sum to the unit keep their cut"
 
 
 def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower_bounds(tmp_path):

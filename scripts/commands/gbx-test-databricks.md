@@ -226,6 +226,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A sample is normalized to a chunk running alone, so runs at different slot counts pool. An estimate is the median of a key's last 5 samples.
 - A chunk stopped by `--shard-cap-min`, `--stall-min` or a crash leaves lower bounds for the files it did not finish.
   - The next plan plans such a file at its bound at least, cut into test parts when that passes the target. A later full run replaces the bound.
+  - A unit cut into test parts sums its parts' own times, bounds included. When they pass the unit's time, the unit is cut into more parts.
 - History wins over CI's minutes from a key's first sample. A file with no sample takes its share of CI's minutes.
 - The cut uses the history too. A file or table longer than `--target-min` gets a chunk of its own; the family file is cut by table.
 - `--explain-only` marks each chunk's estimate: `h` history, `p` partly history, `lb` a lower bound, `ci` CI's minutes.

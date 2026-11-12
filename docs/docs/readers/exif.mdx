@@ -8,18 +8,18 @@ import exifExamples from '!!raw-loader!../../tests/python/readers/exif_reader_ex
 
 # EXIF/GPS Reader — `exif_gbx`
 
-_Since:_ lightweight `exif_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+_Since:_ `exif_gbx` **v0.5.2**
 
 Read per-image EXIF/GPS telemetry from drone and camera JPEG/TIFF images into a Spark
-DataFrame. The `exif_gbx` reader is a lightweight pure-Python DataSource; it requires no
+DataFrame. The `exif_gbx` reader is a pure-Python DataSource; it requires no
 JAR and runs on Serverless, standard (shared), and ARM clusters.
 
 One row per image file. In the default `metadata` mode the reader extracts EXIF tags from
 the file header only — no pixels are decoded. The opt-in `qc` mode additionally reads the
 image bytes to compute sharpness and brightness metrics.
 
-:::note Lightweight only
-`exif_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
+:::note Python only, no JAR
+`exif_gbx` is a Python DataSource with no JVM counterpart. Register
 it with `register(spark)` before use.
 :::
 

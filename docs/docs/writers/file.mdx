@@ -4,9 +4,9 @@ sidebar_label: File Writer
 
 # File Writer — `file_gbx`
 
-_Since:_ lightweight `file_gbx` **v0.5.0** · _(light-only — no heavyweight tier)_
+_Since:_ `file_gbx` **v0.5.0**
 
-`file_gbx` is the shared write committer for all lightweight writers. You do not call it
+`file_gbx` is the shared write committer for all `*_gbx` writers. You do not call it
 directly through the DataSource V2 `write.format(...)` API. Instead, every `*_gbx` writer
 that produces a Delta table with a FILE column routes through `open_for_write` internally.
 This page documents the write-side API for use in scripts and pipeline code.
@@ -65,7 +65,7 @@ a warning, because `CLUSTER BY` requires a FILE-column table.
 
 ## Vector writer FILE options
 
-The lightweight vector writers (`vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `gpkg_gbx`,
+The vector writers (`vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `gpkg_gbx`,
 `file_gdb_gbx`) also accept the FILE write options as DataSource V2 options:
 
 ```python

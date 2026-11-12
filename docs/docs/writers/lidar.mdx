@@ -8,7 +8,7 @@ import lidarWrite from '!!raw-loader!../../tests/python/writers/lidar_gbx_write_
 
 # LiDAR Writer
 
-_Since:_ lightweight `lidar_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+_Since:_ `lidar_gbx` **v0.5.2**
 
 Write LAS/LAZ point-cloud files from a Spark DataFrame — the inverse of the
 [`lidar_gbx` reader](../readers/lidar). `df.write.format("lidar_gbx")` writes
@@ -16,12 +16,12 @@ a points DataFrame (`x`, `y`, `z` plus optional `r`, `g`, `b`) as sharded
 `.laz` files, one per Spark partition, with a deterministic
 `*_<group>_<cluster>` shard name when `groupCol` / `clusterCol` options are set.
 
-`lidar_gbx` is **light-only**: there is no heavyweight JAR counterpart. The
+`lidar_gbx` is **Python only**: it has no JVM counterpart. The
 writer runs on **Serverless, standard (shared), ARM, and classic** compute —
 any environment where `laspy` and `lazrs-python` are available.
 
 :::note Register first
-The lightweight Python DataSources are **not** auto-registered — call
+The `*_gbx` Python DataSources are **not** auto-registered — call
 `register(spark)` once per session before using the `lidar_gbx` writer.
 
 <CodeFromTest code={lidarWrite} language="python" functionName="REGISTER"

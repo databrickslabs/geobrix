@@ -11,7 +11,7 @@ import zarrWrite from '!!raw-loader!../../tests/python/writers/zarr_write_exampl
 
 <ZarrNav current="writer" />
 
-_Since:_ lightweight `gbx_zarr_write` **v0.6.0** · _(light-only — no heavyweight tier)_
+_Since:_ `gbx_zarr_write` **v0.6.0**
 
 `gbx_zarr_write` writes a [Zarr](https://zarr.dev) store **transactionally**. One write is one Delta
 `MERGE` on the store's manifest table, so it is visible whole or not at all. Writers that touch
@@ -21,7 +21,7 @@ registered store. [Zarr Stores](../api/zarr-stores) explains the model, and the
 [Zarr Function Reference](../api/zarr-functions#gbx_zarr_write) lists every parameter and error.
 To read a store back see the [Zarr Reader](../readers/zarr).
 
-It runs in the lightweight tier, so there is no JAR to install: install the env6 wheel with its
+It runs at the Python level, so there is no JAR to install: install the env6 wheel with its
 `[zarr]` extra, as [Zarr Stores](../api/zarr-stores#what-you-need) describes. The examples use these names:
 
 <CodeFromTest code={zarrWrite} language="python" functionName="SETUP" />

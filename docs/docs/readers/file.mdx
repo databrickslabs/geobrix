@@ -8,23 +8,23 @@ import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_example
 
 # File Access — `file_gbx`
 
-_Since:_ lightweight `file_gbx` **v0.5.0** · _(light-only — no heavyweight tier)_
+_Since:_ `file_gbx` **v0.5.0**
 
 `file_gbx` has two roles:
 
 1. **File lister DataSource** — emits one row per file (path, name, extension, size,
    modification time). Use it as the first step in a preparation pipeline. List the
    files you want to process, then pipe those references into a writer such as `cog_gbx`.
-2. **Shared file-access base** — the Python module that every lightweight reader and
+2. **Shared file-access base** — the Python module that every `*_gbx` reader and
    writer uses internally for FILE / FUSE routing, directory enumeration, and write-mode
    selection. See the [Readers & Writers — Shared file-access base](../readers-writers#file-gbx)
    section for the capability tier diagram and the no-gating rule.
 
 `file_gbx` is format-agnostic: it lists any file type and never decodes file content.
 
-:::note Lightweight only
-`file_gbx` is a pure-Python lightweight DataSource. Register it with `register(spark)`
-before use. There is no heavyweight GDAL counterpart.
+:::note Python only, no JAR
+`file_gbx` is a pure-Python DataSource. Register it with `register(spark)`
+before use. It has no JVM counterpart.
 :::
 
 ## Output schema (DataSource)
@@ -158,7 +158,7 @@ tier = file_access_tier(spark)
 # Returns: "read_files" (DBR 13.3+), "list_files" (DBR 18+), or "fuse" (always)
 ```
 
-`open_for_read(source, access="auto")` is the read resolver every lightweight reader calls.
+`open_for_read(source, access="auto")` is the read resolver every `*_gbx` reader calls.
 It validates the access mode and enforces the no-gating rule. The size-adaptive routing
 (FILE byte-range stream, FUSE-of-FILE, or staging) runs in the reader layer on top of it.
 With `access="auto"` it accepts the best available tier and never errors. Passing

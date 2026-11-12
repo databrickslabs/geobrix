@@ -8,12 +8,12 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Shapefile Writer
 
-_Since:_ lightweight `shapefile_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `shapefile_gbx` **v0.4.0**
 
 `shapefile_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `ESRI Shapefile`. It round-trips with the matching `shapefile_gbx`
 reader; the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared
-across all lightweight vector readers and writers.
+across all `*_gbx` vector readers and writers.
 
 :::tip Compute & scale
 - **Large Shapefiles:** a Shapefile assembles on a single node, and the format
@@ -49,7 +49,7 @@ across all lightweight vector readers and writers.
 | `zip` | `false` | When `true`, produce a **single `.shp.zip`** archive containing the `.shp/.shx/.dbf/.prj/.cpg` files at the archive root instead of a sidecar directory. The output path is normalised automatically: `.save("roads")` → `roads.shp.zip`; `.save("roads.shp")` → `roads.shp.zip`. Useful when the destination requires a single portable file (e.g. uploading to a GIS portal). Ignored for non-Shapefile drivers. |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
 | `layerName` | driver default | Output layer name where supported. |
-| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). This is a lightweight-tier writer. |
+| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
 | `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
 | `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
@@ -151,5 +151,5 @@ The writer reads the CRS from the `geom_0_srid` column (or the column named by `
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

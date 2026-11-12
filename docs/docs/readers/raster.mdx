@@ -9,7 +9,7 @@ import largeRasterExamples from '!!raw-loader!../../tests/python/readers/large_r
 
 # Raster Reader
 
-_Since:_ lightweight `raster_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `raster_gbx` **v0.4.0**
 
 Read rasters into the shared `(source, tile)` schema with `raster_gbx`. It is a pure-Python,
 `rasterio`-backed reader. It needs no JAR and runs on Serverless and standard clusters. It reads
@@ -32,7 +32,7 @@ drivers that run stored pipelines or fetch over the network. See
 
 ## Options
 
-The lightweight reader defaults to **no splitting** (`splitStrategy=none`):
+The reader defaults to **no splitting** (`splitStrategy=none`):
 one whole-image tile per file. Splitting is opt-in; COG creation is a
 separate concern handled by the `cog_gbx` writer. See
 [COG Reader](./cog) and [COG Writer](../writers/cog) for the
@@ -40,7 +40,7 @@ prepare-then-read pipeline.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the ingest-OOM-dissolving default for the light tier). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
+| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the default, which keeps a large ingest within memory). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
 | `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 64 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
 | `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB. A positive value implies opt-in split regardless of `splitStrategy`. `-1` = defer to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
@@ -63,10 +63,10 @@ analysis needs. Overlap only makes sense for a reader-chosen grid (`tileSize`); 
 :::
 
 :::note Virtual tiles are the default
-Light raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
+The raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
 `(path, window)` references that read pixels lazily. Previously the reader materialized raster
 bytes into every row. To restore materialized reads, pass `.option("virtualTiles", "false")`.
-A virtual tile passed to a heavyweight function must be materialized first — see
+A virtual tile that reaches the JVM level must be materialized first — see
 [Virtual Tiles](../api/virtual-tiles).
 :::
 
@@ -172,7 +172,7 @@ as COG when you already have tiles in memory:
   source="docs/tests/python/readers/raster_gbx_read_examples.py" />
 
 :::note Register the readers and writers first
-The lightweight readers and writers are Python Data Source V2 sources. Python has no classpath
+The `*_gbx` readers and writers are Python Data Source V2 sources. Python has no classpath
 discovery, so register them before you use `format("raster_gbx")` or `format("gtiff_gbx")`, for
 reads and for writes. Importing `databricks.labs.gbx.ds` registers nothing. `databricks.labs.gbx.register(spark)` registers them.
 :::
@@ -184,7 +184,7 @@ reads and for writes. Importing `databricks.labs.gbx.ds` registers nothing. `dat
   testFile="docs/tests/python/readers/test_raster_gbx_read_examples.py"
   outputConstant="READ_RASTER_GBX_output" />
 
-`gtiff_gbx` is `raster_gbx` with the GeoTIFF driver preset. See the [Lightweight GeoTIFF Reader](./geotiff) for the named-reader page. See [Options](#options) for the reader options.
+`gtiff_gbx` is `raster_gbx` with the GeoTIFF driver preset. See the [GeoTIFF Reader](./geotiff) for the named-reader page. See [Options](#options) for the reader options.
 
 The reader has Python and SQL bindings.
 
@@ -314,7 +314,7 @@ Both reduce plan time from the directory walk (~1.5 s at 10k files) to a single 
   ```
 - **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog). The reader then opens a small number of large files whose headers are comparatively cheap.
 
-**Remote paths in a manifest or a tile index are refused.** A row's `path`, and each source of a `.vrt` you load, is data that anyone who can write the file or the table controls. The lightweight reader therefore opens it only when it names one of three things. These are a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object store (`s3://`, `s3a://`, `abfss://`, `gs://`, `wasbs://`, `/vsis3/`, `/vsiaz/`, `/vsiadls/`, `/vsigs/`, and `/vsizip/` or `/vsitar/` around one of these) or `/vsimem/`. A row that names `/vsicurl/`, `http://`, `https://`, `ftp://` or another GDAL virtual file system is refused. This holds directly or inside a wrapper. The read fails with an error that names it, before anything is opened. The reader reads each row's file from a local or Volume path. Keep the files a manifest or a tile index lists there. See [Security § 7](../security#7-raster-data-other-principals-can-write).
+**Remote paths in a manifest or a tile index are refused.** A row's `path`, and each source of a `.vrt` you load, is data that anyone who can write the file or the table controls. The reader therefore opens it only when it names one of three things. These are a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object store (`s3://`, `s3a://`, `abfss://`, `gs://`, `wasbs://`, `/vsis3/`, `/vsiaz/`, `/vsiadls/`, `/vsigs/`, and `/vsizip/` or `/vsitar/` around one of these) or `/vsimem/`. A row that names `/vsicurl/`, `http://`, `https://`, `ftp://` or another GDAL virtual file system is refused. This holds directly or inside a wrapper. The read fails with an error that names it, before anything is opened. The reader reads each row's file from a local or Volume path. Keep the files a manifest or a tile index lists there. See [Security § 7](../security#7-raster-data-other-principals-can-write).
 
 **A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows), essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`). The index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column. If you have that, read it directly with `spark.table(...)`. You don't need a reader at all.
 
@@ -431,5 +431,5 @@ the tiles are read.
 - [Ingestion Pipelines](../ingestion/overview) - ingest new and changed files incrementally
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

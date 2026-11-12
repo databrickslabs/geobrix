@@ -8,7 +8,7 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # Vector Writer
 
-_Since:_ lightweight `vector_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `vector_gbx` **v0.4.0**
 
 `vector_gbx` — pyogrio-backed, pure-Python DataSource V2 writer. It is the generic
 catch-all vector writer: pass any OGR-supported driver via `driverName` and it
@@ -173,5 +173,5 @@ The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and applie
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

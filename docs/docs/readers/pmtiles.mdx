@@ -8,9 +8,9 @@ import pmtilesRead from '!!raw-loader!../../tests/python/readers/pmtiles_gbx_rea
 
 # PMTiles Reader
 
-_Since:_ lightweight `pmtiles_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `pmtiles_gbx` **v0.4.0**
 
-The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
+The `pmtiles_gbx` reader produces a tile pyramid as
 `(z, x, y, bytes)` rows. It has two sources, chosen by the `source` option:
 
 - **`source="raster"`** — build an XYZ (slippy-map) tile **mosaic pyramid** from a
@@ -24,13 +24,13 @@ Both sources emit the **same `(z, x, y, bytes)` schema**. This is exactly the
 input schema the [PMTiles writer](../writers/pmtiles) expects, so a read feeds
 straight into a write with no reshaping.
 
-:::note Lightweight-only read path
+:::note Python-only read path
 `pmtiles_gbx` is a pure-Python DataSource V2 reader: **no JAR**,
 and it runs on Serverless, standard (shared), and ARM clusters. The
 `pmtiles_gbx` reader documented here is the read path for PMTiles in GeoBrix.
 :::
 
-Register the lightweight DataSources once per session:
+Register the `*_gbx` DataSources once per session:
 
 <CodeFromTest code={pmtilesRead} language="python" functionName="REGISTER"
   source="docs/tests/python/readers/pmtiles_gbx_read_examples.py"
@@ -118,5 +118,5 @@ primitives. The table below shows which are active in this reader and which are 
 | `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

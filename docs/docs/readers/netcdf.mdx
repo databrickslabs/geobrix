@@ -8,7 +8,7 @@ import netcdfExamples from '!!raw-loader!../../tests/python/readers/netcdf_gbx_r
 
 # NetCDF Reader
 
-_Since:_ lightweight `netcdf_gbx` **v0.4.1** · _(light-only — no heavyweight tier)_
+_Since:_ `netcdf_gbx` **v0.4.1**
 
 Read CF-convention NetCDF into GeoBrix's existing schemas — no new downstream contracts.
 `netcdf_gbx` is pure Python (`rasterio`/`netcdf4`-backed) and needs no JAR. It runs on Serverless,
@@ -84,7 +84,7 @@ readers is not part of this release.
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches. |
 | `sizeInMB` | `"-1"` | Raster mode: `<= 0` = one whole tile per variable. |
 
-Register the lightweight DataSources once per session:
+Register the `*_gbx` DataSources once per session:
 
 <CodeFromTest code={netcdfExamples} language="python" functionName="REGISTER"
   source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
@@ -205,7 +205,7 @@ reader emits a `UserWarning` and suggests `fanout` instead.
 
 Vector mode emits attribute columns (one per variable) followed by a
 `geom_0` WKB point column and `geom_0_srid` / `geom_0_srid_proj` string columns.
-This is the same shape as the other lightweight vector readers, so the GeoBrix built-in
+This is the same shape as the other `*_gbx` vector readers, so the GeoBrix built-in
 `gbx_st_*` functions, native Databricks ST, and H3 binning compose directly. A
 curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
@@ -243,7 +243,7 @@ gives a `TIMESTAMP`, `DATE` or `BOOLEAN` column. Any other variable keeps its nu
 
 ## `netcdf_gbx` writer
 
-`netcdf_gbx` is also a **lightweight writer** — the inverse of the reader.
+`netcdf_gbx` is also a **writer** — the inverse of the reader.
 `df.write.format("netcdf_gbx")` writes CF-compliant `.nc` files from raster tile
 DataFrames (the default raster mode) or from point DataFrames (vector mode), with
 `singleFile` / `merge` consolidation. See the [**NetCDF Writer**](../writers/netcdf)
@@ -284,5 +284,5 @@ primitives. The table below shows which are active in this reader and which are 
 | `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

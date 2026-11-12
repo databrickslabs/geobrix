@@ -9,7 +9,7 @@ import ogrGbx from '!!raw-loader!../../tests/python/readers/vector_gbx_examples.
 
 # Vector Reader
 
-_Since:_ lightweight `vector_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `vector_gbx` **v0.4.0**
 
 `vector_gbx` is the catch-all vector reader. It is pure Python (pyogrio-backed), needs no JAR, and reads any OGR-supported format.
 It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
@@ -65,7 +65,7 @@ Reading a folder fans the files across the cluster, one partition per file, so i
 
 ### Reading from a FILE-column table {#vector-file-table-read}
 
-`vector_file_read` (light tier) accepts either a Volume path/directory **or** a FILE-column
+`vector_file_read` (Python level) accepts either a Volume path/directory **or** a FILE-column
 Delta table name. A FILE-column table stores one vector file per row — each FILE reference
 points to a complete vector file (e.g. a `.gpkg`). Reading decodes all features from each
 referenced file via pyogrio.
@@ -193,5 +193,5 @@ primitives. The table below shows which are active in this reader and which are 
 - [Ingestion Pipelines](../ingestion/overview) — ingest new and changed files incrementally
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

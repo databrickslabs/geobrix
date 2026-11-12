@@ -8,7 +8,7 @@ import shapefileGbx from '!!raw-loader!../../tests/python/readers/shapefile_gbx_
 
 # Shapefile Reader
 
-_Since:_ lightweight `shapefile_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `shapefile_gbx` **v0.4.0**
 
 `shapefile_gbx` reads ESRI Shapefiles, zipped or not. It is pure Python (pyogrio-backed) and needs no JAR.
 It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
@@ -87,5 +87,5 @@ primitives. The table below shows which are active in this reader and which are 
 | `gbx_file_write` / FILE-tier write | Not in the DataSource | FILE-tier writes go through `vector_file_write` (function layer). The DataSource writer commits via FUSE. |
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

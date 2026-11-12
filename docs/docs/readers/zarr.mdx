@@ -3,6 +3,8 @@ sidebar_position: 11
 sidebar_label: Zarr
 ---
 
+import Link from '@docusaurus/Link';
+
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import ZarrNav from '@site/src/components/ZarrNav';
 import zarrRead from '!!raw-loader!../../tests/python/readers/zarr_read_examples.py';
@@ -11,7 +13,7 @@ import zarrRead from '!!raw-loader!../../tests/python/readers/zarr_read_examples
 
 <ZarrNav current="reader" />
 
-_Since:_ lightweight `zarr_gbx` **v0.6.0** · _(light-only — no heavyweight tier)_
+_Since:_ `zarr_gbx` **v0.6.0**
 
 Read a [Zarr](https://zarr.dev) store, or a cut of one, into Spark. Three entry points share one
 reader:
@@ -22,7 +24,7 @@ reader:
 | `spark.read.format("zarr_gbx")` | A plain store (a path) | A read that is a Spark source, with no call to a function. A DataSource has no session to read a manifest with, so it reads plain stores only |
 | [`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample) | A plain store or a table, at the points of a DataFrame | The time series at a set of points |
 
-All three run in the lightweight tier, so there is no JAR to install. Install the
+All three run at the Python level, so there is no JAR to install. Install the
 env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19.
 [Zarr Stores](../api/zarr-stores#what-you-need) describes this. To write a store back see the
 [Zarr Writer](../writers/zarr); for every parameter, return value and error see the
@@ -227,7 +229,7 @@ tile. The tile's metadata says which: `zarr_array`, `sliceDims` (such as `time=0
 With `virtual_tiles=True` (the default) a tile holds no pixels. It names its window and the storage
 objects behind it, and reads them when a function opens it. A table of tiles can therefore be
 saved and read back by tasks that have no session. This holds as long as the store stays on a Volume and,
-for a table, the pinned version stays readable. The lightweight `rst_*` functions open a tile on
+for a table, the pinned version stays readable. The Python `rst_*` functions open a tile on
 demand and read only the chunks its window touches. A header function such as `rst_crs` or
 `rst_width` reads no chunk at all.
 
@@ -243,12 +245,14 @@ demand and read only the chunks its window touches. A header function such as `r
   testFile="docs/tests/python/readers/test_zarr_read_examples.py"
   outputConstant="STACK_BANDS_output" />
 
-### Materialize for the heavyweight tier
+<Link id="materialize-for-the-heavyweight-tier"></Link>
+
+### Materialize for the JVM level {#materialize-for-the-jvm-level}
 
 The JVM level reads materialized tiles only. In SQL, GeoBrix sends a virtual tile to the Python
 level, so a `gbx_rst_*` call takes one on every compute (see
 [Virtual Tiles](../api/virtual-tiles#virtual-tiles-and-the-jvm-level)). `virtual_tiles=False` reads
-each tile now and holds its pixels as GeoTIFF bytes, which both tiers accept. It costs the read up
+each tile now and holds its pixels as GeoTIFF bytes, which both levels accept. It costs the read up
 front and the memory of the pixels, so keep the windows small.
 
 <CodeFromTest code={zarrRead} language="python" functionName="materialize_tiles"
@@ -284,7 +288,7 @@ yourself. A store registered in a table reads its chunks through the manifest, w
 ## The `zarr_gbx` DataSource
 
 `spark.read.format("zarr_gbx")` reads a plain store with no table, no session call and no JAR.
-Register the lightweight DataSources once per session. Options are strings, like the other
+Register the `*_gbx` DataSources once per session. Options are strings, like the other
 `*_gbx` readers.
 
 <CodeFromTest code={zarrRead} language="python" functionName="read_with_the_datasource"

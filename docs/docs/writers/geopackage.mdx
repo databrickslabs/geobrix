@@ -8,12 +8,12 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoPackage Writer
 
-_Since:_ lightweight `gpkg_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `gpkg_gbx` **v0.4.0**
 
 `gpkg_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `GPKG`. It round-trips with the matching `gpkg_gbx` reader;
 the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across all
-lightweight vector readers and writers.
+`*_gbx` vector readers and writers.
 
 :::tip Compute & scale
 - **Large datasets:** GeoPackage has **no 2 GB cap** and is the recommended single-file option
@@ -47,7 +47,7 @@ lightweight vector readers and writers.
 | `fileName` | _(none)_ | Name the output unit explicitly. When set, `.save(path)` treats `path` as the **parent directory** (created if missing) and writes `path/<fileName>.gpkg` (extension auto-completed). See [Output naming](#output-naming). |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
 | `layerName` | driver default | Output layer name where supported. |
-| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). This is a lightweight-tier writer. |
+| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
 | `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
 | `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
@@ -128,5 +128,5 @@ The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and regist
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

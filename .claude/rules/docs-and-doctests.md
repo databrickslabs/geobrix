@@ -55,7 +55,10 @@ Term list (start; extend it when you settle a term):
 
 | Use | Not |
 |---|---|
-| lightweight / heavyweight (API, function, reader) | light tier, heavy tier, light-tier |
+| surface (what you call: SQL, the Python API, Unity Catalog SQL, Scala) | tier, API (for "where you call it") |
+| level (what runs it): SQL expression (L0), JVM (L1), Python (L3), Unity Catalog function (L4) | light tier, heavy tier, light-tier, bare "SQL" for L0 |
+| lightweight = the Python level; heavyweight = the JVM level (needs the JAR). Shorthand only: define it in `api/execution-tiers`, installation and performance; elsewhere use the level name or link the shorthand to `/docs/api/execution-tiers#the-levels` | lightweight/heavyweight as a tier, an install or a reader kind |
+| the JAR (a performance add-on that dedicated compute can load) | the heavyweight tier, the heavy install |
 | env wheel (`+env5`, `+env6`) | runtime wheel, flavor wheel |
 | tile (the GeoBrix struct) | chip, raster struct (except where the API name says "chip") |
 | Volume (UC Volume) | volume, UC volume path |

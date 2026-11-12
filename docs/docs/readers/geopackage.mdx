@@ -8,7 +8,7 @@ import geopackageGbx from '!!raw-loader!../../tests/python/readers/geopackage_gb
 
 # GeoPackage Reader
 
-_Since:_ lightweight `gpkg_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `gpkg_gbx` **v0.4.0**
 
 `gpkg_gbx` reads OGC GeoPackage files. It is pure Python (pyogrio-backed) and needs no JAR.
 It produces the `(attrs..., <geom>, <geom>_srid, <geom>_srid_proj)` schema, where `<geom>` is the geometry column's name in the layer (`geom` in the sample file).
@@ -91,5 +91,5 @@ primitives. The table below shows which are active in this reader and which are 
 | `gbx_file_write` / FILE-tier write | Not in the DataSource | FILE-tier writes go through `vector_file_write` (function layer). The DataSource writer commits via FUSE. |
 
 :::note Shared file-access layer
-Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+The `*_gbx` readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::

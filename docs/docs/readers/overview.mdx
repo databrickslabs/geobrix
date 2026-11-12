@@ -70,10 +70,10 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [COG Reader](./cog) | `cog_gbx` | Pure-Python cloud-optimized GeoTIFF reader — windowed/overview-aware reads |
 | [NetCDF Reader](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF reader — CF grids (raster) or CF-DSG points (vector) |
 | [File Reader](./file) | `file_gbx` | Pure-Python file lister — enumerates matching paths as rows (read-only) |
-| [Zarr Reader](./zarr) | `zarr_gbx` | Pure-Python reader for Zarr v2 and v3 stores (light-only): blocks, a table of cells or GeoBrix tiles, by label or position; `gbx_zarr_read` adds versions and sampling |
+| [Zarr Reader](./zarr) | `zarr_gbx` | Pure-Python reader for Zarr v2 and v3 stores (no JAR): blocks, a table of cells or GeoBrix tiles, by label or position; `gbx_zarr_read` adds versions and sampling |
 | [PMTiles Reader](./pmtiles) | `pmtiles_gbx` | Pure-Python PMTiles reader — mosaic pyramid from rasters (`source="raster"`) or tiles from an archive (`source="archive"`) |
-| [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (light-only; no heavyweight tier) |
-| [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (light-only; no heavyweight tier) |
+| [LiDAR Reader](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud reader (no JAR) |
+| [EXIF/GPS Reader](./exif) | `exif_gbx` | Pure-Python EXIF/GPS telemetry reader for drone/camera images (no JAR) |
 | [Vector Reader](./vector) | `vector_gbx` | Pure-Python catch-all vector reader (pyogrio; same OGR schema) |
 | [Shapefile Reader](./shapefile) | `shapefile_gbx` | Pure-Python Shapefile reader (preset OGR driver) |
 | [GeoJSON Reader](./geojson) | `geojson_gbx` | Pure-Python GeoJSON reader (preset OGR driver) |
@@ -85,7 +85,7 @@ See the [Raster Reader](./raster) page for full raster usage/options, and the ve
 reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)` schema.
 
 :::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
-The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a
+The `*_gbx` DataSource readers **enumerate the entire source at planning time**, regardless of a
 downstream `.limit(N)`, `WHERE`, or column projection. Spark 4.0.0's Python DataSource API exposes no
 limit/filter **pushdown** hook. A call such as `spark.read.format("raster_gbx").load(dir).limit(10)` therefore still lists,
 and plans a partition for, *every* file under `dir`. It then discards all but 10 rows afterward. The
@@ -106,7 +106,7 @@ See **[GBX Common Functions](../common-functions)**.
 
 ### FILE-column-table reads {#file-column-table-reads}
 
-Both the raster and vector lightweight readers can read directly from a FILE-column Delta table
+Both the raster and vector readers can read directly from a FILE-column Delta table
 in addition to Volume paths. Such a table has rows that carry FILE references to geospatial files.
 Both auto-order by the resolved source path by default. The ordering effect differs by format:
 

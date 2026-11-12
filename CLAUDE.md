@@ -10,7 +10,7 @@ core. The index of those rules is at the bottom.
 
 **GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.6.0**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
-Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
+Every function runs at the Python level from the env wheel (Python UDFs, some with a Rust kernel). The JAR (Scala/Spark) is a performance add-on that adds a JVM level where measured faster, on dedicated compute only. Vocabulary: a **surface** is what you call (SQL, the Python API, Unity Catalog SQL, Scala); a **level** is what runs it — SQL expression (L0), JVM (L1), Python (L3), Unity Catalog function (L4). *Lightweight* = the Python level and *heavyweight* = the JVM level are shorthand only, defined in `api/execution-tiers`, installation and performance.
 
 Current branch: `streamline/0.6.0`, the 0.6.0 release branch, checked out in the main checkout (container `geobrix-dev`). `beta/0.6.0` is fully merged into it and takes no new work; `beta/0.5.2` = the v0.5.2 release line, kept for hotfixes only — 0.5.2 is the last 0.5.x. Repo: `databrickslabs/geobrix`. The user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `streamline/*` or `beta/*`.
 
@@ -82,14 +82,14 @@ edits matching files, but paste the relevant rule into the dispatch when the wor
 
 **Facts that are NOT findings** (each has been reported as a "discovery"):
 
-- **The heavy tier needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/` but **no `*.jar`** unless `package` ran. No JAR ⇒ heavy SQL registration can't work ⇒ mass `UNRESOLVED_ROUTINE`. That's a missing artifact, **not** a code defect — build/stage first.
-- **The light runtime is pure Python and needs no JAR.** `pyrx`/`pyvx`/`pygx` never require it; the env wheels carry the JAR only for the heavy (L1) level.
-- **The heavy tier opens no data paths.** Heavy functions take tile bytes (opened in `/vsimem`); a virtual tile is refused by the JVM and routed to light by the dispatch wrapper.
-- **`databricks.labs.gbx.register(spark)` is the only registrar.** It registers each `gbx_*` name once, at the level the manifest's level table picks (heavy only where it is measured faster), and prints why it fell back. One geobrix JAR per cluster.
+- **The JVM level (L1) needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/` but **no `*.jar`** unless `package` ran. No JAR ⇒ JVM-level SQL registration can't work ⇒ mass `UNRESOLVED_ROUTINE`. That's a missing artifact, **not** a code defect — build/stage first.
+- **The Python level (L3) needs no JAR.** `pyrx`/`pyvx`/`pygx` never require it; the env wheels carry the JAR only for the JVM (L1) level.
+- **The JVM level opens no data paths.** JVM functions take tile bytes (opened in `/vsimem`); a virtual tile is refused by the JVM and routed to the Python level by the dispatch wrapper.
+- **`databricks.labs.gbx.register(spark)` is the only registrar.** It registers each `gbx_*` name once, at the level the manifest's level table picks (the JVM level only where it is measured faster), and prints why it fell back. One geobrix JAR per cluster.
 - **SQL binds positionally** — an extra wrapper argument is silently dropped, not errored.
 - **Doc tests only run in Docker** (full env + sample data under `/Volumes`).
 - **`.superpowers/` is gitignored** scratch — all internal planning. The public representation of decisions lives in `docs/docs/`.
-- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers. Parity means CRS-equivalence, not string equality.
+- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across levels. Parity means CRS-equivalence, not string equality.
 
 **Standing instructions for any implementation subagent:**
 

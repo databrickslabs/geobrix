@@ -8,13 +8,13 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoDatabase Writer
 
-_Since:_ lightweight `file_gdb_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `file_gdb_gbx` **v0.4.0**
 
 `file_gdb_gbx` — a pure-Python DataSource V2 writer like the other `*_gbx` writers. It
 encodes the `.gdb` with the OpenFileGDB driver in pyogrio's bundled GDAL, so it needs no
 native GDAL. It round-trips with the `file_gdb_gbx` reader; the
 schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across the
-lightweight vector readers and writers.
+`*_gbx` vector readers and writers.
 
 :::tip Compute & scale
 - **Large datasets:** this writer assembles the `.gdb` on a single node. GDAL's FileGDB
@@ -23,8 +23,8 @@ lightweight vector readers and writers.
   large outputs, use a **classic cluster** with ample memory or switch to the distributed
   `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
-- **Tier & compute:** `file_gdb_gbx` is fully lightweight, for writing and for
-  [reading](../readers/filegdb): it runs wherever the lightweight tier runs — Serverless,
+- **Compute:** `file_gdb_gbx` runs at the Python level, for writing and for
+  [reading](../readers/filegdb). It runs wherever the env wheel runs: Serverless,
   standard and dedicated clusters, x86 and ARM. See
   [Benchmarking](../api/benchmarking) for timings and methodology.
 :::
@@ -179,5 +179,5 @@ The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and writes
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

@@ -4,7 +4,7 @@
 Reader and writer pages under docs/docs/{readers,writers}/*.mdx each open with a
 line of the form:
 
-    _Since:_ lightweight `name_gbx` **vX.Y.Z** · <heavyweight … | light-only … | hybrid …>
+    _Since:_ `name_gbx` **vX.Y.Z**
 
 This is hand-maintained (it is NOT generated — the function-info "Since v" badge
 only covers registered functions, not DataSource reader/writer pages), so a newly
@@ -28,10 +28,10 @@ DOC_DIRS = [
 # Non-reader/writer pages that legitimately have no Since line.
 SKIP_STEMS = {"index", "readme", "intro", "overview", "_category_"}
 
-# Strict prefix: `_Since:_ lightweight `<name>` **vX.Y.Z** ·` then any tier suffix.
-# Allows heavyweight/light-only/hybrid variants after the middot without over-fitting.
+# Strict shape: `_Since:_ `<name>` **vX.Y.Z**`, optionally followed by ` · <note>`.
+# Every reader and writer runs at the Python level, so the line names no level.
 SINCE_RE = re.compile(
-    r"^_Since:_ lightweight `[a-z0-9_]+` \*\*v\d+\.\d+\.\d+\*\* · .+",
+    r"^_Since:_ `[a-z0-9_]+` \*\*v\d+\.\d+\.\d+\*\*( · .+)?$",
     re.MULTILINE,
 )
 
@@ -63,8 +63,7 @@ def main() -> int:
             print(f"  - {o}")
         print(
             "\nExpected shape (hand-maintained, one per page):\n"
-            "  _Since:_ lightweight `name_gbx` **vX.Y.Z** · "
-            "<heavyweight `name` **vX.Y.Z** | _(light-only — no heavyweight tier)_>"
+            "  _Since:_ `name_gbx` **vX.Y.Z**"
         )
         return 1
 

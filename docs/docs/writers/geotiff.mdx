@@ -8,7 +8,7 @@ import rasterGbxWrite from '!!raw-loader!../../tests/python/writers/raster_gbx_w
 
 # GeoTIFF Writer
 
-_Since:_ lightweight `gtiff_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `gtiff_gbx` **v0.4.0**
 
 Write GeoTIFF tiles with the `gtiff_gbx` writer (the `raster_gbx` writer with the
 GeoTIFF driver forced).
@@ -80,5 +80,5 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

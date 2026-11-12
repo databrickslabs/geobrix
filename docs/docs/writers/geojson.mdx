@@ -8,12 +8,12 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoJSON Writer
 
-_Since:_ lightweight `geojson_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
+_Since:_ `geojson_gbx` **v0.4.0**
 
 `geojson_gbx` — pyogrio-backed, pure-Python DataSource V2 writer with the OGR
 driver preset to `GeoJSON`. It round-trips with the matching `geojson_gbx` reader;
 the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across all
-lightweight vector readers and writers.
+`*_gbx` vector readers and writers.
 
 :::tip Compute & scale
 - **Large datasets:** this writer emits a single merged GeoJSON file assembled on the driver.
@@ -126,5 +126,5 @@ The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and passes
 :::
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

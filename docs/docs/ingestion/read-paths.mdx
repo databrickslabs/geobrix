@@ -8,7 +8,7 @@ import readPathsExamples from '!!raw-loader!../../tests/python/ingestion/read_pa
 
 # `read_paths` and reference
 
-_Since:_ **v0.6.0** · _(light-only — no heavyweight tier)_
+_Since:_ **v0.6.0**
 
 `read_paths` is the building block of the [Ingestion Pipelines](./overview). It takes a DataFrame
 of file paths (a batch listing or an Auto Loader stream) and reads every file with the GeoBrix
@@ -109,7 +109,7 @@ Everything below applies to every route: the [Lakeflow connector](./lakeflow-con
 
 ### Supported formats
 
-`read_paths` and `declare_ingest` take the name of a lightweight reader. The `_gbx` suffix is
+`read_paths` and `declare_ingest` take the name of a `*_gbx` reader. The `_gbx` suffix is
 optional and the name is case-insensitive; the connector's `format` table option takes the same
 names.
 

@@ -10,7 +10,7 @@ import netcdfWrite from '!!raw-loader!../../tests/python/writers/netcdf_gbx_writ
 
 # NetCDF Writer
 
-_Since:_ lightweight `netcdf_gbx` **v0.4.1** · _(light-only — no heavyweight tier)_
+_Since:_ `netcdf_gbx` **v0.4.1**
 
 Write CF-convention NetCDF (`.nc`) — the inverse of the
 [`netcdf_gbx` reader](../readers/netcdf). `df.write.format("netcdf_gbx")` writes
@@ -21,7 +21,7 @@ as CF Discrete Sampling Geometry (DSG) files (vector mode).
 **Serverless, standard (shared), ARM, and classic** compute.
 
 :::note Register first
-The lightweight Python DataSources are **not** auto-registered — call
+The `*_gbx` Python DataSources are **not** auto-registered — call
 `register(spark)` once per session before using the `netcdf_gbx` writer.
 
 <CodeFromTest code={netcdfWrite} language="python" functionName="REGISTER"
@@ -35,7 +35,7 @@ The writer consumes whichever schema its mode expects:
 
 - **Raster mode** — the shared `(source, tile)` raster schema (exactly what the
   raster readers emit). Each row is one CF grid.
-- **Vector mode** — the lightweight vector schema: attribute columns plus a
+- **Vector mode** — the `*_gbx` vector schema: attribute columns plus a
   `geom_0` WKB point column and `geom_0_srid` (`+ geom_0_srid_proj`) CRS-companion
   columns. `geom_0*` are geometry/CRS metadata and are **not** written as data
   variables; every other column becomes a per-observation data variable. A frame
@@ -211,5 +211,5 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

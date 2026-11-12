@@ -8,7 +8,7 @@ import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_example
 
 # COG Writer
 
-_Since:_ lightweight `cog_gbx` **v0.5.0** · _(light-only — no heavyweight tier)_
+_Since:_ `cog_gbx` **v0.5.0**
 
 `cog_gbx` is the **COG preparation writer**. It takes path-reference rows from
 `file_gbx`, opens each source file, and converts it to a spec-valid
@@ -43,8 +43,8 @@ The VRT index is optional (`writeVrt="false"` writes tiles only).
 See [Mosaic mode](#mosaic-mode) below for the writer options, and the
 [VRT & Mosaics](../api/vrt-mosaic) reference for the full pattern.
 
-:::note Lightweight only
-`cog_gbx` is a pure-Python lightweight DataSource (no JAR). It uses GDAL's
+:::note Python only, no JAR
+`cog_gbx` is a pure-Python DataSource (no JAR). It uses GDAL's
 `driver="COG"` creation path internally, which produces spec-compliant COGs
 without the memory overhead of re-encode paths. Register with `register(spark)`
 before use.
@@ -249,7 +249,7 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
 
 :::note Shared file-access layer
-Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+The `*_gbx` writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::
 
 :::note Coordinate reference systems

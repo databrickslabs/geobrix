@@ -22,9 +22,8 @@ Working with Zarr? These pages cover it end to end:
 
 <ZarrNav />
 
-Two tiers run the readers and writers. The **lightweight** tier is pure Python, needs no JAR and runs
-on Serverless. The **heavyweight** tier is GDAL and OGR on the JVM. Where a format has both, the
-two are held to the same results; see [Choosing an Execution Tier](./api/execution-tiers).
+One set of `*_gbx` readers and writers runs everywhere. They are pure Python, need no JAR and run
+on Serverless; see [Surfaces and levels](./api/execution-tiers).
 
 ## The short version
 
@@ -53,7 +52,7 @@ longitude together.
 
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
-| **[Zarr](./api/zarr-stores)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Lightweight | [`gbx_zarr_read`](./readers/zarr), [`gbx_zarr_sample`](./readers/zarr#sampling-at-points), and the [`zarr_gbx`](./readers/zarr#the-zarr_gbx-datasource) DataSource for plain stores | [`gbx_zarr_write`](./writers/zarr) | `rst_*` on Zarr tiles; the [Zarr functions](./api/zarr-functions): `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
+| **[Zarr](./api/zarr-stores)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Python (no JAR) | [`gbx_zarr_read`](./readers/zarr), [`gbx_zarr_sample`](./readers/zarr#sampling-at-points), and the [`zarr_gbx`](./readers/zarr#the-zarr_gbx-datasource) DataSource for plain stores | [`gbx_zarr_write`](./writers/zarr) | `rst_*` on Zarr tiles; the [Zarr functions](./api/zarr-functions): `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
 | **NetCDF / HDF5** | Self-describing scientific files from data providers. | Both | [`netcdf_gbx`](./readers/netcdf); HDF5 through the [generic raster reader](./readers/raster) | [`netcdf_gbx`](./writers/netcdf) | [RasterX `rst_*`](./api/raster-functions) |
 | **GRIB2** | Weather model output, such as NOAA HRRR or ECMWF. | Both | the [generic raster reader](./readers/raster) | | [RasterX `rst_*`](./api/raster-functions) |
 

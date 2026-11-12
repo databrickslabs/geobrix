@@ -29,6 +29,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--target-min <n>` - the most minutes a chunk is planned at: a hard cap. Default: chosen from the history for about 3.5 chunks per slot, between 3 and 5 min. A file or table longer than it alone is cut into test parts.
 - `--timings <path>` - the timing history of every run. Default: `test-logs/databricks-tests/timings-history.json`. The run cuts and orders the queue by it, then merges its own times in.
 - `--serverless` - run the light shards on Serverless env 6, in small chunks (see "Serverless"). Pass a `--wheel` built at `--sha`: a Spark test's UDFs run the wheel, not the checkout.
+  - A launch refuses a wheel whose `python/geobrix/src` differs from `--sha`'s (`PRECONDITION MISSING`). Every chunk's wheel guard would fail after its start.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
 - `--pool-light <name>`, `--pool-jar <name>` - the pools. Defaults: `gbx-test-1n` (no JAR), `gbx-test-1n-jar` (the JAR).
 - `--node-type <t>` - the node of a pool cluster this run makes. Default: `m5d.8xlarge` (32 vCPU).

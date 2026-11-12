@@ -1581,6 +1581,27 @@ def wheel_notes(wheel: Path, sha: str) -> List[str]:
     return notes
 
 
+WHEEL_CODE = "python/geobrix/src"  # what a Serverless worker imports from the wheel
+
+
+def serverless_wheel_problem(built: str, sha: str) -> str:
+    """Why the wheel cannot serve a Serverless run of ``sha`` ("" when it can). Serverless workers run the wheel, never the checkout
+    laid over the driver's copy, so a wheel whose package code differs from ``sha``'s fails every chunk's wheel guard, after the
+    chunk's 1-3 min start (tst-sls-d9: a wheel built from 805f46fae8 for 842c971f42, one changed module)."""
+    if not built:
+        return ""
+    try:
+        full = git("rev-parse", "--verify", f"{built}^{{commit}}").strip()
+        changed = git("diff", "--name-only", full, sha, "--", WHEEL_CODE).split()
+    except subprocess.CalledProcessError:
+        return f"the wheel's build commit {built[:10]} is not in this repository, so its package code is unchecked against {sha[:10]}"
+    if not changed:
+        return ""
+    return (f"the wheel was built from {built[:10]}, and {len(changed)} file(s) of {WHEEL_CODE} differ at {sha[:10]} "
+            f"({', '.join(changed[:3])}{' ...' if len(changed) > 3 else ''}): Serverless workers run the wheel, so every chunk's "
+            "wheel guard would fail. Fix: rebuild with gbx:build:wheel --env 6 at that commit, or pass --sha of the wheel's commit")
+
+
 def resources_entry(sha: str, volroot: str) -> Optional[dict]:
     """The test resources at ``sha``, named by their git tree id; None when the commit has none."""
     try:
@@ -1727,6 +1748,12 @@ def main(argv=None) -> int:
         print(wheel_problem or "PRECONDITION MISSING: no env6 wheel; run not started.", file=sys.stderr)
         return EXIT_USAGE
     notes = split_notes + (wheel_notes(wheel, sha) if wheel else [f"no usable env6 wheel ({wheel_problem[:140]}); a launch needs one"])
+    stale = serverless_wheel_problem(mut.wheel_git_sha(wheel), sha) if wheel and a.serverless else ""
+    if stale and not a.explain_only:
+        print("PRECONDITION MISSING: " + stale + "; run not started.", file=sys.stderr)
+        return EXIT_USAGE
+    if stale:
+        notes.append(stale)
     dirty = uncommitted()
     if dirty:
         notes.append(f"{len(dirty)} uncommitted path(s) under the staged subset are NOT in this run (it tests {sha[:10]}): "

@@ -1251,6 +1251,29 @@ def test_a_lost_scratch_is_named_with_what_is_left_also_after_a_test_it_broke(sh
     assert "lost=LOST)" in src
 
 
+def test_a_serverless_launch_refuses_a_wheel_whose_package_code_differs_from_the_sha(monkeypatch):
+    import subprocess as sp
+
+    calls = []
+
+    def fake_git(*cmd):
+        calls.append(cmd)
+        if cmd[0] == "rev-parse":
+            if cmd[2].startswith("gone"):
+                raise sp.CalledProcessError(128, "git")
+            return cmd[2].split("^")[0] + "\n"
+        return {"same": "", "moved": "python/geobrix/src/databricks/labs/gbx/bench/oracles.py\n"}[cmd[2]]
+
+    monkeypatch.setattr(launcher, "git", fake_git)
+    assert launcher.serverless_wheel_problem("", "s" * 40) == "", "an unknown build commit is not checked"
+    assert launcher.serverless_wheel_problem("same", "s" * 40) == ""
+    assert calls[-1] == ("diff", "--name-only", "same", "s" * 40, "--", "python/geobrix/src")
+    got = launcher.serverless_wheel_problem("moved", "s" * 40)
+    assert got.startswith("the wheel was built from moved, and 1 file(s) of python/geobrix/src differ at ssssssssss")
+    assert "bench/oracles.py" in got and "Fix: rebuild with gbx:build:wheel --env 6" in got
+    assert "is not in this repository" in launcher.serverless_wheel_problem("gone1", "s" * 40)
+
+
 def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
     src = _cell_source(shards)
     for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):

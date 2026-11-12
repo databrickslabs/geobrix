@@ -550,7 +550,18 @@ def cm_detections():
     register_gbx(spark)
     c = cfg(spark)
 
-    cm = spark.read.table("cm_scenes")
+    from pyspark.sql.window import Window
+
+    # Each cm_window lands its own JSONL file, so two runs over overlapping windows
+    # stream the same plume twice: keep one row per plume_id, the latest landed.
+    cm = (
+        spark.read.table("cm_scenes")
+        .withColumn("_rn", F.row_number().over(
+            Window.partitionBy("plume_id").orderBy(
+                F.col("_ingested_at").desc(), F.col("path").desc())))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
+    )
     # Parse the GeoJSON geometry to a native GEOMETRY tagged SRID 4326 (coords are
     # WGS84 lon/lat), then derive the plume centroid lon/lat and its H3 cell.
     return (

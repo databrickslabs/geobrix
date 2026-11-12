@@ -218,7 +218,7 @@ def _virtual_raster(
                         and stack is not None
                         and _is_whole_file(vt)
                     ):
-                        return run.PathSource(vt.path)
+                        return run.PathSource(_staged_for_path_read(vt.path, held))
                     return _read_virtual(
                         fn, vt, read_cap, file_ref, decimate, sizes_out
                     )
@@ -266,6 +266,103 @@ def _virtual_raster(
         raise run.DataError(
             f"{fn.sql_name}: the virtual tile could not be read ({exc})"
         ) from None
+
+
+def _stage_copy(source_path: str, local_path: str):
+    """The copy a staged path read makes (``local_temp.copy_source_with_sidecars``: one sequential pass, the sidecars
+    beside it)."""
+    from databricks.labs.gbx.pyrx.core.local_temp import copy_source_with_sidecars
+
+    return copy_source_with_sidecars(source_path, local_path)
+
+
+_path_stage_cache = None
+_path_stage_lock = threading.Lock()
+
+
+def _path_stage():
+    """The worker's cache of the Volume files GDAL reads by their path (``local_temp.StageCache``, as the raster reader
+    stages its sources): each file is copied once a process and reused by every call that reads it.
+    """
+    global _path_stage_cache
+    with _path_stage_lock:
+        if _path_stage_cache is None:
+            from databricks.labs.gbx.pyrx.core.local_temp import (
+                StageCache,
+                retried_raster_source_signature,
+            )
+
+            _path_stage_cache = StageCache(
+                "gbx_pathstage_",
+                lambda src, dst: _stage_copy(src, dst),
+                retried_raster_source_signature,
+            )
+        return _path_stage_cache
+
+
+def _staged_for_path_read(path: str, stack) -> str:
+    """The local file GDAL reads in place of `path`, a whole file the engine reads by its path. A file on a Volume (and
+    each Volume source of a VRT) is copied to local disk in one sequential pass first (``_path_stage``), and a VRT is
+    rewritten to name the copies; the copies are held until `stack` closes. GDAL reads a striped or tiled file a few
+    rows at a time, and each read of a cold Volume file is a round trip: 25 striped DSM tiles took 259 s that way on
+    Serverless, and their sequential copy 4 s (the uc-volumes rule: no seeks on a Volume file, sequential I/O). A file
+    off a Volume, and one over the staging limit (``file_gbx.stage_max_bytes``), is read where it is.
+    """
+    from databricks.labs.gbx.ds.file_gbx import _is_fuse_path, stage_max_bytes
+
+    if path.lower().endswith(".vrt"):
+        return _staged_vrt(path, stack)
+    if not _is_fuse_path(path) or _size(path) > stage_max_bytes():
+        return path
+    return stack.enter_context(_path_stage().use(path))
+
+
+def _size(path: str) -> int:
+    import os
+
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return 0
+
+
+def _staged_vrt(path: str, stack) -> str:
+    """`path`, a VRT, rewritten to name local copies of its sources on a Volume (``_staged_for_path_read``), in a folder
+    of local disk removed when `stack` closes; `path` itself when none of its sources is on a Volume. A source that is
+    itself a VRT is left as it is."""
+    import os
+    import shutil
+    import xml.etree.ElementTree as ET
+
+    from databricks.labs.gbx.ds.file_gbx import _is_fuse_path, stage_max_bytes
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    try:
+        with open(path, "rb") as fh:
+            root = ET.fromstring(fh.read())
+    except (OSError, ET.ParseError):
+        return path  # GDAL opens it and gives its own reason
+    folder = os.path.dirname(os.path.abspath(path))
+    elements, sources = [], []
+    for el in root.iter("SourceFilename"):
+        name = (el.text or "").strip()
+        if el.get("relativeToVRT") == "1":
+            name = os.path.join(folder, name)
+        if name and _is_fuse_path(name) and not name.lower().endswith(".vrt"):
+            elements.append(el)
+            sources.append(name)
+    if not sources or sum(_size(s) for s in set(sources)) > stage_max_bytes():
+        return path
+    cache = _path_stage()
+    local = {s: stack.enter_context(cache.use(s)) for s in dict.fromkeys(sources)}
+    for el, name in zip(elements, sources):
+        el.text = local[name]
+        el.set("relativeToVRT", "0")
+    out = new_local_temp_dir("gbx_pathvrt_")
+    stack.callback(shutil.rmtree, out, True)
+    staged = os.path.join(out, os.path.basename(path))
+    ET.ElementTree(root).write(staged, encoding="utf-8")
+    return staged
 
 
 def _is_whole_file(vt) -> bool:

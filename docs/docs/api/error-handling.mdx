@@ -87,6 +87,7 @@ The terrain functions, `gbx_rst_color_relief`, the band-math functions, the warp
 - A streamed warp is refused only when its output tile is over the read cap. The `Fix:` says to retile first or ask for a smaller output.
 - A tile that is already in the target CRS comes back from `gbx_rst_transform` unchanged, before the budget is judged.
 - `gbx_rst_viewshed` and `gbx_rst_gdal` read a virtual tile that is a whole file by its path, block by block. The read cap does not apply to that read, and the budget judges the output.
+- Such a file on a Volume is first copied to local disk in one sequential pass, and so is each Volume source of a VRT. Each worker copies a file once and reuses the copy. A file over `GBX_STAGE_MAX_BYTES` (4 GiB by default) is read in place.
 - `gbx_rst_summary` and `gbx_rst_contour` give NULL where the others give an error tile. `gbx_rst_polygonize` gives no rows. A call that GDAL cannot run logs its reason once for each function and reason on the worker.
 - A virtual tile whose file is missing is retried about 10 times. It then raises with a `Fix:`, and Spark retries the task.
 - A wrong argument raises and names the value.

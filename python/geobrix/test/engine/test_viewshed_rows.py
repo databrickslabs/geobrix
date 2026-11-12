@@ -433,3 +433,97 @@ def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(
     assert gdal.GetCacheMax() == before
     with MemoryFile(reference) as a, a.open() as x, MemoryFile(got) as b, b.open() as y:
         assert (x.read(1) == y.read(1)).all()
+
+
+def _striped_tiles(tmp_path, n=3, px=128):
+    """`n` x 1 striped float32 tiles side by side (2-row strips, as the WC DSM tiles are) and a VRT over them."""
+    import rasterio
+
+    from databricks.labs.gbx.ds._mosaic import mint_vrt
+
+    rng = np.random.default_rng(1)
+    paths = []
+    for i in range(n):
+        p = str(tmp_path / f"s{i}.tif")
+        with rasterio.open(
+            p,
+            "w",
+            driver="GTiff",
+            width=px,
+            height=px,
+            count=1,
+            dtype="float32",
+            crs="EPSG:27700",
+            transform=from_origin(px * i, float(px), 1.0, 1.0),
+            blockysize=2,
+            compress="zstd",
+        ) as dst:
+            dst.write((rng.random((1, px, px)) * 5).astype("float32"))
+        paths.append(p)
+    return paths, mint_vrt(paths, out=str(tmp_path / "w.vrt"))
+
+
+def test_a_file_read_by_its_path_on_a_volume_is_staged_sequentially_once(
+    tmp_path, monkeypatch
+):
+    """A Volume file GDAL reads by its path is copied to local disk in one sequential pass first, and GDAL reads the copy:
+    on Serverless the strip-by-strip reads of 25 cold Volume files took 259 s, and a sequential copy of them 4 s. A VRT's
+    sources are staged and the VRT is rewritten to name the copies. The copies are reused by the next call, and the
+    result is the one the unstaged read gives."""
+    import contextlib
+
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.engine import l3
+    from databricks.labs.gbx.pyrx.core import local_temp
+
+    fn = manifest.load().functions[FN]
+    paths, vrt = _striped_tiles(tmp_path)
+    values = {**_VALUES, "observer_geom": "POINT(192.5 63.5)"}
+
+    def viewshed():
+        seen = []
+        real_run = run.run
+
+        def spy(fn_, rasters, *a, **k):
+            seen.extend(r.path for r in rasters if isinstance(r, run.PathSource))
+            return real_run(fn_, rasters, *a, **k)
+
+        monkeypatch.setattr(run, "run", spy)
+        try:
+            with contextlib.ExitStack() as stack:
+                rasters, _, _ = l3._inputs(
+                    fn, _file_tile(vrt), 1 << 30, None, None, values, stack
+                )
+                res = run.run(fn, rasters, values)
+                staged_vrt = open(seen[0]).read() if seen and seen[0] != vrt else None
+        finally:
+            monkeypatch.setattr(run, "run", real_run)
+        assert res.error is None, res.error
+        return res.raster, seen[0], staged_vrt
+
+    reference, read, _ = viewshed()
+    assert read == vrt  # not on a Volume: read where it is
+    copies = []
+    real_copy = local_temp.copy_source_with_sidecars
+
+    def counted(src, dst):
+        copies.append(src)
+        return real_copy(src, dst)
+
+    monkeypatch.setattr(l3, "_stage_copy", counted)
+    monkeypatch.setattr(
+        file_gbx, "_is_fuse_path", lambda p: str(p).startswith(str(tmp_path))
+    )
+    got, read, body = viewshed()
+    assert read != vrt and not read.startswith(str(tmp_path))
+    assert sorted(copies) == sorted(paths) and not any(p in body for p in paths)
+    again, _, _ = viewshed()
+    assert sorted(copies) == sorted(paths)  # the second call reads the same copies
+    for raster in (got, again):
+        with (
+            MemoryFile(reference) as a,
+            a.open() as x,
+            MemoryFile(raster) as b,
+            b.open() as y,
+        ):
+            assert (x.read(1) == y.read(1)).all()

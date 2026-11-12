@@ -1407,6 +1407,11 @@ class StageTooLargeError(Exception):
     """
 
 
+def stage_max_bytes() -> int:
+    """The largest file (or VRT's sources, together) staged to local disk: ``GBX_STAGE_MAX_BYTES``, else 4 GiB."""
+    return int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
+
+
 def _stage_local_if_needed(path: str) -> tuple[str, bool]:
     """Return ``(local_path, is_temp)``.
 
@@ -1451,7 +1456,7 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
     # Size guard: refuse to stage files that exceed the configured cap.
     # This prevents silent OOM from staging a multi-GiB file to local disk.
     # Does NOT apply to the direct-FUSE-access success path above.
-    stage_max = int(os.environ.get("GBX_STAGE_MAX_BYTES", 4 * 1024**3))
+    stage_max = stage_max_bytes()
     try:
         file_size = os.path.getsize(path)
     except OSError:

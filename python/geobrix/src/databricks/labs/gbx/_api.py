@@ -56,6 +56,10 @@ def _flow(spark) -> tuple:
     """
     client = _client(spark)
     if client is None:
+        from databricks.labs.gbx.manager.capabilities import is_connect
+
+        if is_connect(spark):  # a Connect session without a client: never read the JVM
+            return ()
         try:
             tid = getattr(spark._jsparkSession, "_target_id", None)
         except Exception:  # noqa: BLE001 - no JVM session to read: one cache

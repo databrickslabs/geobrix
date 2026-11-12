@@ -2775,7 +2775,7 @@ for _fn in HV_FUNCTIONS:
 
 
 # Probe: do the heavy-first functions that are kept return silent NULLs under load? One form runs four accessors (width,
-# bounding box, memory size, SRID) in a single scan of the corpus tiles, each through its JVM level under a private name;
+# bounding box, band count, upper-left y) in a single scan of the corpus tiles, each through its JVM level under a private name;
 # an accessor's NULL has no text, so the report names how many NULLs each gave and which tiles. `fromcontent`, which
 # returns a tile, runs over replicated bytes and the report names the `last_error` texts with their counts. They run only
 # when `--levels-forms` names them.
@@ -2783,11 +2783,11 @@ _ACC_PKG = "com.databricks.labs.gbx.rasterx.expressions.accessors."
 DEM_PROBE_ACCESSORS = (
     "gbx_rst_width",
     "gbx_rst_boundingbox",
-    "gbx_rst_memsize",
-    "gbx_rst_srid",
+    "gbx_rst_numbands",
+    "gbx_rst_upperlefty",
 )
 _DEM_PROBE_COMPANION = {fn: _ACC_PKG + "RST_" + c for fn, c in zip(
-    DEM_PROBE_ACCESSORS, ("Width", "BoundingBox", "MemSize", "SRID"))}  # fmt: skip
+    DEM_PROBE_ACCESSORS, ("Width", "BoundingBox", "NumBands", "UpperLeftY"))}  # fmt: skip
 DEM_PROBE_FUNCTIONS = ("gbx_rst_width", "gbx_rst_fromcontent")
 _ACC = [dem_l1_name(fn) for fn in DEM_PROBE_ACCESSORS]
 _ACC_ROW = ", ".join(f"{n}(tile) AS a{i}" for i, n in enumerate(_ACC))

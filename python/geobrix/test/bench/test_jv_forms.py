@@ -40,7 +40,7 @@ def test_the_set_covers_the_jvm_levels_ordered_first_and_never():
     # the last JVM level the level order never picked (tilexyz) runs first since its Arrow re-measure
     assert not never
     assert {
-        "gbx_rst_crs",
+        "gbx_rst_numbands",
         "gbx_bng_aswkb",
         "gbx_rst_h3_rasterize_agg",
         "gbx_rst_tilexyz",
@@ -111,7 +111,10 @@ def test_each_function_has_a_local_set_that_compares_the_outputs(fn):
 
 
 def test_set_names_expand_by_list_by_input_and_all():
-    assert lt.expand_sets("JV-rst_crs, JV-bng_aswkb") == ["JV-rst_crs", "JV-bng_aswkb"]
+    assert lt.expand_sets("JV-rst_numbands, JV-bng_aswkb") == [
+        "JV-rst_numbands",
+        "JV-bng_aswkb",
+    ]
     assert len(lt.expand_sets("JV")) == len(FNS)
     dem = lt.expand_sets("JV@dem_1024_mem")
     assert dem and all(jv.spec_of("gbx_" + n[3:]).inp == "dem_1024_mem" for n in dem)
@@ -142,7 +145,7 @@ def test_the_run_parts_cover_every_function_once():
 
 def test_a_part_times_one_floor_per_input_and_every_form_of_its_functions():
     names = jv.part_forms(jv.PARTS["acc1"])
-    assert [n for n in names if ":floor@" in n] == ["gbx_rst_crs:floor@n"]
+    assert [n for n in names if ":floor@" in n] == ["gbx_rst_numbands:floor@n"]
     assert {n.split(":")[0] for n in names} == set(jv.PARTS["acc1"])
     assert all(lf.form_named(f, names) for fn in jv.PARTS["acc1"] for f in _of(fn)[:-1])
     assert not [
@@ -160,12 +163,26 @@ def test_the_custom_aggregates_take_the_grid_as_a_constant():
     )  # the column form of the same grid (the scalars and explodes read it)
 
 
-# --- the cull check: the tile ops whose JVM level was removed, timed light only on the spec of their old JVM verdict ---
-CULLED = ("gbx_rst_band", "gbx_rst_getsubdataset", "gbx_rst_setcrs", "gbx_rst_setsrid")
+# --- the cull check: the functions whose JVM level was removed, timed light only on the spec of their old JVM verdict ---
+CULLED_TILE_OPS = (
+    "gbx_rst_band",
+    "gbx_rst_getsubdataset",
+    "gbx_rst_setcrs",
+    "gbx_rst_setsrid",
+)
+# the accessors culled after the Arrow re-measure (under 1.2x of the Arrow light form at 4x and 16x)
+CULLED_ACCESSORS = tuple(
+    f"gbx_rst_{n}"
+    for n in (
+        "crs", "format", "height", "memsize", "pixelheight", "pixelwidth", "rotation", "scalex", "scaley", "skewx",
+        "skewy", "srid", "upperleftx", "rastertoworldcoordy",
+    )
+)  # fmt: skip
+CULLED = CULLED_TILE_OPS + CULLED_ACCESSORS
 
 
 @pytest.mark.parametrize("fn", CULLED)
-def test_a_culled_tile_op_keeps_its_light_forms_and_a_floor_with_no_jvm_form(fn):
+def test_a_culled_function_keeps_its_light_forms_and_a_floor_with_no_jvm_form(fn):
     """Its L1 level is gone, so only the light forms (and the floor) are timed, to check the cull against the old L1."""
     row = manifest.load().functions[fn]
     assert "L1" not in row.levels
@@ -188,9 +205,20 @@ def test_the_cull_check_times_the_calls_and_inputs_of_the_old_jvm_verdict():
         "gbx_rst_setcrs": ("dem_1024_mem", "{fn}(tile, 'EPSG:32633')"),
         "gbx_rst_setsrid": ("dem_1024_mem", "{fn}(tile, 32633)"),
     }
-    assert {fn: (jv.spec_of(fn).inp, jv.spec_of(fn).call) for fn in CULLED} == want
+    assert {fn: (jv.spec_of(fn).inp, jv.spec_of(fn).call) for fn in want} == want
     assert jv.BASE_ROWS["jv_nc_512_mem"] == 128
     assert "jv_nc_512_mem" in lf.INPUTS
+
+
+def test_the_culled_accessors_keep_the_calls_and_inputs_of_their_arrow_re_measure():
+    """The one-argument accessors over the corpus tiles, rastertoworldcoordy over the DEM tiles (its old JV spec)."""
+    for fn in CULLED_ACCESSORS:
+        s = jv.spec_of(fn)
+        assert s.shape == "scalar" and s.floor_args == "tile", fn
+        if fn == "gbx_rst_rastertoworldcoordy":
+            assert (s.inp, s.call) == ("dem_1024_mem", "{fn}(tile, 500, 300)")
+        else:
+            assert (s.inp, s.call) == ("tiles_n", "{fn}(tile)"), fn
 
 
 # --- the transport a light tile form took: the row's `path` says it -------------------------------------------------
@@ -201,7 +229,7 @@ TILE_UDF_FNS = _ACCESSORS + CULLED + ("gbx_rst_tri",)
 
 
 def test_the_tile_udf_functions_are_the_accessors_tilexyz_the_culls_and_tri():
-    assert len(_ACCESSORS) == 20 and "gbx_rst_tilexyz" in _ACCESSORS
+    assert len(_ACCESSORS) == 6 and "gbx_rst_tilexyz" in _ACCESSORS
 
 
 @pytest.mark.parametrize("fn", TILE_UDF_FNS)

@@ -16,7 +16,7 @@ the sorted arrays) and a NULL report (`nullsql`), so the levels are compared by 
 load is a counted, named NULL, not a fast wrong row. A run picks one function with `--levels-forms <fn>:<variant>,...`
 (`levels_forms.select_forms`), and the local pass with the `JV-<name>` sets of `bench.local_timing`.
 
-`CULLED_SPECS` keeps the tile ops whose JVM level was removed (Task 25) on the spec of their old JVM verdict, light forms
+`CULLED_SPECS` keeps the functions whose JVM level was removed (Task 25) on the spec of their old JVM verdict, light forms
 and a floor only, so a cull can be checked again against the old L1 medians when the light transport changes.
 """
 
@@ -110,25 +110,12 @@ _GRID_LIT = (
 _NULLS_D, _NULLS_I = "CAST(NULL AS DOUBLE)", "CAST(NULL AS INT)"
 
 SPECS: List[Spec] = [
-    # -- the raster accessors that return one value: a header read (the 15 one-argument ones over the corpus tiles, as the
-    # width and bounding-box record; the four coordinate ones over the replicated DEM tiles, whose grid is known)
+    # -- the raster accessors that return one value: a header read (the one-argument ones over the corpus tiles, as the
+    # width and bounding-box record; the coordinate ones over the replicated DEM tiles, whose grid is known)
     *[
         Spec(f"gbx_rst_{n}", "tiles_n", "n", "scalar", "{fn}(tile)", v, f"udf:{t}", "tile")
         for n, t, v in (
-            ("crs", "string", "hash"),
-            ("format", "string", "hash"),
-            ("height", "int", "hash"),
-            ("memsize", "bigint", "hash"),
             ("numbands", "int", "hash"),
-            ("pixelheight", "double", "round"),
-            ("pixelwidth", "double", "round"),
-            ("rotation", "double", "round"),
-            ("scalex", "double", "round"),
-            ("scaley", "double", "round"),
-            ("skewx", "double", "round"),
-            ("skewy", "double", "round"),
-            ("srid", "int", "hash"),
-            ("upperleftx", "double", "round"),
             ("upperlefty", "double", "round"),
         )
     ],
@@ -137,7 +124,6 @@ SPECS: List[Spec] = [
         Spec(f"gbx_rst_{n}", "dem_1024_mem", "dem", "scalar", c, v, f"udf:{t}", "tile")
         for n, c, t, v in (
             ("rastertoworldcoordx", "{fn}(tile, 500, 300)", "double", "round"),
-            ("rastertoworldcoordy", "{fn}(tile, 500, 300)", "double", "round"),
             ("worldtorastercoordx", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
             ("worldtorastercoordy", "{fn}(tile, 405005D, 5756995D)", "int", "hash"),
         )
@@ -250,13 +236,36 @@ SPECS: List[Spec] = [
 
 FUNCTIONS: Tuple[str, ...] = tuple(s.fn for s in SPECS)
 
-# The tile ops whose JVM level was culled (no L1 left): their light forms and a floor, on the calls and inputs of the old
-# JVM verdict (the t25f re-measure), so a change of the light transport can be checked against the old L1 medians.
+# The functions whose JVM level was culled (no L1 left): their light forms and a floor, on the calls and inputs of the old
+# JVM verdict, so a change of the light transport can be checked against the old L1 medians. The tile ops are the t25f
+# re-measure's; the accessors are the Arrow re-measure's (corpus tiles; rastertoworldcoordy over the DEM tiles).
 CULLED_SPECS: List[Spec] = [
     Spec("gbx_rst_band", "dem_1024_mem", "dem", "tile", "{fn}(tile, 1)", "raster", "tile"),
     Spec("gbx_rst_getsubdataset", "jv_nc_512_mem", "nc", "tile", "{fn}(tile, 'Band2')", "raster", "tile"),
     Spec("gbx_rst_setcrs", "dem_1024_mem", "dem", "tile", "{fn}(tile, 'EPSG:32633')", "raster", "tile"),
     Spec("gbx_rst_setsrid", "dem_1024_mem", "dem", "tile", "{fn}(tile, 32633)", "raster", "tile"),
+    *[
+        Spec(f"gbx_rst_{n}", "tiles_n", "n", "scalar", "{fn}(tile)", v, f"udf:{t}", "tile")
+        for n, t, v in (
+            ("crs", "string", "hash"),
+            ("format", "string", "hash"),
+            ("height", "int", "hash"),
+            ("memsize", "bigint", "hash"),
+            ("pixelheight", "double", "round"),
+            ("pixelwidth", "double", "round"),
+            ("rotation", "double", "round"),
+            ("scalex", "double", "round"),
+            ("scaley", "double", "round"),
+            ("skewx", "double", "round"),
+            ("skewy", "double", "round"),
+            ("srid", "int", "hash"),
+            ("upperleftx", "double", "round"),
+        )
+    ],
+    Spec(
+        "gbx_rst_rastertoworldcoordy", "dem_1024_mem", "dem", "scalar", "{fn}(tile, 500, 300)", "round", "udf:double",
+        "tile",
+    ),
 ]  # fmt: skip
 
 
@@ -796,16 +805,11 @@ def by_input() -> Dict[str, List[str]]:
 # where they can (an input is built once per scale and read by every form of the part), and a part times the floor of its
 # first function per input only (the floors of one input and shape cost the same).
 PARTS: Dict[str, Tuple[str, ...]] = {
-    "acc1": tuple(f"gbx_rst_{n}" for n in ("crs", "format", "height", "memsize", "numbands")),
-    "acc2": tuple(f"gbx_rst_{n}" for n in ("pixelheight", "pixelwidth", "rotation", "scalex", "scaley")),
-    "acc3": tuple(f"gbx_rst_{n}" for n in ("skewx", "skewy", "srid", "upperleftx", "upperlefty")),
+    "acc1": tuple(f"gbx_rst_{n}" for n in ("numbands", "upperlefty")),
     "dem1": tuple(
         f"gbx_rst_{n}"
-        for n in (
-            "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoordx", "worldtorastercoordy",
-            "tilexyz",
-        )
-    ),  # fmt: skip
+        for n in ("rastertoworldcoordx", "worldtorastercoordx", "worldtorastercoordy", "tilexyz")
+    ),
     "cells": (
         "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg", "gbx_custom_cellfill",
         "gbx_rst_custom_rasterize_agg", "gbx_rst_quadbin_rasterize_agg",

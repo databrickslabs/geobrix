@@ -868,7 +868,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         _BOTH,
         {},
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Height.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: accessors.height(ds),
         col_fn=lambda t, a: rx.rst_height(t),
@@ -1078,7 +1079,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.srid(ds),
         col_fn=lambda t, a: rx.rst_srid(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SRID.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_pixelwidth": FnSpec(
@@ -1089,7 +1091,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.pixelwidth(ds),
         col_fn=lambda t, a: rx.rst_pixelwidth(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_PixelWidth.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_pixelheight": FnSpec(
@@ -1100,7 +1103,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.pixelheight(ds),
         col_fn=lambda t, a: rx.rst_pixelheight(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_PixelHeight.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_upperleftx": FnSpec(
@@ -1111,7 +1115,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.upperleftx(ds),
         col_fn=lambda t, a: rx.rst_upperleftx(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_UpperLeftX.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_upperlefty": FnSpec(
@@ -1133,7 +1138,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.scalex(ds),
         col_fn=lambda t, a: rx.rst_scalex(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_ScaleX.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_scaley": FnSpec(
@@ -1144,7 +1150,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.scaley(ds),
         col_fn=lambda t, a: rx.rst_scaley(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_ScaleY.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_skewx": FnSpec(
@@ -1155,7 +1162,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.skewx(ds),
         col_fn=lambda t, a: rx.rst_skewx(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SkewX.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_skewy": FnSpec(
@@ -1166,7 +1174,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.skewy(ds),
         col_fn=lambda t, a: rx.rst_skewy(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_SkewY.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rotation": FnSpec(
@@ -1177,7 +1186,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.rotation(ds),
         col_fn=lambda t, a: rx.rst_rotation(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Rotation.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_isempty": FnSpec(
@@ -1213,7 +1223,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.format(ds),
         col_fn=lambda t, a: rx.rst_format(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Format.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_type": FnSpec(
@@ -1239,7 +1250,8 @@ REGISTRY: Dict[str, FnSpec] = {
         # open dataset (deterministic; timing-only, fingerprint suppressed).
         core_fn=lambda ds, a: int(ds.read().nbytes),
         col_fn=lambda t, a: rx.rst_memsize(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_MemSize.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1268,7 +1280,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {"x": 64, "y": 64},
         core_fn=lambda ds, a: coords.raster_to_world_y(ds, a["x"], a["y"]),
         col_fn=lambda t, a: rx.rst_rastertoworldcoordy(t, a["x"], a["y"]),
-        sources=_COORDS_LIGHT + (_HEAVY + "RST_RasterToWorldCoordY.scala",),
+        sources=_COORDS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_rastertoworldcoord": FnSpec(
@@ -1514,7 +1527,8 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: accessors.crs(ds),
         col_fn=lambda t, a: rx.rst_crs(t),
-        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Crs.scala",),
+        sources=_ACCESSORS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_setcrs": FnSpec(

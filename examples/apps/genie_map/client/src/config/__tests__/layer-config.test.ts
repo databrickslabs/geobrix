@@ -6,7 +6,7 @@ describe('layer config factories', () => {
     const cfg = createH3LayerConfig({
       datasetId: 'ch4_hotspots', hexField: 'hex', valueField: 'ch4_max',
       label: 'CH4 Hotspots', enable3d: true,
-    }) as any;
+    });
     const layer = cfg.config.visState.layers[0];
     expect(layer.config.dataId).toBe('ch4_hotspots');
     expect(layer.visualChannels.colorField.name).toBe('ch4_max');
@@ -14,8 +14,8 @@ describe('layer config factories', () => {
   });
 
   it('H3 factory resolves a registered non-default palette to a distinct colorRange', () => {
-    const dflt = createH3LayerConfig({ datasetId: 'a', palette: 'Global Warming' }) as any;
-    const cfg = createH3LayerConfig({ datasetId: 'b', palette: 'Uber Viz Sequential' }) as any;
+    const dflt = createH3LayerConfig({ datasetId: 'a', palette: 'Global Warming' });
+    const cfg = createH3LayerConfig({ datasetId: 'b', palette: 'Uber Viz Sequential' });
     const dfltColors = dflt.config.visState.layers[0].config.visConfig.colorRange.colors;
     const colors = cfg.config.visState.layers[0].config.visConfig.colorRange.colors;
     expect(colors).not.toEqual(dfltColors);

@@ -163,7 +163,6 @@ export function highlightRows(
   dispatch: (action: any) => void,
   // Current visState.filters — needed to resolve a filter's index for removeFilter (which
   // is index-based, not id-based). Defaults to empty (clear becomes a no-op if unknown).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   filters: Array<{ id?: string }> = [],
 ) {
   const datasetId = Object.keys(datasets).find(dataId => datasets[dataId].label === datasetName);

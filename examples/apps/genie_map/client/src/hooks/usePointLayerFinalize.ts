@@ -6,6 +6,7 @@ import {
   layerVisConfigChange,
   layerVisualChannelConfigChange,
 } from '@kepler.gl/actions';
+import type { Layer } from '@kepler.gl/layers';
 import { keplerGlGetState } from '../store';
 
 /**
@@ -35,19 +36,17 @@ export interface PointLayerDef {
   colorField?: string;
 }
 
-interface KLayer {
-  id: string;
-  type: string;
-  config: { dataId: string; label?: string; isVisible?: boolean };
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type KField = { name: string; [k: string]: any };
+
+// Visual-channel field keys (sizeField, colorField) live on the concrete point layer's
+// config, not on the base config type the action is declared with.
+type ChannelConfig = Partial<Layer['config']>;
 
 export function usePointLayerFinalize(zoom: number | null, pointDefs: PointLayerDef[]): void {
   const dispatch = useDispatch();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const layers: KLayer[] = useSelector((s: any) => keplerGlGetState(s)?.map?.visState?.layers ?? []);
+  const layers: Layer[] = useSelector((s: any) => keplerGlGetState(s)?.map?.visState?.layers ?? []);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const datasets = useSelector((s: any) => keplerGlGetState(s)?.map?.visState?.datasets ?? {});
   const renamedRef = useRef<Set<string>>(new Set());
@@ -80,7 +79,7 @@ export function usePointLayerFinalize(zoom: number | null, pointDefs: PointLayer
             if (def.radiusRange) {
               dispatch(layerVisConfigChange(layer, { radiusRange: def.radiusRange }));
             }
-            dispatch(layerVisualChannelConfigChange(layer, { sizeField: field }, 'size'));
+            dispatch(layerVisualChannelConfigChange(layer, { sizeField: field } as ChannelConfig, 'size'));
           }
         }
 
@@ -89,7 +88,7 @@ export function usePointLayerFinalize(zoom: number | null, pointDefs: PointLayer
         if (def.colorField) {
           const field = fieldObj(def.colorField);
           if (field) {
-            dispatch(layerVisualChannelConfigChange(layer, { colorField: field }, 'color'));
+            dispatch(layerVisualChannelConfigChange(layer, { colorField: field } as ChannelConfig, 'color'));
           }
         }
         renamedRef.current.add(def.dataId);

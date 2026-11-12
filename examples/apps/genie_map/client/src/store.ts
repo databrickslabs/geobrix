@@ -68,13 +68,13 @@ const keplerGlMiddleware = enhanceReduxMiddleware([]);
 
 export const store = configureStore({
   reducer: rootReducer,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   middleware: (getDefaultMiddleware) => [
     ...getDefaultMiddleware({
       serializableCheck: false,
       immutableCheck: false,
     }),
     ...keplerGlMiddleware,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ] as any,
 });
 

@@ -23,7 +23,7 @@ const pointLayer: LayerDef = { id: 'plumes', kind: 'point', label: 'x',
   latField: 'latitude', tooltipFields: ['record_id'], zoomVisible: { min: 9, max: 24 } };
 
 // sql.number/sql.double/sql.string wrap the underlying value as a string on `.value`.
-const val = (p: any) => (p == null ? p : p.value);
+const val = (p: unknown) => (p == null ? p : (p as { value: unknown }).value);
 
 describe('buildLayerParams', () => {
   it('returns null when bounds are null', () => {
@@ -33,7 +33,7 @@ describe('buildLayerParams', () => {
     expect(buildLayerParams(h3Layer, bounds, '')).toBeNull();
   });
   it('emits the dynamic-H3 params for a cells-source H3 layer with correct values', () => {
-    const p = buildLayerParams(h3Layer, bounds, 'db.sch.hotspot_latest') as any;
+    const p = buildLayerParams(h3Layer, bounds, 'db.sch.hotspot_latest') as Record<string, unknown>;
     expect(val(p.table_name)).toBe('db.sch.hotspot_latest');
     expect(val(p.zoom_level)).toBe(String(bounds.zoom_level));
     expect(val(p.zoom_break_1)).toBe(String(h3Layer.h3!.zoomResBreaks[0]));
@@ -47,13 +47,13 @@ describe('buildLayerParams', () => {
     expect(p.max_res).toBeUndefined();
   });
   it('emits max_res (not native_res) for a points-source H3 layer', () => {
-    const p = buildLayerParams(h3PointsLayer, bounds, 'db.sch.wells_enriched_latest') as any;
+    const p = buildLayerParams(h3PointsLayer, bounds, 'db.sch.wells_enriched_latest') as Record<string, unknown>;
     expect(val(p.max_res)).toBe(String(h3PointsLayer.h3!.maxRes));
     expect(p.native_res).toBeUndefined();
     expect(val(p.res_5)).toBe(String(h3PointsLayer.h3!.resByBreak[4]));
   });
   it('emits only bbox+table for a point layer', () => {
-    const p = buildLayerParams(pointLayer, bounds, 'db.sch.plume_leaderboard_latest') as any;
+    const p = buildLayerParams(pointLayer, bounds, 'db.sch.plume_leaderboard_latest') as Record<string, unknown>;
     expect(p.x_min).toBeDefined();
     expect(p.table_name).toBeDefined();
     expect(p.zoom_break_1).toBeUndefined();

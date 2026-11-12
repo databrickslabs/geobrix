@@ -20,9 +20,10 @@ export function usePanelState(): PanelState {
       state.demo?.keplerGl?.map?.uiState?.mapControls?.aiAssistant?.active ?? false,
   );
   const isSqlPanelOpen = useSelector(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    // sqlPanel is this app's own map control, so kepler's MapControls type does not list it.
     (state: RootState) =>
-      (state.demo?.keplerGl?.map?.uiState?.mapControls as any)?.sqlPanel?.active ?? false,
+      (state.demo?.keplerGl?.map?.uiState?.mapControls as
+        Record<string, { active?: boolean } | undefined> | undefined)?.sqlPanel?.active ?? false,
   );
   const startScreenCapture = useSelector(
     (state: RootState) =>

@@ -104,12 +104,14 @@ function CustomMapControlFactory(
     AiAssistantControl
   ];
 
+  // These panels are mutually exclusive: only one can be active at a time.
+  // kepler.gl's built-in toggleMapControlUpdater only knows about its own
+  // pairs (effect<->aiAssistant), so we handle our custom panels here.
+  const MUTUALLY_EXCLUSIVE_PANELS = ['aiAssistant', 'sqlPanel'] as const;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const CustomMapControl = (props: any) => {
-    // These panels are mutually exclusive: only one can be active at a time.
-    // kepler.gl's built-in toggleMapControlUpdater only knows about its own
-    // pairs (effect<->aiAssistant), so we handle our custom panels here.
-    const MUTUALLY_EXCLUSIVE_PANELS = ['aiAssistant', 'sqlPanel'] as const;
+    const { onToggleMapControl, mapControls } = props;
 
     // Blur the currently focused element before toggling any map control.
     // MapControlButton CSS has &:focus { background: highlighted } which keeps
@@ -119,10 +121,10 @@ function CustomMapControlFactory(
       // Close any other currently-active panel in the exclusive group first,
       // so only one panel is active at a time.
       MUTUALLY_EXCLUSIVE_PANELS
-        .filter(p => p !== panelId && (props.mapControls as any)?.[p]?.active)
-        .forEach(p => props.onToggleMapControl?.(p));
-      props.onToggleMapControl?.(panelId);
-    }, [props.onToggleMapControl, props.mapControls]);
+        .filter(p => p !== panelId && mapControls?.[p]?.active)
+        .forEach(p => onToggleMapControl?.(p));
+      onToggleMapControl?.(panelId);
+    }, [onToggleMapControl, mapControls]);
 
     return (
       <StyledMapControlOverlay $top={props.top ?? 0}>

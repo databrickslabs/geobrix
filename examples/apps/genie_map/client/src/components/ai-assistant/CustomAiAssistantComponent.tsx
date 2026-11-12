@@ -231,6 +231,11 @@ type State = {
   };
 };
 
+// Stable fallbacks while kepler's visState is not yet populated: a fresh `{}` / `[]` on
+// every render would change the identity of the memo/effect dependencies below.
+const NO_DATASETS = {};
+const NO_ITEMS: never[] = [];
+
 export function CustomAiAssistantComponent() {
   const visState = useSelector((state: State) => state.demo?.keplerGl?.map?.visState);
   const aiAssistant = useSelector((state: State) => state.demo?.aiAssistant);
@@ -241,12 +246,12 @@ export function CustomAiAssistantComponent() {
   const dispatch = useDispatch() as Dispatch;
 
   // Get datasets and layers from visState
-  const datasets = visState?.datasets || {};
-  const layers = visState?.layers || [];
-  const layerData = visState?.layerData || [];
+  const datasets = visState?.datasets || NO_DATASETS;
+  const layers = visState?.layers || NO_ITEMS;
+  const layerData = visState?.layerData || NO_ITEMS;
   // Current filters — passed to the echarts tools so a cleared chart selection can resolve
   // the cross-filter's INDEX for kepler's index-based removeFilter.
-  const filters = visState?.filters || [];
+  const filters = visState?.filters || NO_ITEMS;
 
   // Get Databricks tools with dispatch bound
   const databricksTools = useMemo(

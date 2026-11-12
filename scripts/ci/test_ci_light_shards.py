@@ -10,8 +10,10 @@ Rust module (the `light-payload` job). These tests read the workflow and the CI 
   table of the manifest in exactly one shard);
 * the heavy build ignores the same dirs (`LIGHT_IGNORES`) and the unsharded fallback line of the light action lists them;
 * `test/bench` runs as exactly three shards, `bench 1/3`, `bench 2/3` and `bench 3/3`, each on its own (bench relies on no
-  state another dir leaves in the process): test_levels.py (with pyvx) and test_levels_legs.py, the two long files, are
-  pinned to a shard each so the three stay balanced;
+  state another dir leaves in the process): test_levels.py (with pyvx) is pinned to the first, test_levels_legs.py and
+  test_levels_family_forms.py (the next two longest) to the second, so the three stay balanced;
+* test/engine runs as a shard of its own (test_engine_leaks.py alone is ~9 min), so `other dirs` is no longer the
+  critical path;
 * the heavy build waits only for the native payload (it is no longer behind the light shards), and nothing can quietly
   drop a shard, a path or the native bindings: the matrix has no `exclude`/`include`, and the job and the action step
   carry no `if`, `continue-on-error` or skip input; the action fails a shard whose bindings do not load from the payload.
@@ -160,7 +162,8 @@ def test_the_heavy_build_ignores_the_light_dirs_and_the_fallback_lists_them():
 
 
 _BENCH_SHARDS = ["bench 1/3", "bench 2/3", "bench 3/3"]
-_BENCH_PINNED = ["test/bench/test_levels.py", "test/bench/test_levels_legs.py"]
+_BENCH_FIRST = {"test/bench/test_levels.py"}
+_BENCH_SECOND = {"test/bench/test_levels_legs.py", "test/bench/test_levels_family_forms.py"}
 
 
 def test_bench_runs_as_three_self_sufficient_shards_with_the_long_files_pinned():
@@ -170,11 +173,10 @@ def test_bench_runs_as_three_self_sufficient_shards_with_the_long_files_pinned()
     bench = _test_files("test/bench")
     # together they are all of bench; the shard-wide check above proves each file is in exactly one
     assert (first | second | rest) >= bench
-    # each long file is alone in its shard (the first with pyvx); the third shard is the rest of the dir
-    pinned_first, pinned_second = _BENCH_PINNED
-    assert pinned_first in first and first & bench == {pinned_first}
-    assert second == {pinned_second}
-    assert rest == bench - set(_BENCH_PINNED)
+    # the long files are pinned (the first with pyvx); the third shard is the rest of the dir
+    assert first & bench == _BENCH_FIRST
+    assert second == _BENCH_SECOND
+    assert rest == bench - _BENCH_FIRST - _BENCH_SECOND
     # self-sufficient: no bench shard needs a dir another shard leaves behind, so the other dirs of a shard are only
     # pyvx, and the shards without pyvx (the second and third) still hold all of bench but the first's pinned file
     assert {f.split("/")[1] for f in first | second | rest} == {"bench", "pyvx"}
@@ -232,3 +234,11 @@ def test_the_light_job_cannot_hide_a_shard_or_test_without_the_native_bindings()
         if s.get("uses") == "./.github/actions/pyrx_build"
     ]
     assert scripts["with"]["native"] == "false" and scripts["with"]["run_tests"] == "false"
+
+
+def test_engine_runs_as_a_shard_of_its_own():
+    """test/engine (~12 min, test_engine_leaks.py ~9) kept `other dirs` at ~22 min, the light job's critical path."""
+    (engine,) = [s for s in _shards() if s["name"] == "engine"]
+    assert engine["paths"].split() == ["test/engine"] and not engine.get("ignore")
+    (other,) = [s for s in _shards() if s["name"] == "other dirs"]
+    assert "test/engine" not in other["paths"].split()

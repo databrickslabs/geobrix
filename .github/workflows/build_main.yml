@@ -205,19 +205,23 @@ jobs:
             paths: test/manager
             ignore: test/manager/test_family_cross_tier.py
           # test/bench in three: test_levels.py was ~15 min on its own (the critical path), so its test_levels_leg_*
-          # tests (~8-9 min) are test_levels_legs.py, a shard of their own; test_levels.py keeps its ~6 min of
-          # worker-peak tests and its remainder (~7 min) and runs with test/pyvx (~1 min); the third shard is the rest
-          # of the dir. A hashed split would put the long parts together. Each shard is self-sufficient: bench needs
-          # nothing a previous test dir left in the process.
+          # tests are test_levels_legs.py; test_levels.py keeps its worker-peak tests and its remainder and runs with
+          # test/pyvx (~1 min). test_levels_family_forms.py (~5.5 min) joins test_levels_legs.py (~3.5 min), so the
+          # second and third shards are ~9 min each; the third is the rest of the dir. A hashed split would put the long
+          # parts together. Each shard is self-sufficient: bench needs nothing a previous test dir left in the process.
           - name: bench 1/3
             paths: test/pyvx test/bench/test_levels.py
           - name: bench 2/3
-            paths: test/bench/test_levels_legs.py
+            paths: test/bench/test_levels_legs.py test/bench/test_levels_family_forms.py
           - name: bench 3/3
             paths: test/bench
-            ignore: test/bench/test_levels.py test/bench/test_levels_legs.py
+            ignore: test/bench/test_levels.py test/bench/test_levels_legs.py test/bench/test_levels_family_forms.py
+          # test/engine (~12.5 min; test_engine_leaks.py alone ~9) on its own: with the other dirs it was ~22 min, the
+          # light job's critical path.
+          - name: engine
+            paths: test/engine
           - name: other dirs
-            paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/engine test/drivers_extended
+            paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/drivers_extended
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

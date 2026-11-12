@@ -938,6 +938,47 @@ def test_a_case_red_in_its_batch_and_every_case_of_a_failed_batch_is_judged_alon
     assert [m for _, m in ran] == ["alone:a", "alone:b", "alone:c"]
 
 
+def test_gbx_oracle_trace_1_names_each_query_its_seconds_and_why_a_batch_failed(
+    monkeypatch, capsys
+):
+    from databricks.labs.gbx.bench import oracles
+
+    cases = [_fake("a"), _fake("b")]
+    monkeypatch.delenv(oracles.TRACE_ENV, raising=False)
+    _batched(cases, batch_raises=True)
+    assert "oracle trace" not in capsys.readouterr().out, "off unless asked"
+    monkeypatch.setenv(oracles.TRACE_ENV, "1")
+    ran, _ = _batched(cases, batch_raises=True)
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == "oracle trace: batch of 2 case(s) in 1 group(s): start"
+    assert out[1].startswith("oracle trace: batch of 2 case(s) in 1 group(s): ")
+    assert out[1].endswith(" s")
+    assert out[2] == (
+        "oracle trace: batch failed, its cases run alone: RuntimeError: the batch failed"
+    )
+    assert [m for _, m in ran] == ["alone:a", "alone:b"], "the verdicts stand"
+
+
+def test_gbx_oracle_trace_1_times_a_case_run_alone(spark, monkeypatch, capsys):
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.bench import oracles
+
+    name = "gbx_bng_cellarea"
+    register(spark, only=[name], _levels={name: ("L3", "c0")})
+    case = next(
+        c
+        for c in oracles.TABLES["GRID_SCALAR"]
+        if c.fn == name and "session" in c.surfaces and c.sql is None
+    )
+    monkeypatch.setenv(oracles.TRACE_ENV, "1")
+    assert oracles.run_session(spark, [case]) == [(case, None)]
+    out = [
+        x for x in capsys.readouterr().out.splitlines() if x.startswith("oracle trace")
+    ]
+    assert out[0] == f"oracle trace: {case.cid} alone: start" and len(out) == 2
+    assert out[1].startswith(f"oracle trace: {case.cid} alone: ")
+
+
 def test_gbx_oracle_batch_0_turns_batching_off(monkeypatch):
     from databricks.labs.gbx.bench import oracles
 

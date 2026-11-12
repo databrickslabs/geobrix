@@ -5192,6 +5192,29 @@ def batching() -> bool:
     return os.environ.get(BATCH_ENV, "1").strip() != "0"
 
 
+# `GBX_ORACLE_TRACE=1` prints a line per query of the family harness: the batch (and why it failed) and each case run alone,
+# with its seconds. A row that is slow on one compute (a Serverless query costs seconds) is then named in the test's output.
+TRACE_ENV = "GBX_ORACLE_TRACE"
+
+
+def _trace(line: str) -> None:
+    if os.environ.get(TRACE_ENV, "").strip() == "1":
+        print(f"oracle trace: {line}", flush=True)
+
+
+@contextlib.contextmanager
+def _traced(what: str):
+    """Trace ``what`` (``_trace``): its start, and its seconds when it ends, also when it raises."""
+    import time
+
+    t0 = time.time()
+    _trace(f"{what}: start")
+    try:
+        yield
+    finally:
+        _trace(f"{what}: {time.time() - t0:.1f} s")
+
+
 def _run_batched(cases, prepare, run_batch, judge, run_alone):
     """Run ``cases`` in batches; one ``(case, verdict)`` per case run, in the order of ``cases``.
 
@@ -5215,11 +5238,15 @@ def _run_batched(cases, prepare, run_batch, judge, run_alone):
             groups.setdefault(got[0], []).append((k, got[1]))
     done: Dict[int, list] = {}
     if groups:
+        n = sum(len(g) for g in groups.values())
         try:
-            outs = run_batch(list(groups.values()))
+            with _traced(f"batch of {n} case(s) in {len(groups)} group(s)"):
+                outs = run_batch(list(groups.values()))
         except (
             Exception
-        ):  # noqa: BLE001 - re-run case by case, so a failure names its case
+        ) as exc:  # noqa: BLE001 - re-run case by case, so a failure names its case
+            why = " ".join(str(exc).split())[:300]
+            _trace(f"batch failed, its cases run alone: {type(exc).__name__}: {why}")
             outs = None
         for members in groups.values():
             for k, payload in members:
@@ -5369,15 +5396,16 @@ def run_session(
             continue
         rows, schema, call = _session_parts(man, case, name_of, tmpdir, surface)
         try:
-            df = spark.createDataFrame([tuple(r) for r in rows], schema)
-            if column_of is None:
-                df.createOrReplaceTempView("_gbx_oracle")
-                got = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").collect()
-            else:
-                call_py = _session_py_call(
-                    case, rows, man.functions[case.fn].params, column_of
-                )
-                got = df.select(call_py.alias("out")).collect()
+            with _traced(f"{case.cid} alone"):
+                df = spark.createDataFrame([tuple(r) for r in rows], schema)
+                if column_of is None:
+                    df.createOrReplaceTempView("_gbx_oracle")
+                    got = spark.sql(f"SELECT {call} AS out FROM _gbx_oracle").collect()
+                else:
+                    call_py = _session_py_call(
+                        case, rows, man.functions[case.fn].params, column_of
+                    )
+                    got = df.select(call_py.alias("out")).collect()
             outs = [r["out"] for r in got]
             results.append((case, verdict(case, outs, rows, tmpdir)))
         except (

@@ -603,7 +603,14 @@ def _shared_dir(d):  # a folder the next chunks may write even when they run as 
 base = scratch + "/%%s-%%s" %% (PLAN["run_id"], PLAN.get("attempt", "0"))
 OWN_BASE = False  # True: a temp folder of this chunk's own, removed at its end with everything in it
 STALE_SCRATCH_S = 6 * 3600  # an earlier launch's scratch on this node older than this is removed (no run lasts that long)
+# On Serverless each chunk's notebook run is a user of its own (its uid), so a runner's checkout is never reused there, and the
+# platform recycles those uids (1008-1013 again in tst-sls-b7). A folder another chunk's user made (the shared scratch, the
+# launch's folder) went with its files, chunks beside it lost their trees within seconds of a run ending (tst-sls-b2, -b6, -b7).
+# So there each chunk works in a temp folder its own user makes.
+OWN_SCRATCH = bool(PLAN.get("serverless"))
 try:
+    if OWN_SCRATCH:
+        raise OSError("Serverless: a temp folder of this chunk's own")
     _shared_dir(scratch)
     for _old in os.listdir(scratch):  # earlier launches' folders on this node (a pool node lives on): gone after STALE_SCRATCH_S
         _p = scratch + "/" + _old
@@ -616,7 +623,7 @@ try:
     root = base + "/" + SLUG
     shutil.rmtree(root, ignore_errors=True)
     os.makedirs(root + "/out")
-except OSError:  # a folder this chunk cannot write: one of its own (the checkout is then unpacked for this chunk alone)
+except OSError:  # Serverless, or a folder this chunk cannot write: one of its own (the checkout is then unpacked for this chunk alone)
     import tempfile
 
     base = tempfile.mkdtemp(prefix="gbxtest-")

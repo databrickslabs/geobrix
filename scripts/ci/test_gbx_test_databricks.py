@@ -1201,6 +1201,34 @@ def test_a_timed_out_test_escapes_a_per_case_except_and_its_connect_operations_e
     assert sr.interrupt_session(Refusing()) == "interruptAll failed: RuntimeError: session closed"
 
 
+def test_a_serverless_chunk_works_in_a_temp_folder_its_own_user_makes(shards, tmp_path, monkeypatch):
+    """The cell's scratch block, run: on Serverless a folder of the chunk's own under the temp dir (another chunk's user's folder
+    can go with that user's files there), elsewhere the launch's shared folder on the scratch disk."""
+    import shutil
+    import tempfile
+    import time
+
+    src = _cell_source(shards)
+    start, end = src.index("try:  # the node's local disk; Serverless has none to write"), src.index("try:  # the runner that runs this chunk")
+    (tmp_path / "not-a-dir").write_text("x")  # the node's disk this host lacks: makedirs under a file fails as it does there
+    snippet = src[start:end].replace("/local_disk0/gbxtest", str(tmp_path / "not-a-dir" / "gbxtest"))
+    temp = tmp_path / "temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp))
+
+    def scratch_of(plan):
+        ns = {"os": os, "shutil": shutil, "time": time, "PLAN": plan, "SLUG": "files-family-1-2"}
+        exec(compile(snippet, "scratch", "exec"), ns)  # noqa: S102
+        return ns
+
+    pool = scratch_of({"run_id": "t1", "attempt": "0"})
+    assert pool["OWN_BASE"] is False and pool["base"] == str(temp / "gbxtest" / "t1-0")
+    sls = scratch_of({"run_id": "t1", "attempt": "0", "serverless": True})
+    assert sls["OWN_BASE"] is True and os.path.dirname(sls["base"]) == str(temp) and os.path.basename(sls["base"]).startswith("gbxtest-")
+    assert os.path.isdir(sls["root"] + "/out") and sls["root"] == sls["base"] + "/files-family-1-2"
+    assert os.stat(sls["base"]).st_uid == os.getuid(), "made by this chunk's own user"
+
+
 def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
     src = _cell_source(shards)
     for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):

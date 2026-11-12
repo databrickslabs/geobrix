@@ -137,6 +137,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Job status tells the truth. A chunk with a failed test fails its own notebook run. A runner task that ran one fails too.
 - Each chunk names its run first (`<stage>/out/<shard>/child.json`) and in the queue table (`child_run_id`, `child_job_id`). When it dies before pytest, its row shows that run's own error.
 - Each launch has its own scratch folder on the node, named by run id and attempt. So a relaunch under the same run id meets no files of the last one.
+- On Serverless each chunk works in a temp folder of its own, made by its own user. Each chunk's notebook run there is a user of its own, and the platform recycles those users.
+  - A folder that another chunk's user made went with that user's files. Chunks beside it lost their trees within seconds (`tst-sls-b2`, `-b6`, `-b7`).
 
 ## The smoke chunk
 

@@ -54,9 +54,10 @@ resources:
           # per dependency entry, so splitting the extras defeats pip's resolver.
           # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
           - ${var.gbx_wheel}[vizx,stac]
-          # The Overture CLI (the bbox fast path) is not an env wheel extra: a separate entry.
-          # It raises click and tqdm and installs PyPI's shapely, which GeoBrix does not use.
-          - overturemaps>=1.0.2,<2
+          # No Overture CLI here: the pipeline only reads the water mask the land task staged
+          # (OvertureClient.read is a parquet read). The CLI needs click>=8.3, and Lakeflow
+          # installs each entry under a constraint that holds the runtime's click 8.2.1, so the
+          # entry fails the install. The land task's job environment below keeps it.
       configuration:
         wireless_coverage.catalog: ${var.catalog}
         wireless_coverage.schema: ${var.schema}
@@ -133,6 +134,11 @@ resources:
             - task_key: siting
           notebook_task:
             notebook_path: ./validate/validate_wc_lf.ipynb
+            # The notebook's catalog/schema widgets default to geospatial_docs; pass the
+            # bundle's own so an override that repoints the catalog validates its tables.
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
           environment_key: wc_env
       environments:
         - environment_key: wc_env
@@ -146,6 +152,8 @@ resources:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
               - ${var.gbx_wheel}[vizx,stac]
+              # The Overture CLI (the bbox fast path of the land task's water-mask download)
+              # is not an env wheel extra: a separate entry. It raises click and tqdm.
               - overturemaps>=1.0.2,<2
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"

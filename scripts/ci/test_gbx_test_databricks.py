@@ -1930,6 +1930,7 @@ def test_the_chunk_records_its_setup_phases_in_order(shards):
     for hook in ("collected", "first_test_start", "first_test_end"):
         assert 'phase("%s")' % hook in run
     assert "phases=PHASES_OUT()" in run, "the result carries the phases"
+    assert run.index('print("phases so far:"') > run.index("sys.stderr = Tee("), "a killed chunk's log holds its early phases"
 
 
 def test_a_serverless_chunk_checks_its_workers_while_it_unpacks(shards):

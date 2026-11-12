@@ -761,6 +761,8 @@ class Tee:
     def __getattr__(self, n): return getattr(self.a, n)
 sys.stdout = Tee(sys.stdout, log)
 sys.stderr = Tee(sys.stderr, log)  # a usage error of pytest is only on stderr
+# the phases before the log began, in it too: a chunk the watchdog kills leaves no result, but its log reaches the Volume
+print("phases so far:", json.dumps(PHASES_OUT()), flush=True)
 
 FF = PLAN.get("fail_fast") or {}
 MAXFAIL = int(FF.get("maxfail") or 0)  # pytest stops this chunk at its MAXFAIL-th failure (0: never)

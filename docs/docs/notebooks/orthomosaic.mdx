@@ -114,6 +114,7 @@ The core pipeline:
    matcher; results are collected to the driver for the reconstruction step.
 6. **Incremental mapping** — `pycolmap.incremental_mapping` recovers camera poses and a
    sparse 3-D point cloud on the driver.
+   The raw `pycolmap` log is limited to warnings and errors; pass `verbose=True` to `run_sfm` to see it.
 7. **Orthomosaic projection** — each registered image is back-projected onto the estimated
    ground plane; contributions are blended by overlap count into a georeferenced RGB
    GeoTIFF (`orthomosaic.tif`).

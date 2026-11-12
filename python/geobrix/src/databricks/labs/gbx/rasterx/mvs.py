@@ -6,6 +6,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from databricks.labs.gbx.rasterx._native_log import native_log
 from databricks.labs.gbx.rasterx.checkpoint import checkpoint_skip, input_signature
 
 
@@ -216,12 +217,13 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     _kw = {}
     if num_src_images:
         _kw["num_patch_match_src_images"] = int(num_src_images)
-    pycolmap.undistort_images(
-        output_path=str(work),
-        input_path=str(model_dir),
-        image_path=to_local_path(str(image_dir)),
-        **_kw,
-    )
+    with native_log(pycolmap):
+        pycolmap.undistort_images(
+            output_path=str(work),
+            input_path=str(model_dir),
+            image_path=to_local_path(str(image_dir)),
+            **_kw,
+        )
     return str(work)
 
 
@@ -260,7 +262,8 @@ def dense_patch_match(
         pm.window_step = int(window_step)
     if cache_size_gb:
         pm.cache_size = float(cache_size_gb)
-    pycolmap.patch_match_stereo(str(work_dir), options=pm)
+    with native_log(pycolmap):
+        pycolmap.patch_match_stereo(str(work_dir), options=pm)
     return str(work_dir)
 
 
@@ -276,12 +279,13 @@ def dense_fuse(work_dir, out_ply, *, geom_consistency=True):
     """
     import pycolmap
 
-    pycolmap.stereo_fusion(
-        output_path=str(out_ply),
-        workspace_path=str(work_dir),
-        input_type="geometric" if geom_consistency else "photometric",
-        output_type="PLY",
-    )
+    with native_log(pycolmap):
+        pycolmap.stereo_fusion(
+            output_path=str(out_ply),
+            workspace_path=str(work_dir),
+            input_type="geometric" if geom_consistency else "photometric",
+            output_type="PLY",
+        )
     if not Path(out_ply).exists():
         raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")
     return str(out_ply)

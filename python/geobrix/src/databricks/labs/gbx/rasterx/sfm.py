@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 
+from databricks.labs.gbx.rasterx._native_log import quiet_native_log, restore_native_log
+
 
 def image_ids_to_pair_id(image_id1, image_id2):
     if image_id1 > image_id2:
@@ -26,7 +28,9 @@ def image_ids_to_pair_id(image_id1, image_id2):
     return 2147483647 * image_id1 + image_id2
 
 
-def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+def _extract_features_to_df(
+    iterator: Iterator[pd.DataFrame], verbose: bool = False
+) -> Iterator[pd.DataFrame]:
     """Distributed CPU-SIFT feature extraction (`mapInPandas`).
 
     Extracted verbatim from the notebook's `extract_features_to_df` (cell
@@ -38,6 +42,8 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
     the OS reclaim all native memory on exit, keeping worker RSS flat
     regardless of image count. Full quality is preserved (identical
     `FeatureExtractionOptions`) — do not "optimize" these params.
+
+    The child's pycolmap native log is limited to warnings and errors unless `verbose`.
     """
     import gc
     import os
@@ -68,7 +74,9 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
         "os.environ['MKL_NUM_THREADS'] = '1'\n"
         "from pathlib import Path\n"
         "import pycolmap\n"
-        "img_path, db_path, work_dir, max_size, use_gpu = sys.argv[1:6]\n"
+        "img_path, db_path, work_dir, max_size, use_gpu, native_verbose = sys.argv[1:7]\n"
+        "if not int(native_verbose) and pycolmap.logging.minloglevel < 1:\n"
+        "    pycolmap.logging.minloglevel = 1\n"
         "work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)\n"
         "link = work / Path(img_path).name\n"
         "if not os.path.lexists(str(link)):\n"
@@ -107,6 +115,7 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                             str(worker_dir),
                             str(MAX_IMAGE_SIZE),
                             str(int(False)),
+                            str(int(bool(verbose))),
                         ],
                         capture_output=True,
                         text=True,
@@ -243,13 +252,16 @@ def _require_extracted(n_extracted: int, n_images: int, first_source) -> None:
         )
 
 
-def _match_pairs_dist(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
+def _match_pairs_dist(
+    iterator: Iterator[pd.DataFrame], verbose: bool = False
+) -> Iterator[pd.DataFrame]:
     """Distributed SIFT feature matching (`mapInPandas`).
 
     Extracted verbatim from the notebook's `match_pairs_dist` (cell
     `8762ea18`). Rebuilds a scratch per-pair COLMAP DB from the two images'
     extracted keypoints/descriptors, runs `pycolmap.match_exhaustive`, and
-    emits verified two-view geometries with >=10 inlier matches.
+    emits verified two-view geometries with >=10 inlier matches. The worker's pycolmap
+    native log is limited to warnings and errors unless `verbose`.
     """
     import sqlite3
     from pathlib import Path
@@ -258,6 +270,7 @@ def _match_pairs_dist(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame
     import pandas as pd
     import pycolmap
 
+    quiet_native_log(pycolmap, verbose)
     for pdf in iterator:
         results = []
         for _, row in pdf.iterrows():
@@ -577,6 +590,7 @@ def run_sfm(  # noqa: C901
     force_master=False,
     persist_dir=None,
     serialize_extract=False,
+    verbose=False,
 ):
     """Distributed sparse Structure-from-Motion pipeline for one group of drone images.
 
@@ -613,6 +627,10 @@ def run_sfm(  # noqa: C901
         Optional durable-storage root (e.g. a Volume) for cross-run sparse-model reuse.
     serialize_extract:
         Force single-partition (coalesce(1)) feature extraction as an OOM fallback.
+    verbose:
+        Show pycolmap's raw native log (every registered image, matcher and extractor).
+        Default False limits it to warnings and errors, on the driver, the matching
+        workers and the extraction children; ``GBX_PYCOLMAP_VERBOSE=1`` does the same.
 
     Returns
     -------
@@ -668,7 +686,10 @@ def run_sfm(  # noqa: C901
                 else df_qc.select("source").repartition(num_partitions, "source")
             )
             (
-                _extract_df.mapInPandas(_extract_features_to_df, schema=feature_schema)
+                _extract_df.mapInPandas(
+                    lambda it: _extract_features_to_df(it, verbose=verbose),
+                    schema=feature_schema,
+                )
                 .write.mode("overwrite")
                 .option("overwriteSchema", "true")
                 .saveAsTable(feature_table)
@@ -718,7 +739,7 @@ def run_sfm(  # noqa: C901
                 )
                 .repartition(num_partitions)
                 .mapInPandas(
-                    _match_pairs_dist,
+                    lambda it: _match_pairs_dist(it, verbose=verbose),
                     schema="src1 string, src2 string, matches binary, match_config int",
                 )
                 .write.mode("overwrite")
@@ -762,6 +783,8 @@ def run_sfm(  # noqa: C901
 
     # ── Stage 4–5: Master DB assembly + incremental mapping ───────────────
     t4 = time.perf_counter()
+    # pycolmap's level before this call (driver); put back in `finally`
+    _native_log_prev = None
     try:
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         master_db = Path(output_dir) / f"master_sfm{_sfx}.db"
@@ -800,6 +823,8 @@ def run_sfm(  # noqa: C901
 
         if not master_db.exists() or force_master:
             import pycolmap
+
+            _native_log_prev = quiet_native_log(pycolmap, verbose)
 
             if master_db.exists():
                 master_db.unlink()
@@ -938,3 +963,8 @@ def run_sfm(  # noqa: C901
             f"[ERROR Stage 4-5] SfM failed after {time.perf_counter() - t4:.1f}s: {e}"
         )
         raise
+    finally:
+        if _native_log_prev is not None:
+            import pycolmap
+
+            restore_native_log(pycolmap, _native_log_prev)

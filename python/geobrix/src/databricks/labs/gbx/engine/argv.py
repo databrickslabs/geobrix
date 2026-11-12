@@ -1225,6 +1225,21 @@ def pipeline_peak(tokens: Sequence[str], start: PipeState, geo) -> int:
     return peak
 
 
+def pipeline_streamed(tokens: Sequence[str], start: PipeState, geo) -> Tuple[int, int]:
+    """``(held, output)`` of a command run streamed: the most decoded bytes its steps that GDAL cannot stream
+    (``command.MATERIALIZING``) hold at once (each its result and its input), and the decoded bytes of its output, the
+    state its last step leaves. The other steps (a reprojection, a resize, a value step) GDAL runs a block at a time.
+    """
+    steps = command_mod.steps_of(tokens)[1:-1]  # without the read and write steps
+    state, held = start, 0
+    for step in steps:
+        after = _advance(step, state, geo)
+        if step[0] in command_mod.MATERIALIZING:
+            held = max(held, after.nbytes + state.nbytes)
+        state = after
+    return held, state.nbytes
+
+
 def estimate_output(
     fn,
     tokens: Sequence[str],

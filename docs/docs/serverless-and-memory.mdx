@@ -174,7 +174,7 @@ If a tile reaching the writer has a pending warp or clip operation that has not 
 
 A tile function that runs GDAL's own algorithm holds its input and output within a decoded budget of 64 MiB on Serverless. Two cases stay within it without an error:
 
-- `gbx_rst_transform`, `gbx_rst_transformcrs`, `gbx_rst_to_webmercator` and the resample functions stream a call over the budget. GDAL warps block by block and writes the output on local disk. Only an output tile over the read cap is refused.
+- `gbx_rst_transform`, `gbx_rst_transformcrs`, `gbx_rst_to_webmercator` and the resample functions stream a call over the budget. So does a `gbx_rst_gdal` command with a `reproject` step. GDAL warps in chunks and writes the output on local disk. Only an output tile over the read cap is refused.
 - `gbx_rst_viewshed` reads a virtual tile that is a whole file by its path. GDAL's block cache takes the budget the output leaves. One line of a wide window over tiled files then reads each block once.
 - A file on a Volume that GDAL reads by its path is first copied to local disk in one sequential pass. A VRT's Volume sources are copied the same way. GDAL's many small reads of a cold Volume file are each a round trip: a 25-tile DSM window took 259 s that way, and 5 s copied first.
 

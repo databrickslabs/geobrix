@@ -1722,8 +1722,9 @@ def _judge_budget(
 ) -> tuple:
     """``(held, streamed)``: the decoded bytes the call holds (its inputs and its estimated output), and whether it runs
     streamed. OverCap (with a Fix) unless they fit the decoded budget at once (spec 4.1), or the call is a warp
-    (``_STREAMED_ALG``) whose output tile fits the read cap: that call runs streamed, holding no whole raster (``run``),
-    so it holds what its mask bands and GDAL's warp take, the budget less its cache (``_STREAMED_CACHE_SHARE``). A reprojection's output
+    (``_STREAMED_ALG``), or a command with a reproject step, that can run streamed (``_streamed_hold``): it then holds no
+    whole raster (``run``), only what its mask bands, GDAL's warp chunks and any step GDAL holds in memory take
+    (``_STREAMED_STEP_SHARE``). A reprojection's output
     grid is the one GDAL picks (``_warp_grid``), read from the header. A command is judged by the largest state any of
     its steps leaves (``argv.pipeline_peak``): each step is sized from the one before it.
     """
@@ -1746,6 +1747,14 @@ def _judge_budget(
                 out // max(start.bands * start.item, 1)
             )
         need = decoded + out
+        if need > budget and any(
+            s[0] == "reproject" for s in command_mod.steps_of(tokens)[1:-1]
+        ):
+            # a command that reprojects streams as a warp does, unless a step GDAL holds in memory needs the budget
+            held, tile = argv_mod.pipeline_streamed(tokens, start, geo)
+            streamed = _streamed_hold(budget, held, tile, read_cap)
+            if streamed is not None:
+                return streamed, True
     else:
         grid = None
         # a --size fixes the output's pixels (argv._output_pixels), so the grid GDAL would pick is not read for it
@@ -1762,8 +1771,9 @@ def _judge_budget(
             tile = argv_mod.estimate_output(
                 fn, tokens, [dataclasses.replace(props[0], mask=False)], grid
             )
-            if tile <= read_cap:
-                return budget - budget // _STREAMED_CACHE_SHARE, True
+            streamed = _streamed_hold(budget, 0, tile, read_cap)
+            if streamed is not None:
+                return streamed, True
     if budget and need > budget:
         raise OverCap(
             f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
@@ -1773,11 +1783,24 @@ def _judge_budget(
     return need, False
 
 
-# A streamed warp holds GDAL's warp buffers and a band of rows of its masks (``_mask_rows``): GDAL's block cache takes a
-# quarter of the decoded budget (``budget.streaming_cache_bytes``), and the rest is kept for them. MEASURED in the dev
-# container, a 4393 x 3842 Byte tile to EPSG:4326 at a 64 MiB budget: peak RSS 50 MiB over the process with a 4 MiB
-# cache, 64 MiB with 16 MiB, 70 MiB with 32 MiB, all in 0.46 s; the same call held in memory peaked at 142 MiB.
-_STREAMED_CACHE_SHARE = 4
+# A streamed warp holds GDAL's warp buffers (GDAL warps in chunks of at most its default warp memory, 64 MB, of source
+# and output pixels together) and a band of rows of its masks (``_mask_rows``); GDAL's block cache gets the tile share
+# (``budget.block_cache_bytes``, 4 MiB on Serverless), so the call holds the whole budget (``budget.streaming_cache_bytes``
+# of nothing spare). A step GDAL holds in memory may take at most the budget less a quarter (``_STREAMED_STEP_SHARE``).
+# MEASURED in the dev container at a 64 MiB budget, peak RSS over the process: a 4393 x 3842 Byte tile to EPSG:4326,
+# 50 MiB (142 MiB held in memory); a 2500 x 2500 float32 tile to EPSG:32610, 68 MiB (94 MiB), one 64 MB warp chunk.
+# A smaller warp memory (gdalwarp -wm 8 MB) peaks at 22 MiB, but its chunk edges move GDAL's approximate transform: 4.4% of
+# that float tile's pixels took a neighbour's value. The pixels would then depend on the compute, so it is not used.
+_STREAMED_STEP_SHARE = 4
+
+
+def _streamed_hold(budget: int, held: int, tile: int, read_cap: int) -> Optional[int]:
+    """What a streamed call holds of its decoded `budget` (all of it: GDAL's cache gets its tile share), or None when it
+    cannot run streamed: its output `tile` must fit the read cap of the functions that read it, and its in-memory steps
+    (`held`) must leave GDAL's warp a quarter of the budget."""
+    if tile > read_cap or held > budget - budget // _STREAMED_STEP_SHARE:
+        return None
+    return budget
 
 
 def _local_scratch() -> str:

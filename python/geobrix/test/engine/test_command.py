@@ -764,3 +764,69 @@ def test_the_window_is_placed_by_the_observer_and_never_beyond_the_grid():
         argv.PipeState(64, 48, 0.0, 0.0, 0, 0, "EPSG:32633", 3, 4, True),
     )
     assert blind.nbytes == 64 * 48 * 3 * 4 and blind.fresh
+
+
+def _big_dem() -> bytes:
+    """A 2500 x 2500 float32 DEM in EPSG:3857 over San Francisco, no NoData: 24 MiB decoded, so a command that reprojects
+    it (its output and the footprint mask's work arrays) needs more than 64 MiB."""
+    n = 2500
+    y, x = np.mgrid[0:n, 0:n]
+    z = (np.sin(x / 40.0) * 30 + y * 0.02).astype("float32")
+    profile = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3857",
+        transform=from_origin(-13636130.0, 4546890.0, 1.0, 1.0),
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
+        compress="zstd",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(z[np.newaxis])
+        return mf.read()
+
+
+@needs_engine
+@pytest.mark.parametrize(
+    "cmd",
+    ["reproject --output-crs=EPSG:32610", "reproject --output-crs=EPSG:32610 ! slope"],
+)
+def test_a_command_that_reprojects_over_the_budget_streams_to_the_same_tile(
+    monkeypatch, cmd
+):
+    """A command whose reproject step takes it over the decoded budget (64 MiB, Serverless's) runs streamed, as
+    gbx_rst_transform does: its output on local disk, GDAL's cache capped, the footprint mask carried a band of rows at a
+    time. The tile is the unbounded call's: the same pixels, mask, grid and CRS."""
+    src = _big_dem()
+    monkeypatch.setattr(run, "decoded_budget", lambda: 0)
+    ref = run.run(FN, [src], {"command": cmd})
+    assert ref.error is None, ref.error
+    monkeypatch.setattr(run, "decoded_budget", lambda: 64 << 20)
+    got = run.run(FN, [src], {"command": cmd})
+    assert got.error is None, got.error
+    with _open(ref) as a, _open(got) as b:
+        assert (a.width, a.height, a.transform, a.crs) == (
+            b.width,
+            b.height,
+            b.transform,
+            b.crs,
+        )
+        am, bm = a.dataset_mask(), b.dataset_mask()
+        assert (am == bm).all() and (am == 0).any()
+        assert (a.read() == b.read()).all()
+
+
+@needs_engine
+def test_a_command_whose_held_step_is_over_the_budget_is_still_refused(monkeypatch):
+    """A step GDAL cannot stream (a fill holds its result in memory) is not made streamable by a reproject beside it: over
+    the budget the call is an error tile with a Fix."""
+    monkeypatch.setattr(run, "decoded_budget", lambda: 64 << 20)
+    res = run.run(
+        FN, [_big_dem()], {"command": "reproject --output-crs=EPSG:32610 ! fill-nodata"}
+    )
+    assert res.raster is None and "Fix:" in res.error

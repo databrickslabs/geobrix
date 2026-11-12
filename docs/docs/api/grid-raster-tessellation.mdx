@@ -265,7 +265,7 @@ For **coverage and assignment cell-set semantics and computed values**, behavior
 
 **Grouped aggregators return `BINARY`.** The aggregators `<grid>_cellfill` and `rst_<grid>_rasterize_agg` return `BINARY` in SQL at every level, because a grouped aggregate cannot return a `StructType`. Wrap a rasterize result with `gbx_rst_fromcontent(<agg>, 'GTiff')` to get a tile back.
 
-The function calls are identical on every compute. GeoBrix picks the level. See [Surfaces and levels](./execution-tiers). A generator takes the DataFrame first:
+The function calls are identical on every compute. GeoBrix picks the level. See [Surfaces & Levels](./execution-tiers). A generator takes the DataFrame first:
 
 ```python
 from databricks.labs.gbx.rasterx import functions as rx

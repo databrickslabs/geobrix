@@ -206,7 +206,7 @@ pixel-producing operations materialize — but you can always ask for the other.
 For the full rule (which operations are free on virtual tiles and which
 materialize), see the
 [Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
-the Surfaces and levels page.
+the Surfaces & Levels page.
 
 A table of virtual tiles is tiny (each row is a path), so Spark reads it in a single task. A pixel-producing
 operation over it runs one tile at a time. It holds every output of the batch in that task's memory, and
@@ -250,7 +250,7 @@ The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materi
   `cog_gbx` `driverMode`) and the format/memory details behind windowed reads.
 - [VRT & Mosaics](./vrt-mosaic) — a `.vrt` index over mini-COG tiles expands into
   one virtual tile row per member; `rst_*` functions run per-tile unchanged.
-- [Surfaces and levels](./execution-tiers) — the full virtual↔materialized taxonomy
+- [Surfaces & Levels](./execution-tiers) — the full virtual↔materialized taxonomy
   and the JVM level.
 - [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
   — the windowed-read option reference.

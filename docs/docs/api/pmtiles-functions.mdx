@@ -12,7 +12,7 @@ import { Impl } from '@site/src/components/Impl';
 
 # PMTiles Function Reference
 
-The `gbx_pmtiles_agg` aggregate runs on every compute. The `pmtiles_gbx` DataSource writer is a pure-Python writer that also runs on every compute. See the [PMTiles Writer](../writers/pmtiles) page. See [Surfaces and levels](./execution-tiers) for how GeoBrix picks the implementation.
+The `gbx_pmtiles_agg` aggregate runs on every compute. The `pmtiles_gbx` DataSource writer is a pure-Python writer that also runs on every compute. See the [PMTiles Writer](../writers/pmtiles) page. See [Surfaces & Levels](./execution-tiers) for how GeoBrix picks the implementation.
 
 GeoBrix encodes tile pyramids (raster or vector) into the [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file archive format. PMTiles replaces the "directory of tiles" pattern with one compact, hash-deduplicated, range-readable file servable directly from cloud object storage. Tile content bytes (PNG / JPEG / WebP / MVT) pass through verbatim — PMTiles is container-only.
 

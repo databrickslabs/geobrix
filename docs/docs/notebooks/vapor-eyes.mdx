@@ -38,7 +38,7 @@ This is the production counterpart to the notebook series (see the other tab). I
 :::
 
 :::info Runs on Serverless
-As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline installs `geobrix[stac,vizx]` from the env6 wheel. Its `land` downloader task (Serverless environment version 6) installs the same wheel. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Each task takes the staged wheel as a single pip dependency entry. The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces and levels](../api/execution-tiers).
+As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline installs `geobrix[stac,vizx]` from the env6 wheel. Its `land` downloader task (Serverless environment version 6) installs the same wheel. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Each task takes the staged wheel as a single pip dependency entry. The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard
@@ -137,7 +137,7 @@ A five-notebook series that takes one Permian (Delaware Basin) bounding box. It 
 :::
 
 :::info Runs on Serverless by default
-The `rasterx` and `vectorx` Python API plus the `geobrix[stac,vizx]` env6 wheel (with `earthaccess` as a separate step) — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Surfaces and levels](../api/execution-tiers).
+The `rasterx` and `vectorx` Python API plus the `geobrix[stac,vizx]` env6 wheel (with `earthaccess` as a separate step) — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 ### 01 — Wide-area screening (Sentinel-5P)

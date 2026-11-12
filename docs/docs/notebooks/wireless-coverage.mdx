@@ -88,7 +88,7 @@ databricks bundle run wireless_coverage_lf_job
 :::
 
 :::info Runs on Serverless
-As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline and its `land` and `siting` tasks use `geobrix[vizx,stac]` from the env6 wheel, with the Overture CLI as a separate entry. Each takes it as a single pip dependency entry. The code uses the `rasterx` and `gridx` Python API with no JAR, on Serverless throughout. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Check the [Lakeflow runtime channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy. The bundle **defaults to Serverless**. For heavier runs (notably full San Francisco) switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Surfaces and levels](../api/execution-tiers).
+As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline and its `land` and `siting` tasks use `geobrix[vizx,stac]` from the env6 wheel, with the Overture CLI as a separate entry. Each takes it as a single pip dependency entry. The code uses the `rasterx` and `gridx` Python API with no JAR, on Serverless throughout. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Check the [Lakeflow runtime channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy. The bundle **defaults to Serverless**. For heavier runs (notably full San Francisco) switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites
@@ -214,7 +214,7 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 ## Prerequisites
 
 - **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume, not the Volume itself.
-- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Surfaces and levels](../api/execution-tiers).
+- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Surfaces & Levels](../api/execution-tiers).
 - **Network access**: the `land` task fetches USGS 3DEP and Overture Maps data over HTTPS — Serverless has outbound internet by default.
 
 ## Validation notebook
@@ -237,7 +237,7 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 :::
 
 :::info Runs on Serverless by default
-The series uses the `rasterx` Python API plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR. The `laspy` / `lazrs` readers the point cloud needs ship with the env wheel. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Surfaces and levels](../api/execution-tiers).
+The series uses the `rasterx` Python API plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR. The `laspy` / `lazrs` readers the point cloud needs ship with the env wheel. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Surfaces & Levels](../api/execution-tiers).
 :::
 
 :::note Big-data by default

@@ -16,7 +16,7 @@ GeoBrix installs as one **env wheel** for your runtime. The wheel runs every fun
 level. A dedicated cluster can also load the GeoBrix JAR, a performance add-on that adds a JVM level to
 some functions. You never choose a level in code: `gbx.register(spark)` picks the faster one the compute
 offers. These docs call the Python level **lightweight** and the JVM level **heavyweight**. See
-[Surfaces and levels](./api/execution-tiers.mdx#the-levels).
+[Surfaces & Levels](./api/execution-tiers.mdx#the-levels).
 Pick the install path that matches your compute.
 
 ## Choose an install path {#choose-an-install-path}
@@ -349,7 +349,7 @@ What the Scala code can call, checked on a dedicated cluster on DBR 17.3:
 - A table function, in `SELECT * FROM gbx_x(...)` and in `FROM t, LATERAL gbx_x(...)`.
 - A `*_gbx` data source, such as `spark.read.format("raster_gbx")`.
 
-A table function at the Python level does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces and levels](./api/execution-tiers.mdx).
+A table function at the Python level does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces & Levels](./api/execution-tiers.mdx).
 
 :::note Dedicated clusters only
 `spark._jvm` and `spark._jsparkSession` exist only where Python and the JVM share a process. That is a dedicated cluster. Standard access mode and Serverless run Spark Connect, which gives Python no access to the JVM. Use the Unity Catalog route there.
@@ -401,5 +401,5 @@ Each task of a job has its own session. Functions registered in a Python task ar
 
 - Follow the [Quick Start Guide](./quick-start.mdx) to begin using GeoBrix
 - Explore the [Functions](./api/overview.mdx) documentation
-- See how GeoBrix picks an implementation in [Surfaces and levels](./api/execution-tiers.mdx)
+- See how GeoBrix picks an implementation in [Surfaces & Levels](./api/execution-tiers.mdx)
 - Moving from 0.5.x? Read the [migration guide](./migration-0-6)

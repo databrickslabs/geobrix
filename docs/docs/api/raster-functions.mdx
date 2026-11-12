@@ -23,7 +23,7 @@ import VirtualTileOverrides from '../_partials/_virtual-tile-overrides.mdx';
 
 # <img src={RasterXIcon} alt="RasterX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
-Every RasterX function runs on every compute. GeoBrix picks the implementation level for the compute. See [Surfaces and levels](./execution-tiers). Each function section shows the surfaces it runs on, and an Implementation note names its backing library.
+Every RasterX function runs on every compute. GeoBrix picks the implementation level for the compute. See [Surfaces & Levels](./execution-tiers). Each function section shows the surfaces it runs on, and an Implementation note names its backing library.
 
 Complete reference for all RasterX functions with detailed descriptions, parameters, return values, and examples.
 
@@ -88,7 +88,7 @@ See **[Tile structure](./tile-structure)** for the full tile-struct schema (the 
 
 ## Setup
 
-With the GeoBrix wheel already installed ([Installation](../installation)), run this once. Every example below assumes the setup. Python and SQL use the same `rx` alias and the same views. (See [Surfaces and levels](./execution-tiers) for how GeoBrix picks an implementation.)
+With the GeoBrix wheel already installed ([Installation](../installation)), run this once. Every example below assumes the setup. Python and SQL use the same `rx` alias and the same views. (See [Surfaces & Levels](./execution-tiers) for how GeoBrix picks an implementation.)
 
 The examples on this page read from **four temp views**, each a raster loaded as a `tile` column. Point the four path placeholders at your own rasters:
 
@@ -132,7 +132,7 @@ Prefer pure SQL? After `register(spark)`, create the same four views directly so
 Each function below carries an `:::note Implementation` admonition. It names the library behind the function and any behavior worth knowing. For how `gbx_rst_derivedband` runs your Python code, see **[VRT Python pixel functions](#vrt-python-pixel-functions)** at the end of this page.
 
 :::tip Scala tags
-A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces and levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
+A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces & Levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
 :::
 
 ## Examples — Conventions

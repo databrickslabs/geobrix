@@ -146,7 +146,7 @@ Before using GeoBrix functions in Python or SQL, register them with the Spark se
 
 ### Register selectively
 
-Pass `only=` to register a few functions. GeoBrix still picks the implementation level for each. See [Surfaces and levels](./execution-tiers).
+Pass `only=` to register a few functions. GeoBrix still picks the implementation level for each. See [Surfaces & Levels](./execution-tiers).
 
 <CodeFromTest code={packagesExamples} language="python" functionName="register_only_rasterx" testFile="docs/tests/python/packages/test_examples.py" validationLevel="compile" />
 
@@ -158,7 +158,7 @@ Call `gbx.register(spark)` from Python to register the SQL functions. The JAR re
 
 ## API Languages
 
-GeoBrix provides the same functionality in SQL and Python. See [Language Bindings](./language-bindings) for the registration and import patterns each surface uses. See [Surfaces and levels](./execution-tiers) for how GeoBrix picks the level that runs each function.
+GeoBrix provides the same functionality in SQL and Python. See [Language Bindings](./language-bindings) for the registration and import patterns each surface uses. See [Surfaces & Levels](./execution-tiers) for how GeoBrix picks the level that runs each function.
 
 ## Scalar values vs `lit(...)` wrapping
 

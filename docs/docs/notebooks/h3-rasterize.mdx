@@ -19,7 +19,7 @@ The notebook works over the San Francisco Bay Area. It downloads the **USGS 3DEP
 :::
 
 :::info Runs on Serverless environment 5 (`geobrix[stac,vizx]`, the env5 wheel)
-The notebook uses the `rasterx` and `gridx.h3` Python API plus the `geobrix[stac,vizx]` env5 wheel (with the Overture CLI as a separate step). It runs on **Serverless environment 5** with no JAR. The per-tier rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Surfaces and levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
+The notebook uses the `rasterx` and `gridx.h3` Python API plus the `geobrix[stac,vizx]` env5 wheel (with the Overture CLI as a separate step). It runs on **Serverless environment 5** with no JAR. The per-tier rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Surfaces & Levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 :::
 
 ---

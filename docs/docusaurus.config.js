@@ -138,7 +138,7 @@ const config = {
           },
           {
             to: '/docs/api/execution-tiers',
-            label: 'Surfaces and levels',
+            label: 'Surfaces & Levels',
             position: 'left'
           },
           {

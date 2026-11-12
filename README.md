@@ -88,7 +88,7 @@ boroughs = spark.read.format("geojson_gbx").load("/Volumes/.../boroughs.geojson"
 boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.geojson")
 ```
 
-On a dedicated cluster, the same code also uses the JVM implementation once you add the JAR (`gbx.stage_jar`) or use the GeoBrix DCS image. See [Surfaces and levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers). Moving from 0.5.x? Read the [migration guide](https://databrickslabs.github.io/geobrix/docs/migration-0-6).
+On a dedicated cluster, the same code also uses the JVM implementation once you add the JAR (`gbx.stage_jar`) or use the GeoBrix DCS image. See [Surfaces & Levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers). Moving from 0.5.x? Read the [migration guide](https://databrickslabs.github.io/geobrix/docs/migration-0-6).
 
 ## Readers & writers
 

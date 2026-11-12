@@ -115,7 +115,7 @@ export default function Home() {
                 <Link
                   className="button button--primary button--md"
                   to="/docs/api/execution-tiers">
-                  Surfaces and levels →
+                  Surfaces & Levels →
                 </Link>
               </div>
             </div>

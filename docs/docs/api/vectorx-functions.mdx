@@ -14,7 +14,7 @@ import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 # <img src={VectorXIcon} alt="VectorX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
 :::tip Scala tags
-A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces and levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
+A **Scala** tag on a function means the GeoBrix JAR has a faster JVM form of it. On dedicated compute with the JAR, GeoBrix runs that form for you. You still call the SQL or Python function. See [Surfaces & Levels](./execution-tiers) and [Functions the JAR speeds up](./jar-functions).
 :::
 
 ## Overview
@@ -48,7 +48,7 @@ Vector files are read and written by the `*_gbx` readers and writers. See the [r
 
 ## Levels by function
 
-Every function runs on every compute through its Python level. On a dedicated cluster with the JAR, GeoBrix picks the JVM level for the functions in [Functions the JAR speeds up](./jar-functions). See [Surfaces and levels](./execution-tiers).
+Every function runs on every compute through its Python level. On a dedicated cluster with the JAR, GeoBrix picks the JVM level for the functions in [Functions the JAR speeds up](./jar-functions). See [Surfaces & Levels](./execution-tiers).
 
 | Function | Levels | Notes |
 |---|---|---|
@@ -1232,7 +1232,7 @@ Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WK
 - [Coverage Validity](./coverage-validity) — validate and simplify polygon coverages with `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify`
 - [Geometry Cleaning](./geometry-cleaning) — topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping
 - [Antimeridian](./antimeridian) — antimeridian composition pattern with full example
-- [Surfaces and levels](./execution-tiers) — how GeoBrix picks the implementation
+- [Surfaces & Levels](./execution-tiers) — how GeoBrix picks the implementation
 - [PMTiles Function Reference](./pmtiles-functions) — Aggregate MVT tiles into a single `.pmtiles` archive
 - [PMTiles Writer](../writers/pmtiles) — DataSource for streaming large pyramids to a single `.pmtiles` file
 - [Helios notebooks](../notebooks/helios) — worked end-to-end example: `gbx_st_asmvt` + `gbx_st_asmvt_pyramid` encode San Francisco building footprints into a PMTiles archive (NB01).

@@ -75,7 +75,7 @@ decide whether GeoBrix should follow DBR's PROJ version.
 
 ## Compute Requirements
 
-The compute requirements below apply to the **JVM level** (heavyweight: the GeoBrix JAR + native GDAL). The **Python level** (lightweight: the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Surfaces and levels](./api/execution-tiers#the-levels).
+The compute requirements below apply to the **JVM level** (heavyweight: the GeoBrix JAR + native GDAL). The **Python level** (lightweight: the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Surfaces & Levels](./api/execution-tiers#the-levels).
 
 The JVM level runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
 - **Not** compatible with Serverless compute (GeoBrix uses the Python level there)

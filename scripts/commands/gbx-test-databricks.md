@@ -165,7 +165,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 - `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
 - Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
-  - So a Serverless plan marks no chunk `xN`. A test part's own time is its estimate, not a factor.
+  - So a Serverless plan marks no chunk `xN`, and its summary has no contention cell. A test part's own time is its estimate, not a factor.
 - `--start-chunks 0` is refused with `--serverless`. On 2026-11-12 every runner started at once, and 5 of 8 died to `ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND`.
   - Keep the default ramp, or give a positive n.
 - The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.

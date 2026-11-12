@@ -2151,7 +2151,8 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         samples += got_s
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
-        r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
+        # no contention on Serverless (a runner has compute of its own): actual over expected is the row's error %, not a factor
+        r.update(x=round(act / (solo * 60), 2) if act and solo and not sls else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
         if verdict in ("ok", "FAILED", "INCOMPLETE") and not sls and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k"):
             cont += tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
                                           incomplete=verdict == "INCOMPLETE")

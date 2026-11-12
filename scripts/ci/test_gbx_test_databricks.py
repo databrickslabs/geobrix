@@ -2728,6 +2728,8 @@ def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower
     got = launcher.record_timings(tmp_path / "h.json", plan, rows, out, records)
     h = tm.load(tmp_path / "h.json")
     assert got["contention"] == 0 and rows[0]["nb"] == 0, "Serverless runners have no neighbours"
+    # nor a contention cell: actual over expected is the error % there, never "3.3x (heavy)" (tst-sls-d15's summary)
+    assert rows[0]["x"] is None and launcher.contention_cell(rows[0]) == "-"
     assert set(h["keys"]) == {tm.SLS + files[0], tm.SLS + files[1]}, "Serverless samples under their own keys"
     assert h["keys"][tm.SLS + files[0]]["samples"][0] == {"s": 200.0, "run": "t1", "slots": 1, "lb": False, "first": True}, \
         "a failed chunk that ran out is a full sample (its runner's first: a cold start)"

@@ -2332,6 +2332,7 @@ def _launcher(name, monkeypatch):
     from unittest import mock
 
     monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test-profile")  # the runner picks no profile itself
     with mock.patch.dict(os.environ):  # stage_wheel_to_volume copies databricks_cluster_config.env in at import
         return importlib.import_module(name)
 
@@ -3219,6 +3220,8 @@ def runner(monkeypatch):
     from types import ModuleType
     from unittest.mock import MagicMock
 
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test-profile")  # the runner picks no profile itself
+
     sdk = ModuleType("databricks.sdk")
     sdk.WorkspaceClient = MagicMock(name="WorkspaceClient")
     sdk.WorkspaceClient.return_value.current_user.me.return_value.user_name = (
@@ -3411,15 +3414,20 @@ def test_a_failed_output_harvest_does_not_fail_the_run_or_stop_the_chain(
     def broken(*_a, **_k):
         raise ValueError("could not detect the notebook's JSON serialization")
 
-    assert _run_with_harvest(runner, monkeypatch, tmp_path, broken) is True
+    assert _run_with_harvest(runner, monkeypatch, tmp_path, broken) is True  # the run itself succeeded
     out = capsys.readouterr().out
-    assert "output harvest failed" in out and "SUCCEEDED" in out
-    assert runner.HARVEST_FAILURES == ["nb.ipynb"]
+    assert "HARVEST FAILED" in out and "SUCCEEDED" in out and "unchanged" in out
+    assert runner.HARVEST_FAILURES == ["nb.ipynb"]  # main() exits 1 at the end of the chain
 
 
 def test_a_harvest_that_works_is_not_reported_as_failed(runner, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
     assert (
-        _run_with_harvest(runner, monkeypatch, tmp_path, lambda *a, **k: (3, []))
+        _run_with_harvest(
+            runner, monkeypatch, tmp_path,
+            lambda *a, **k: SimpleNamespace(updated=3, not_run=[], deps={}, provenance=None, install_cell=None),
+        )
         is True
     )
     assert runner.HARVEST_FAILURES == []

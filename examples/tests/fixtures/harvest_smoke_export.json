@@ -1,0 +1,262 @@
+{
+ "_comment": "The notebook model of a real Serverless env6 run (927920516588036, 2026-11-12) of harvest_smoke.ipynb, from `databricks jobs export-run --views-to-export CODE`; trimmed (UI keys, the guard body, the plot bytes).",
+ "commands": [
+  {
+   "command": "%md\n# Harvest smoke\n\nA fixture for `gbx:test:notebooks-serverless --harvest-outputs`: one cell per output kind. Its committed outputs are deliberately stale; a harvest must replace or clear every one.",
+   "position": 1.0,
+   "guid": "6c80ecc3-8adc-49c1-9e38-f8486236028c",
+   "parentHierarchy": [],
+   "results": null,
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "%run ./harvest_smoke_config",
+   "position": 2.0,
+   "guid": "5acb93b3-b6ea-452f-8273-728996a0caa3",
+   "parentHierarchy": [],
+   "results": null,
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "",
+   "position": 2.5,
+   "guid": "918db8ff-442e-4514-be1a-548a6e55c025",
+   "parentHierarchy": [
+    "5acb93b3-b6ea-452f-8273-728996a0caa3"
+   ],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "ansi",
+      "data": "config loaded 42\n",
+      "name": "stdout"
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "script"
+  },
+  {
+   "command": "# Wheel guard: the run tests the staged wheel (see _wheel_guard.py); it fails here when the imported geobrix is another.\n# (the guard body, trimmed for the fixture)\n",
+   "position": 3.0,
+   "guid": "ffc2822e-e5cb-4e1b-bd0c-2818a1b5b6a2",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "ansi",
+      "data": "WHEEL GUARD expected: wheel=/Volumes/geospatial_docs/geobrix/sample-data/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl git_sha=e523f16e6dfb dirty=False digest=366f5fc8dfc7\nWHEEL GUARD driver: module=/local_disk0/.ephemeral_nfs/envs/pythonEnv-066c596c-8f01-47aa-a3a2-c4a14e233023/lib/python3.12/site-packages/databricks/labs/gbx/__init__.py version=0.6.0+env6 git_sha=e523f16e6dfb dirty=False digest=366f5fc8dfc7\nWHEEL GUARD worker ?: module=/local_disk0/.ephemeral_nfs/envs/pythonEnv-19b9dbc2-7b26-4465-b0a6-4d323bc7c83d/lib/python3.12/site-packages/databricks/labs/gbx/__init__.py version=0.6.0+env6 git_sha=e523f16e6dfb dirty=False digest=366f5fc8dfc7\nWHEEL GUARD provenance: {\"version\": \"0.6.0+env6\", \"git_sha\": \"e523f16e6dfb932a9ce60d7c7e005ca614560099\", \"dirty\": false, \"wheel\": \"/Volumes/geospatial_docs/geobrix/sample-data/geobrix/0.6.0/env6/geobrix-0.6.0+env6-py3-none-any.whl\", \"wheel_sha256\": \"70fac9419b5c9396be52675fe0427d54be9e27bb0a06675f2669f4555903b2a5\", \"runtime\": \"client.6.5\", \"python\": \"3.12.3\"}\nWHEEL GUARD ok: driver and 1 worker identity\n",
+      "name": "stdout"
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "print(\"hello\", CONFIG_VALUE)",
+   "position": 4.0,
+   "guid": "c5db87b8-ff10-472c-8a07-efc1d98243be",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "ansi",
+      "data": "hello 42\n",
+      "name": "stdout"
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "df = spark.range(3).selectExpr(\"id\", \"id * 2 AS twice\", \"CAST(NULL AS STRING) AS s\")\ndisplay(df)",
+   "position": 5.0,
+   "guid": "41c16c6e-e521-423b-820c-d2cdd72372f2",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "table",
+      "data": [
+       [
+        0,
+        0,
+        null
+       ],
+       [
+        1,
+        2,
+        null
+       ],
+       [
+        2,
+        4,
+        null
+       ]
+      ],
+      "schema": [
+       {
+        "name": "id",
+        "type": "\"long\"",
+        "metadata": "{}"
+       },
+       {
+        "name": "twice",
+        "type": "\"long\"",
+        "metadata": "{}"
+       },
+       {
+        "name": "s",
+        "type": "\"string\"",
+        "metadata": "{}"
+       }
+      ],
+      "isJsonSchema": true
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "displayHTML(\"<b>bold</b> html\")",
+   "position": 6.0,
+   "guid": "90b350bd-54b8-451f-b3b2-dd96622a1eb4",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "mimeBundle",
+      "data": {
+       "text/html": "<b>bold</b> html"
+      },
+      "executionCount": null
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "display(spark.sql(\"SELECT h3_longlatash3(-122.4, 37.8, 7) AS cell\"))",
+   "position": 7.0,
+   "guid": "08b18c3d-7781-4af0-bcf5-97cd51083f9c",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "table",
+      "data": [
+       [
+        608692970249519103
+       ]
+      ],
+      "schema": [
+       {
+        "name": "cell",
+        "type": "\"long\"",
+        "metadata": "{}"
+       }
+      ],
+      "isJsonSchema": true
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])\nplt.show()",
+   "position": 8.0,
+   "guid": "ccfc69ac-8680-49a4-80a5-56fa223fd5f9",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "mimeBundle",
+      "data": {
+       "text/plain": "<Figure size 640x480 with 1 Axes>",
+       "image/png": "iVBORw0KGgo="
+      },
+      "executionCount": null
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "quiet = 1",
+   "position": 9.0,
+   "guid": "7b2b883f-4df9-4c4a-8357-be84e8a9dbe6",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": []
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "spark.range(2)",
+   "position": 10.0,
+   "guid": "4f47404a-33a5-4b30-81c1-e24806f6e256",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "mimeBundle",
+      "data": {
+       "text/plain": "DataFrame[id: bigint]"
+      },
+      "executionCount": 10
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  },
+  {
+   "command": "import databricks.labs.gbx as gbx\nprint(gbx.__version__)",
+   "position": 11.0,
+   "guid": "be51577d-c099-48fd-879d-538030830abd",
+   "parentHierarchy": [],
+   "results": {
+    "type": "listResults",
+    "data": [
+     {
+      "type": "ansi",
+      "data": "0.6.0+env6\n",
+      "name": "stdout"
+     }
+    ]
+   },
+   "errorSummary": null,
+   "error": null,
+   "subtype": "command"
+  }
+ ]
+}

@@ -96,6 +96,10 @@ def wheel_identity(path):
     try:
         local = os.path.join(tmp, os.path.basename(path))
         shutil.copy(path, local)
+        whole = hashlib.sha256()
+        with open(local, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                whole.update(block)
         files, info = {}, ""
         with zipfile.ZipFile(local) as z:
             for name in z.namelist():
@@ -110,7 +114,7 @@ def wheel_identity(path):
         shutil.rmtree(tmp, ignore_errors=True)
     sha, dirty, version = _build_fields(info)
     return {"name": os.path.basename(path), "git_sha": sha, "dirty": dirty, "version": version, "files": files,
-            "digest": _digest(files)}
+            "digest": _digest(files), "sha256": whole.hexdigest()}
 
 
 def installed_identity(with_files=True, exclude=()):
@@ -245,6 +249,24 @@ def collect_workers(spark, tasks=8, exclude=()):
     return [json.loads(r["w"]) for r in rows]
 
 
+PROVENANCE_TAG = "WHEEL GUARD provenance: "
+
+
+def provenance(drv, exp, expected):
+    """What ran, for the executed notebook's record (harvest_notebook_outputs reads the line): the version and build the
+    driver imports, the staged wheel's path and sha256, and the runtime (``DATABRICKS_RUNTIME_VERSION``)."""
+    exp = exp or {}
+    return {
+        "version": drv.get("version") or exp.get("version"),
+        "git_sha": drv.get("git_sha") or exp.get("git_sha"),
+        "dirty": drv.get("dirty"),
+        "wheel": (expected or {}).get("wheel"),
+        "wheel_sha256": exp.get("sha256"),
+        "runtime": os.environ.get("DATABRICKS_RUNTIME_VERSION"),
+        "python": sys.version.split()[0],
+    }
+
+
 def run_guard(expected, spark=None, say=print, workers=None, exclude=()):
     """Print what is imported, fail (RuntimeError) when it is not the staged wheel.
 
@@ -282,6 +304,7 @@ def run_guard(expected, spark=None, say=print, workers=None, exclude=()):
         msg = "WHEEL GUARD FAILED:\n  - " + "\n  - ".join(problems) + "\n" + fix_text((expected or {}).get("wheel"), (expected or {}).get("tree"))
         say(msg)
         raise RuntimeError(msg)
+    say(PROVENANCE_TAG + json.dumps(provenance(drv, exp, expected)))
     say("WHEEL GUARD ok: %s%s" % ("driver" if not seen else "driver and %d worker identit%s" % (
         len(seen), "y" if len(seen) == 1 else "ies"), "" if exp is not None else " (reported, not compared)"))
     return verdict

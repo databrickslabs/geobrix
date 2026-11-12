@@ -339,6 +339,7 @@ def test_the_launchers_that_upload_a_runner_notebook_ask_for_the_runner_dir(laun
 @pytest.fixture
 def fake_sdk(monkeypatch):
     """Minimal databricks.sdk.service.{jobs,compute}: containers for the submit spec."""
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "test-profile")  # the runner picks no profile itself
 
     def container(name):
         return type(name, (SimpleNamespace,), {})

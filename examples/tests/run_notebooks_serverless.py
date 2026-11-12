@@ -40,6 +40,7 @@ import tomllib
 from dataclasses import dataclass
 from typing import Optional
 
+import _cell_range  # sibling module: run a notebook in pieces (--cells)
 import _wheel_guard  # sibling module: force the staged wheel in, then fail the run if another geobrix is imported
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _snapshot import snapshot_files  # sibling module (script dir is on sys.path)
@@ -56,11 +57,37 @@ _ENVS_PATH = PROJECT_ROOT / "python" / "geobrix" / "envs"
 # Constants
 # ---------------------------------------------------------------------------
 ENV_KEY = "ser6"
-DEFAULT_WHEEL = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"
-)
 DEFAULT_EXTRAS = "stac,vizx"
 DEFAULT_ENV_VERSION = "6"
+# The staged wheels: gbx:data:stage-wheel --env both --versioned puts each env wheel in its own folder of the
+# sample-data Volume, <root>/geobrix/<version>/env<N>/ (the root's own wheels are older stagings).
+STAGED_WHEEL_ROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
+_INIT_PATH = PROJECT_ROOT / "python" / "geobrix" / "src" / "databricks" / "labs" / "gbx" / "__init__.py"
+
+
+def package_version() -> str:
+    """The checkout's geobrix version (``__version__`` of the package)."""
+    m = re.search(r'^__version__\s*=\s*"([^"]+)"', _INIT_PATH.read_text(encoding="utf-8"), re.M)
+    if not m:
+        raise SystemExit(f"no __version__ in {_INIT_PATH}")
+    return m.group(1)
+
+
+def default_wheel(env: int) -> str:
+    """The current versioned staged env wheel: ``<root>/geobrix/<version>/env<N>/geobrix-<version>+env<N>-py3-none-any.whl``."""
+    v = package_version()
+    return f"{STAGED_WHEEL_ROOT}/geobrix/{v}/env{env}/geobrix-{v}+env{env}-py3-none-any.whl"
+
+
+def default_wheel_env(env_version, new_cluster=None) -> int:
+    """The env wheel a run takes when no --wheel is given: a new cluster's runtime decides (DBR 17.3 and 18: env5,
+    DBR 19: env6), else the Serverless environment version (5 or 6)."""
+    if isinstance(new_cluster, str) and runtime_env(new_cluster) is not None:
+        return runtime_env(new_cluster)
+    return 5 if str(env_version) == "5" else 6
+
+
+DEFAULT_WHEEL = default_wheel(int(DEFAULT_ENV_VERSION))
 # Each run's time limit (minutes): a notebook that outlives it is ended by the Jobs service, not left to hang.
 DEFAULT_TIMEOUT_MIN = 60
 DEFAULT_POLL_SECS = 20
@@ -488,6 +515,15 @@ def _terminal_states():
 # Core: import + submit one notebook
 # ---------------------------------------------------------------------------
 
+def _select_piece(nb_bytes: bytes, cells: str, prelude: Optional[str]) -> bytes:
+    """The notebook with only the piece ``cells`` (``A:B``) and its prelude (see _cell_range.py)."""
+    nb = json.loads(nb_bytes)
+    out, rng, pre = _cell_range.select_cells(nb, cells, prelude)
+    print(f"    piece: cells {_cell_range.range_label(rng)}; prelude cells "
+          f"{', '.join(str(i + 1) for i in pre) or 'none'}", flush=True)
+    return json.dumps(out).encode()
+
+
 def _import_notebook(
     w,
     local_path: pathlib.Path,
@@ -495,11 +531,16 @@ def _import_notebook(
     strip_pip: bool,
     set_vars: list[str] | None = None,
     guard: bool = True,
+    cells: Optional[str] = None,
+    prelude: Optional[str] = None,
 ) -> str:
-    """Import a local .ipynb to the workspace; return the workspace path (`guard=False` for a %run dependency)."""
+    """Import a local .ipynb to the workspace; return the workspace path (`guard=False` for a %run dependency).
+    `cells` uploads only that piece (``A:B``) and its prelude."""
     from databricks.sdk.service.workspace import ImportFormat
 
     nb_bytes = local_path.read_bytes()
+    if cells:
+        nb_bytes = _select_piece(nb_bytes, cells, prelude)
     if strip_pip:
         nb_bytes = _strip_pip_cells(nb_bytes)
     elif PIP_WHEEL:
@@ -573,6 +614,9 @@ def run_one(
     timeout_min: int = DEFAULT_TIMEOUT_MIN,
     harvest_path: pathlib.Path | None = None,
     on_submit=None,
+    cells: Optional[str] = None,
+    prelude: Optional[str] = None,
+    run_context: Optional[dict] = None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
 
@@ -592,7 +636,8 @@ def run_one(
     notebook installs its own deps with ``%pip``.
 
     If ``harvest_outputs`` is True and the run succeeds, exports the run and harvests
-    cell outputs back into the local .ipynb file.
+    cell outputs back into the local .ipynb file (a ``%run`` cell gets what its notebook printed), with the
+    provenance (``run_context``: where it ran) in the metadata. ``cells`` runs and harvests one piece (``A:B``).
     """
     from databricks.sdk.service import compute, jobs
 
@@ -603,9 +648,10 @@ def run_one(
     else:
         _mode = "serverless"
     tag = f" [{hardware_accelerator}]" if hardware_accelerator else ""
-    print(f"\n=== SUBMIT ({_mode}{tag}): {local_path.name} ===", flush=True)
+    piece = f" cells {cells}" if cells else ""
+    print(f"\n=== SUBMIT ({_mode}{tag}): {local_path.name}{piece} ===", flush=True)
 
-    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars)
+    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars, cells=cells, prelude=prelude)
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
@@ -730,22 +776,44 @@ def run_one(
     if not ok:
         print(f"!!! STOP — {local_path.name} did not SUCCEED ({result}).", flush=True)
     elif harvest_outputs:
-        from harvest_notebook_outputs import harvest_run_outputs  # same dir as this script
-
-        try:
-            n, unmatched = harvest_run_outputs(run_id, profile or "oauth-fe", harvest_path or local_path)
-        except Exception as e:  # noqa: BLE001 — the run itself succeeded: say so loudly, but let the chain go on
-            HARVEST_FAILURES.append(local_path.name)
-            print(
-                f"!!! WARNING — output harvest failed for {local_path.name} ({e.__class__.__name__}: {e}); "
-                "the run SUCCEEDED, its outputs are not in the local notebook",
-                flush=True,
-            )
-            return ok
-        print(f"    harvested outputs into {n} cell(s) of {harvest_path or local_path}"
-              + (f"; NOT updated (no match or unsupported result type): code cells {unmatched}"
-                 if unmatched else ""), flush=True)
+        harvest(run_id, profile, local_path, harvest_path or local_path, cells=cells, run_context=run_context)
     return ok
+
+
+def harvest(run_id, profile, snapshot_path: pathlib.Path, target: pathlib.Path, cells: Optional[str] = None,
+            run_context: Optional[dict] = None, model: Optional[dict] = None) -> bool:
+    """Write the run's outputs into ``target`` (see harvest_notebook_outputs.py). A failure is recorded in
+    HARVEST_FAILURES (the launch then exits 1) and leaves every file as it was."""
+    import harvest_notebook_outputs as hno  # same dir as this script
+
+    try:
+        rng = None
+        if cells:
+            n_snap = len(json.loads(snapshot_path.read_bytes()).get("cells", []))
+            n_now = len(json.loads(target.read_bytes()).get("cells", []))
+            if n_snap != n_now:
+                raise hno.HarvestError(
+                    f"{target.name} has {n_now} cells now and had {n_snap} at launch: the piece's cell numbers no "
+                    "longer name the same cells. Fix: rerun the piece on the current notebook")
+            rng = _cell_range.parse_range(cells, n_now)
+        rep = hno.harvest_run_outputs(run_id, profile, target, cells=rng, run_context=run_context, model=model)
+    except Exception as e:  # noqa: BLE001 — the run itself succeeded: say so loudly, and fail the launch at its end
+        HARVEST_FAILURES.append(target.name)
+        print(
+            f"!!! HARVEST FAILED for {target.name} ({e.__class__.__name__}: {e}); the run SUCCEEDED, the local "
+            "notebook is unchanged",
+            flush=True,
+        )
+        return False
+    prov = rep.provenance or {}
+    print(f"    harvested run {run_id} into {rep.updated} cell(s) of {target}"
+          + (f" (cells {cells})" if cells else "")
+          + (f"; cleared, not in this run: cells {[i + 1 for i in rep.not_run]}" if rep.not_run else ""), flush=True)
+    print(f"    provenance: geobrix {prov.get('version')} git_sha={(prov.get('git_sha') or 'none')[:12]} "
+          f"wheel_sha256={(prov.get('wheel_sha256') or 'none')[:12]} runtime={(run_context or {}).get('label')}"
+          + ("" if rep.install_cell is None else f"; install cell {rep.install_cell + 1} shows it")
+          if prov else "    provenance: none (no wheel guard ran): only the launcher's view is recorded", flush=True)
+    return True
 
 
 def run_jar_task(
@@ -1036,8 +1104,9 @@ def main() -> int:
         metavar="VOLPATH",
         default=None,
         help=(
-            f"Volume path to the geobrix wheel (default: {DEFAULT_WHEEL!r}). An env wheel "
-            "(+env5 / +env6) must match --env-version."
+            f"Volume path to the geobrix wheel (default: the versioned staged env wheel for the run's environment, "
+            f"{default_wheel(6)!r} for environment 6 and DBR 19, the env5 one for environment 5 and DBR 17.3/18). "
+            "An env wheel (+env5 / +env6) must match --env-version."
         ),
     )
     parser.add_argument(
@@ -1154,10 +1223,10 @@ def main() -> int:
     parser.add_argument(
         "--profile",
         metavar="PROFILE",
-        default=os.environ.get("DATABRICKS_CONFIG_PROFILE", "oauth-fe"),
+        default=os.environ.get("DATABRICKS_CONFIG_PROFILE") or None,
         help=(
-            "Databricks config profile to use. "
-            "Reads DATABRICKS_CONFIG_PROFILE env var; falls back to 'oauth-fe'."
+            "Databricks config profile to use (required; DATABRICKS_CONFIG_PROFILE counts as given). No profile is "
+            "picked for you."
         ),
     )
     parser.add_argument(
@@ -1262,25 +1331,67 @@ def main() -> int:
         help="With --python-task: one more JAR (a /Volumes path) to install as a library of the cluster. Repeatable.",
     )
     parser.add_argument(
+        "--cells",
+        metavar="A:B",
+        action="append",
+        default=None,
+        help=(
+            "Run the notebook in pieces: cells A to B (numbered from 1 over all cells, both included; A: and :B are "
+            "open). Repeat for more pieces: each piece is its own run, in order, and stops the launch on a failure. "
+            "The uploaded piece keeps its cells plus the setup cells before it (installs, %%run, imports, "
+            "definitions, literal assignments); the state between pieces is what the notebook persists (tables, "
+            "files) and its FORCE_* flags. A piece that needs a skipped cell's name is refused before submitting. "
+            "With --harvest-outputs each piece writes only its own cells."
+        ),
+    )
+    parser.add_argument(
+        "--prelude",
+        metavar="LIST",
+        default=None,
+        help="With --cells: more cells to run before each piece (e.g. '5' or '5,8:9'), besides the automatic setup cells.",
+    )
+    parser.add_argument(
+        "--harvest-run-id",
+        metavar="RUN_ID",
+        type=int,
+        default=None,
+        help=(
+            "Harvest an earlier run of the ONE --notebook (with --cells for a piece) instead of running it: the "
+            "run's outputs and provenance are written as --harvest-outputs would. Give the --env-version / "
+            "--new-cluster the run had, for the runtime label."
+        ),
+    )
+    parser.add_argument(
         "--harvest-outputs",
         dest="harvest_outputs",
         action="store_true",
         default=False,
         help=(
-            "After each successful run, export the run and harvest cell outputs "
-            "back into the local .ipynb file (aligning by source code, not cell index). "
-            "Strips injected %%pip cells and override cells; preserves local serialization."
+            "After each successful run, export the run and write ITS outputs into the local .ipynb: every covered "
+            "code cell gets exactly this run's outputs or none, the install cell one line naming the wheel and "
+            "runtime, metadata.geobrix_run the provenance, and a %%run cell what its notebook printed. An output that cannot be converted fails the harvest and writes nothing; a failed harvest "
+            "exits 1."
         ),
     )
 
     args = parser.parse_args()
 
+    if not args.profile:
+        parser.error("--profile is required (or DATABRICKS_CONFIG_PROFILE): no profile is picked for you")
     if args.no_wheel and args.wheel:
         parser.error("--no-wheel and --wheel are exclusive: --no-wheel installs no geobrix wheel")
     explicit_wheel = args.wheel  # None when the default is used below
     if not args.no_wheel and args.wheel is None:
         # the %pip wheel is also the cluster library: two different wheels give the workers another geobrix
-        args.wheel = args.pip_wheel or DEFAULT_WHEEL
+        new_rt = args.new_cluster if isinstance(args.new_cluster, str) else (args.spark_version if args.new_cluster else None)
+        args.wheel = args.pip_wheel or default_wheel(default_wheel_env(args.env_version, new_rt))
+    if args.prelude and not args.cells:
+        parser.error("--prelude goes with --cells")
+    for spec in args.cells or []:
+        try:
+            _cell_range.parse_range(spec, 10**9)  # the form only; the bounds are checked against each notebook
+        except ValueError as exc:
+            parser.error(str(exc).split(":")[0] + ": expected A:B (cell numbers from 1, both included)")
 
     # Validate --set-var forms early (NAME=VALUE, NAME a valid identifier).
     for sv in args.set_vars or []:
@@ -1384,6 +1495,16 @@ def main() -> int:
         parser.error(
             "Provide at least one notebook via --notebook or --dir."
         )
+    if args.harvest_run_id is not None and len(notebooks) != 1:
+        parser.error("--harvest-run-id harvests ONE --notebook")
+    for nb_path in notebooks if args.cells else []:  # every piece must fit, and need no skipped cell, before any run
+        for spec in args.cells:
+            try:
+                _select_piece(nb_path.read_bytes(), spec, args.prelude)
+            except ValueError as exc:
+                parser.error(f"{nb_path.name}: {exc}")
+            except json.JSONDecodeError as exc:
+                parser.error(f"{nb_path.name}: not a notebook ({exc})")
 
     if args.timeout_min < 1:
         parser.error("--timeout-min must be at least 1")
@@ -1410,6 +1531,13 @@ def main() -> int:
         if runtime_env(new_runtime) is not None:
             dep_env = str(runtime_env(new_runtime))
     deps = _build_dep_list(args.wheel, extras, extra_deps, dep_env)
+
+    if args.harvest_run_id is not None:  # harvest an earlier run; no workspace import, no run
+        ctx = _run_context(args, None, new_runtime if args.new_cluster else None)
+        for spec in args.cells or [None]:
+            harvest(args.harvest_run_id, args.profile, notebooks[0], originals[notebooks[0]], cells=spec,
+                    run_context=ctx)
+        return 1 if HARVEST_FAILURES else 0
 
     from databricks.sdk import WorkspaceClient
 
@@ -1504,32 +1632,60 @@ def main() -> int:
         print(f"=== DEP-IMPORT: {dep_path.name} ===", flush=True)
         _import_notebook(w, dep_path, ws_dir, strip_pip=args.strip_pip, guard=False)
 
+    ctx = _run_context(args, w, new_runtime if job_cluster else None)
     for nb_path in notebooks:
-        ok = run_one(
-            w=w,
-            local_path=nb_path,
-            ws_dir=ws_dir,
-            deps=deps,
-            env_version=args.env_version,
-            poll_secs=args.poll_secs,
-            strip_pip=args.strip_pip,
-            set_vars=args.set_vars,
-            hardware_accelerator=args.hardware_accelerator,
-            existing_cluster_id=args.existing_cluster_id,
-            harvest_outputs=args.harvest_outputs,
-            profile=args.profile,
-            job_cluster=job_cluster,
-            timeout_min=args.timeout_min,
-            harvest_path=originals[nb_path],
-            on_submit=lease.job_run if lease is not None else None,  # the lease follows the notebook's job run
-        )
-        if not ok:
-            return 1
+        for spec in args.cells or [None]:
+            ok = run_one(
+                w=w,
+                local_path=nb_path,
+                ws_dir=ws_dir,
+                deps=deps,
+                env_version=args.env_version,
+                poll_secs=args.poll_secs,
+                strip_pip=args.strip_pip,
+                set_vars=args.set_vars,
+                hardware_accelerator=args.hardware_accelerator,
+                existing_cluster_id=args.existing_cluster_id,
+                harvest_outputs=args.harvest_outputs,
+                profile=args.profile,
+                job_cluster=job_cluster,
+                timeout_min=args.timeout_min,
+                harvest_path=originals[nb_path],
+                on_submit=lease.job_run if lease is not None else None,  # the lease follows the notebook's job run
+                cells=spec,
+                prelude=args.prelude,
+                run_context=ctx,
+            )
+            if not ok:
+                return 1
 
     print("\n=== ALL NOTEBOOKS SUCCEEDED ===", flush=True)
     if HARVEST_FAILURES:
-        print(f"=== OUTPUT HARVEST FAILED for: {', '.join(HARVEST_FAILURES)} ===", flush=True)
+        print(f"=== OUTPUT HARVEST FAILED for: {', '.join(HARVEST_FAILURES)} (exit 1) ===", flush=True)
+        return 1
     return 0
+
+
+def _run_context(args, w, new_runtime: Optional[str]) -> dict:
+    """Where the runs execute, for the harvested notebook's record: the Serverless environment or the runtime."""
+    ctx: dict = {"wheel": args.wheel}
+    if args.existing_cluster_id:
+        ctx["compute"] = "cluster"
+        try:
+            ctx["spark_version"] = w.clusters.get(args.existing_cluster_id).spark_version if w is not None else None
+        except Exception:  # noqa: BLE001 - the label only
+            ctx["spark_version"] = None
+    elif args.new_cluster or new_runtime:
+        ctx["compute"] = "job cluster"
+        ctx["spark_version"] = new_runtime or args.spark_version
+    else:
+        ctx["compute"] = "serverless"
+        ctx["environment_version"] = str(args.env_version)
+        ctx["label"] = f"Serverless environment {args.env_version}" + (
+            f" ({args.hardware_accelerator})" if args.hardware_accelerator else "")
+    if ctx.get("spark_version"):
+        ctx["label"] = f"Databricks Runtime {ctx['spark_version']}"
+    return {k: v for k, v in ctx.items() if v is not None}
 
 
 if __name__ == "__main__":

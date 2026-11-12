@@ -51,6 +51,24 @@ _EXIF_GPS_DOP = 0x0B
 _EXIF_GPS_H_POSITIONING_ERROR = 0x1F
 
 
+class _RegistrationCounter:
+    """Images registered by ``pycolmap.incremental_mapping``, from its two callbacks.
+
+    ``initial_image_pair_callback`` fires once per model for the initial pair (two images);
+    ``next_image_callback`` fires once per image registered after it. Counting only the
+    latter undercounts every model by two.
+    """
+
+    def __init__(self):
+        self.value = 0
+
+    def on_init(self):
+        self.value += 2
+
+    def on_next(self):
+        self.value += 1
+
+
 def _prior_sigma_pair(prior_sigma_m):
     """``prior_sigma_m`` as a validated ``(horizontal, vertical)`` pair of positive metres.
 
@@ -1003,27 +1021,28 @@ def run_sfm(  # noqa: C901
                 Path(r.source).name for r in local_features_sorted
             ]
 
-            _registered = [0]
+            _reg = _RegistrationCounter()
             _t_map = [time.perf_counter()]
 
             def _on_init():
+                _reg.on_init()
                 print(
                     "[Mapping] Initial pair found — registering remaining images...",
                     flush=True,
                 )
 
             def _on_next():
-                _registered[0] += 1
+                _reg.on_next()
                 elapsed = time.perf_counter() - _t_map[0]
-                rate = _registered[0] / elapsed if elapsed > 0 else 0
+                rate = _reg.value / elapsed if elapsed > 0 else 0
                 eta = (
-                    (len(local_features_sorted) - _registered[0]) / rate
+                    (len(local_features_sorted) - _reg.value) / rate
                     if rate > 0
                     else float("inf")
                 )
                 print(
-                    f"[Mapping] {_registered[0]}/{len(local_features_sorted)} images "
-                    f"({100 * _registered[0] / len(local_features_sorted):.0f}%) | "
+                    f"[Mapping] {_reg.value}/{len(local_features_sorted)} images "
+                    f"({100 * _reg.value / len(local_features_sorted):.0f}%) | "
                     f"elapsed {elapsed:.0f}s | ETA ~{eta:.0f}s",
                     flush=True,
                 )
@@ -1046,7 +1065,7 @@ def run_sfm(  # noqa: C901
             elapsed_total = time.perf_counter() - t4
             print(
                 f"[Stage 4-5] SfM complete: {len(reconstructions)} model(s) in "
-                f"{elapsed_total:.0f}s ({_registered[0]}/{len(local_features_sorted)} images registered)."
+                f"{elapsed_total:.0f}s ({_reg.value}/{len(local_features_sorted)} images registered)."
             )
             with open(_gps_local, "w") as _f:
                 json.dump(_gps_from_master(master_db), _f)
@@ -1063,7 +1082,7 @@ def run_sfm(  # noqa: C901
                 "sparse_dir": str(sparse_dir),
                 "gps_json": str(_gps_local),
                 "models": len(reconstructions),
-                "registered": _registered[0],
+                "registered": _reg.value,
             }
         elapsed_total = time.perf_counter() - t0
         print(

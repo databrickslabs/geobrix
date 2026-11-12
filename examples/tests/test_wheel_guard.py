@@ -283,3 +283,38 @@ def test_the_env_wheels_version_stamp_is_no_difference_but_any_other_change_is(t
     (installed / "__init__.py").write_text('__version__ = "0.6.1+env6"\n')
     with pytest.raises(RuntimeError, match="__init__.py"):
         g.run_guard({"tree": str(checkout)}, say=say, workers=workers, exclude=("_build_info.py",))
+
+
+def test_the_worker_check_is_one_stage_of_tasks_and_dedupes_on_the_driver(monkeypatch):
+    """No shuffle: a repartition and a distinct each add a stage, seconds apiece on Serverless (the check runs per chunk)."""
+    calls = []
+
+    class DF:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def select(self, col):
+            calls.append(("select", col))
+            return self
+
+        def repartition(self, *a):  # pragma: no cover - the check must not shuffle
+            raise AssertionError("no repartition")
+
+        def distinct(self):  # pragma: no cover
+            raise AssertionError("no distinct")
+
+        def collect(self):
+            return self.rows
+
+    a, b = json.dumps({"host": "w1"}), json.dumps({"host": "w2"})
+
+    class Spark:
+        def range(self, *args):
+            calls.append(("range", args))
+            return DF([{"w": a}, {"w": b}, {"w": a}])
+
+    F = pytest.importorskip("pyspark.sql.functions")
+    monkeypatch.setattr(F, "udf", lambda _t: (lambda fn: (lambda col: types.SimpleNamespace(alias=lambda _n: ("udf", col)))))
+    got = g.collect_workers(Spark(), tasks=8)
+    assert calls[0] == ("range", (0, 8, 1, 8)), "one partition per task, in the range itself"
+    assert sorted(w["host"] for w in got) == ["w1", "w2"], "the identities, each once"

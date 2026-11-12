@@ -236,7 +236,8 @@ def check(installed, expected, label="driver"):
 
 
 def collect_workers(spark, tasks=8, exclude=()):
-    """The distinct identities (dicts) the Python workers import: a UDF over ``tasks`` partitions."""
+    """The distinct identities (dicts) the Python workers import: a UDF over ``tasks`` partitions, one stage (the range is cut
+    into them itself, and the few answers are deduped here: a repartition and a distinct cost a shuffle stage each)."""
     import pyspark.sql.functions as F
 
     exclude = tuple(exclude)
@@ -245,8 +246,8 @@ def collect_workers(spark, tasks=8, exclude=()):
     def _who(_):
         return worker_identity(exclude)
 
-    rows = spark.range(tasks).repartition(tasks).select(_who("id").alias("w")).distinct().collect()
-    return [json.loads(r["w"]) for r in rows]
+    rows = spark.range(0, tasks, 1, tasks).select(_who("id").alias("w")).collect()
+    return [json.loads(w) for w in sorted({r["w"] for r in rows})]
 
 
 PROVENANCE_TAG = "WHEEL GUARD provenance: "

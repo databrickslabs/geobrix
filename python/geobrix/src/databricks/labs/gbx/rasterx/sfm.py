@@ -21,6 +21,105 @@ from pyspark.sql import functions as F
 
 from databricks.labs.gbx.rasterx._native_log import quiet_native_log, restore_native_log
 
+DEFAULT_PRIOR_SIGMA_M = (5.0, 10.0)
+"""Default GPS prior sigma, ``(horizontal, vertical)`` in metres, for an image whose EXIF has no
+GPS accuracy tag.
+
+pycolmap's EXIF reader writes every GPS prior with an all-NaN covariance. COLMAP then
+substitutes a hard-wired 1 m sigma (``prior_position_fallback_stddev``, not settable through
+``IncrementalPipelineOptions``): it weights consumer GPS as a 1 m constraint in the
+prior bundle adjustment and aligns to the priors with a ~2.8 m RANSAC inlier threshold
+(``sqrt(7.815 * 1 m^2)``). Consumer and drone GPS is good to about 3-5 m horizontally and
+worse vertically, so that alignment fails for some clusters and the bundle adjustment drops
+the priors. 5 m / 10 m is the upper end of that range: too loose costs a little GPS weight,
+too tight costs the alignment.
+"""
+
+GPS_VERTICAL_TO_HORIZONTAL = 2.0
+"""GPS vertical error over horizontal error (VDOP is typically 1.5-2x HDOP). Gives the vertical
+sigma when only a horizontal accuracy is known (EXIF ``GPSHPositioningError``, ``GPSDOP``, or a
+single-number ``prior_sigma_m``)."""
+
+GPS_UERE_M = 3.0
+"""User-equivalent range error, metres, of a modern single-frequency GPS receiver: EXIF
+``GPSDOP`` times this is the horizontal sigma."""
+
+_EXIF_GPS_IFD = 0x8825
+_EXIF_GPS_DOP = 0x0B
+_EXIF_GPS_H_POSITIONING_ERROR = 0x1F
+
+
+def _prior_sigma_pair(prior_sigma_m):
+    """``prior_sigma_m`` as a validated ``(horizontal, vertical)`` pair of positive metres.
+
+    A number is the horizontal sigma; the vertical is ``GPS_VERTICAL_TO_HORIZONTAL`` times it.
+    """
+    try:
+        if np.ndim(prior_sigma_m) == 0:
+            h = float(prior_sigma_m)
+            pair = (h, h * GPS_VERTICAL_TO_HORIZONTAL)
+        else:
+            vals = [float(v) for v in prior_sigma_m]
+            if len(vals) != 2:
+                raise ValueError
+            pair = (vals[0], vals[1])
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"prior_sigma_m must be a positive number or a (horizontal, vertical) pair "
+            f"of metres, got {prior_sigma_m!r}"
+        ) from None
+    if not all(np.isfinite(v) and v > 0 for v in pair):
+        raise ValueError(
+            f"prior_sigma_m must be positive and finite, got {prior_sigma_m!r}"
+        )
+    return pair
+
+
+def _prior_covariance_bytes(sigma_h, sigma_v):
+    """The ENU position covariance ``diag(h^2, h^2, v^2)`` as COLMAP's 9 float64 blob.
+
+    COLMAP converts WGS84 prior positions to ENU metres and leaves the covariance as written,
+    so the covariance is in ENU metres (east, north, up).
+    """
+    return np.diag([sigma_h**2, sigma_h**2, sigma_v**2]).astype(np.float64).tobytes()
+
+
+def _finite_covariance(cov_bytes):
+    """True when ``cov_bytes`` is a 3x3 float64 covariance with every entry finite."""
+    if not cov_bytes or len(cov_bytes) != 72:
+        return False
+    return bool(np.all(np.isfinite(np.frombuffer(bytes(cov_bytes), dtype=np.float64))))
+
+
+def _exif_gps_sigma(img_path):
+    """``(horizontal, vertical)`` GPS sigma in metres from the image's EXIF, or None.
+
+    ``GPSHPositioningError`` (metres) is used first, then ``GPSDOP`` times ``GPS_UERE_M``. The
+    vertical sigma is ``GPS_VERTICAL_TO_HORIZONTAL`` times the horizontal. None when the image
+    has neither tag with a positive value, or cannot be read.
+    """
+    from PIL import Image
+
+    # An unreadable image has no accuracy; the caller's default applies.
+    try:
+        with Image.open(img_path) as img:
+            gps = img.getexif().get_ifd(_EXIF_GPS_IFD)
+    except Exception:  # noqa: BLE001
+        return None
+
+    def _positive(tag):
+        try:
+            v = float(gps.get(tag))
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+        return v if np.isfinite(v) and v > 0 else None
+
+    h = _positive(_EXIF_GPS_H_POSITIONING_ERROR)
+    if h is None:
+        dop = _positive(_EXIF_GPS_DOP)
+        h = dop * GPS_UERE_M if dop is not None else None
+    return None if h is None else (h, h * GPS_VERTICAL_TO_HORIZONTAL)
+
 
 def image_ids_to_pair_id(image_id1, image_id2):
     if image_id1 > image_id2:
@@ -143,7 +242,20 @@ def _extract_features_to_df(
                             bytes(gps_row[0]) if np.all(np.isfinite(_pos)) else None
                         )
                         gps_cs = int(gps_row[1]) if gps_pos is not None else 0
-                        gps_cov = bytes(gps_row[2]) if gps_row[2] is not None else None
+                        # pycolmap's EXIF reader writes an all-NaN covariance; use the
+                        # EXIF GPS accuracy instead, else None (the assembly default).
+                        gps_cov = (
+                            bytes(gps_row[2])
+                            if _finite_covariance(gps_row[2])
+                            else None
+                        )
+                        _sigma = (
+                            _exif_gps_sigma(img_path)
+                            if gps_pos is not None and gps_cov is None
+                            else None
+                        )
+                        if _sigma is not None:
+                            gps_cov = _prior_covariance_bytes(*_sigma)
                         gps_grav = bytes(gps_row[3]) if gps_row[3] is not None else None
                     else:
                         gps_pos = None
@@ -359,7 +471,14 @@ def _match_pairs_dist(
         yield pd.DataFrame(results)
 
 
-def _assemble_colmap_db(db_path, features, matches, *, camera_defaults=None):
+def _assemble_colmap_db(
+    db_path,
+    features,
+    matches,
+    *,
+    camera_defaults=None,
+    prior_sigma_m=DEFAULT_PRIOR_SIGMA_M,
+):
     """Assemble the COLMAP master SQLite DB from extracted features + verified matches.
 
     Extracted verbatim from the notebook's `run_spark_sfm` Stage 4-5 "Master DB
@@ -369,11 +488,15 @@ def _assemble_colmap_db(db_path, features, matches, *, camera_defaults=None):
     `pycolmap.extract_features` in `run_sfm`, or a DDL fixture in tests) before
     calling this function.
 
+    Every GPS prior gets a finite position covariance: the feature's own (from its EXIF GPS
+    accuracy) when it has one, else ``prior_sigma_m`` (see `DEFAULT_PRIOR_SIGMA_M`).
+
     Returns
     -------
     tuple[int, int, bool]
         `(best_init_id1, best_init_id2, has_gps)`.
     """
+    default_cov_bytes = _prior_covariance_bytes(*_prior_sigma_pair(prior_sigma_m))
     conn = _sq.connect(db_path)
     cursor = conn.cursor()
 
@@ -447,8 +570,8 @@ def _assemble_colmap_db(db_path, features, matches, *, camera_defaults=None):
             if np.all(np.isfinite(_pos)):
                 gps_cov_bytes = (
                     bytes(row.gps_cov)
-                    if row.gps_cov
-                    else np.full(9, np.nan, dtype=np.float64).tobytes()
+                    if _finite_covariance(row.gps_cov)
+                    else default_cov_bytes
                 )
                 gps_grav_bytes = (
                     bytes(row.gps_grav)
@@ -590,6 +713,7 @@ def run_sfm(  # noqa: C901
     force_master=False,
     persist_dir=None,
     serialize_extract=False,
+    prior_sigma_m=DEFAULT_PRIOR_SIGMA_M,
     verbose=False,
 ):
     """Distributed sparse Structure-from-Motion pipeline for one group of drone images.
@@ -627,6 +751,12 @@ def run_sfm(  # noqa: C901
         Optional durable-storage root (e.g. a Volume) for cross-run sparse-model reuse.
     serialize_extract:
         Force single-partition (coalesce(1)) feature extraction as an OOM fallback.
+    prior_sigma_m:
+        GPS prior sigma in metres, for images whose EXIF has no GPS accuracy
+        (``GPSHPositioningError`` / ``GPSDOP``): a ``(horizontal, vertical)`` pair, or a
+        number for the horizontal (vertical ``GPS_VERTICAL_TO_HORIZONTAL`` times it).
+        Default `DEFAULT_PRIOR_SIGMA_M`, ``(5.0, 10.0)``. It sets how strongly the GPS
+        priors pull the bundle adjustment and the inlier threshold of the alignment to them.
     verbose:
         Show pycolmap's raw native log (every registered image, matcher and extractor).
         Default False limits it to warnings and errors, on the driver, the matching
@@ -639,6 +769,7 @@ def run_sfm(  # noqa: C901
         when short-circuited via the `persist_dir` durable-reuse path.
     """
     _sfx = f"_{group_key}" if group_key else ""
+    _prior_sigma_pair(prior_sigma_m)  # refuse a bad value before the extraction runs
 
     num_partitions = df_qc.count()
     t0 = time.perf_counter()
@@ -840,7 +971,7 @@ def run_sfm(  # noqa: C901
             local_matches = df_verified_matches.collect()
 
             best_init_id1, best_init_id2, has_gps = _assemble_colmap_db(
-                master_db, local_features, local_matches
+                master_db, local_features, local_matches, prior_sigma_m=prior_sigma_m
             )
             local_features_sorted = sorted(
                 local_features, key=lambda r: Path(r.source).name

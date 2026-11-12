@@ -434,6 +434,7 @@ Parameters:
 - **`serialize_extract`** — forces single-partition (`coalesce(1)`) feature extraction, an
   out-of-memory fallback that runs one SIFT extraction at a time instead of fanning out, at
   the cost of wall-clock time.
+- **`prior_sigma_m`** — the GPS prior sigma in metres, `(horizontal, vertical)`, default `(5.0, 10.0)`. It applies to images without an EXIF GPS accuracy tag.
 
 Returns a `dict` with these keys. `sparse_dir` is the COLMAP sparse-model directory path.
 `gps_json` is the path to the persisted GPS-prior JSON. `models` is the number of reconstructions

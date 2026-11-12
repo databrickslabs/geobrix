@@ -19,11 +19,15 @@ Stdlib only.
 from __future__ import annotations
 
 import ast
+import builtins
 import re
 from typing import Iterable, Optional
 
 _MAGIC_SETUP = re.compile(r"^\s*(%pip|%restart_python|%run)\b", re.M)
 _RESTART = re.compile(r"restartPython\(\)")
+# Names a Databricks notebook session has before any cell runs.
+_SESSION_GLOBALS = frozenset(dir(builtins)) | {"spark", "sc", "sqlContext", "dbutils", "display", "displayHTML",
+                                               "sql", "table", "getArgument"}
 
 
 def cell_source(cell) -> str:
@@ -170,12 +174,24 @@ def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, lis
 CARRIED_PREFIX = "# --- piece setup carried from skipped cells"
 
 
-def carried_statements(cells: list, missing: dict[str, list[int]]) -> tuple[Optional[dict], set[str]]:
+def _inputs(stmt) -> set[str]:
+    """The names a call-free assignment reads from the session (its own lambda arguments and comprehension targets
+    left out). Imports and ``def``/``class`` read nothing when they run."""
+    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+        return set()
+    return _loaded(stmt.value) - _defined(stmt.value)
+
+
+def carried_statements(cells: list, missing: dict[str, list[int]],
+                       available: Iterable[str] = ()) -> tuple[Optional[dict], set[str]]:
     """A cell of the setup STATEMENTS (imports, defs, call-free assignments) of skipped cells that bind a missing name,
     and the names it binds. A compute cell often starts with its imports or a flag; those lines carry, the compute
-    does not."""
+    does not. ``available``: the names the kept cells bind. A statement that reads a name neither those cells, an
+    earlier carried statement nor the session provides (``wkb = geom.wkb`` after ``geom = make()``) is not carried,
+    so its name stays missing and the piece is refused rather than failing with a NameError on the compute."""
     wanted = set(missing)
-    lines, covered, sources = [], set(), []
+    have = set(available) | _SESSION_GLOBALS
+    candidates = []  # (1-based cell, source segment, names bound, names read), in notebook order
     for i in sorted({i for where in missing.values() for i in where}):
         src = _python_of(cell_source(cells[i]))
         tree = _parse(cell_source(cells[i]))
@@ -186,13 +202,25 @@ def carried_statements(cells: list, missing: dict[str, list[int]]) -> tuple[Opti
                 continue
             names = _bound(_module_scope(ast.Module(body=[stmt], type_ignores=[]))) | (
                 {stmt.name} if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else set())
+            seg = ast.get_source_segment(src, stmt)
+            if seg:
+                candidates.append((i + 1, seg, names, _inputs(stmt)))
+    grown = True
+    while grown:  # a carried line also carries the setup lines of those cells it reads (``SEP = os.sep`` -> ``import os``)
+        before = len(wanted)
+        for _, _, names, needs in candidates:
             if names & wanted:
-                seg = ast.get_source_segment(src, stmt)
-                if seg:
-                    lines.append(seg)
-                    covered |= names
-                    if i + 1 not in sources:
-                        sources.append(i + 1)
+                wanted |= needs - have
+        grown = len(wanted) != before
+    lines, covered, sources = [], set(), []
+    for cell_no, seg, names, needs in candidates:
+        if names & wanted and needs <= have:
+            lines.append(seg)
+            covered |= names
+            have |= names
+            if cell_no not in sources:
+                sources.append(cell_no)
+    covered &= set(missing)
     if not lines:
         return None, set()
     body = f"{CARRIED_PREFIX} {', '.join(map(str, sources))} (the runner's; not in the notebook) ---\n" + "\n".join(lines) + "\n"
@@ -212,7 +240,9 @@ def select_cells(nb: dict, spec: str, prelude: Optional[str] = None) -> tuple[di
     pre = [i for i in pre if i not in rng]
     kept = sorted(set(pre) | set(rng))
     missing = missing_names(cells, kept, rng)
-    carried, covered = carried_statements(cells, missing) if missing else (None, set())
+    available = set().union(*(_defined(t) for i in kept if cells[i].get("cell_type") == "code"
+                              for t in [_parse(cell_source(cells[i]))] if t is not None))
+    carried, covered = carried_statements(cells, missing, available) if missing else (None, set())
     missing = {k: v for k, v in missing.items() if k not in covered}
     if missing:
         detail = "; ".join(f"{name} (cell {', '.join(str(i + 1) for i in where)})" for name, where in sorted(missing.items()))

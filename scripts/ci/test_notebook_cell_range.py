@@ -84,6 +84,18 @@ def test_the_imports_and_flags_of_a_skipped_compute_cell_are_carried_not_its_com
     assert hno.CARRIED_PREFIX == cr.CARRIED_PREFIX
 
 
+def test_a_carried_statement_whose_inputs_only_the_skipped_compute_binds_is_refused(cr):
+    # `land_wkb = land_geom.wkb` has no call, but land_geom comes from the cell's compute: carrying the line alone
+    # would raise NameError on the compute, so the piece is refused with the prelude to add.
+    nb = {"cells": [_code("land_geom = make_geom()\nland_wkb = land_geom.wkb\nN = 3"), _code("print(land_wkb, N)")]}
+    with pytest.raises(ValueError, match=r"land_wkb \(cell 1\).*--prelude 1"):
+        cr.select_cells(nb, "2:2")
+    nb = {"cells": [_code("import os\nSEP = os.sep\nrows = spark.range(9).collect()\nF = lambda x: x"),
+                    _code("print(SEP, F(1))")]}
+    carried = cr.cell_source(cr.select_cells(nb, "2:2")[0]["cells"][0])  # inputs bound by carried lines: carried
+    assert "SEP = os.sep" in carried and "F = lambda x: x" in carried
+
+
 def test_function_locals_of_a_skipped_cell_are_not_session_names(cr):
     nb = {"cells": [_code("def f(df):\n    n = df.count()\n    return n\nf(spark.range(1))"), _code("x = 1"), _code("n = 3\nprint(n, x)")]}
     out, _, _ = cr.select_cells(nb, "3:3")  # n is bound in the piece; f's locals are not the session's

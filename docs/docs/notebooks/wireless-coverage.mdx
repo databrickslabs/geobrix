@@ -12,8 +12,8 @@ import TabItem from '@theme/TabItem';
 Wireless Coverage turns a USGS 3DEP LiDAR point cloud over San Francisco into ranked candidate
 cell-tower sites, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks. LiDAR
 returns become DSM / DTM / CHM surfaces. The surfaces are indexed to H3. Exact H3
-line-of-sight viewsheds score each candidate site. It comes in two flavors. One is a **production-ready
-Lakeflow pipeline** that runs the whole flow as a scheduled job. The other is an **interactive notebook
+line-of-sight viewsheds score each candidate site. It comes in two flavors. One is a **Lakeflow
+pipeline** that runs the whole flow as a scheduled job. The other is an **interactive notebook
 series** that walks through each step and the GeoBrix functions behind it.
 
 :::note Minimum GeoBrix version
@@ -49,7 +49,7 @@ Finally, the Golden Gate Park demo makes the ranked sites legible. Part 4 scores
 
 **Requires GeoBrix 0.6.0 or newer.**
 
-A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task. A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) packages it, and it runs entirely on **Serverless** compute with the GeoBrix Python API.
+A Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task. A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) packages it, and it runs entirely on **Serverless** compute with the GeoBrix Python API.
 
 This is the production counterpart to the notebook series (see the other tab). It uses the same San Francisco AOI and USGS 3DEP LiDAR sources. It runs as a scheduled medallion pipeline instead of one-off notebook outputs. A `land` downloader task stages the data. The pipeline then cascades bronze → silver → gold through declared table-to-table dependencies. A `siting` task runs the H3-native tower analysis. A `validate` notebook confirms all outputs.
 
@@ -285,7 +285,7 @@ edge). The `rst_isoband` function extracts DEM and DSM elevation bands as contig
 The Databricks product `h3_try_coverash3` indexes them to H3 cells.
 Cumulative elevation tiers give each cell a coverage-depth value. The Canopy Height Model
 is aggregated to the maximum canopy height per H3 cell via `gbx_rst_h3_rastertogridmax`.
-Interior gaps are filled with `h3_cellfill` (k=1, IDW, land mask re-applied after fill).
+Interior gaps are filled with `h3_cellfill_array` (k=1, IDW, land mask re-applied after fill).
 All three H3 tables — `wc_h3_dem`, `wc_h3_dsm`, `wc_h3_chm` — are prepared for
 downstream analysis in Part 4. Each H3-cell output table carries a stable res-9 rollup join
 key: `parent_cellid` (the `h3_toparent` of each cell at res 9) and `parent_cellid_res`.
@@ -461,7 +461,7 @@ Canopy Height Model tiles  (Float32, NoData = −9999)
         │
         ▼  (Part 3a) rst_isoband → h3_try_coverash3  →  wc_h3_dem / wc_h3_dsm elevation-tier grids
         ▼  (Part 3a) gbx_rst_h3_rastertogridmax  →  wc_h3_chm max-canopy grid
-        ▼  (Part 3a) h3_cellfill (k=1, IDW, land mask)  →  gap-filled H3 tables
+        ▼  (Part 3a) h3_cellfill_array (k=1, IDW, land mask)  →  gap-filled H3 tables
         │
         ▼  (Part 3b) independent candidate lattice  →  rst_viewshed_towers (per-tower, 1 m raster)  →  wc_rpx_raster_viewshed_demo
         ▼  (Part 3b) h3_los_visible (inline, res-12, self-contained)  →  wc_rpx_h3_viewshed_demo / wc_rpx_h3_coverage_demo

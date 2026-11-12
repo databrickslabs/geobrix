@@ -1747,6 +1747,19 @@ def rerun_shards(run_dir: Path, root: Path, shards: Optional[List[ts.Shard]] = N
             if nid not in by_file.setdefault(f, []):
                 by_file[f].append(nid)
             env_of.setdefault(f, dict((old_plan.get(junit.parent.name) or {}).get("env") or {}))
+    # a test past --test-timeout that did not stop was killed with its chunk: the junit holds no failure for it, the result names it
+    for res_file in sorted(Path(run_dir).glob("*/result.json")):
+        try:
+            timed_out = json.loads(res_file.read_text()).get("timed_out") or []
+        except (OSError, ValueError, AttributeError):
+            continue
+        for nid in timed_out:
+            f = str(nid).split("::", 1)[0]
+            if not f.endswith(".py") or "::" not in str(nid):
+                continue
+            if nid not in by_file.setdefault(f, []):
+                by_file[f].append(str(nid))
+            env_of.setdefault(f, dict((old_plan.get(res_file.parent.name) or {}).get("env") or {}))
     out = []
     for f, ids in sorted(by_file.items()):
         env = env_of.get(f) or {}

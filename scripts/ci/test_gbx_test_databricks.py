@@ -2567,6 +2567,20 @@ def test_a_heavy_rerun_runs_on_the_jar_pool_with_its_integration_tests_and_the_f
     assert not heavy.subset and not fam.subset, "a rerun that collects nothing is a selection error, not a pass"
 
 
+def test_rerun_failed_also_reruns_a_test_the_timeout_stopped(shards, tmp_path):
+    """A test past --test-timeout that does not stop is killed with its chunk: the junit then holds no failure for it (2026-11-12,
+    tst-sls-b4: gbx_rst_color_relief-L3engine-c0-sql), but the chunk's result names it in timed_out."""
+    run = tmp_path / "tst-old"
+    nid = "test/manager/test_family_cross_tier.py::test_family_oracle[gbx_rst_color_relief-L3engine-c0-sql]"
+    (run / "smoke-serverless").mkdir(parents=True)
+    (run / "smoke-serverless" / "junit.xml").write_text("<testsuites><testsuite tests='1'><testcase classname='test.manager."
+                                                         "test_family_cross_tier' name='test_family_oracle[gbx_rst_aspect-L3engine-c0-sql]' time='1'/></testsuite></testsuites>")
+    (run / "smoke-serverless" / "result.json").write_text(json.dumps({"timed_out": [nid]}))
+    (run / "plan.json").write_text(json.dumps({"shards": {"smoke-serverless": {"env": {"GBX_ORACLE_TABLES": "SPEC_DEM"}}}}))
+    got = launcher.rerun_shards(run, REPO_ROOT, shards)
+    assert [s.paths for s in got] == [[nid]] and got[0].oracle_tables == "SPEC_DEM"
+
+
 def test_an_overrun_chunk_is_stopped_and_reported_as_overrun_not_as_a_failed_test():
     res = {"rc": 130, "reason": "killed by watchdog: ran past 6 min, 2x its estimate", "overrun": True, "failed": 0, "errors": 0, "passed": 4}
     assert not sr.chunk_failed(res), "its own run and its runner task do not fail"

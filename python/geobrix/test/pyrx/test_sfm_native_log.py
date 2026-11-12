@@ -121,3 +121,76 @@ def test_extract_child_script_limits_the_log_by_default(tmp_path, monkeypatch):
         )
     )
     assert captured["cmd"][-1] == "1"
+
+
+# --- concurrent patch-match: glog's minloglevel is one flag for the whole process -------------
+
+
+def test_overlapping_scopes_keep_the_level_until_the_last_one_exits():
+    """dense_mvs_pool runs patch-match in threads sharing one process-wide level.
+
+    The first scope to finish must not put the level back while another is still running.
+    """
+    pc = _fake_pycolmap(0)
+    a, b = _native_log.native_log(pc), _native_log.native_log(pc)
+    a.__enter__()
+    b.__enter__()
+    a.__exit__(None, None, None)
+    assert pc.logging.minloglevel == WARNING  # b is still inside
+    b.__exit__(None, None, None)
+    assert pc.logging.minloglevel == 0  # the caller's level, once
+
+
+def test_overlapping_scopes_restore_regardless_of_exit_order():
+    pc = _fake_pycolmap(0)
+    a, b = _native_log.native_log(pc), _native_log.native_log(pc)
+    a.__enter__()
+    b.__enter__()
+    b.__exit__(None, None, None)
+    assert pc.logging.minloglevel == WARNING
+    a.__exit__(None, None, None)
+    assert pc.logging.minloglevel == 0
+
+
+def test_concurrent_dense_patch_match_stays_quiet_until_both_finish(monkeypatch):
+    """Two patch-match calls on pool threads: the one that ends first must not re-enable INFO."""
+    import threading
+
+    from databricks.labs.gbx.rasterx import mvs
+
+    pc = _fake_pycolmap(0)
+    pc.PatchMatchOptions = lambda: types.SimpleNamespace()
+    both_started = threading.Barrier(2)
+    first_done = threading.Event()
+    seen = {}
+
+    def _stereo(work_dir, options=None):
+        both_started.wait(timeout=10)
+        if work_dir == "slow":
+            assert first_done.wait(timeout=10)
+            seen["slow_after_fast_exit"] = pc.logging.minloglevel
+
+    pc.patch_match_stereo = _stereo
+    monkeypatch.setitem(sys.modules, "pycolmap", pc)
+
+    def _fast():
+        mvs.dense_patch_match("fast")
+        first_done.set()
+
+    t1 = threading.Thread(target=_fast)
+    t2 = threading.Thread(target=lambda: mvs.dense_patch_match("slow"))
+    t1.start()
+    t2.start()
+    t1.join(15)
+    t2.join(15)
+    assert seen["slow_after_fast_exit"] == WARNING
+    assert pc.logging.minloglevel == 0
+
+
+def test_concurrent_verbose_env_leaves_the_level_alone(monkeypatch):
+    monkeypatch.setenv(_native_log.VERBOSE_ENV, "1")
+    pc = _fake_pycolmap(0)
+    with _native_log.native_log(pc):
+        with _native_log.native_log(pc):
+            assert pc.logging.minloglevel == 0
+    assert pc.logging.minloglevel == 0

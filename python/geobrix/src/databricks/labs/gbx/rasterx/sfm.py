@@ -19,7 +19,11 @@ import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 
-from databricks.labs.gbx.rasterx._native_log import quiet_native_log, restore_native_log
+from databricks.labs.gbx.rasterx._native_log import (
+    quiet_native_log,
+    quiet_native_log_for_process,
+    restore_native_log,
+)
 
 DEFAULT_PRIOR_SIGMA_M = (5.0, 10.0)
 """Default GPS prior sigma, ``(horizontal, vertical)`` in metres, for an image whose EXIF has no
@@ -382,7 +386,7 @@ def _match_pairs_dist(
     import pandas as pd
     import pycolmap
 
-    quiet_native_log(pycolmap, verbose)
+    quiet_native_log_for_process(pycolmap, verbose)
     for pdf in iterator:
         results = []
         for _, row in pdf.iterrows():

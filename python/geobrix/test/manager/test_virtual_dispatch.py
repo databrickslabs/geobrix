@@ -36,8 +36,8 @@ BYTES_TO_JVM = [
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # the 7 accessors and coordinate functions that return one value
-    assert len(L1_TILE_FNS) >= 7, [f.sql_name for f in L1_TILE_FNS]
+    # the 2 accessors that return one value (boundingbox, worldtorastercoordy) and the web tile
+    assert len(L1_TILE_FNS) >= 3, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)
@@ -243,8 +243,8 @@ def test_every_jvm_first_tile_function_has_an_oracle_row_for_a_reference(fn, tmp
 def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm(
     jvm_spark, tmp_path
 ):
-    """With the JAR the width is JVM first: the SQL name is the dispatch wrapper over both private functions, a bytes
-    tile and the reference to the same file give the same width, and the JVM function alone refuses the reference.
+    """With the JAR the bounding box is JVM first: the SQL name is the dispatch wrapper over both private functions, a
+    bytes tile and the reference to the same file give the same polygon, and the JVM function alone refuses the reference.
     """
     from pyspark.sql.types import StructField, StructType
 
@@ -252,13 +252,13 @@ def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm
     from databricks.labs.gbx.bench import oracles
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
-    name = "gbx_rst_width"
+    name = "gbx_rst_boundingbox"
     chosen = register(jvm_spark, only=[name])
     assert chosen[name].level == "L1", chosen[name]
     body = " ".join(
         str(r[0]) for r in jvm_spark.sql(f"DESCRIBE FUNCTION EXTENDED {name}").collect()
     )
-    assert "gbx__l1_rst_width" in body and "gbx__l3_rst_width" in body
+    assert "gbx__l1_rst_boundingbox" in body and "gbx__l3_rst_boundingbox" in body
     mat, virt = (
         oracles.resolve_arg(oracles.Build(b), str(tmp_path))
         for b in ("tile_4326", "tile_virtual")
@@ -268,11 +268,15 @@ def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm
     )
     jvm_spark.createDataFrame([(mat, virt)], schema).createOrReplaceTempView("_gbx_w")
     row = jvm_spark.sql(
-        f"SELECT {name}(m) AS m, {name}(v) AS v, gbx__l3_rst_width(v) AS light FROM _gbx_w"
+        f"SELECT {name}(m) AS m, {name}(v) AS v, gbx__l3_rst_boundingbox(v) AS light FROM _gbx_w"
     ).collect()[0]
-    assert (row["m"], row["v"], row["light"]) == (64, 64, 64)
+    import shapely
+
+    # the same polygon from both levels (the JVM and light rings can start at another corner)
+    m, v, light = (shapely.from_wkb(bytes(row[k])) for k in ("m", "v", "light"))
+    assert m.equals(v) and v.equals(light) and not m.is_empty
     with pytest.raises(Exception, match="VirtualTileException"):
-        jvm_spark.sql("SELECT gbx__l1_rst_width(v) FROM _gbx_w").collect()
+        jvm_spark.sql("SELECT gbx__l1_rst_boundingbox(v) FROM _gbx_w").collect()
 
 
 # No row has both a JVM level and the GDAL spec engine as its only light form now (TRI, the last, is light). The branch

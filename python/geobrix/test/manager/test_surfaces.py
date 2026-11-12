@@ -369,7 +369,7 @@ def test_jar_functions_lists_only_the_names_the_jar_compute_runs_on_the_jvm():
         f"{len(rows)} functions run on the JVM when the JAR is present."
     )
     assert (
-        '| <Link id="gbx_rst_width" />`gbx_rst_width` | RasterX | A virtual tile runs in Python. |'
+        '| <Link id="gbx_rst_boundingbox" />`gbx_rst_boundingbox` | RasterX | A virtual tile runs in Python. |'
         in rows
     )
     assert (
@@ -428,12 +428,12 @@ def test_a_scala_tag_links_to_its_jar_functions_row_or_to_the_page():
         for m in re.findall(r'jar="(\w+)"', surfaces.surfaces_props(f))
     }
     assert named <= rows
-    assert 'jar="gbx_rst_width"' in surfaces.surfaces_props(
-        man.functions["gbx_rst_width"]
+    assert 'jar="gbx_rst_boundingbox"' in surfaces.surfaces_props(
+        man.functions["gbx_rst_boundingbox"]
     )
     assert "jar=" not in surfaces.surfaces_props(man.functions["gbx_st_makevalid"])
     # the page lists stable rows only, so a non-stable function's tag names no anchor either
-    beta = dataclasses.replace(man.functions["gbx_rst_width"], status="beta")
+    beta = dataclasses.replace(man.functions["gbx_rst_boundingbox"], status="beta")
     assert "jar=" not in surfaces.surfaces_props(beta)
 
 

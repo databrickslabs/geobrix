@@ -554,20 +554,15 @@ JVM_FIRST_ACCESSORS = [
 
 def test_the_accessors_that_return_one_value_run_on_the_jvm_first():
     names = {f.sql_name for f in JVM_FIRST_ACCESSORS}
-    assert names == {
-        f"gbx_rst_{n}"
-        for n in (
-            "boundingbox numbands rastertoworldcoordx upperlefty width worldtorastercoordx worldtorastercoordy"
-        ).split()
-    }
+    assert names == {f"gbx_rst_{n}" for n in ("boundingbox", "worldtorastercoordy")}
 
 
-# The one-value accessors culled under the 1.2x keep rule against the Arrow light form (1.05x to 1.19x at 4x and 16x).
+# The one-value accessors culled under the 1.2x keep rule against the Arrow light form (under 1.2x at 4x and 16x).
 _CULLED_ONE_VALUE_ACCESSORS = [
     f"gbx_rst_{n}"
     for n in (
-        "crs format height memsize pixelheight pixelwidth rotation scalex scaley skewx skewy srid upperleftx "
-        "rastertoworldcoordy"
+        "crs format height memsize numbands pixelheight pixelwidth rotation scalex scaley skewx skewy srid upperleftx "
+        "upperlefty width rastertoworldcoordx rastertoworldcoordy worldtorastercoordx"
     ).split()
 ]
 
@@ -2026,7 +2021,7 @@ def test_collision_gate_fires_on_a_private_name_equal_to_a_public_one_and_a_dupl
 
 def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkeypatch):
     gates = _gates()
-    fn = MAN.functions["gbx_rst_rastertoworldcoordx"]
+    fn = MAN.functions["gbx_rst_worldtorastercoordy"]
     renamed = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
     )
@@ -2043,13 +2038,13 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
     monkeypatch.setattr(
         gates,
         "_scala_wrappers",
-        lambda: {"rst_rastertoworldcoordx": {own: [["a", "b", "c", "d"]]}},
+        lambda: {"rst_worldtorastercoordy": {own: [["a", "b", "c", "d"]]}},
     )
     assert any(
         "Scala wrapper arities [4] above" in f for f in gates.name_findings([fn])
     )
     bare = _row(
-        "gbx_rst_rastertoworldcoordx",
+        "gbx_rst_worldtorastercoordy",
         levels={k: v for k, v in fn.levels.items() if k != "L1"},
         gdal=None,
     )
@@ -2060,7 +2055,7 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
         gates,
         "_scala_wrappers",
         lambda: {
-            "rst_rastertoworldcoordx": {
+            "rst_worldtorastercoordy": {
                 "src/other/functions.scala": [["a", "b", "c", "d"]]
             }
         },

@@ -28,6 +28,7 @@ def render_point_cloud_3d(
     figsize=None,
     dpi=None,
     z_exaggeration=None,
+    detached=False,
 ):
     """Render a decimated, centered point cloud as a static 3D matplotlib Figure.
 
@@ -56,10 +57,13 @@ def render_point_cloud_3d(
     clamped to a minimum of 1.0 (never squashes Z). Pass ``1.0`` for true
     geographic scale, or a positive float to set an explicit multiplier.
 
+    ``detached=True`` builds the Figure on its own Agg canvas, outside pyplot's
+    figure registry: no global backend is touched and nothing needs
+    ``plt.close`` (used to render offscreen frames from a notebook session).
+
     Does not call ``pyplot.show()`` -- the caller displays the returned
     Figure, consistent with ``plot_static``.
     """
-    import matplotlib.pyplot as plt
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 -- registers the 3d projection
 
     x = np.asarray(x, dtype="float64")
@@ -82,7 +86,16 @@ def render_point_cloud_3d(
         fig_kw["figsize"] = figsize
     if dpi is not None:
         fig_kw["dpi"] = dpi
-    fig = plt.figure(**fig_kw)
+    if detached:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
+
+        fig = Figure(**fig_kw)
+        FigureCanvasAgg(fig)
+    else:
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(**fig_kw)
     ax = fig.add_subplot(111, projection="3d")
     fig.set_facecolor(background)
     ax.set_facecolor(background)

@@ -722,10 +722,12 @@ def _rasterio_driver_names() -> set:
     """Every driver in rasterio's registry, vector ones too."""
     import rasterio
 
-    # The listing imports osgeo's gdal_array (see `_osgeo.bindings`), which registers GDAL's NUMPY driver. Make the
+    # The listing imports osgeo's gdal_array through `_osgeo.bindings`, which registers GDAL's NUMPY driver. Make the
     # same registration here, or the verdict follows whether this process happened to import it earlier.
+    from databricks.labs.gbx import _osgeo
+
     try:
-        from osgeo import gdal_array  # noqa: F401
+        _osgeo.bindings("the drivers check")
     except ImportError:
         pass
     with rasterio.Env() as env:

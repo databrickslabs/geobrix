@@ -1,5 +1,6 @@
 """The confs the zarr suites give the session Databricks provides (``conftest.PROVIDED_CONFS``)."""
 
+from test import _provided_spark as ps
 from test.zarr.conftest import PROVIDED_CONFS, provided_session_confs
 
 
@@ -44,3 +45,21 @@ def test_the_local_session_gets_nothing():
     with provided_session_confs(_Session(conf), {}):
         pass
     assert conf.values == {"spark.sql.shuffle.partitions": "2"}
+
+
+def test_a_delta_path_quoted_part_by_part_is_qualified_too(tmp_path):
+    """GeoBrix quotes every part of a table name (``_manifest._q``), so the ledger reaches Spark as
+    ```delta`.`<path>```; that spelling gets the same rule. Here, not in test/test_provided_spark.py: the
+    zarr modules import pyarrow, which the heavy CI job does not install."""
+    from databricks.labs.gbx.zarr._manifest import _q
+    from databricks.labs.gbx.zarr._register import _ledger_table
+
+    root = tmp_path / "root_s"
+    root.mkdir()
+    name = _q(_ledger_table(str(root)))
+    assert ps._qualify_sql(f"DESCRIBE DETAIL {name}") == (
+        f"DESCRIBE DETAIL `delta`.`file:{root / '_gbx_owner'}`"
+    )
+    assert ps._qualify_sql("SELECT * FROM `delta`.`/Volumes/c/s/v/t`") == (
+        "SELECT * FROM `delta`.`/Volumes/c/s/v/t`"
+    )

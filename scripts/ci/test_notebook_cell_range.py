@@ -242,3 +242,39 @@ def test_the_runner_passes_the_notebooks_folder_so_run_notebooks_resolve(cr, mon
     with pytest.raises(ValueError, match=r"rows \(cell 4\)"):
         rns._select_piece(raw, "6:6", None, FIXTURES)
     assert "DEMO = True" in rns._select_piece(raw, "5:5", None, FIXTURES).decode()
+
+
+# ---------------------------------------------- the cell-by-cell runner skips Databricks-only fixtures
+
+
+@pytest.fixture
+def cbc(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    return importlib.import_module("run_notebooks_cell_by_cell")
+
+
+def _write_nb(path, *, cell_by_cell=None):
+    meta = {} if cell_by_cell is None else {"gbx": {"cell_by_cell": cell_by_cell}}
+    path.write_text(json.dumps({"cells": [], "metadata": meta, "nbformat": 4, "nbformat_minor": 5}))
+
+
+def test_a_directory_run_skips_notebooks_marked_not_for_cell_by_cell(cbc, monkeypatch, tmp_path):
+    # harvest_smoke / cell_range_pieces need Spark, display and a Volumes wheel: a kernel-less exec() run on the
+    # dev container fails on them by design. They carry metadata.gbx.cell_by_cell = false.
+    fixtures = tmp_path / "tests" / "fixtures"
+    fixtures.mkdir(parents=True)
+    _write_nb(fixtures / "plain.ipynb")
+    _write_nb(fixtures / "databricks_only.ipynb", cell_by_cell=False)
+    _write_nb(fixtures / "marked_true.ipynb", cell_by_cell=True)
+    monkeypatch.setattr(cbc, "EXAMPLES_ROOT", tmp_path)
+    names = lambda found: [p.name for p in found]  # noqa: E731
+    assert names(cbc.discover_notebooks(None)) == ["marked_true.ipynb", "plain.ipynb"]
+    assert names(cbc.discover_notebooks("fixtures")) == ["marked_true.ipynb", "plain.ipynb"]
+    # Named on its own, the notebook runs: the caller asked for it.
+    assert names(cbc.discover_notebooks("tests/fixtures/databricks_only.ipynb")) == ["databricks_only.ipynb"]
+
+
+def test_the_databricks_only_fixtures_are_marked():
+    for name in ("cell_range_pieces", "harvest_smoke"):
+        nb = json.loads((FIXTURES / f"{name}.ipynb").read_text())
+        assert nb["metadata"]["gbx"]["cell_by_cell"] is False, name

@@ -19,6 +19,7 @@ Usage (inside container):
 Exit: 0 if all pass, 1 if any failure.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -118,6 +119,24 @@ def _create_venv_and_run(venv_root: Path, path_arg: str | None) -> int:
     return r.returncode
 
 
+def _cell_by_cell_ok(nb: Path) -> bool:
+    """False when the notebook is marked `metadata.gbx.cell_by_cell = false`: a Databricks-only fixture (Spark,
+    display, a Volumes wheel) that a kernel-less exec() run cannot execute. It runs only when named on its own."""
+    try:
+        meta = json.loads(nb.read_text()).get("metadata", {})
+    except (OSError, ValueError):
+        return True
+    return (meta.get("gbx") or {}).get("cell_by_cell", True) is not False
+
+
+def _runnable(found: list[Path]) -> list[Path]:
+    kept = [nb for nb in found if _cell_by_cell_ok(nb)]
+    for nb in found:
+        if nb not in kept:
+            print(f"Skipping {nb.name}: metadata.gbx.cell_by_cell is false (Databricks-only; name it to run it)", flush=True)
+    return kept
+
+
 def discover_notebooks(path_arg: str | None) -> list[Path]:
     """Return list of notebook paths to run. path_arg limits scope when provided."""
     if not path_arg:
@@ -127,18 +146,18 @@ def discover_notebooks(path_arg: str | None) -> list[Path]:
             d = EXAMPLES_ROOT / sub
             if d.is_dir():
                 notebooks.extend(sorted(d.glob("*.ipynb")))
-        return notebooks
+        return _runnable(notebooks)
 
     # path_arg can be "sample-data", "fixtures", "tests/fixtures", or path to .ipynb
     p = EXAMPLES_ROOT / path_arg
     if p.is_file() and p.suffix == ".ipynb":
         return [p]
     if p.is_dir():
-        return sorted(p.glob("*.ipynb"))
+        return _runnable(sorted(p.glob("*.ipynb")))
     # e.g. path_arg "fixtures" -> examples/tests/fixtures
     p2 = EXAMPLES_ROOT / "tests" / path_arg
     if p2.is_dir():
-        return sorted(p2.glob("*.ipynb"))
+        return _runnable(sorted(p2.glob("*.ipynb")))
     return []
 
 

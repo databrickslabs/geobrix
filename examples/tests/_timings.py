@@ -48,7 +48,7 @@ import statistics
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import _test_shards as ts
 
@@ -409,14 +409,20 @@ def case_seconds(junit: Path, root: Path, chunk_tables: List[str], fn_table: Dic
     return out
 
 
+# a stopped chunk's bound grows by the share of its tests it did not reach, at most this many times its elapsed time
+PROGRESS_SCALE_MAX = 6.0
+
+
 def run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path, root: Path, slots: int,
-                fn_table: Optional[Dict[str, str]] = None, stop: str = "", prefix: str = "") -> List[dict]:
+                fn_table: Optional[Dict[str, str]] = None, stop: str = "", prefix: str = "",
+                progress: Optional[Tuple[int, int]] = None) -> List[dict]:
     """The samples one chunk leaves. A finished chunk: the seconds of each key from its junit. A chunk that did not finish
     (INCOMPLETE: a cap, a stall, a crash, --maxfail, a fail-fast stop): its keys that finished are full samples; the key it was in
     when it stopped and the keys it never reached share what its elapsed time leaves over as lower bounds, so none of them is
     underestimated next time. ``stop`` (the fail-fast rule that stopped the run) flags those lower bounds; ``prefix`` (``sls:``)
-    names the keys of a Serverless run."""
-    out = _run_samples(chunk, verdict, busy_s, junit, root, slots, fn_table)
+    names the keys of a Serverless run. ``progress`` (tests that ended, tests selected: the chunk's pytest.log) grows the bounds of a
+    chunk stopped part way by the share it did not reach (at most PROGRESS_SCALE_MAX times), so the next plan is not short again."""
+    out = _run_samples(chunk, verdict, busy_s, junit, root, slots, fn_table, progress)
     for x in out:
         x["key"] = prefix + x["key"]
         if stop and x["lb"]:
@@ -425,7 +431,7 @@ def run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path,
 
 
 def _run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path, root: Path, slots: int,
-                 fn_table: Optional[Dict[str, str]] = None) -> List[dict]:
+                 fn_table: Optional[Dict[str, str]] = None, progress: Optional[Tuple[int, int]] = None) -> List[dict]:
     if verdict in ("EMPTY", "ERRORS"):  # nothing ran, or pytest stopped before the tests: no times to learn from
         return []
     tables = list(chunk.get("tables") or [])
@@ -445,6 +451,9 @@ def _run_samples(chunk: dict, verdict: str, busy_s: Optional[float], junit: Path
     if not open_keys:
         return [{"key": k, "s": s, "slots": slots, "lb": False} for k, s in done.items()]
     elapsed = float(busy_s or 0.0) - ts.FIXED_MIN * 60
+    ran, selected = progress or (0, 0)
+    if elapsed > 0 and 0 < ran < selected:  # the tests it never reached take about as long each as the ones it ran
+        elapsed *= min(PROGRESS_SCALE_MAX, selected / ran)
     # what no key's cases took: the stopped key's own seconds are already in its share, so they are not left over too
     left = max(0.0, elapsed - sum(per.values()))
     out = [{"key": k, "s": s, "slots": slots, "lb": False} for k, s in done.items()]

@@ -71,7 +71,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 try:  # the junit files are our own, but a parser that refuses entities costs nothing
     from defusedxml import ElementTree as ET
@@ -1286,6 +1286,24 @@ def build_notebook(plan: dict, pool: str) -> dict:
 # ---------------------------------------------------------------------------------------------- results
 
 
+_SELECTED = re.compile(r"collected (\d+) items?(?: / (\d+) deselected)?(?: / (\d+) selected)?")
+_ENDED = re.compile(r"\b(PASSED|FAILED|SKIPPED|ERROR|XFAIL|XPASS)\b[^\n\[]*\[\s*\d+%\]")
+
+
+def progress_of(log: Path) -> Optional[Tuple[int, int]]:
+    """(tests that ended, tests selected) from a chunk's pytest.log (pytest -v), None when it has no collection line. A chunk the
+    watchdog killed leaves no junit, but its log reaches the Volume: how far it got grows its lower bounds."""
+    try:
+        text = re.sub(r"\x1b\[[0-9;]*m", "", Path(log).read_text(errors="replace"))
+    except OSError:
+        return None
+    m = _SELECTED.search(text)
+    if not m:
+        return None
+    selected = int(m.group(3)) if m.group(3) else int(m.group(1)) - int(m.group(2) or 0)
+    return len(_ENDED.findall(text)), selected
+
+
 def parse_junit(path: Path) -> dict:
     """Counts, the failures (name, first lines of the message) and the skip reasons of one junit.xml."""
     root = ET.parse(path).getroot()
@@ -2073,7 +2091,8 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         # a chunk pytest stopped at --maxfail did not run all its tests: its times are lower bounds, as a capped chunk's are
         verdict = "INCOMPLETE" if (r.get("maxfail_hit") and r["verdict"] == "FAILED") or r["verdict"] == "OVERRUN" else r["verdict"]
         got_s = [] if chunk.get("smoke") or chunk.get("select_k") else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
-            chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "")
+            chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "",
+            progress=progress_of(local_out / r["slug"] / "pytest.log") if verdict == "INCOMPLETE" else None)
         n_parts = int(str(chunk.get("test_part") or "0/1").split("/")[1])
         for x in got_s:  # a test part times its own part only (``<key>#i/n``); a unit all of whose parts ran gets their sum below
             x["key"] = tm.part_key(x["key"], chunk.get("test_part") or "")

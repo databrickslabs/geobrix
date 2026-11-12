@@ -824,6 +824,33 @@ def test_a_stopped_chunks_bounds_share_only_the_time_its_keys_did_not_take(tmp_p
     assert got[files[1]] - got[files[2]] == pytest.approx(20.0)
 
 
+def test_a_stopped_chunks_bounds_grow_by_the_share_of_its_tests_it_did_not_reach(tmp_path):
+    """A chunk stopped at 2x its estimate after 18 of its 64 tests (tst-sls-b5, RASTER_TO_GRID on Serverless) needs about 3.6x
+    its elapsed time: a bound of the elapsed time alone plans the next run short again, and it is stopped again."""
+    chunk = {"tables": ["RASTER_TO_GRID"], "test_part": "0/2"}
+    absent, busy = tmp_path / "absent.xml", 474
+    elapsed = busy - ts.FIXED_MIN * 60
+    plain = sum(x["s"] for x in tm.run_samples(chunk, "INCOMPLETE", busy, absent, REPO_ROOT, 1))
+    grown = tm.run_samples(chunk, "INCOMPLETE", busy, absent, REPO_ROOT, 1, progress=(18, 64))
+    assert plain == pytest.approx(elapsed) and all(x["lb"] for x in grown)
+    assert sum(x["s"] for x in grown) == pytest.approx(elapsed * 64 / 18)
+    assert sum(x["s"] for x in tm.run_samples(chunk, "INCOMPLETE", busy, absent, REPO_ROOT, 1, progress=(1, 500))) == pytest.approx(
+        elapsed * tm.PROGRESS_SCALE_MAX), "a chunk that barely started is not extrapolated without limit"
+    assert sum(x["s"] for x in tm.run_samples(chunk, "INCOMPLETE", busy, absent, REPO_ROOT, 1, progress=(0, 64))) == pytest.approx(elapsed)
+
+
+def test_a_chunks_progress_is_read_from_its_pytest_log(tmp_path):
+    log = tmp_path / "pytest.log"
+    log.write_text("collecting ... collected 131 items / 67 deselected / 64 selected\n"
+                   "test/x.py::a \x1b[32mPASSED\x1b[0m\x1b[32m [  1%]\x1b[0m\n"
+                   "test/x.py::b \x1b[31mFAILED\x1b[0m\x1b[31m [  3%]\x1b[0m\n"
+                   "test/x.py::c SKIPPED (no corpus) [  4%]\ntest/x.py::d \n")
+    assert launcher.progress_of(log) == (3, 64)
+    log.write_text("collected 7 items\ntest/x.py::a PASSED [ 14%]\n")
+    assert launcher.progress_of(log) == (1, 7)
+    assert launcher.progress_of(tmp_path / "absent.log") is None
+
+
 def test_a_chunk_that_never_ran_leaves_no_zero_second_bound(tmp_path):
     files = _ds_files(2)
     absent = tmp_path / "absent.xml"

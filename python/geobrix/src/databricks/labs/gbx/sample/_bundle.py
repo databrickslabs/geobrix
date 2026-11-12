@@ -544,7 +544,7 @@ def run_essential_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
-    """Download the Essential sample-data bundle (~355 MB) to a Volumes path.
+    """Download the Essential sample-data bundle (~536 MB) to a Volumes path.
 
     Fetches NYC and London vector data (GeoJSON), Sentinel-2 raster (red band),
     and SRTM elevation for both regions. All interim work (downloads, decompression)
@@ -813,7 +813,7 @@ def run_complete_bundle(  # noqa: C901
     volumes_path: str,
     temp_dir: Optional[str] = None,
 ) -> dict:
-    """Download the Complete sample-data bundle additions (~440 MB more).
+    """Download the Complete sample-data bundle additions (~147 MB more).
 
     Run after run_essential_bundle. Adds NYC neighborhoods, extra SRTM tile,
     London boroughs (GeoJSON), HRRR weather (GRIB2), NYC parks and subway

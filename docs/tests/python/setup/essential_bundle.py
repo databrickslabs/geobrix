@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-GeoBrix Essential Bundle Setup (~355MB)
+GeoBrix Essential Bundle Setup (~536MB)
 
 This script downloads essential sample data for GeoBrix including:
 - NYC and London vector data (GeoJSON)
@@ -124,7 +124,7 @@ def main():
     print("=" * 70)
     print("GeoBrix Essential Bundle Setup")
     print("=" * 70)
-    print(f"Downloading ~355MB to: {SAMPLE_DATA_PATH}")
+    print(f"Downloading ~536MB to: {SAMPLE_DATA_PATH}")
     print()
 
     result = bundle_lib.run_essential_bundle(SAMPLE_DATA_PATH)

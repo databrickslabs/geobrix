@@ -164,7 +164,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - A Serverless chunk spends 1.2-3 min before its first test. A 3-5 min chunk there is about half setup.
 - Each chunk records its setup phases from the runner's call: `phase=<name> t=<s>` in its output, `phases` in `result.json`, and a table in `summary.md`.
   - Medians over 9 chunks (2026-11-12, `tst-sls-ph1`, `-b2` to `-b5`): the notebook run's start 25 s, the wheel guard cell 4 s.
-  - Then the checkout 13 s (up to 42 s with 8 chunks unpacking at once), the worker wheel check 24 s, the queue note 3 s, collection 5 s.
+  - Then the checkout 13 s, or up to 42 s with 8 chunks unpacking at once.
+  - Then the worker wheel check 24 s, the queue note 3 s, and collection 5 s.
   - The first test started at 79 s (76-176 s).
   - The worker check now runs in a thread during the unpack, in one stage. Serverless workers run the wheel, not the overlaid checkout.
   - After it (`tst-sls-b8` to `-b10`, 5 chunks): the first test at 72 s (72-126 s). The notebook start and the first UDF are the platform's.

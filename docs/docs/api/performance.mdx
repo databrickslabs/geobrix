@@ -75,8 +75,9 @@ These are the measurements. [Functions the JAR speeds up](./jar-functions) lists
 | Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
 |---|---|---|---|
 | `gbx_st_transformcrs` | 5.78 / 20.25 | 33.17 / 128.79 | 5.7x / 6.4x |
-| `gbx_rst_fromcontent` | 4.5 / 31.1 | 33.3 / 111.9 | 7.4x / 3.6x |
-| `gbx_st_triangulate` | 1.32 / 2.65 | 4.14 / 12.57 | 3.1x / 4.7x |
+| `gbx_rst_fromcontent` | 3.13 / not run | 14.09 / not run | 4.5x at 4x |
+| `gbx_st_triangulate` | 1.49 / 2.71 | 2.40 / 6.70 | 1.6x / 2.5x |
+| `gbx_st_interpolateelevationbbox` | 2.41 / 5.45 | 3.08 / 9.88 | 1.28x / 1.81x |
 | `gbx_bng_tessellateexplode` | 13.47 / 54.69 | 32.23 / 120.81 | 2.4x / 2.2x |
 | `gbx_bng_tessellate` | 14.31 / 57.58 | 30.51 / 126.40 | 2.1x / 2.2x |
 | `gbx_bng_cellfill` | 2.21 / 5.95 | 3.11 / 8.13 | 1.4x / 1.4x |
@@ -85,6 +86,8 @@ These are the measurements. [Functions the JAR speeds up](./jar-functions) lists
 | `gbx_rst_bng_rasterize_agg`, group input | not run / 8.42 | not run / 16.98 | 2.0x at 16x |
 
 A later run re-measured `gbx_bng_cellfill`, `gbx_bng_kring` and the rasterize aggregate. Its figures replace the single-sample figures of an earlier run.
+
+A further run re-measured `gbx_rst_fromcontent`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox` against the lightweight form that moves tiles in Arrow batches, as medians of five iterations. `gbx_rst_fromcontent` passed at 4x, so 16x was not run.
 
 A later pass timed every other JVM form at 1x and 4x rows on the same cluster, with the same decoded output. These 16 functions passed the 1.2x line at 4x rows, so they run on the JVM by default too:
 
@@ -122,7 +125,6 @@ The same JAR also serves these functions, measured on earlier runs by the time t
 | Function | JVM time as a fraction of light | Compute |
 |---|---|---|
 | The five BNG `*explode` generators | 0.37 to 0.67 | Dedicated |
-| `gbx_st_interpolateelevationbbox` | 0.75 | Dedicated |
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
 
 Two raster accessors that return one value run on the JVM for a materialized tile. They were measured against the lightweight form that moves tiles in Arrow batches:

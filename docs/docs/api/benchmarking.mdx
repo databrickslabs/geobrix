@@ -167,8 +167,9 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 | Function | 4x | 16x | Outcome |
 |---|---|---|---|
 | `gbx_st_transformcrs` | 0.17 | 0.16 | Heavy default |
-| `gbx_rst_fromcontent` | 0.13 | 0.28 | Heavy default |
-| `gbx_st_triangulate` | 0.32 | 0.21 | Heavy default |
+| `gbx_rst_fromcontent` (five iterations, against the Arrow lightweight form) | 0.22 | not run | Heavy default |
+| `gbx_st_triangulate` (five iterations, against the Arrow lightweight form) | 0.62 | 0.40 | Heavy default |
+| `gbx_st_interpolateelevationbbox` (five iterations, against the Arrow lightweight form) | 0.78 | 0.55 | Heavy default |
 | `gbx_bng_tessellateexplode` | 0.42 | 0.45 | Heavy default |
 | `gbx_bng_tessellate` | 0.47 | 0.46 | Heavy default |
 | `gbx_bng_cellfill` (three iterations) | 0.71 | 0.73 | Heavy default |

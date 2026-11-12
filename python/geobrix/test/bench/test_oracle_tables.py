@@ -1028,6 +1028,29 @@ def test_gbx_oracle_trace_1_names_a_case_error_and_its_task_attempts(
     ]
 
 
+def test_gbx_oracle_trace_1_times_each_helper_case(
+    spark, tmp_path, monkeypatch, capsys
+):
+    from databricks.labs.gbx.bench import oracles
+
+    cases = [
+        c
+        for c in oracles.MVP_H
+        if c.cid in ("h_merge_error_tile", "h_retile_materialized")
+    ]
+    monkeypatch.setenv(oracles.TRACE_ENV, "1")
+    ran = oracles.run_helpers(spark, cases, tmpdir=str(tmp_path))
+    assert [(c.cid, m) for c, m in ran] == [(c.cid, None) for c in cases]
+    out = [
+        x for x in capsys.readouterr().out.splitlines() if x.startswith("oracle trace")
+    ]
+    timed = [x for x in out if x.endswith(" s") and " alone: " in x]
+    assert [x.split(" alone: ")[0] for x in timed] == [
+        f"oracle trace: {c.cid}" for c in cases
+    ]
+    assert any(x.startswith("oracle trace: h_retile_materialized raised ") for x in out)
+
+
 def test_gbx_oracle_batch_0_turns_batching_off(monkeypatch):
     from databricks.labs.gbx.bench import oracles
 

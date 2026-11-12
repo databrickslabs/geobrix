@@ -4868,38 +4868,40 @@ def run_helpers(spark, cases, tmpdir: Optional[str] = None):
     for case in cases:
         if "session" not in case.surfaces:
             continue
-        if case.fn == "rst_viewshed_towers":
-            try:
-                got = run_towers(spark, case, tmpdir)
-                if case.kind == "raises":
-                    out.append(
-                        (case, f"{case.cid}: returned {len(got)} rows, want an error")
-                    )
-                else:
-                    msg = towers_differ(case.expect, got)
-                    out.append((case, msg and f"{case.cid}: {msg}"))
-            except Exception as exc:  # noqa: BLE001
-                out.append((case, check_error(case, exc)))
-            continue
-        first = resolve_arg(case.args[0], tmpdir)
-        tiles = first if isinstance(first, list) else [first]
-        df = spark.createDataFrame(
-            [("a", t) for t in tiles], f"key string, tile {TILE_SQL}"
-        )
-        fn, extra = getattr(helpers, case.fn), list(case.args[1:])
-        try:
-            if case.fn == "merge_by_key":
-                res = fn(df, ["key"], method=extra[0]).collect()
-            elif case.fn == "combine_by_key":
-                res = fn(df, ["key"], stat=extra[0]).collect()
-            else:
-                res = fn(df, "tile", *extra).collect()
-            out.append((case, _check_helper(case, res, tiles)))
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
-            out.append((case, check_error(case, exc)))
+        with _traced(f"{case.cid} alone"):
+            out.append((case, _helper_verdict(spark, case, tmpdir, helpers, TILE_SQL)))
     return out
+
+
+def _helper_verdict(spark, case, tmpdir: str, helpers, tile_sql: str) -> Optional[str]:
+    """One helper case of ``run_helpers``: None when it holds, else what differs."""
+    if case.fn == "rst_viewshed_towers":
+        try:
+            got = run_towers(spark, case, tmpdir)
+            if case.kind == "raises":
+                return f"{case.cid}: returned {len(got)} rows, want an error"
+            msg = towers_differ(case.expect, got)
+            return msg and f"{case.cid}: {msg}"
+        except Exception as exc:  # noqa: BLE001
+            return check_error(case, exc)
+    first = resolve_arg(case.args[0], tmpdir)
+    tiles = first if isinstance(first, list) else [first]
+    df = spark.createDataFrame(
+        [("a", t) for t in tiles], f"key string, tile {tile_sql}"
+    )
+    fn, extra = getattr(helpers, case.fn), list(case.args[1:])
+    try:
+        if case.fn == "merge_by_key":
+            res = fn(df, ["key"], method=extra[0]).collect()
+        elif case.fn == "combine_by_key":
+            res = fn(df, ["key"], stat=extra[0]).collect()
+        else:
+            res = fn(df, "tile", *extra).collect()
+        return _check_helper(case, res, tiles)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+        return check_error(case, exc)
 
 
 _SQL = {

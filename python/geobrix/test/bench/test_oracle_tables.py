@@ -1008,6 +1008,26 @@ def test_gbx_oracle_trace_1_times_a_generator_and_an_aggregate_case_alone(
     assert out[1].startswith(f"oracle trace: {case.cid} alone: ")
 
 
+def test_gbx_oracle_trace_1_names_a_case_error_and_its_task_attempts(
+    monkeypatch, capsys
+):
+    from databricks.labs.gbx.bench import oracles
+
+    case = oracles.Case("cr_bad", "gbx_x", (), "raises", "bad line")
+    exc = RuntimeError(
+        "Job aborted due to stage failure: Task 0 in stage 3.0 failed 4 times, most\n  recent failure: bad line 2"
+    )
+    monkeypatch.setenv(oracles.TRACE_ENV, "1")
+    assert oracles.check_error(case, exc) is None, "the verdict stands"
+    assert oracles.check_error(case, ValueError("other")).startswith("cr_bad: error")
+    out = capsys.readouterr().out.splitlines()
+    assert out == [
+        "oracle trace: cr_bad raised RuntimeError; the task ran 4 time(s): Job aborted due to stage failure: Task 0 "
+        "in stage 3.0 failed 4 times, most recent failure: bad line 2",
+        "oracle trace: cr_bad raised ValueError: other",
+    ]
+
+
 def test_gbx_oracle_batch_0_turns_batching_off(monkeypatch):
     from databricks.labs.gbx.bench import oracles
 

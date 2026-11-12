@@ -4494,7 +4494,17 @@ def check(case: Case, out, args) -> Optional[str]:
     raise ValueError(case.kind)
 
 
+def _attempts(text: str) -> str:
+    """How many times Spark ran the failed task, from its message ("Task 0 in stage 3.0 failed 4 times"): "" without one."""
+    m = re.search(r"failed (\d+) times", text)
+    return f"; the task ran {m.group(1)} time(s)" if m else ""
+
+
 def check_error(case: Case, exc: BaseException) -> Optional[str]:
+    text = str(exc)
+    _trace(
+        f"{case.cid} raised {type(exc).__name__}{_attempts(text)}: {' '.join(text.split())[:200]}"
+    )
     if case.kind == "raises":
         # a tuple is alternatives: levels that say it differently (a light read failure names no tile)
         wanted = case.expect if isinstance(case.expect, tuple) else (case.expect,)

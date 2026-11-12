@@ -81,7 +81,7 @@ and ask a spatial question to confirm the answer renders as a layer.
 ## Deploy
 
 ```bash
-bash scripts/commands/gbx-app-deploy.sh --profile oauth-fe
+bash scripts/commands/gbx-app-deploy.sh --profile <profile>
 ```
 
 This builds the client and server and deploys the app through its asset bundle

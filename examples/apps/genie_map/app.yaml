@@ -21,7 +21,7 @@ env:
   - name: VITE_ACTIVE_DATASET
     value: vapor-eyes
   - name: VITE_GOLD_CATALOG
-    value: serverless_stable_genie_map_catalog
+    value: geospatial_catalog
   - name: VITE_GOLD_SCHEMA
     value: vapor_eyes_lf
   - name: VITE_GENIE_SPACE_NAME

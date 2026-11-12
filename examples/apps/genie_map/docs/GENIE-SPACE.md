@@ -10,7 +10,8 @@ whenever its context changes.
 | Deployment | Workspace | Space id | Warehouse |
 |---|---|---|---|
 | Reference (e2-demo) | `e2-demo-field-eng` | `01f18180a9a4192ea9669e77da489e62` | `82e587bd93c6cbcf` |
-| Full-stack demo | `fevm-serverless-stable-genie-map` | `01f18192f19c14c89ca05c62111a68b4` | `13e2ed4a49e74f6c` |
+| Geospatial Hub | `fevm-geospatial` | set at deploy (`databricks bundle summary`) | `d5dd41002fc1ca02` |
+| Earlier full-stack demo | `fevm-serverless-stable-genie-map` | `01f18192f19c14c89ca05c62111a68b4` | `13e2ed4a49e74f6c` |
 
 Title: **Vapor-Eyes — Permian Methane (Genie Map)**.
 
@@ -18,8 +19,8 @@ Title: **Vapor-Eyes — Permian Methane (Genie Map)**.
 
 The space is scoped to nine gold tables in the vapor-eyes gold schema
 (`<catalog>.vapor_eyes_lf.*`, where `<catalog>` is `geospatial_docs` on the
-reference deployment and `serverless_stable_genie_map_catalog` on the full-stack
-demo env). The serialized space uses `{"version":2,"data_sources":{"tables":[...]}}`
+reference deployment and `geospatial_catalog` on the
+Geospatial Hub). The serialized space uses `{"version":2,"data_sources":{"tables":[...]}}`
 with table identifiers **sorted alphabetically** (the API rejects an unsorted list):
 
 1. `detections_by_county` — Carbon Mapper detections rolled up to county (map-ready polygon).
@@ -67,7 +68,7 @@ yields WGS84 GeoJSON that kepler renders directly.
   `.example_question_sqls`), parsed straight from this file. **No manual UI pasting.**
   The DAB `genie_space` resource re-applies only the table set on every deploy and wipes
   these, so `gbx:app:deploy` runs the seed automatically at the end (for the
-  `genie-map-env` profile); you can also run `gbx:app:seed-genie` any time after editing
+  profile you pass); you can also run `gbx:app:seed-genie` any time after editing
   the blocks below.
 
 > Keep this document as the single source of truth: `gbx:app:seed-genie` reads blocks A
@@ -172,7 +173,7 @@ Add each as a named example. All were run against the gold schema and return row
 ```sql
 SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
        ST_ASGEOJSON(plume_geom_native) AS plume_geojson
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+FROM geospatial_catalog.vapor_eyes_lf.plume_leaderboard_latest
 ORDER BY max_conc_ppmm DESC
 ```
 
@@ -180,15 +181,15 @@ ORDER BY max_conc_ppmm DESC
 ```sql
 SELECT h3_h3tostring(h3_cellid) AS hex, ch4_max, ch4_mean, n_obs,
        ST_ASGEOJSON(hex_geom) AS hex_geojson
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.hotspot_latest
+FROM geospatial_catalog.vapor_eyes_lf.hotspot_latest
 ORDER BY ch4_max DESC
 ```
 
 **Operators nearest the strongest plumes** — *"Which operators have wells nearest the strongest plumes?"* (72 rows)
 ```sql
 SELECT p.plume_id, p.max_conc_ppmm, w.operator, w.county, w.dist_m
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_candidate_wells w
-JOIN serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest p
+FROM geospatial_catalog.vapor_eyes_lf.plume_candidate_wells w
+JOIN geospatial_catalog.vapor_eyes_lf.plume_leaderboard_latest p
   ON w.plume_id = p.plume_id
 WHERE w.rank = 1
 ORDER BY p.max_conc_ppmm DESC
@@ -198,14 +199,14 @@ ORDER BY p.max_conc_ppmm DESC
 ```sql
 SELECT api, operator, field, play_name,
        ST_ASGEOJSON(well_geom_native) AS well_geojson
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+FROM geospatial_catalog.vapor_eyes_lf.wells_enriched_latest
 WHERE county_name = 'Loving'
 ```
 
 **Plumes by shale play** — *"How many plumes are in each shale play?"* (7 rows)
 ```sql
 SELECT play_name, plume_count, max_emission_kg_hr
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.emissions_by_play
+FROM geospatial_catalog.vapor_eyes_lf.emissions_by_play
 ORDER BY plume_count DESC
 ```
 
@@ -213,13 +214,13 @@ ORDER BY plume_count DESC
 ```sql
 WITH plume_cells AS (
   SELECT h3_longlatash3(lon_max, lat_max, 6) AS cell, max_conc_ppmm
-  FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+  FROM geospatial_catalog.vapor_eyes_lf.plume_leaderboard_latest
   WHERE lon_max IS NOT NULL AND lat_max IS NOT NULL
 ),
 well_cells AS (
   SELECT h3_longlatash3(longitude, latitude, 6) AS cell,
          COUNT(*) AS well_count, COUNT(DISTINCT operator) AS operator_count
-  FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+  FROM geospatial_catalog.vapor_eyes_lf.wells_enriched_latest
   WHERE longitude IS NOT NULL AND latitude IS NOT NULL
   GROUP BY 1
 )
@@ -234,7 +235,7 @@ ORDER BY w.well_count DESC
 ```sql
 SELECT plume_id, max_conc_ppmm, lead_operator, lead_county,
        ST_ASGEOJSON(plume_geom_native) AS plume_geojson
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.plume_leaderboard_latest
+FROM geospatial_catalog.vapor_eyes_lf.plume_leaderboard_latest
 WHERE plume_geom_native IS NOT NULL
 ORDER BY max_conc_ppmm DESC
 ```
@@ -243,6 +244,6 @@ ORDER BY max_conc_ppmm DESC
 ```sql
 SELECT api, operator, play_name, county_name,
        ST_ASGEOJSON(well_geom_native) AS well_geojson
-FROM serverless_stable_genie_map_catalog.vapor_eyes_lf.wells_enriched_latest
+FROM geospatial_catalog.vapor_eyes_lf.wells_enriched_latest
 WHERE well_geom_native IS NOT NULL
 ```

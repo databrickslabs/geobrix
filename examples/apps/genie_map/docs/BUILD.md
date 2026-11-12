@@ -202,7 +202,7 @@ Ordered, each step independently checkable:
 ## Data provenance — what the pipeline downloaded
 
 Counts landed by the pipeline in the full-stack demo environment
-(`serverless_stable_genie_map_catalog.vapor_eyes_lf`), by source. These are recorded
+(`geospatial_catalog.vapor_eyes_lf`), by source. These are recorded
 from the bronze inventory tables after a successful land→pipeline run; they vary with
 the configured date windows and live source availability.
 

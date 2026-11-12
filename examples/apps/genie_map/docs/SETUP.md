@@ -27,7 +27,7 @@ cp databricks.override.yml.example databricks.override.yml   # git-ignored
 ```
 
 If your gold tables live in a catalog/schema other than
-`serverless_stable_genie_map_catalog.vapor_eyes_lf`, also update:
+`geospatial_catalog.vapor_eyes_lf`, also update:
 - `VITE_GOLD_CATALOG` / `VITE_GOLD_SCHEMA` in `app.yaml` (client build), and
 - the table identifiers in `genie_space.geniespace.json` (must stay sorted).
 
@@ -82,7 +82,7 @@ The bundle set the table list + a short description; the **rich instructions and
 SQL** are written to the space by `gbx:app:seed-genie`, which parses blocks A and B from
 [`GENIE-SPACE.md`](./GENIE-SPACE.md) and PATCHes them via the Genie spaces update API — no
 manual UI pasting. `gbx:app:deploy` runs this automatically at the end (for the
-`genie-map-env` profile), and the DAB wipes these on every deploy, so re-seeding is part
+profile you pass), and the DAB wipes these on every deploy, so re-seeding is part
 of the deploy. Run it standalone any time after editing the blocks:
 
 ```bash

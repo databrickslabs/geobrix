@@ -48,11 +48,11 @@ targets:
     default: true
     workspace:
       # Host is a literal (DAB resolves auth before variables). This committed
-      # default is the FEVM full-stack demo workspace (the shared oauth-fe /
+      # default is the Geospatial Hub workspace (the shared oauth-fe /
       # e2-demo-field-eng workspace is deprecated and perpetually at app
       # capacity — do NOT target it). Override in databricks.override.yml for a
       # different workspace.
-      host: https://fevm-serverless-stable-genie-map.cloud.databricks.com
+      host: https://fevm-geospatial.cloud.databricks.com
 
 resources:
   apps:
@@ -122,7 +122,7 @@ resources:
 variables:
   warehouse_id:
     description: "SQL warehouse id the app queries (also injected as the sql-warehouse-id app resource)"
-    default: "82e587bd93c6cbcf"
+    default: "d5dd41002fc1ca02"
   serving_endpoint_name:
     description: "Foundation-model serving endpoint the AI Assistant queries"
     default: "databricks-gpt-5-2"

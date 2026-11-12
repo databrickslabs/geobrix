@@ -11,7 +11,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: 8meu-9t5y)
-url = 'https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=300'
+url = 'https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc/taxi-zones")
@@ -95,7 +95,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: gthc-hcne)
-url = 'https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=10'
+url = 'https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc/boroughs")
@@ -137,7 +137,7 @@ from pathlib import Path
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # NYC Open Data - Socrata API (dataset: 9nt8-h7nd)
-url = 'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=250'
+url = 'https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=50000'
 
 # Output path (each dataset in its own subfolder)
 output_dir = Path(f"{sample_path}/nyc-neighborhoods")
@@ -161,7 +161,7 @@ nyc_nta.select("ntaname", "boroname").show(10)"""
 
 DOWNLOAD_NYC_NTA_output = """✅ Downloaded NYC Neighborhoods (4.1 MB)
    Path: /Volumes/.../nyc-neighborhoods/nyc_nta.geojson
-   Neighborhoods: 250
+   Neighborhoods: 262
 +------------------+----------+
 |ntaname           |boroname  |
 +------------------+----------+

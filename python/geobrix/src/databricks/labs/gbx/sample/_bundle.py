@@ -172,6 +172,21 @@ def _copy_final_to_volumes(
     return dest
 
 
+# Socrata (NYC Open Data) answers `$limit` rows and nothing more, with no continuation
+# marker: `$limit=250` on the 262-row Neighborhood Tabulation Areas dataset silently
+# dropped 12 areas. SODA 2.1 allows up to 50,000 rows per request, far above any
+# dataset in the bundle, so request that instead of a tuned count.
+_SOCRATA_MAX_ROWS = 50000
+
+
+def _socrata_geojson_url(dataset_id: str) -> str:
+    """NYC Open Data GeoJSON URL for ``dataset_id`` returning every row (up to 50,000)."""
+    return (
+        f"https://data.cityofnewyork.us/resource/{dataset_id}.geojson"
+        f"?$limit={_SOCRATA_MAX_ROWS}"
+    )
+
+
 def download_to_path(
     url: str,
     dest_path: Path,
@@ -653,7 +668,7 @@ def run_essential_bundle(  # noqa: C901
             print("⬇️  Downloading NYC Taxi Zones...")
             t = tmp_dir_resolve("nyc", "taxi-zones") / "nyc_taxi_zones.geojson"
             download_to_path(
-                "https://data.cityofnewyork.us/resource/8meu-9t5y.geojson?$limit=300",
+                _socrata_geojson_url("8meu-9t5y"),
                 t,
                 "NYC Taxi Zones",
                 skip_if_exists=False,
@@ -676,7 +691,7 @@ def run_essential_bundle(  # noqa: C901
             print("⬇️  Downloading NYC Boroughs...")
             t = tmp_path("nyc", "boroughs", "nyc_boroughs.geojson")
             download_to_path(
-                "https://data.cityofnewyork.us/resource/gthc-hcne.geojson?$limit=10",
+                _socrata_geojson_url("gthc-hcne"),
                 t,
                 "NYC Boroughs",
                 skip_if_exists=False,
@@ -851,7 +866,7 @@ def run_complete_bundle(  # noqa: C901
             print("⬇️  Downloading NYC Neighborhoods...")
             t = tmp_path("nyc", "neighborhoods", "nyc_nta.geojson")
             download_to_path(
-                "https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=250",
+                _socrata_geojson_url("9nt8-h7nd"),
                 t,
                 "NYC Neighborhoods",
                 skip_if_exists=False,

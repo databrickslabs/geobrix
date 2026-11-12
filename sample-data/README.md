@@ -36,7 +36,7 @@ sample-data/Volumes/main/default/
 | Boroughs | `nyc_boroughs.zip` | Shapefile | 1.3 MB | 5 | ✅ Zipped shapefile |
 | Taxi Zones | `nyc_taxi_zones.geojson` | GeoJSON | 3.7 MB | 263 | TLC taxi zones |
 | Taxi Zones | `nyc_taxi_zones.zip` | Shapefile | 1.7 MB | 263 | ✅ Zipped shapefile |
-| Neighborhoods | `nyc_nta.geojson` | GeoJSON | 4.1 MB | 250 | Neighborhood Tabulation Areas |
+| Neighborhoods | `nyc_nta.geojson` | GeoJSON | 4.1 MB | 262 | Neighborhood Tabulation Areas |
 | **Vector - Features** |
 | Parks | `nyc_parks.zip` | Shapefile | 2.1 MB | 2065 | NYC parks and playgrounds |
 | Subway | `nyc_subway.zip` | Shapefile | 118 KB | 2120 | ✅ Subway station locations |

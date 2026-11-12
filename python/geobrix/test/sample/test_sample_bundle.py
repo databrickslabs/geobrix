@@ -612,3 +612,27 @@ def test_the_bundle_gdal_steps_raise_the_missing_osgeo_error(tmp_path, monkeypat
             _osgeo.OsgeoUnavailable, match=r"Fix: install the env wheel"
         ):
             call()
+
+
+# ========== Socrata row cap (no network) ==========
+
+
+def test_socrata_url_asks_for_every_row():
+    """NYC Neighborhoods (9nt8-h7nd) holds 262 rows; a `$limit=250` dropped 12 of them.
+
+    Socrata returns exactly `$limit` rows with no continuation marker, so the cap
+    must sit far above any dataset in the bundle.
+    """
+    url = _bundle_mod._socrata_geojson_url("9nt8-h7nd")
+    assert (
+        url == "https://data.cityofnewyork.us/resource/9nt8-h7nd.geojson?$limit=50000"
+    )
+    assert _bundle_mod._SOCRATA_MAX_ROWS >= 263  # largest bundle dataset (taxi zones)
+
+
+def test_bundle_has_no_hand_tuned_socrata_limit():
+    """Every NYC Open Data URL in the bundle goes through the helper."""
+    import re
+
+    src = Path(_bundle_mod.__file__).read_text()
+    assert not re.search(r"geojson\?\$limit=\d", src)

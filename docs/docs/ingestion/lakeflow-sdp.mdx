@@ -88,6 +88,28 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
   network access can block GitHub. See [WHL-only (Lightweight)](../installation#whl-only) for
   downloading and staging the wheel.
 
+## Register GeoBrix in each dataset function
+
+A pipeline runs each dataset function as its own flow. A `gbx_*` SQL name or a `*_gbx` reader
+resolves only in the flow that registered it.
+
+- **Call `gbx.register(spark)` at the top of each dataset function** that uses a `gbx_*` SQL name
+  or a `*_gbx` reader. A registration in another function's body does not reach it.
+- **Don't register at module import.** The pipeline imports each source file once, outside every
+  flow, so a registration there reaches no flow.
+- **The Python API registers on first use in each flow.** A call such as `pmtiles_agg(...)`
+  registers its function in the flow that makes it. Later calls in that flow cost nothing.
+
+<CodeFromTest
+  code={sdpExamples}
+  language="python"
+  functionName="DATASET_REGISTERS"
+  source="docs/tests/python/ingestion/lakeflow_sdp_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_sdp_examples.py"
+/>
+
+Both example bundles register in every dataset function that uses GeoBrix.
+
 ## Serverless pipelines
 
 - **Lightweight tier only.** A Serverless pipeline can't load a JAR, so it

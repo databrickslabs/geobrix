@@ -48,3 +48,19 @@ def table_exists(spark, name):
         if "TABLE_OR_VIEW_NOT_FOUND" not in str(e):
             raise
         return False"""
+
+# A dataset function registers GeoBrix first: a pipeline runs each one as its own flow,
+# and SQL names and *_gbx readers resolve only in the flow that registered them.
+DATASET_REGISTERS = """from pyspark import pipelines as dp
+from pyspark.sql import SparkSession
+
+from databricks.labs import gbx
+
+
+@dp.materialized_view
+def wells_bng():
+    spark = SparkSession.getActiveSession()
+    gbx.register(spark)  # in this function, not at module import
+    return spark.read.table("wells").selectExpr(
+        "well_id", "gbx_bng_pointascell(geom_wkt, 3) AS bng_cell"
+    )"""

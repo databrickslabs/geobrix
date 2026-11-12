@@ -106,18 +106,21 @@ def test_bundle_has_the_shape_of_the_example_bundles():
 
 @pytest.mark.parametrize("name", EXAMPLE_BUNDLES)
 def test_example_bundles_default_to_the_current_channels_wheel(name):
-    """The production examples the page points to run on the default channel, CURRENT,
-    so a bundle's default `gbx_wheel` is this release's env wheel for that channel's
-    runtime (the artifact Volume keeps only the current version), and every extra a
+    """A bundle's default `gbx_wheel` is this release's env wheel for the runtime of the
+    bundle's default channel (a `channel` key, often a `${var.pipeline_channel}`, or else
+    CURRENT; the artifact Volume keeps only the current version), and every extra a
     dependency asks for is one that wheel ships."""
     version = re.search(
         r'__version__ = "([^"]+)"',
         (REPO / "python/geobrix/src/databricks/labs/gbx/__init__.py").read_text(),
     ).group(1)
     bundle = yaml.safe_load(EXAMPLE_BUNDLES[name].read_text())
-    assert "channel" not in _pipeline(EXAMPLE_BUNDLES[name].read_text())  # the default, CURRENT
+    channel = _pipeline(EXAMPLE_BUNDLES[name].read_text()).get("channel", "CURRENT")
+    var = re.fullmatch(r"\$\{var\.(\w+)\}", channel)
+    if var:
+        channel = bundle["variables"][var.group(1)]["default"]
     default = bundle["variables"]["gbx_wheel"]["default"]
-    suffix = ex.CHANNEL_WHEELS["CURRENT"][1]
+    suffix = ex.CHANNEL_WHEELS[channel][1]
     assert default.rsplit("/", 1)[1] == f"geobrix-{version}{suffix}-py3-none-any.whl"
     env = int(suffix.removeprefix("+env"))
     deps = list(_pipeline(EXAMPLE_BUNDLES[name].read_text())["environment"]["dependencies"])
@@ -160,3 +163,61 @@ def test_table_exists_in_sink_snippet(spark):
             table_exists(spark, "not a ( table name")
     finally:
         spark.catalog.dropTempView("sdp_doc_exists")
+
+
+_GEOBRIX_USE = re.compile(r"\bgbx_\w+\s*\(|_gbx['\"]|databricks\.labs\.gbx|\b(?:rx|vx|gx)\.\w+\(")
+
+
+def _dataset_functions(source):
+    """The functions of a pipeline source file that a ``dp.*`` decorator declares as datasets or flows."""
+    import ast
+
+    return [
+        n
+        for n in ast.walk(ast.parse(source))
+        if isinstance(n, ast.FunctionDef) and any(ast.unparse(d).startswith("dp.") for d in n.decorator_list)
+    ]
+
+
+def test_dataset_function_snippet_registers_in_its_body_and_runs(spark, monkeypatch):
+    """The displayed dataset function registers before it uses a GeoBrix SQL name, and returns real cells."""
+    import ast
+    import types
+
+    (fn,) = _dataset_functions(ex.DATASET_REGISTERS)
+    calls = [ast.unparse(s.value) for s in fn.body if isinstance(s, ast.Expr)]
+    assert calls[0] == "gbx.register(spark)", calls
+    module_calls = [s for s in ast.parse(ex.DATASET_REGISTERS).body if isinstance(s, ast.Expr)]
+    assert not module_calls, "nothing registers at module import"
+
+    # pyspark.pipelines arrives with the pipeline runtime; a pass-through decorator stands in for it here.
+    dp = types.ModuleType("pyspark.pipelines")
+    dp.materialized_view = lambda f: f
+    monkeypatch.setitem(sys.modules, "pyspark.pipelines", dp)
+    import pyspark
+
+    monkeypatch.setattr(pyspark, "pipelines", dp, raising=False)
+    spark.createDataFrame([(1, "POINT (530000 180000)")], "well_id INT, geom_wkt STRING").createOrReplaceTempView(
+        "wells"
+    )
+    try:
+        scope = {}
+        exec(ex.DATASET_REGISTERS, scope)  # noqa: S102 - the displayed snippet
+        rows = scope["wells_bng"]().collect()
+    finally:
+        spark.catalog.dropTempView("wells")
+    assert [r.well_id for r in rows] == [1] and rows[0].bng_cell, rows
+
+
+@pytest.mark.parametrize("name", sorted(EXAMPLE_BUNDLES))
+def test_example_dataset_functions_that_use_geobrix_register_in_their_body(name):
+    """The production bundles follow the page: each dataset function that uses GeoBrix registers it itself."""
+    import ast
+
+    missing = []
+    for path in sorted((EXAMPLE_BUNDLES[name].parent / "transformations").glob("*.py")):
+        for fn in _dataset_functions(path.read_text()):
+            body = ast.unparse(fn)
+            if _GEOBRIX_USE.search(body) and not re.search(r"\b(?:register_gbx|gbx\.register)\(spark\)", body):
+                missing.append(f"{path.name}:{fn.name}")
+    assert not missing, missing

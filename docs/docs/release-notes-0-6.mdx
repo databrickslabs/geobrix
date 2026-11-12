@@ -82,7 +82,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
 
 - **One call registers the functions and the readers.** Call `from databricks.labs import gbx`, then `gbx.register(spark)`. It picks the best level for each function on the compute. It also registers the `*_gbx` data sources.
   - `gbx.register(spark, only=["gbx_rst_width"])` limits the functions. A name no function matches raises a `ValueError`.
-  - The Python API also registers a function on its first call.
+  - The Python API also registers a function on its first call. In a Lakeflow pipeline it registers on the first call in each flow. See [Lakeflow SDP](./ingestion/lakeflow-sdp#register-geobrix-in-each-dataset-function).
 - **The per-package registrars are removed.** The old `register()` functions of the generated modules (`rasterx`, `gridx.<grid>`, `vectorx`) raise an `AttributeError`. So do those of the `pyrx`, `pygx` and `pyvx` modules, of `databricks.labs.gbx.ds.register` and of `vectorx.jts.legacy`. The message gives the fix.
 - **`databricks.labs.gbx.vectorx.jts.legacy` no longer exists.** The legacy decode is `vectorx.functions.st_legacyaswkb`.
 - **Importing `databricks.labs.gbx.ds` no longer registers the readers.** The Scala data source that registered them is gone.

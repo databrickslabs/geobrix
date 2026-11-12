@@ -262,16 +262,99 @@ def test_a_reprojected_nodata_area_stays_nodata(engine):
         assert (band.compressed() != 0).any()
 
 
-def test_a_call_whose_input_and_output_pass_the_budget_is_an_error_tile_with_a_fix(
+def test_a_warp_whose_output_is_over_the_read_cap_is_an_error_tile_with_a_fix(
     engine, monkeypatch
 ):
+    """A warp over the decoded budget streams (below), but its output is a tile: one decoded over the read cap is
+    refused before GDAL runs."""
+    from databricks.labs.gbx.pyrx.core import budget
+
     monkeypatch.setattr(run, "decoded_budget", lambda: 3 * 64 * 48 * 4)
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: 3 * 64 * 48 * 4)
     res = engine.run(M[RS], [_gtiff()], {"factor": 4.0, "algorithm": "bilinear"})
-    assert res.raster is None and "Fix:" in res.error and "smaller output" in res.error
+    assert res.raster is None and res.over_cap
+    assert "Fix:" in res.error and "smaller output" in res.error
     ok = engine.run(M[RS], [_gtiff()], {"factor": 1.0, "algorithm": "bilinear"})
     assert (
         ok.error is None
     )  # input and an output of the same size: 2 x 12288 <= 3 x 12288
+
+
+def _decoded(raster):
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+        return (
+            ds.read(),
+            ds.read_masks(1),
+            ds.transform,
+            ds.crs,
+            (ds.width, ds.height),
+            ds.nodata,
+        )
+
+
+def _viewshed_like(own_mask: bool) -> bytes:
+    """A 4393 x 3842 Byte tile in EPSG:3857 over San Francisco, 0 and 255 like a viewshed: 16 MiB decoded, so it and
+    its reprojection to EPSG:4326 (with the footprint mask's work arrays) need well over 64 MiB. No NoData: the warp
+    carries its footprint as a mask, or with `own_mask` its own mask band (a disc)."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    w, h = 4393, 3842
+    yy, xx = np.mgrid[0:h, 0:w]
+    z = np.where(((xx // 37) + (yy // 23)) % 3 == 0, 255, 0).astype("uint8")[None]
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=from_origin(-13634879.0 - w / 2, 4545641.0 + h / 2, 1.0, 1.0),
+        tiled=True,
+        blockxsize=512,
+        blockysize=512,
+        compress="zstd",
+    )
+    with MemoryFile() as mf:
+        import rasterio
+
+        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+            with mf.open(**profile) as dst:
+                dst.write(z)
+                if own_mask:
+                    disc = ((xx - w / 2) ** 2 + (yy - h / 2) ** 2) <= (h / 2) ** 2
+                    dst.write_mask(np.where(disc, 255, 0).astype("uint8"))
+        return mf.read()
+
+
+@pytest.mark.parametrize(
+    "own_mask, srid",
+    [(False, 32610), (True, 4326)],
+    ids=["footprint-utm", "own-mask-4326"],
+)
+def test_a_reprojection_over_the_decoded_budget_streams_to_the_same_tile(
+    engine, monkeypatch, own_mask, srid
+):
+    """A reprojection whose input and output are over the decoded budget (64 MiB, Serverless's) runs streamed: GDAL
+    reads and writes it block by block, with its output on local disk, and the mask is carried a band of rows at a time.
+    The tile is the one an unbounded call gives: the same pixels, mask, grid and CRS. (Web Mercator to EPSG:4326 keeps
+    the footprint's edges on the grid, so the footprint case goes to UTM, where it is masked at the corners.)
+    """
+    src = _viewshed_like(own_mask)
+    monkeypatch.setattr(run, "decoded_budget", lambda: 0)
+    ref = engine.run(M[TR], [src], {"srid": srid})
+    assert ref.error is None, ref.error
+    monkeypatch.setattr(run, "decoded_budget", lambda: 64 << 20)
+    got = engine.run(M[TR], [src], {"srid": srid})
+    assert got.error is None, got.error
+    (a, am, at, ac, asz, an), (b, bm, bt, bc, bsz, bn) = _decoded(ref.raster), _decoded(
+        got.raster
+    )
+    assert asz == bsz and at == bt and ac == bc and an == bn
+    assert (am == bm).all() and (am == 0).any()
+    assert (a == b).all()
 
 
 def test_a_virtual_tile_with_an_overview_is_read_at_its_target_size(engine, tmp_path):
@@ -547,8 +630,10 @@ def test_a_tile_in_the_target_crs_is_returned_before_the_budget_is_judged(
     monkeypatch.setattr(run, "decoded_budget", lambda: 100)  # far below the tile
     res = engine.run(M[TR], [raw], {"srid": 3857})
     assert res.error is None and bytes(res.raster) == raw
-    res = engine.run(M[TR], [_gtiff()], {"srid": 3857})  # a warp is over this budget
-    assert res.raster is None and "Fix:" in res.error
+    res = engine.run(
+        M[TR], [_gtiff()], {"srid": 3857}
+    )  # a warp over this budget streams
+    assert res.error is None and res.raster is not None
 
 
 def test_a_non_geotiff_tile_in_the_target_crs_is_judged_by_the_budget_before_it_is_translated(
@@ -565,18 +650,19 @@ def test_a_non_geotiff_tile_in_the_target_crs_is_judged_by_the_budget_before_it_
     finally:
         gdal.Unlink("/vsimem/gbx-test-hfa.img")
         gdal.Unlink("/vsimem/gbx-test-src.tif")
-    monkeypatch.setattr(run, "decoded_budget", lambda: 100)
-    res = engine.run(M[TR], [hfa], {"srid": 3857})
-    assert res.raster is None and "Fix:" in res.error
-    monkeypatch.undo()
     ok = engine.run(M[TR], [hfa], {"srid": 3857})
     assert ok.error is None and bytes(ok.raster)[:2] in (
         b"II",
         b"MM",
     )  # the GeoTIFF it translated to
+    # over the budget it is not kept as it is (it is no GeoTIFF): the warp streams, to the same GeoTIFF
+    monkeypatch.setattr(run, "decoded_budget", lambda: 100)
+    res = engine.run(M[TR], [hfa], {"srid": 3857})
+    assert res.error is None and bytes(res.raster)[:2] in (b"II", b"MM")
+    assert (_decoded(res.raster)[0] == _decoded(ok.raster)[0]).all()
 
 
-def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_budget_refuses_it(
+def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_read_cap_refuses_it(
     engine, monkeypatch
 ):
     from osgeo import gdal
@@ -597,14 +683,18 @@ def test_a_rotated_tiles_output_grid_is_the_grid_the_estimate_uses_and_the_budge
     mf, ds = _open_result(res)
     with mf, ds:
         assert (grid.width, grid.height) == (ds.width, ds.height)
-    # the input is 1200 bytes decoded; the old estimate (the input's size) is 1200 more, the grid's is larger: a budget
-    # one byte short of the grid's need refuses the call, and one that holds it admits it
+    # the input is 1200 bytes decoded; the old estimate (the input's size) is 1200 more, the grid's is larger. A warp
+    # over the budget streams while its output tile fits the read cap: a cap one byte short of the grid's tile refuses
+    # the call, and one that holds it admits it
+    from databricks.labs.gbx.pyrx.core import budget
+
     assert grid.width * grid.height > 20 * 15
-    need = 20 * 15 * 4 + grid.width * grid.height * 4
-    monkeypatch.setattr(run, "decoded_budget", lambda: need - 1)
+    tile = grid.width * grid.height * 4
+    monkeypatch.setattr(run, "decoded_budget", lambda: 20 * 15 * 4 + tile - 1)
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: tile - 1)
     res = engine.run(M[TR], [raw], {"srid": 3035})
     assert res.raster is None and "Fix:" in res.error
-    monkeypatch.setattr(run, "decoded_budget", lambda: need)
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: tile)
     assert engine.run(M[TR], [raw], {"srid": 3035}).error is None
 
 
@@ -695,7 +785,6 @@ def _output_grid(gdal, name, width, height, origin, px):
 
 
 def test_the_mask_is_cut_to_the_window_of_its_grid_and_a_misfit_is_a_data_error(engine):
-    import numpy as np
     from osgeo import gdal
 
     from databricks.labs.gbx.engine.run import _gdal_status
@@ -703,15 +792,13 @@ def test_the_mask_is_cut_to_the_window_of_its_grid_and_a_misfit_is_a_data_error(
     prefix = "/vsimem/gbx-test-cut"
     wd = gdal.GetDriverByName("MEM").Create("", 20, 15, 1, gdal.GDT_Byte)
     wd.SetGeoTransform((100.0, 1.0, 0.0, 50.0, 0.0, -1.0))
-    mask = np.arange(20 * 15, dtype="u1")
-    grid = mask.reshape(15, 20)
     try:
         with _gdal_status() as g:
             _output_grid(g, f"{prefix}/win.tif", 4, 4, (103.0, 48.0), 1.0)
-            cut = run._cut_to_output(g, f"{prefix}/win.tif", wd, mask)
-            assert (cut == grid[2:6, 3:7].ravel()).all()  # column 3, row 2
+            # column 3, row 2, 4 x 4
+            assert run._output_window(g, f"{prefix}/win.tif", wd) == (3, 2, 4, 4)
             _output_grid(g, f"{prefix}/same.tif", 20, 15, (100.0, 50.0), 1.0)
-            assert run._cut_to_output(g, f"{prefix}/same.tif", wd, mask) is mask
+            assert run._output_window(g, f"{prefix}/same.tif", wd) == (0, 0, 20, 15)
             for name, (w, h, origin, px) in {
                 "half": (4, 4, (103.5, 48.0), 1.0),  # half a pixel off the grid
                 "coarse": (4, 4, (103.0, 48.0), 2.0),  # another pixel size
@@ -721,7 +808,7 @@ def test_the_mask_is_cut_to_the_window_of_its_grid_and_a_misfit_is_a_data_error(
                 with pytest.raises(
                     spec.DataError, match="does not warp onto the output grid"
                 ):
-                    run._cut_to_output(g, f"{prefix}/{name}.tif", wd, mask)
+                    run._output_window(g, f"{prefix}/{name}.tif", wd)
     finally:
         wd = None
         with _gdal_status() as g:

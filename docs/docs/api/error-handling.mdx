@@ -83,6 +83,8 @@ The terrain functions, `gbx_rst_color_relief`, the band-math functions, the warp
 
 - A tile over the read cap gives an error tile with a `Fix:` that says to retile first. GeoBrix judges it from the header, before it decodes a pixel.
 - The input and the estimated output must fit the compute's decoded budget together. The budget is 64 MiB on Serverless and 1536 MiB on classic compute, in dedicated and standard access mode alike. If they do not fit, the call gives an error tile with a `Fix:` that says to retile first or ask for a smaller output.
+- A warp or resample over the budget does not give that error tile. It runs streamed: GDAL reads and writes the raster block by block, on local disk. The result is the same tile.
+- A streamed warp is refused only when its output tile is over the read cap. The `Fix:` says to retile first or ask for a smaller output.
 - A tile that is already in the target CRS comes back from `gbx_rst_transform` unchanged, before the budget is judged.
 - `gbx_rst_viewshed` and `gbx_rst_gdal` read a virtual tile that is a whole file by its path, block by block. The read cap does not apply to that read, and the budget judges the output.
 - `gbx_rst_summary` and `gbx_rst_contour` give NULL where the others give an error tile. `gbx_rst_polygonize` gives no rows. A call that GDAL cannot run logs its reason once for each function and reason on the worker.

@@ -611,28 +611,20 @@ def _carries_mask(gdal, ds) -> bool:
 
 
 def _mask_to_carry(gdal, ds):
-    """What a warp of the open source `ds` must carry as a mask, as ``(valid, inverted)``, else None.
+    """What a warp of the open source `ds` must carry as a mask, as ``(own, inverted)``, else None.
 
-    The source's own mask band is carried: ``valid`` is its 255/0 bytes (the dataset's mask, see ``_mask_flags``). A source
-    that declares no NoData in any band and has no alpha band gets its footprint as a mask: GDAL's warp fills the pixels
-    no source pixel reaches with 0, which reads as a valid value, and GeoBrix never makes a value where data is missing.
-    ``valid`` is then all 255, and ``inverted`` is False: a pixel the warp does not reach is masked. With a NoData value
-    (or an alpha band) the pixels outside the footprint are already NoData (or transparent), so only a source's own mask
-    is carried, ``inverted``: a pixel no source pixel reaches stays as the warp left it.
+    The source's own mask band is carried (``own``): its 255/0 bytes are the valid pixels (the dataset's mask, see
+    ``_mask_flags``). A source that declares no NoData in any band and has no alpha band gets its footprint as a mask
+    (``own`` False: every source pixel is valid): GDAL's warp fills the pixels no source pixel reaches with 0, which reads
+    as a valid value, and GeoBrix never makes a value where data is missing. ``inverted`` is then False: a pixel the warp
+    does not reach is masked. With a NoData value (or an alpha band) the pixels outside the footprint are already NoData
+    (or transparent), so only a source's own mask is carried, ``inverted``: a pixel no source pixel reaches stays as the
+    warp left it. Nothing is read here: the mask is read a band of rows at a time (``_mask_rows``).
     """
-    import numpy as np
-
-    w, h = ds.RasterXSize, ds.RasterYSize
     own, declared = _mask_flags(gdal, ds)
-    if own:
-        valid = np.frombuffer(
-            ds.GetRasterBand(1).GetMaskBand().ReadRaster(0, 0, w, h), "u1"
-        )
-    elif declared:
+    if not own and declared:
         return None
-    else:
-        valid = np.full(w * h, 255, "u1")
-    return valid, declared
+    return own, declared
 
 
 # The steps of a command that move pixels to another grid: the footprint mask goes through these alone.
@@ -660,6 +652,26 @@ def _mask_pipeline(tokens, mask_in: str, mask_out: str) -> list:
     return out + ["!", "write", f"--output={mask_out}", "--output-format=GTiff"]
 
 
+# The rows of a mask the engine holds at once, as a share of the call's decoded budget: a band of rows of the mask and its
+# work copies (``_mask_rows``). The whole mask in one band where the budget is none (0) or the mask fits the share.
+_MASK_BAND_SHARE = 16
+
+
+def _mask_rows(width: int, height: int, budget: int) -> int:
+    """The rows of a `width`-pixel mask the engine reads, tests and writes at once: a band that holds a share of the call's
+    decoded `budget` (``_MASK_BAND_SHARE``), at least one row; the whole mask where the budget is none (0).
+    """
+    if not budget:
+        return max(1, height)
+    return max(1, min(height, (budget // _MASK_BAND_SHARE) // max(1, width)))
+
+
+def _bands_of_rows(height: int, rows: int):
+    """``(row, count)`` of each band of `rows` rows over a raster `height` rows high, top to bottom."""
+    for row in range(0, height, rows):
+        yield row, min(rows, height - row)
+
+
 def _carry_mask(
     gdal,
     tokens,
@@ -669,12 +681,15 @@ def _carry_mask(
     shown,
     alg="raster reproject",
     window: bool = False,
+    budget: int = 0,
 ) -> None:
     """The output's own mask band, from the source (see ``_mask_to_carry``): the mask is warped like the pixels, as data
     (nearest), by the same arguments (for a command, by its grid steps). The output gets no mask band when every pixel of
     it is valid; the bands stay as they are (no alpha band is added). With `window` the command ends on a window around
     an observer (a viewshed with ``--max-distance``): the mask, on the grid the steps before it leave, is cut to the
-    output's own pixels."""
+    output's own pixels. The masks are read, tested and written a band of rows at a time (``_mask_rows`` of the call's
+    decoded `budget`), and the work files go under `prefix` (the call's /vsimem prefix, or its folder on local disk).
+    """
     import numpy as np
 
     ds = (
@@ -686,23 +701,41 @@ def _carry_mask(
         carry = _mask_to_carry(gdal, ds)
         if carry is None:
             return
-        valid, inverted = carry
+        own, inverted = carry
         w, h = ds.RasterXSize, ds.RasterYSize
-        # a pixel the mask warp does not reach is 0: valid pixels are written 255 (or, inverted, masked ones 255)
-        coverage = np.where(valid == 0, 255, 0) if inverted else valid
-        if inverted and not coverage.any():
+        rows = _mask_rows(w, h, budget)
+        src_mask = ds.GetRasterBand(1).GetMaskBand() if own else None
+
+        def coverage(row, n):
+            # a pixel the mask warp does not reach is 0: valid pixels are written 255 (or, inverted, masked ones 255)
+            if src_mask is None:
+                return np.full(w * n, 255, "u1")
+            valid = np.frombuffer(src_mask.ReadRaster(0, row, w, n), "u1")
+            return (
+                np.where(valid == 0, np.uint8(255), np.uint8(0)) if inverted else valid
+            )
+
+        if inverted and not any(
+            coverage(row, n).any() for row, n in _bands_of_rows(h, rows)
+        ):
             return
-        mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
+        mem = gdal.GetDriverByName("GTiff").Create(
+            f"{prefix}/mask_in.tif", w, h, 1, gdal.GDT_Byte
+        )
         if ds.GetGCPCount():
             # a tile georeferenced by ground control points: the mask warps on the same points, not on a default grid
             mem.SetGCPs(ds.GetGCPs(), ds.GetGCPSpatialRef())
         else:
             mem.SetGeoTransform(ds.GetGeoTransform())
             mem.SetProjection(ds.GetProjection())
-        mem.GetRasterBand(1).WriteRaster(0, 0, w, h, coverage.astype("u1").tobytes())
-        gdal.GetDriverByName("GTiff").CreateCopy(f"{prefix}/mask_in.tif", mem)
+        band = mem.GetRasterBand(1)
+        for row, n in _bands_of_rows(h, rows):
+            band.WriteRaster(0, row, w, n, coverage(row, n).tobytes())
+        band = None
+        mem.FlushCache()
         mem = None
     finally:
+        src_mask = None
         ds = None
     args = [
         t
@@ -724,48 +757,52 @@ def _carry_mask(
     wd = _open_geotiff(gdal, mask_out)
     od = None
     try:
-        warped = np.frombuffer(
-            wd.GetRasterBand(1).ReadRaster(0, 0, wd.RasterXSize, wd.RasterYSize),
-            dtype="u1",
+        warped_band = wd.GetRasterBand(1)
+        col, top, ow, oh = (
+            _output_window(gdal, out, wd)
+            if window
+            else (0, 0, wd.RasterXSize, wd.RasterYSize)
         )
-        out_valid = np.where(warped == 0, 255, 0) if inverted else warped
-        if window:
-            out_valid = _cut_to_output(gdal, out, wd, out_valid)
-        if out_valid.all():
+        rows = _mask_rows(ow, oh, budget)
+
+        def out_valid(row, n):
+            warped = np.frombuffer(warped_band.ReadRaster(col, top + row, ow, n), "u1")
+            return (
+                np.where(warped == 0, np.uint8(255), np.uint8(0))
+                if inverted
+                else warped
+            )
+
+        if all(out_valid(row, n).all() for row, n in _bands_of_rows(oh, rows)):
             return
         with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
             od = _open_geotiff(gdal, out, update=True)
-            if (
-                out_valid.size != od.RasterXSize * od.RasterYSize
-                if window  # cut to the output's pixels already
-                else (od.RasterXSize, od.RasterYSize)
-                != (wd.RasterXSize, wd.RasterYSize)
-            ):
+            if (od.RasterXSize, od.RasterYSize) != (ow, oh):
                 raise DataError(
                     "the source's mask band does not warp onto the output grid"
                 )
             od.CreateMaskBand(gdal.GMF_PER_DATASET)
-            od.GetRasterBand(1).GetMaskBand().WriteRaster(
-                0, 0, od.RasterXSize, od.RasterYSize, out_valid.astype("u1").tobytes()
-            )
+            mask = od.GetRasterBand(1).GetMaskBand()
+            for row, n in _bands_of_rows(oh, rows):
+                mask.WriteRaster(0, row, ow, n, out_valid(row, n).tobytes())
+            mask = None
             od.FlushCache()
     finally:
+        warped_band = None
         od = wd = None
 
 
-def _cut_to_output(gdal, out: str, wd, valid):
-    """The mask `valid` (flat, on the grid of the dataset `wd`) cut to the pixels of the output `out`: a window of that grid,
+def _output_window(gdal, out: str, wd) -> tuple:
+    """``(col, row, width, height)`` of the output `out`'s pixels on the grid of the dataset `wd`: a window of that grid,
     found by its geotransform. DataError when the output is not a whole-pixel window of it.
     """
-    import numpy as np
-
     od = _open_geotiff(gdal, out)
     try:
         ow, oh, ogt = od.RasterXSize, od.RasterYSize, od.GetGeoTransform()
     finally:
         od = None
     if (ow, oh) == (wd.RasterXSize, wd.RasterYSize):
-        return valid
+        return 0, 0, ow, oh
     gt = wd.GetGeoTransform()
     col, row = (ogt[0] - gt[0]) / gt[1], (ogt[3] - gt[3]) / gt[5]
     c, r = round(col), round(row)
@@ -781,8 +818,7 @@ def _cut_to_output(gdal, out: str, wd, valid):
     )
     if not fits:
         raise DataError("the source's mask band does not warp onto the output grid")
-    grid = np.asarray(valid).reshape(wd.RasterYSize, wd.RasterXSize)
-    return np.ascontiguousarray(grid[r : r + oh, c : c + ow]).ravel()
+    return c, r, ow, oh
 
 
 def _remove(gdal, prefix: str) -> None:
@@ -803,19 +839,7 @@ def _output_name(block, prefix: str):
     streamed features output a GeoPackage in a new folder on local disk, which holds what GDAL has written so memory does
     not."""
     if block.out_kind == "features" and block.out_stream:
-        from databricks.labs.gbx.pyrx.core.local_temp import (
-            gc_stale_local_temp,
-            new_local_temp_dir,
-        )
-
-        global _swept
-        if (
-            not _swept
-        ):  # a worker ended with os._exit leaves its folder: sweep the ones whose process is gone, once a process
-            _swept = True
-            gc_stale_local_temp(SCRATCH_PREFIX, pid_owned=True)
-        # the folder is named for this process: a stream read longer than the stale age is no orphan while its owner lives
-        scratch = new_local_temp_dir(f"{SCRATCH_PREFIX}{os.getpid()}_")
+        scratch = _local_scratch()
         return f"{scratch}/out.gpkg", scratch
     return f"{prefix}/out.tif", None
 
@@ -1674,10 +1698,11 @@ def _pipe_start(gdal, sql_name: str, name: str, props, drivers):
         ds = None
 
 
-def _judge_read_cap(fn, sizes, cap: Optional[int] = None) -> None:
+def _judge_read_cap(fn, sizes, cap: Optional[int] = None) -> int:
     """OverCap (with a Fix) when an input the engine holds is decoded over the read cap: the cap of every tile read from
     bytes (light's ``_serde.open_tile``), judged from its header; ``cap`` replaces this compute's. A ``PathSource`` holds
     nothing (size 0): GDAL reads it block by block, so only the decoded budget (``_judge_budget``) judges it, by its output.
+    Returns the cap it judged by.
     """
     from databricks.labs.gbx.pyrx.core.budget import read_cap_refusal, tile_read_cap
 
@@ -1685,19 +1710,26 @@ def _judge_read_cap(fn, sizes, cap: Optional[int] = None) -> None:
     for size in sizes:
         if size > cap:
             raise OverCap(f"{fn.sql_name}: {read_cap_refusal(size, cap)}")
+    return cap
+
+
+# The algorithm whose call over the decoded budget runs streamed (``_judge_budget``): GDAL warps a block at a time.
+_STREAMED_ALG = "raster reproject"
 
 
 def _judge_budget(
-    gdal, fn, tokens, props, names, sources, drivers, decoded, budget
-) -> int:
-    """The decoded bytes the call holds (its inputs and its estimated output); OverCap (with a Fix) unless they fit the
-    decoded budget at once (spec 4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the
-    header. A command is judged by the largest state any of its steps leaves (``argv.pipeline_peak``): each step is sized
-    from the one before it.
+    gdal, fn, tokens, props, names, sources, drivers, decoded, budget, read_cap
+) -> tuple:
+    """``(held, streamed)``: the decoded bytes the call holds (its inputs and its estimated output), and whether it runs
+    streamed. OverCap (with a Fix) unless they fit the decoded budget at once (spec 4.1), or the call is a warp
+    (``_STREAMED_ALG``) whose output tile fits the read cap: that call runs streamed, holding no whole raster (``run``),
+    so it holds what its mask bands and GDAL's warp take, the budget less its cache (``_STREAMED_CACHE_SHARE``). A reprojection's output
+    grid is the one GDAL picks (``_warp_grid``), read from the header. A command is judged by the largest state any of
+    its steps leaves (``argv.pipeline_peak``): each step is sized from the one before it.
     """
     if fn.gdal.alg == command_mod.PIPELINE_ALG:
         if not budget:
-            return decoded
+            return decoded, False
         name = sources.get(0, names[0])
         drv = (
             drivers
@@ -1725,13 +1757,77 @@ def _judge_budget(
                 else _warp_grid(gdal, fn.sql_name, names[0], tokens)
             )
         need = decoded + argv_mod.estimate_output(fn, tokens, props, grid)
+        if budget and need > budget and fn.gdal.alg == _STREAMED_ALG:
+            # the output is a tile: decoded, it must fit the read cap of the functions that read it
+            tile = argv_mod.estimate_output(
+                fn, tokens, [dataclasses.replace(props[0], mask=False)], grid
+            )
+            if tile <= read_cap:
+                return budget - budget // _STREAMED_CACHE_SHARE, True
     if budget and need > budget:
         raise OverCap(
             f"{fn.sql_name}: the call needs {need // 2**20} MiB decoded (input and output), over this "
             f"compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile), or ask for a "
             "smaller output"
         )
-    return need
+    return need, False
+
+
+# A streamed warp holds GDAL's warp buffers and a band of rows of its masks (``_mask_rows``): GDAL's block cache takes a
+# quarter of the decoded budget (``budget.streaming_cache_bytes``), and the rest is kept for them. MEASURED in the dev
+# container, a 4393 x 3842 Byte tile to EPSG:4326 at a 64 MiB budget: peak RSS 50 MiB over the process with a 4 MiB
+# cache, 64 MiB with 16 MiB, 70 MiB with 32 MiB, all in 0.46 s; the same call held in memory peaked at 142 MiB.
+_STREAMED_CACHE_SHARE = 4
+
+
+def _local_scratch() -> str:
+    """A new folder on local disk for the call's files, named for this process; the folders of processes that are gone
+    are swept once a process (a worker ended with os._exit leaves its folder)."""
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        gc_stale_local_temp,
+        new_local_temp_dir,
+    )
+
+    global _swept
+    if not _swept:
+        _swept = True
+        gc_stale_local_temp(SCRATCH_PREFIX, pid_owned=True)
+    # the folder is named for this process: a stream read longer than the stale age is no orphan while its owner lives
+    return new_local_temp_dir(f"{SCRATCH_PREFIX}{os.getpid()}_")
+
+
+def _output_in(folder: str, tokens, out: str, shown) -> tuple:
+    """``(tokens, out)`` with the call's output moved from `out` to ``out.tif`` in `folder` (a folder on local disk)."""
+    moved = f"{folder}/out.tif"
+    shown[moved] = "<output>"
+    return [f"--output={moved}" if t == f"--output={out}" else t for t in tokens], moved
+
+
+def _carry_output_mask(
+    gdal, block, tokens, src: str, out: str, prefix: str, shown, budget: int
+) -> None:
+    """The mask a warp carries onto its output (``_carry_mask``): a reprojection's, and a command's that reprojects. A
+    command that reprojects keeps the footprint, as gbx_rst_transformcrs does: GDAL fills what no source pixel reaches
+    with 0, a value the tile never held. A command that ends on a window around an observer (a viewshed with
+    --max-distance) cuts the mask to that window; one that changes the grid after the window has no mask on its grid,
+    and keeps no footprint."""
+    if block.alg == "raster reproject":
+        _carry_mask(gdal, tokens, src, out, prefix, shown, budget=budget)
+        return
+    if block.alg != command_mod.PIPELINE_ALG or argv_mod.window_mask(tokens) == "skip":
+        return
+    if any(st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]):
+        _carry_mask(
+            gdal,
+            tokens,
+            src,
+            out,
+            prefix,
+            shown,
+            command_mod.PIPELINE_ALG,
+            window=argv_mod.window_mask(tokens) == "cut",
+            budget=budget,
+        )
 
 
 def run(
@@ -1769,7 +1865,7 @@ def run(
                 gdal, fn, rasters, names, prefix, shown, section, src_sizes
             )
             sizes = _held_sizes(rasters, props)
-            _judge_read_cap(fn, sizes, cap)
+            read_cap = _judge_read_cap(fn, sizes, cap)
             decoded = sum(sizes)
             budget = decoded_budget() if cap is None else cap
             # the texts of the call's text arguments (a color table) are files of their own under the prefix
@@ -1802,9 +1898,24 @@ def run(
             # is translated: the bytes returned are the GeoTIFF's.
             if 0 not in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
-            held = _judge_budget(
-                gdal, fn, tokens, props, names, sources, drivers, decoded, budget
+            held, streamed = _judge_budget(
+                gdal,
+                fn,
+                tokens,
+                props,
+                names,
+                sources,
+                drivers,
+                decoded,
+                budget,
+                read_cap,
             )
+            work = prefix
+            if streamed:
+                # a warp over the budget: GDAL writes the output, and the engine the mask's work files, on local disk,
+                # so memory holds GDAL's block cache and a band of rows, not the rasters
+                scratch = work = _local_scratch()
+                tokens, out = _output_in(work, tokens, out, shown)
             if block.out_kind == "json":
                 # a JSON row describes the tile as it is: in its own driver, not translated (a container has no band
                 # to translate)
@@ -1876,8 +1987,11 @@ def run(
                     alpha,
                 )
                 return Result(_read(gdal, out), None, command)
-            with _streaming_cache(on_path, budget, held):
+            with _streaming_cache(on_path or streamed, budget, held):
                 _execute(gdal, block.alg, tokens, shown, refused, strict=on_path)
+                _carry_output_mask(
+                    gdal, block, tokens, names[0], out, work, shown, budget
+                )
             if block.per_band and props[0].bands > 1:
                 _fill_bands(
                     gdal,
@@ -1896,29 +2010,6 @@ def run(
                 )
             if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
                 _remask_zero_for_flat(gdal, names[0], out)
-            if block.alg == "raster reproject":
-                _carry_mask(gdal, tokens, names[0], out, prefix, shown)
-            elif (
-                block.alg == command_mod.PIPELINE_ALG
-                and any(
-                    st[0] == "reproject" for st in command_mod.steps_of(tokens)[1:-1]
-                )
-                and argv_mod.window_mask(tokens) != "skip"
-            ):
-                # a command that reprojects keeps the footprint, as gbx_rst_transformcrs does: GDAL fills what no source
-                # pixel reaches with 0, a value the tile never held. A command that ends on a window around an observer
-                # (a viewshed with --max-distance) cuts the mask to that window; one that changes the grid after the
-                # window has no mask on its grid, and keeps no footprint
-                _carry_mask(
-                    gdal,
-                    tokens,
-                    names[0],
-                    out,
-                    prefix,
-                    shown,
-                    command_mod.PIPELINE_ALG,
-                    window=argv_mod.window_mask(tokens) == "cut",
-                )
             return Result(_read(gdal, out), None, command)
         except DataError as exc:
             return Result(

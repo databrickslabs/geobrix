@@ -359,7 +359,7 @@ def test_a_required_argument_left_out_raises_and_a_result_over_the_cap_is_refuse
     with pytest.raises(TypeError, match="takes at least 2 arguments, got 1"):
         engine_uc.rst_resample(dem)
     monkeypatch.setattr(
-        run, "_judge_budget", lambda *a, **k: None
+        run, "_judge_budget", lambda *a, **k: (0, False)
     )  # an estimate that lets the call run
     monkeypatch.setattr(engine_uc, "DECODED_CAP", 2 * 1024 * 1024)
     with pytest.raises(

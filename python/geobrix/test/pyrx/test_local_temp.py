@@ -395,8 +395,8 @@ def test_a_failed_sidecar_copy_leaves_nothing_staged_and_the_size_counts_the_sid
     bad = str(folder / ("1" * 32 + "_a.bil"))
     real = lt._copy_sidecars
 
-    def _fail_after_one(source_path, local_path):
-        real(source_path, local_path)
+    def _fail_after_one(source_path, local_path, listed=False):
+        real(source_path, local_path, listed)
         raise OSError("sidecar copy failed")
 
     monkeypatch.setattr(lt, "_copy_sidecars", _fail_after_one)

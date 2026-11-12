@@ -289,21 +289,27 @@ def copy_source_sequential(source_path: str, local_path: str) -> None:
     _listing._retry_transient(_do_stage)
 
 
-def copy_source_with_sidecars(source_path: str, local_path: str) -> List[str]:
+def copy_source_with_sidecars(
+    source_path: str, local_path: str, listed: bool = False
+) -> List[str]:
     """:func:`copy_source_sequential` of the file, then of the sidecar files beside it (a ``StageCache`` ``copy_fn``
     for a raster, whose staged copy has to open as the source does). Returns the staged sidecar paths, which the
-    cache keeps with the entry (to size and to remove it) instead of listing the folder.
+    cache keeps with the entry (to size and to remove it) instead of listing the folder. With *listed* the sidecars
+    are found in the folder's listing (``_env.sidecar_files``), as the cache's ``raster_source_signature`` finds them:
+    one listing for a folder of many sources, not a stat of each of about fifty names a source.
     """
     try:
         copy_source_sequential(source_path, local_path)
-        return _copy_sidecars(source_path, local_path)
+        return _copy_sidecars(source_path, local_path, listed)
     except BaseException:
         # a copy that failed is not in the cache's books: take what it staged (the file and the sidecars already copied)
         remove_staged(local_path)
         raise
 
 
-def _copy_sidecars(source_path: str, local_path: str) -> List[str]:
+def _copy_sidecars(
+    source_path: str, local_path: str, listed: bool = False
+) -> List[str]:
     """Copy the sidecar files beside *source_path* (``pyrx._env.copied_sidecar_files``) next to the staged *local_path*,
     named as the staged file is: the staged name is a prefix plus the source's name, and a sidecar keeps the rest of its
     own name, so GDAL finds it by the same rule as at the source. A staged copy that lost them would open without the
@@ -319,7 +325,7 @@ def _copy_sidecars(source_path: str, local_path: str) -> List[str]:
     prefix = local_name[: len(local_name) - len(staged)]
     folder = os.path.dirname(local_path)
     copied: List[str] = []
-    for side in _env.copied_sidecar_files(source_path):
+    for side in _env.copied_sidecar_files(source_path, listed):
         name = staged_sidecar_name(src_name, os.path.basename(side))
         if name is None:
             continue

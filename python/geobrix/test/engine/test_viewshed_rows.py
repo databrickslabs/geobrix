@@ -6,6 +6,7 @@ the engine does (the dev container).
 """
 
 import math
+import os
 
 import numpy as np
 import pytest
@@ -527,3 +528,37 @@ def test_a_file_read_by_its_path_on_a_volume_is_staged_sequentially_once(
             b.open() as y,
         ):
             assert (x.read(1) == y.read(1)).all()
+
+
+def test_staging_a_vrts_sources_takes_the_sidecars_from_one_listing(
+    tmp_path, monkeypatch
+):
+    """Staging a VRT's Volume sources finds their sidecars in the folder's listing, not by a stat of each of the ~50
+    names GDAL could read: each is a Volume round trip, and 25 cold tiles spent 44 s on Serverless in those stats alone
+    (a stat a source is the floor: its size and the cache's signature)."""
+    import contextlib
+
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.engine import l3
+
+    fn = manifest.load().functions[FN]
+    paths, vrt = _striped_tiles(tmp_path, n=6, px=32)
+    values = {**_VALUES, "observer_geom": "POINT(96.5 15.5)", "max_distance": 10.0}
+    monkeypatch.setattr(
+        file_gbx, "_is_fuse_path", lambda p: str(p).startswith(str(tmp_path))
+    )
+    n = {"stat": 0}
+    real = os.stat
+
+    def counted(path, *a, **k):
+        if str(path).startswith(str(tmp_path)):
+            n["stat"] += 1
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(os, "stat", counted)
+    with contextlib.ExitStack() as stack:
+        rasters, _, _ = l3._inputs(
+            fn, _file_tile(vrt), 1 << 30, None, None, values, stack
+        )
+        assert run.run(fn, rasters, values).error is None
+    assert n["stat"] <= 6 * len(paths), n

@@ -269,11 +269,12 @@ def _virtual_raster(
 
 
 def _stage_copy(source_path: str, local_path: str):
-    """The copy a staged path read makes (``local_temp.copy_source_with_sidecars``: one sequential pass, the sidecars
-    beside it)."""
+    """The copy a staged path read makes (``local_temp.copy_source_with_sidecars``: one sequential pass, and the
+    sidecars beside it found in the folder's listing, as the cache's signature finds them: the ~50 stats a source a
+    lookup by name makes took 44 s for 25 cold Volume tiles on Serverless)."""
     from databricks.labs.gbx.pyrx.core.local_temp import copy_source_with_sidecars
 
-    return copy_source_with_sidecars(source_path, local_path)
+    return copy_source_with_sidecars(source_path, local_path, listed=True)
 
 
 _path_stage_cache = None

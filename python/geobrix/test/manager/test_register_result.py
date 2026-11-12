@@ -88,7 +88,9 @@ def test_say_grouped_hands_back_the_lines_it_prints(capsys):
     from databricks.labs.gbx.manager import messages
 
     spark = object.__new__(type("S9", (), {}))
-    line = "geobrix: heavy unavailable: Spark Connect session; using light"
+    line = (
+        "geobrix: JVM level unavailable: Spark Connect session; using the Python level"
+    )
     got = messages.say_grouped(spark, [(f"gbx_rst_f{i}", line) for i in range(5)])
     assert got == capsys.readouterr().out.strip().splitlines()
     # a second call prints nothing (seen) but still hands the line back for the summary

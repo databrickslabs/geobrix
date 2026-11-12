@@ -105,7 +105,7 @@ def stand_ins(spark):
         ):  # the branch the wrapper hands NULL: the JVM function answers NULL for it
             return None
         raise RuntimeError(
-            "VirtualTileException: Heavyweight rst_* received a virtual tile"
+            "VirtualTileException: A JVM-level rst_* received a virtual tile"
         )
 
     def light(*_):

@@ -81,12 +81,12 @@ def _warn_heavy_volume_grids(result) -> None:
     vol_dirs = [d for d in result if str(d).startswith(_VOLUME_PREFIXES)]
     if vol_dirs:
         warnings.warn(
-            "register_proj_grids: the heavyweight tier reads grid files directly from "
+            "register_proj_grids: the JVM level reads grid files directly from "
             "each worker's local disk and cannot read them from a Unity Catalog Volume "
-            f"({', '.join(vol_dirs)}) — grid-referencing transforms will return NULL on "
-            "the heavyweight tier. Stage the grid files to a cluster-local path (e.g. via "
-            "a cluster init script) and register that path instead; Volume-hosted grids "
-            "are supported on the lightweight tier.",
+            f"({', '.join(vol_dirs)}) — grid-referencing transforms will return NULL at "
+            "the JVM level. Stage the grid files to a cluster-local path (e.g. via "
+            "a cluster init script) and register that path instead; the Python level "
+            "reads Volume-hosted grids.",
             UserWarning,
             stacklevel=4,
         )
@@ -135,8 +135,8 @@ def _apply_heavy(spark, result) -> None:
         if not _heavy_refusal_logged:
             _heavy_refusal_logged = True
             _LOG.info(
-                "geobrix: heavy-tier PROJ grid registration is unavailable in this cluster's access mode (py4j "
-                "refused the call); the light tier has the grid directories."
+                "geobrix: JVM-level PROJ grid registration is unavailable in this cluster's access mode (py4j "
+                "refused the call); the Python level has the grid directories."
             )
         return
     # Heavy tier IS active: warn if any registered dir is a Volume executors can't read.

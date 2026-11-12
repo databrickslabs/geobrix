@@ -905,7 +905,7 @@ def test_connect_session_never_touches_the_jvm(
     assert len(printed) == len(
         set(printed)
     )  # each reason line once per session, across all names
-    assert any(f"{reason}; using light" in p for p in printed)
+    assert any(f"{reason}; using the Python level" in p for p in printed)
     assert not any(
         "Error" in p for p in printed
     )  # a reason is plain words, never an exception class
@@ -1804,7 +1804,7 @@ def test_register_on_standard_with_a_jar_staged_falls_back_with_the_same_reason(
     assert stub.artifacts == [] and stub.java_registered == []
     printed = capsys.readouterr().out.splitlines()
     assert any(
-        "Spark Connect session (standard access mode); using light" in p
+        "Spark Connect session (standard access mode); using the Python level" in p
         for p in printed
     ), printed
 
@@ -2154,7 +2154,7 @@ def test_shared_fallback_reason_prints_once_with_a_count(capsys):
     from databricks.labs.gbx.manager import messages
 
     spark = object.__new__(type("S", (), {}))
-    line = "geobrix: heavy unavailable: Spark Connect session (Serverless); using light"
+    line = "geobrix: JVM level unavailable: Spark Connect session (Serverless); using the Python level"
     messages.say_grouped(spark, [(f"gbx_rst_f{i}", line) for i in range(40)])
     out = capsys.readouterr().out.strip().splitlines()
     assert len(out) == 1 and "40 functions" in out[0], out
@@ -2292,11 +2292,11 @@ def test_l1_gives_the_jvm_the_light_read_cap_unless_the_session_names_one():
     [
         (
             ["gbx_rst_a"],
-            "geobrix: gbx_rst_a runs without the GDAL spec engine at light (x)",
+            "geobrix: gbx_rst_a runs without the GDAL spec engine at the Python level (x)",
         ),
         (
             ["gbx_rst_a", "gbx_rst_b", "gbx_rst_c"],
-            "geobrix: 3 functions (gbx_rst_a, gbx_rst_b, gbx_rst_c) run without the GDAL spec engine at light (x)",
+            "geobrix: 3 functions (gbx_rst_a, gbx_rst_b, gbx_rst_c) run without the GDAL spec engine at the Python level (x)",
         ),
     ],
     ids=["one", "three"],
@@ -2308,7 +2308,10 @@ def test_a_grouped_line_agrees_in_number(capsys, names, want):
     messages.say_grouped(
         spark,
         [
-            (n, f"geobrix: {n} runs without the GDAL spec engine at light (x)")
+            (
+                n,
+                f"geobrix: {n} runs without the GDAL spec engine at the Python level (x)",
+            )
             for n in names
         ],
     )
@@ -2464,8 +2467,7 @@ def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
     out = manager.register(stub)
     printed = capsys.readouterr().out.splitlines()
     assert any(
-        "light data sources not registered (RuntimeError: no data source support here)"
-        in p
+        "data sources not registered (RuntimeError: no data source support here)" in p
         for p in printed
     ), printed
     assert out and set(out) <= _api._done(stub), "the names are still marked registered"

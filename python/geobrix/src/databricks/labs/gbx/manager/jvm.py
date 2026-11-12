@@ -83,7 +83,7 @@ def install_l1(spark, fn, caps) -> Optional[str]:
         want = ",".join(str(n) for n in range(fn.min_args, fn.max_args + 1))
         got = str(inst.acceptedArities(fqn, fn.min_args, fn.max_args))
         if got != want:
-            return f"{fn.sql_name}: heavy accepts {got or 'no'} argument counts, the signature needs {want}"
+            return f"{fn.sql_name}: the JVM level accepts {got or 'no'} argument counts, the signature needs {want}"
         if fn.kind == "generator":
             # A table function (FROM t, LATERAL f(...)), the shape the light UDTFs have. There is no
             # dispatch wrapper: a generator cannot be wrapped in a scalar SQL function.
@@ -99,7 +99,7 @@ def install_l1(spark, fn, caps) -> Optional[str]:
         _create_wrapper(spark, fn, dispatch_ddl(fn, _priv(fn, "L1"), light))
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
-        return f"{fn.sql_name}: heavy install failed ({type(exc).__name__}: {str(exc)[:160]})"
+        return f"{fn.sql_name}: JVM level install failed ({type(exc).__name__}: {str(exc)[:160]})"
 
 
 def _is_tiles(fn) -> bool:
@@ -130,7 +130,7 @@ def install_companion(spark, fqn: str, name: str) -> Optional[str]:
     access mode) has no JVM bridge, so it is refused here, before any JVM access."""
     if capabilities.is_connect(spark):
         return (
-            f"{name}: the heavy engine cannot be installed from a Spark Connect session (Serverless or standard "
+            f"{name}: the JVM level cannot be installed from a Spark Connect session (Serverless or standard "
             "access mode). Fix: run on dedicated compute, or use the Python level here."
         )
     try:
@@ -143,7 +143,9 @@ def install_companion(spark, fqn: str, name: str) -> Optional[str]:
         )
         return None if r == "ok" else f"{name}: {r}"
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
-        return f"{name}: heavy install failed ({type(exc).__name__}: {str(exc)[:160]})"
+        return (
+            f"{name}: JVM level install failed ({type(exc).__name__}: {str(exc)[:160]})"
+        )
 
 
 def install_private_l1(spark, fqn: str, name: str) -> Optional[str]:

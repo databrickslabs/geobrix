@@ -140,7 +140,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
         reg.udtf.register(name, table_fn)
     else:
         raise ValueError(
-            f"{fn.sql_name}: its light level is the GDAL spec engine alone, which this process cannot run "
+            f"{fn.sql_name}: its Python level is the GDAL spec engine alone, which this process cannot run "
             "(register it at L3 through the engine, or install the geobrix env wheel)"
         )
     if target != name:

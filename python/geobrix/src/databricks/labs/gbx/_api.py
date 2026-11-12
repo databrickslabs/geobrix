@@ -111,7 +111,7 @@ def ensure(spark, sql_name: str) -> None:
     if sql_name not in choices:
         raise RuntimeError(
             f"{sql_name} cannot run on this compute (the line above says why). "
-            "Fix: install its light dependencies, or see the availability page."
+            "Fix: install the env wheel for this runtime, or see the availability page."
         )
     _done(spark).add(sql_name)
 

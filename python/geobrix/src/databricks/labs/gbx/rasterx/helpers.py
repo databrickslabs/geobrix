@@ -115,7 +115,7 @@ def _header_dims(paths: Sequence[str]):
         except Exception as exc:  # noqa: BLE001
             raise ValueError(
                 f"cannot read the header of {p!r}: {exc}. Fix: check that the file exists and that "
-                f"it is a raster the light tier can open"
+                f"it is a raster GDAL can open"
             ) from exc
     return dims
 

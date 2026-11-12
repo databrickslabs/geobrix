@@ -40,7 +40,7 @@ def test_a_missing_light_dependency_is_named_with_a_fix(monkeypatch):
     with pytest.raises(ImportError) as err:
         manager.register(ConnectStub(), only=["gbx_bng_centroid"])
     text = str(err.value)
-    assert "lightweight functions need pandas" in text
+    assert "the Python level needs pandas" in text
     assert "gbx_bng_centroid" in text and "grid-scalar" in text
     assert "Fix: install the geobrix env wheel" in text and "pip install pandas" in text
     assert isinstance(err.value.__cause__, ModuleNotFoundError)
@@ -67,7 +67,7 @@ def test_an_import_error_of_an_installed_package_passes_through_unchanged(
     monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
     with pytest.raises(ImportError) as err:
         manager.register(ConnectStub(), only=["gbx_bng_centroid"])
-    assert err.value is error and "lightweight functions need" not in str(err.value)
+    assert err.value is error and "the Python level needs" not in str(err.value)
 
 
 def test_ensure_refuses_a_name_the_manager_did_not_register(monkeypatch):

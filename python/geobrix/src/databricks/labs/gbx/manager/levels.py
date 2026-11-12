@@ -198,10 +198,11 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "general": ("L3",),
 }
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
+# The user-facing name of each level, as the fallback lines print it ("geobrix: JVM level unavailable: ...").
 NAMES = {
-    "L0": "SQL",
-    "L1": "heavy (Catalyst)",
-    "L3": "light",
+    "L0": "SQL expression",
+    "L1": "JVM",
+    "L3": "Python",
 }
 # The variant of a level that runs the row's `gdal` block on the GDAL spec engine. A forced L3 may name the
 # engine's row-wise UDF alone ("engine-c0") or its batch UDF behind the wrapper ("engine-c1", the default).
@@ -352,7 +353,7 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
             return why
         l1_returns = spec.get("session_returns", fn.returns_session)
         if l1_returns != fn.returns_session:
-            return f"{fn.sql_name}: heavy returns {l1_returns}, the session signature returns {fn.returns_session}"
+            return f"{fn.sql_name}: the JVM level returns {l1_returns}, the session signature returns {fn.returns_session}"
         # A tile function reaches its Catalyst companion only through a SQL dispatch wrapper. Where SQL functions
         # cannot be created there is no wrapper: L1 is unavailable and `select` falls back to the next level,
         # naming this reason in the manager's one-line message.
@@ -408,7 +409,7 @@ def select(
             why = engine_unavailable(fn, "L3", caps)
             if why:
                 raise NoLevelAvailable(
-                    fn.sql_name, (f"geobrix: {NAMES['L3']} unavailable: {why}",)
+                    fn.sql_name, (f"geobrix: {NAMES['L3']} level unavailable: {why}",)
                 )
             return Choice("L3", ENGINE, ())
         return Choice(override[0], override[1], ())
@@ -431,5 +432,5 @@ def select(
                 fn, level, caps
             )
             return Choice(level, ENGINE if on_engine else "-", tuple(reasons))
-        reasons.append(f"geobrix: {NAMES[level]} unavailable: {why}")
+        reasons.append(f"geobrix: {NAMES[level]} level unavailable: {why}")
     raise NoLevelAvailable(fn.sql_name, tuple(reasons))

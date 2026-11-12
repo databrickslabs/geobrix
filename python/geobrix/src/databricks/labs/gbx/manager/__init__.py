@@ -185,8 +185,8 @@ def register(
             )
             lines.append(
                 (
-                    "light data sources",
-                    f"geobrix: light data sources not registered ({why})",
+                    "data sources",
+                    f"geobrix: data sources not registered ({why})",
                 )
             )
     out.notes = messages.say_grouped(spark, lines)
@@ -475,8 +475,8 @@ def _light_deps(fn):
         ):  # installed: the error is its own (a missing submodule), so say it as it is
             raise
         raise ImportError(
-            f"geobrix: the lightweight functions need {pkg}, which is not installed ({fn.sql_name}, a "
-            f"{fn.family} function, is served by them here). Fix: install the geobrix env wheel for this runtime, "
+            f"geobrix: the Python level needs {pkg}, which is not installed ({fn.sql_name}, a "
+            f"{fn.family} function, runs at that level here). Fix: install the geobrix env wheel for this runtime, "
             f"or pip install {pkg}."
         ) from exc
 
@@ -494,7 +494,7 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
             lines.append(
                 (
                     fn.sql_name,
-                    f"geobrix: {fn.sql_name} runs without the GDAL spec engine at {levels.NAMES[level]} ({why})",
+                    f"geobrix: {fn.sql_name} runs without the GDAL spec engine at the {levels.NAMES[level]} level ({why})",
                 )
             )
     if level == "L0":
@@ -511,15 +511,17 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
             why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:160] if str(exc) else ''}"
         if why is None:
             for r in reasons:
-                lines.append((fn.sql_name, f"{r}; using {levels.NAMES[level]}"))
+                lines.append(
+                    (fn.sql_name, f"{r}; using the {levels.NAMES[level]} level")
+                )
             return choice
         if forced:
             raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
         if "L3" not in fn.levels:
             raise RuntimeError(
-                f"{fn.sql_name}: the SQL level failed and there is no other level: {why}"
+                f"{fn.sql_name}: the SQL expression level failed and there is no other level: {why}"
             )
-        reasons.append(f"geobrix: {levels.NAMES[level]} unavailable: {why}")
+        reasons.append(f"geobrix: {levels.NAMES[level]} level unavailable: {why}")
         level = "L3"
     if level == "L1":
         from databricks.labs.gbx.manager import jvm
@@ -527,11 +529,13 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
         why = jvm.install_l1(spark, fn, caps)
         if why is None:
             for r in reasons:
-                lines.append((fn.sql_name, f"{r}; using {levels.NAMES[level]}"))
+                lines.append(
+                    (fn.sql_name, f"{r}; using the {levels.NAMES[level]} level")
+                )
             return choice
         if forced:
             raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
-        reasons.append(f"geobrix: {levels.NAMES[level]} unavailable: {why}")
+        reasons.append(f"geobrix: {levels.NAMES[level]} level unavailable: {why}")
         level = "L3"
     l3_spec = fn.levels["L3"]
     on_engine = (forced and choice.variant in levels.ENGINE_L3) or (
@@ -544,7 +548,7 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
         with _light_deps(fn):
             variant = l3.register_l3_engine(spark, fn, form)
         for r in reasons:
-            lines.append((fn.sql_name, f"{r}; using {levels.NAMES['L3']}"))
+            lines.append((fn.sql_name, f"{r}; using the {levels.NAMES['L3']} level"))
         return Choice("L3", variant, tuple(reasons))
     variant, skip = (
         (choice.variant, None)
@@ -554,7 +558,7 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
     with _light_deps(fn):
         l3.register_l3(spark, fn, variant)
     for r in reasons:
-        lines.append((fn.sql_name, f"{r}; using {levels.NAMES['L3']}"))
+        lines.append((fn.sql_name, f"{r}; using the {levels.NAMES['L3']} level"))
     if skip:
         lines.append((fn.sql_name, skip))
     return Choice("L3", variant, tuple(reasons))

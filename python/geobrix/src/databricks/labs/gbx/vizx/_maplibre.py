@@ -814,6 +814,18 @@ def _max_tile_bytes(raw: bytes) -> int | None:
         return None
 
 
+def _skipped_embed_estimate(layer) -> int:
+    """Rendered (base64-inflated) size of a layer that was not prepared.
+
+    An over-budget embedded pmtiles layer is skipped before assembly, so it has
+    no prepared ``embed_bytes``; its real cost is the archive size x
+    ``_BASE64_INFLATION`` (the same measure the over-budget guard uses).
+    """
+    if getattr(layer, "kind", None) != "pmtiles":
+        return 0
+    return int(len(_pmtiles_raw_bytes(layer) or b"") * _BASE64_INFLATION)
+
+
 def _build_audit(
     layers, prepared, total_embed_bytes, max_embed_bytes, simplify_tiles_spec
 ) -> dict:
@@ -821,7 +833,12 @@ def _build_audit(
     audit_layers_list = []
     for idx, layer in enumerate(layers):
         entry = prepared[idx] if idx < len(prepared) else None
-        eb = entry[2] if (entry is not None and len(entry) > 2) else 0
+        if entry is None:
+            # Skipped (over-budget) layer: report its estimated rendered size, not 0,
+            # so the per-layer figures add up to the total.
+            eb = _skipped_embed_estimate(layer)
+        else:
+            eb = entry[2] if len(entry) > 2 else 0
         audit_layers_list.append(_layer_audit_entry(layer, idx, eb))
 
     fits = total_embed_bytes <= max_embed_bytes
@@ -939,20 +956,21 @@ def audit_layers(
             prepared.append(None)
 
     valid_prepared = [e for e in prepared if e is not None]
-    if valid_prepared:
-        total_embed_bytes = len(build_html(valid_prepared, emphasis=emphasis).encode())
-    else:
-        # All layers were over-budget individually — estimate the RENDERED embed
-        # size as the base64-inflated (~4/3x) sum of raw archive bytes, matching
-        # the per-layer guard above (the cell-output cap counts rendered HTML).
-        total_embed_bytes = int(
-            sum(
-                len(_pmtiles_raw_bytes(layer) or b"")
-                for layer in lyrs
-                if getattr(layer, "kind", None) == "pmtiles"
-            )
-            * _BASE64_INFLATION
-        )
+    # Skipped (over-budget) layers still count toward the embed total, at their
+    # estimated RENDERED size (base64-inflated ~4/3x; the cell-output cap counts
+    # rendered HTML). Without them an over-budget archive next to a small layer
+    # would audit as "embed".
+    skipped_bytes = sum(
+        _skipped_embed_estimate(layer)
+        for layer, entry in zip(lyrs, prepared)
+        if entry is None
+    )
+    html_bytes = (
+        len(build_html(valid_prepared, emphasis=emphasis).encode())
+        if valid_prepared
+        else 0
+    )
+    total_embed_bytes = html_bytes + skipped_bytes
 
     return _build_audit(
         lyrs, prepared, total_embed_bytes, max_embed_bytes, simplify_tiles_spec
@@ -1197,6 +1215,13 @@ def prepare_layers(
                 if getattr(layer, "kind", None) == "pmtiles"
             )
             * _BASE64_INFLATION
+        )
+        + sum(
+            entry[2]
+            for layer, entry in zip(layers, prepared)
+            if entry is not None
+            and len(entry) > 2
+            and getattr(layer, "kind", None) != "pmtiles"
         )
     )
     size_desc = f"{total_bytes / 1_048_576:.1f} MB" + (

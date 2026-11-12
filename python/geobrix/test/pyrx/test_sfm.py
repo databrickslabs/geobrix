@@ -144,3 +144,100 @@ def test_module_imports_without_pycolmap():
     # force_* replaced do_overwrite_*
     assert {"force_features", "force_matches", "force_master"} <= set(params)
     assert not any(p.startswith("do_overwrite") for p in params)
+
+
+# --- Volume (dbfs:) sources -------------------------------------------------
+# exif_gbx returns `path`/`source` as `dbfs:/Volumes/...` for UC Volume inputs; the
+# SIFT child opens a filesystem path, so the scheme must be gone before the hand-off.
+
+
+def _spy_child(monkeypatch, returncode=1, stderr="stub"):
+    import subprocess
+
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(argv[2])  # [python, child_script, img_path, db, work, max, gpu]
+        return subprocess.CompletedProcess(argv, returncode, "", stderr)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    return seen
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            "dbfs:/Volumes/cat/sch/vol/images/G0001.JPG",
+            "/Volumes/cat/sch/vol/images/G0001.JPG",
+        ),
+        (
+            "file:/Volumes/cat/sch/vol/images/G0001.JPG",
+            "/Volumes/cat/sch/vol/images/G0001.JPG",
+        ),
+        (
+            "/Volumes/cat/sch/vol/images/G0001.JPG",
+            "/Volumes/cat/sch/vol/images/G0001.JPG",
+        ),
+    ],
+)
+def test_extract_features_hands_the_child_a_local_path(monkeypatch, source, expected):
+    import pandas as pd
+
+    from databricks.labs.gbx.rasterx import sfm
+
+    seen = _spy_child(monkeypatch)
+    list(sfm._extract_features_to_df(iter([pd.DataFrame({"source": [source]})])))
+    assert seen == [expected]
+
+
+def test_require_extracted_raises_naming_first_path_and_fix(tmp_path):
+    from databricks.labs.gbx.rasterx import sfm
+
+    missing = f"dbfs:{tmp_path}/G0001.JPG"
+    with pytest.raises(RuntimeError) as ei:
+        sfm._require_extracted(0, 3, missing)
+    msg = str(ei.value)
+    assert "0 of 3 images" in msg
+    assert f"{tmp_path}/G0001.JPG" in msg  # the first skipped path
+    assert "no such file" in msg  # and why
+    assert "Fix:" in msg
+
+
+def test_require_extracted_reports_the_child_failure_when_the_file_exists(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.rasterx import sfm
+
+    img = tmp_path / "G0001.JPG"
+    img.write_bytes(b"not a jpeg")
+    _spy_child(monkeypatch, returncode=2, stderr="ModuleNotFoundError: pycolmap")
+    with pytest.raises(RuntimeError) as ei:
+        sfm._require_extracted(0, 1, str(img))
+    msg = str(ei.value)
+    assert str(img) in msg
+    assert "pycolmap" in msg
+    assert "Fix:" in msg
+
+
+def test_require_extracted_partial_skip_only_warns(capsys):
+    from databricks.labs.gbx.rasterx import sfm
+
+    sfm._require_extracted(2, 3, "/Volumes/c/s/v/a.JPG")
+    out = capsys.readouterr().out
+    assert "WARN" in out and "2 of 3" in out
+
+
+def test_require_extracted_all_extracted_is_quiet(capsys):
+    from databricks.labs.gbx.rasterx import sfm
+
+    sfm._require_extracted(3, 3, "/Volumes/c/s/v/a.JPG")
+    assert capsys.readouterr().out == ""
+
+
+def test_require_extracted_empty_input_raises_with_fix():
+    from databricks.labs.gbx.rasterx import sfm
+
+    with pytest.raises(RuntimeError, match="no rows") as ei:
+        sfm._require_extracted(0, 0, None)
+    assert "Fix:" in str(ei.value)

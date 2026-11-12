@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -212,3 +214,81 @@ def test_sparse_orthomosaic_end_to_end(tmp_path):
     pytest.skip(
         "sparse_orthomosaic end-to-end needs a real reconstruction; validated on-cluster (nb1a)"
     )
+
+
+# --- image_dir on a UC Volume ------------------------------------------------
+
+
+class _Img:
+    def __init__(self, name):
+        self.name = name
+        self.has_pose = True
+        self.camera_id = 1
+
+    def projection_center(self):
+        return np.array([0.0, 0.0, 100.0])
+
+
+class _Rec:
+    points3D = {}  # no points: the canvas comes from the camera centres
+
+    def __init__(self, names):
+        self.images = {i + 1: _Img(n) for i, n in enumerate(names)}
+
+
+def _stub_one_cluster(monkeypatch, names):
+    from databricks.labs.gbx.rasterx import ortho
+
+    monkeypatch.setattr(
+        ortho,
+        "place_clusters_shared_enu",
+        lambda cm: {
+            "T": {0: (1.0, np.eye(3), np.zeros(3))},
+            "aligned": [0],
+            "ref_lat": 40.0,
+            "ref_lon": -105.0,
+        },
+    )
+    monkeypatch.setattr(ortho, "_load_largest_model", lambda d: _Rec(names))
+    return ortho
+
+
+def test_sparse_orthomosaic_raises_when_no_image_file_is_found(tmp_path, monkeypatch):
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG", "G0002.JPG"])
+    with pytest.raises(RuntimeError) as ei:
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"dbfs:{tmp_path}", tmp_path / "o.tif"
+        )
+    msg = str(ei.value)
+    assert (
+        f"First skipped: {tmp_path}/G0001.JPG -> not found" in msg
+    )  # the local path, scheme gone
+    assert "not found" in msg and "Fix:" in msg
+
+
+def test_sparse_orthomosaic_opens_images_under_a_scheme_qualified_image_dir(
+    tmp_path, monkeypatch
+):
+    """`file:`/`dbfs:` image_dir is a Volume path with its scheme: the files are found (back-projection runs)."""
+    from PIL import Image
+
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG"])
+    Image.new("RGB", (8, 6)).save(tmp_path / "G0001.JPG")
+    cam = SimpleNamespace(width=8, height=6, params=[50.0, 4.0, 3.0, 0.0])
+    _Rec.cameras = {1: cam}
+    _Img.cam_from_world = lambda self: SimpleNamespace(
+        rotation=SimpleNamespace(matrix=lambda: np.eye(3)), translation=np.zeros(3)
+    )
+    called = []
+    monkeypatch.setattr(
+        ortho,
+        "_backproject_image",
+        lambda *a, **k: called.append(1),  # None: nothing placed
+    )
+    with pytest.raises(RuntimeError):
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"file:{tmp_path}", tmp_path / "o.tif"
+        )
+    assert called == [
+        1
+    ]  # the image was found and read; only the projection was stubbed out

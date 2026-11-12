@@ -404,8 +404,10 @@ Parameters:
 
 - **`spark`** — the `SparkSession`, an explicit argument rather than a notebook global.
 - **`df_qc`** — a Spark DataFrame with a `source` column (full path to each JPEG) and,
-  typically, a GPS geometry column as produced by the `exif_gbx` reader.
-- **`image_dir`** — the POSIX path to the JPEG directory backing `df_qc`.
+  typically, a GPS geometry column as produced by the `exif_gbx` reader. Images may live on a
+  Unity Catalog Volume: `source` can be the `dbfs:/Volumes/...` form `exif_gbx` returns or the
+  bare `/Volumes/...` path. Every worker must be able to read it.
+- **`image_dir`** — the path to the JPEG directory backing `df_qc` (a Volume directory is fine).
 - **`output_dir`** — the persistent storage root for this run's SfM artifacts (the COLMAP
   master DB, the `sparse` model directory, and the GPS-prior JSON).
 - **`group_key`** (optional) — a string label used only for the `master_sfm` database
@@ -437,8 +439,9 @@ Returns a `dict` with these keys. `sparse_dir` is the COLMAP sparse-model direct
 `incremental_mapping` produced. `registered` is the number of images registered into the model.
 Both `models` and `registered` are `None` on the reuse and pre-existing-database paths.
 The `dict` also holds `reused: True` when the result came from the `persist_dir` short-circuit.
-Raises `RuntimeError` if feature extraction yields zero images or matching yields zero
-verified pairs.
+Raises `RuntimeError` if feature extraction yields features for no image (the message names the
+first skipped image and why, for example a path the workers cannot open) or matching yields zero
+verified pairs. When only some images are skipped, it prints a warning and goes on.
 
 `run_sfm` imports cleanly with no `pycolmap` installed — only
 reaching the master-DB-assembly/mapping stage requires it, and that import is lazy and

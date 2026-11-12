@@ -640,3 +640,18 @@ def test_reconstruct_skip_uses_manifest_output_not_this_run_ply_root(
     assert result2 == {0: persisted_path}
     assert calls["undistort"] == 0
     assert calls["pool"] == 0
+
+
+def test_dense_undistort_hands_colmap_a_local_image_dir(tmp_path, monkeypatch):
+    """A Volume image_dir arrives as `dbfs:/Volumes/...`; pycolmap reads a filesystem path."""
+    import sys
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.rasterx import mvs
+
+    seen = {}
+    fake = SimpleNamespace(undistort_images=lambda **kw: seen.update(kw))
+    monkeypatch.setitem(sys.modules, "pycolmap", fake)
+    monkeypatch.setattr(mvs, "_resolve_model_dir", lambda d: d)
+    mvs.dense_undistort("sparse", "dbfs:/Volumes/c/s/v/images", str(tmp_path / "w"))
+    assert seen["image_path"] == "/Volumes/c/s/v/images"

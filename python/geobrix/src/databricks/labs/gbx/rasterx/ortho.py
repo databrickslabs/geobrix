@@ -24,6 +24,7 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
+from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.rasterx.imagery import read_fused_ply, zbuffer_ortho
 from databricks.labs.gbx.rasterx.mvs import dense_reconstruct_clusters
@@ -560,7 +561,8 @@ def sparse_orthomosaic(
     from concurrent.futures import ThreadPoolExecutor
 
     t0 = time.perf_counter()
-    image_dir = Path(image_dir)
+    # a Volume directory may arrive Spark-qualified (`dbfs:/Volumes/...`); open the FUSE path
+    image_dir = Path(to_local_path(str(image_dir)))
     out_tiff = Path(out_tiff)
 
     # ---- Pass A+B: place every cluster in ONE shared ENU frame ----
@@ -623,6 +625,7 @@ def sparse_orthomosaic(
     weights = np.zeros((out_h, out_w), dtype=np.float16)
     _lock = threading.Lock()
     n_proj = [0]
+    first_skip = []  # (path, why) of the first posed image that was not projected
 
     def _project_cluster(rec, T_cid, z_med):
         def _one(kv):
@@ -631,6 +634,7 @@ def sparse_orthomosaic(
                 return
             ip = image_dir / image.name
             if not ip.exists():
+                first_skip.append((str(ip), "not found"))
                 return
             cam = rec.cameras[image.camera_id]
             cw, ch = cam.width, cam.height
@@ -664,6 +668,7 @@ def sparse_orthomosaic(
                 blend_gamma=blend_gamma,
             )
             if result is None:
+                first_skip.append((str(ip), "back-projection placed no pixels"))
                 return
             px0, px1, py0, py1, colors, w = result
             with _lock:
@@ -684,6 +689,18 @@ def sparse_orthomosaic(
         gc.collect()
         print(
             f"[ortho] cluster {cid}: projected ({n_proj[0]} images total)", flush=True
+        )
+
+    if n_proj[0] == 0:
+        _p, _why = (
+            first_skip[0] if first_skip else ("(no posed image)", "none to project")
+        )
+        raise RuntimeError(
+            f"sparse_orthomosaic: no image was projected, so the orthomosaic would be empty. "
+            f"First skipped: {_p} -> {_why}. "
+            "Fix: pass image_dir as the directory the images were extracted from (a UC Volume path "
+            "such as /Volumes/<catalog>/<schema>/<volume>/<dir>, or its dbfs:/Volumes/... form) and "
+            "check the registered images' file names match the files in it."
         )
 
     has = weights > 0

@@ -208,6 +208,8 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     """
     import pycolmap
 
+    from databricks.labs.gbx.ds._listing import to_local_path
+
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
@@ -217,7 +219,7 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     pycolmap.undistort_images(
         output_path=str(work),
         input_path=str(model_dir),
-        image_path=str(image_dir),
+        image_path=to_local_path(str(image_dir)),
         **_kw,
     )
     return str(work)

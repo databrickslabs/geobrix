@@ -50,6 +50,7 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
     import pandas as pd
     from PIL import Image
 
+    from databricks.labs.gbx.ds._listing import to_local_path
     from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
     MAX_IMAGE_SIZE = 2000  # SIFT input cap (quality knob; unchanged)
@@ -85,7 +86,9 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
     try:
         for pdf in iterator:
             for _, row in pdf.iterrows():
-                img_path = row["source"].replace("file:", "")
+                # `source` is the Spark-qualified form (exif_gbx gives `dbfs:/Volumes/...`
+                # for a UC Volume); the child opens a filesystem path.
+                img_path = to_local_path(row["source"])
                 img_name = Path(img_path).name
                 worker_db = Path(f"/tmp/ex_{img_name}.db")
                 worker_dir = Path(f"/tmp/ed_{img_name}")
@@ -111,7 +114,7 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                     )
                     if proc.returncode != 0 or not worker_db.exists():
                         print(
-                            f"[extract] SKIP {img_name}: child rc={proc.returncode} "
+                            f"[extract] SKIP {img_path}: child rc={proc.returncode} "
                             f"{proc.stderr.strip()[-300:]}",
                             flush=True,
                         )
@@ -186,6 +189,58 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
             os.unlink(child_script)
         except OSError:
             pass
+
+
+def _why_not_extracted(source: str) -> str:
+    """Driver-side reason one image gave no features (the worker's own SKIP line is not visible here)."""
+    import contextlib
+    import io
+    import os
+
+    import pandas as pd
+
+    from databricks.labs.gbx.ds._listing import to_local_path
+
+    local = to_local_path(source)
+    if not os.path.exists(local):
+        return f"no such file: {local} (source was {source!r})"
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        out = list(_extract_features_to_df(iter([pd.DataFrame({"source": [source]})])))
+    if out:
+        return (
+            f"{local} extracts on the driver, so the workers cannot read it "
+            "(a driver-local path?)"
+        )
+    skip = [ln for ln in buf.getvalue().splitlines() if ln.startswith("[extract] SKIP")]
+    return skip[0] if skip else f"the SIFT child gave no features for {local}"
+
+
+def _require_extracted(n_extracted: int, n_images: int, first_source) -> None:
+    """Fail loudly when feature extraction skipped EVERY image; warn when it skipped some.
+
+    A total skip used to surface much later as "0 matches" (or, in a notebook that catches per-cluster
+    errors, as a green run with no orthomosaic).
+    """
+    if n_images == 0:
+        raise RuntimeError(
+            "Stage 1: df_qc has no rows, so there is nothing to extract. "
+            "Fix: pass the images' DataFrame (a 'source' column of image paths)."
+        )
+    if n_extracted == 0:
+        raise RuntimeError(
+            f"Stage 1: no image produced features (0 of {n_images} images). "
+            f"First skipped: {first_source} -> {_why_not_extracted(first_source)}. "
+            "Fix: make every 'source' a path the workers can open (a UC Volume path such as "
+            "/Volumes/<catalog>/<schema>/<volume>/<dir>/<image>.jpg, or its dbfs:/Volumes/... form), "
+            "check that pycolmap is installed on the workers, then rerun with force_features=True "
+            "so the empty feature table is rebuilt."
+        )
+    if n_extracted < n_images:
+        print(
+            f"[WARN] Stage 1: features for {n_extracted} of {n_images} images; "
+            "the rest were skipped (see the '[extract] SKIP' lines in the worker logs)."
+        )
 
 
 def _match_pairs_dist(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame]:
@@ -627,6 +682,11 @@ def run_sfm(  # noqa: C901
             f"[ERROR Stage 1] Feature extraction failed after {time.perf_counter() - t1:.1f}s: {e}"
         )
         raise RuntimeError(f"[Stage 1 extract] {e}") from e
+
+    _first = df_qc.select("source").first()
+    _require_extracted(
+        df_features.count(), num_partitions, _first["source"] if _first else None
+    )
 
     # ── Stage 2–3: Spatial pair discovery + distributed matching ─────────
     t2 = time.perf_counter()

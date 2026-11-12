@@ -152,6 +152,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - No chunk is planned over `--target-min`. A file or table longer than that alone is cut into test parts: each part runs the tests whose node id hashes to it.
 - A part's times count for its whole file or table (times the parts).
 - A test that runs past `--test-timeout` fails, and the chunk goes on. The shard raises an exception inside the test. pytest-timeout does it where the env has it. A test that does not stop stops its chunk 60 s later.
+  - The exception is a BaseException, as pytest's outcomes are. A harness that catches `Exception` per case cannot swallow it.
+  - On Serverless the shard also interrupts the session's Spark operations (`interruptAll`). A blocked `collect` then returns, and no work stays running.
 - A chunk past 2x its estimate stops (`--overrun-x`). Its times are lower bounds, so the next plan cuts it finer.
 - `--rerun-failed <run id>` runs only the tests that failed in that run, a chunk per file, each stopping at its first failure.
 - Run `--no-fail-fast` for a full list of failures, for example before a fix that touches many tests.

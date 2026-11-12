@@ -230,6 +230,20 @@ def node_checkout(base: str, key: str, want: dict, unpack: Callable[[str], None]
     return "unpacked", repo, why
 
 
+def interrupt_session(spark) -> str:
+    """Cancel the Spark operations of a test that ran past --test-timeout: what was done, for the chunk's log. Only a Spark
+    Connect session (Serverless) is interrupted: its ``interruptAll`` ends this session's operations alone, and the test's
+    blocked ``collect`` then returns. A classic session on a pool node is left alone, since its jobs share the node's
+    context with the chunks beside it."""
+    if not type(spark).__module__.startswith("pyspark.sql.connect"):
+        return "not a Spark Connect session: left running"
+    try:
+        ids = spark.interruptAll()
+    except Exception as exc:  # noqa: BLE001 - the interrupt is a help; the timeout stands without it
+        return f"interruptAll failed: {type(exc).__name__}: {' '.join(str(exc).split())[:160]}"
+    return f"interrupted {len(ids or [])} operation(s)"
+
+
 WATCHDOG_LABEL = "killed by watchdog: "
 
 

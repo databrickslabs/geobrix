@@ -555,7 +555,8 @@ def guard_source(plan: dict) -> str:
 def run_source(plan: dict) -> str:
     """The cell that unpacks the checkout, runs one shard's pytest in this process and writes its files."""
     # the chunk fails its own run by the rule its runner and fail fast use (_shard_runner.chunk_failed, inlined: no copy on the node)
-    helpers = "import json, os, re\nfrom typing import Callable\n\n\n" + inspect.getsource(sr.chunk_failed) + "\n\n" + inspect.getsource(sr.node_checkout)
+    helpers = ("import json, os, re\nfrom typing import Callable\n\n\n" + inspect.getsource(sr.chunk_failed) + "\n\n" + inspect.getsource(sr.node_checkout)
+               + "\n\n" + inspect.getsource(sr.interrupt_session))
     return helpers + '''
 import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
 
@@ -894,11 +895,13 @@ class Counter:
         if report.failed or (state["passed"] + state["failed"] + state["skipped"]) %% 50 == 0:
             beat()
 
-class TestTimeout(Exception):
-    """Raised inside a test that ran past --test-timeout: the test fails, and the chunk goes on."""
+class TestTimeout(BaseException):
+    """Raised inside a test that ran past --test-timeout: the test fails, and the chunk goes on. A BaseException, as pytest's own
+    outcomes are: a harness that catches Exception per case (the family oracles re-run a failed batch case by case) must not
+    swallow it and run on (tst-sls-b6, -b8, -b9, -b10: each such test ran 60 s on, and the watchdog then killed its chunk)."""
 
     def __init__(self, *args):
-        Exception.__init__(self, *(args or (state.get("timeout_msg") or "the test ran past --test-timeout",)))
+        BaseException.__init__(self, *(args or (state.get("timeout_msg") or "the test ran past --test-timeout",)))
 
 
 MAIN_THREAD = threading.get_ident()
@@ -910,6 +913,8 @@ def time_out_test(nodeid):  # an exception in the main thread, at its next Pytho
     state["timed_out"].append(nodeid)
     state["timeout_msg"] = "%%s ran past %%g s (--test-timeout)" %% (nodeid, TEST_TIMEOUT)
     ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_ulong(MAIN_THREAD), ctypes.py_object(TestTimeout))
+    # a Spark Connect session's blocked collect returns once its operation ends: interrupt it (and the work it left running)
+    print("TEST TIMEOUT: Spark session:", interrupt_session(spark), flush=True)
 
 
 def watchdog():

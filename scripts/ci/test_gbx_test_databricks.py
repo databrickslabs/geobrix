@@ -1146,6 +1146,61 @@ def test_the_overlay_removes_modules_the_commit_deleted_and_keeps_the_payload(sh
     assert (inst / "keep.py").read_text() == "new"
 
 
+def test_a_timed_out_test_escapes_a_per_case_except_and_its_connect_operations_end(shards, capsys):
+    """The cell's timeout, run: it reaches a test that catches Exception per case (the family oracles re-run a failed batch
+    case by case), and it interrupts a Spark Connect session's operations; a classic session is left alone."""
+    src = _cell_source(shards)
+    start, end = src.index("class TestTimeout(BaseException):"), src.index("def watchdog():")
+    calls = []
+
+    class ConnectSession:  # the module a Spark Connect session's class lives in is what the helper reads
+        def interruptAll(self):
+            calls.append("interruptAll")
+            return ["op-1", "op-2"]
+
+    ConnectSession.__module__ = "pyspark.sql.connect.session"
+    ran = {}
+
+    def per_case_test():  # a harness that judges each case and goes on after any Exception
+        ns["MAIN_THREAD"] = threading.get_ident()
+        ready.set()
+        try:
+            for _ in range(400):
+                try:
+                    __import__("time").sleep(0.01)
+                except Exception:  # noqa: BLE001 - what the oracle harness does with a failed case
+                    ran["swallowed"] = True
+            ran["outcome"] = "ran on"
+        except BaseException as exc:  # noqa: BLE001 - the timeout
+            ran["outcome"] = type(exc).__name__ + ": " + str(exc)
+
+    ns = {"threading": threading, "state": {"timed_out": []}, "TEST_TIMEOUT": 120.0, "spark": ConnectSession(),
+          "interrupt_session": sr.interrupt_session}
+    exec(compile(textwrap.dedent(src[start:end]), "timeout", "exec"), ns)  # noqa: S102
+    ready = threading.Event()
+    t = threading.Thread(target=per_case_test)
+    t.start()
+    ready.wait(5)
+    ns["time_out_test"]("t.py::t")
+    t.join(10)
+    assert ran["outcome"] == "TestTimeout: t.py::t ran past 120 s (--test-timeout)" and "swallowed" not in ran
+    assert calls == ["interruptAll"] and ns["state"]["timed_out"] == ["t.py::t"]
+    assert "Spark session: interrupted 2 operation(s)" in capsys.readouterr().out
+
+    class ClassicSession:
+        def interruptAll(self):  # pragma: no cover - never called: a pool node's context is shared
+            calls.append("classic")
+
+    assert sr.interrupt_session(ClassicSession()) == "not a Spark Connect session: left running" and calls == ["interruptAll"]
+
+    class Refusing:
+        def interruptAll(self):
+            raise RuntimeError("session closed")
+
+    Refusing.__module__ = "pyspark.sql.connect.session"
+    assert sr.interrupt_session(Refusing()) == "interruptAll failed: RuntimeError: session closed"
+
+
 def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
     src = _cell_source(shards)
     for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):

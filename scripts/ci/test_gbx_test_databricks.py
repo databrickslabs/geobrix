@@ -1229,6 +1229,28 @@ def test_a_serverless_chunk_works_in_a_temp_folder_its_own_user_makes(shards, tm
     assert os.stat(sls["base"]).st_uid == os.getuid(), "made by this chunk's own user"
 
 
+def test_a_lost_scratch_is_named_with_what_is_left_also_after_a_test_it_broke(shards, tmp_path, capsys):
+    src = _cell_source(shards)
+    start = src.index("LOST = None")
+    snippet = src[start:src.index("result = dict(shard=", start)]
+    base = tmp_path / "gbxtest-x"
+    base.mkdir()
+    root = base / "files-family-1-2"  # its out/ is gone
+
+    def run(reason):
+        ns = {"os": os, "root": str(root), "base": str(base), "scratch": str(tmp_path), "OWN_BASE": True, "state": {"reason": reason}}
+        exec(compile(snippet, "lost", "exec"), ns)  # noqa: S102
+        return ns
+
+    ns = run("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/repo'")
+    lost = {"root": False, "base": True, "scratch": True, "uid": os.getuid(), "own_base": True}
+    assert ns["LOST"] == lost and (root / "out").is_dir(), "the result can be written"
+    assert ns["state"]["reason"].startswith("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/repo'; the chunk's scratch ")
+    assert str(lost) in ns["state"]["reason"] and "went during its run" in capsys.readouterr().out
+    assert run("")["LOST"] is None and run("")["state"]["reason"] == "", "a scratch still there is no finding"
+    assert "lost=LOST)" in src
+
+
 def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
     src = _cell_source(shards)
     for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):

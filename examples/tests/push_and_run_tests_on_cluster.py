@@ -1078,16 +1078,19 @@ except Exception as exc:
 ran_n = state["passed"] + state["failed"] + state["skipped"]
 # pytest stopped at --maxfail before the end of the chunk: its times are partial (lower bounds), not a full sample
 maxfail_hit = bool(MAXFAIL) and state["failed"] + state["errors"] >= MAXFAIL and ran_n < state["total"]
-if not os.path.isdir(root + "/out"):  # 2026-11-12 (tst-sls-b2, Serverless): the chunk's scratch went during its run; say so
-    LOST = {"root": os.path.isdir(root), "base": os.path.isdir(base), "scratch": os.path.isdir(scratch), "uid": os.getuid()}
+LOST = None  # 2026-11-12 (tst-sls-b2, Serverless): the chunk's scratch went during its run; say so, and what is still there
+if not os.path.isdir(root + "/out"):
+    LOST = {"root": os.path.isdir(root), "base": os.path.isdir(base), "scratch": os.path.isdir(scratch), "uid": os.getuid(),
+            "own_base": OWN_BASE}
     os.makedirs(root + "/out", exist_ok=True)
-    state["reason"] = state["reason"] or "the chunk's scratch %%s went during its run, its junit and log with it (%%s)" %% (root, LOST)
-    print(state["reason"], flush=True)
+    _lost = "the chunk's scratch %%s went during its run, its junit and log with it (%%s)" %% (root, LOST)
+    state["reason"] = state["reason"] + "; " + _lost if state["reason"] else _lost  # also after a test it broke (cwd gone)
+    print(_lost, flush=True)
 result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0), reason=state["reason"], pid=os.getpid(), isolation=iso,
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
               timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER,
-              empty_ok=S.get("empty_ok", True), phases=PHASES_OUT(), phase_origin="call" if "call" in PHASES else "nb_start")
+              empty_ok=S.get("empty_ok", True), phases=PHASES_OUT(), phase_origin="call" if "call" in PHASES else "nb_start", lost=LOST)
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)

@@ -2745,6 +2745,25 @@ def test_a_finer_cut_whose_own_parts_also_sum_past_it_is_cut_finer_again():
     assert len(out) == n2 > n1
 
 
+def test_a_unit_whose_parts_at_another_count_sum_past_it_is_planned_by_them():
+    """tst-sls-s3-an: SPEC_ANALYSIS's own time (233 s) predates the per-row test items, while its 49 parts' own times (a run
+    after the split, some lower bounds) sum to about 98 min. A 5 min cut took the stale 233 s and planned 6 chunks, 29.7 min in
+    all. A unit's time is now the most its parts at any count say, so the cut is sized by the items it runs now."""
+    files = _ds_files(1)
+    shard = ts.Shard(name="files", kind="light", paths=files)
+    target, work = 5.0, 5.0 - ts.FIXED_MIN
+    parts = {f"{files[0]}#{j}/49": 120.0 for j in range(49)}  # 98 min in all
+    fsec = {files[0]: 233.0, **parts}
+    assert ts.unit_seconds(files[0], fsec) == pytest.approx(49 * 120.0)
+    out = ts.cut(shard, target, REPO_ROOT, fsec, set())
+    n = math.ceil(49 * 120.0 / 60.0 / work - 1e-9)
+    assert len(out) == n and all(c.est_min <= target + 1e-9 for c in out), (len(out), n)
+    assert ts.estimate(shard, REPO_ROOT, fsec) == pytest.approx(ts.FIXED_MIN + 49 * 2.0)
+    # a part count that covers part of the unit counts its missing parts at the unit's own share
+    assert ts.unit_seconds(files[0], {files[0]: 600.0, f"{files[0]}#0/4": 400.0}) == pytest.approx(400.0 + 3 * 150.0)
+    assert ts.unit_seconds(files[0], {files[0]: 600.0, f"{files[0]}#0/4": 100.0}) == 600.0, "never below the unit's own time"
+
+
 def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower_bounds(tmp_path):
     files = _ds_files(2)
     picked = [ts.Shard(name="ds [1/2]", kind="light", paths=[files[0]], est_min=3.0, solo_min=3.0, est_src="history"),

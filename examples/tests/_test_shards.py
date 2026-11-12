@@ -390,6 +390,28 @@ def untimed_file_seconds(shard: Shard, n_files: int) -> float:
 
 TABLE_REST = "table:*"  # the tests of the family file that run in every table chunk, a key of their own
 
+_PART_KEY = re.compile(r"#(\d+)/(\d+)$")
+
+
+def unit_seconds(key: str, file_seconds: Dict[str, float], default: Optional[float] = None) -> Optional[float]:
+    """A unit's seconds: its own time, or the most that its test parts at any one count sum to (``<key>#j/n``; a part with no
+    time of its own counts the unit's share, 1/n), whichever is more. The parts are often newer: a unit whose tests changed
+    (2026-11-12: the per-row family items) is timed by the parts of the runs after the change, while its own time, set only
+    when every part of one run finished, predates it. ``default`` stands in for a unit with no time of its own."""
+    base = file_seconds.get(key, default)
+    counts: Dict[int, Dict[int, float]] = {}
+    for k, v in file_seconds.items():
+        if k.startswith(key + "#"):
+            m = _PART_KEY.search(k)
+            if m and k[: m.start()] == key:
+                counts.setdefault(int(m.group(2)), {})[int(m.group(1))] = v
+    best = base
+    for n, got in counts.items():
+        share = (base or 0.0) / n
+        total = sum(got.get(j, share) for j in range(n))
+        best = total if best is None else max(best, total)
+    return best
+
 
 def _items(shard: Shard, root: Path, file_seconds: Dict[str, float]):
     """The units the shard is made of and their minutes: its oracle tables (``table:<T>``) or its files. A unit with no
@@ -407,8 +429,8 @@ def _items(shard: Shard, root: Path, file_seconds: Dict[str, float]):
         share = untimed_file_seconds(shard, len(keys))
         rest = 0.0
     n = part_count(shard) / max(1e-6, min(1.0, shard.share or 1.0))  # a test part runs about 1/n of its unit, a -k selection its share
-    mins = {k: file_seconds.get(k, share) / 60.0 / n for k in keys}
-    return mins, sum(1 for k in keys if k in file_seconds), rest / n
+    mins = {k: unit_seconds(k, file_seconds, share) / 60.0 / n for k in keys}
+    return mins, sum(1 for k in keys if unit_seconds(k, file_seconds) is not None), rest / n
 
 
 def test_part_n(shard: Shard) -> str:

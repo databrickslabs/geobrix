@@ -120,6 +120,10 @@ def portfolio_mvt_tiles():
 def pmtiles_shards():
     from pyspark.sql import SparkSession
     spark = SparkSession.getActiveSession()
+    # Register in THIS body, like every other dataset: a registration made while another
+    # flow's body ran does not resolve here, and pmtiles_agg's first-use registration is
+    # skipped once the session has registered the name (UNRESOLVED_ROUTINE otherwise).
+    register_gbx(spark)
     from databricks.labs.gbx.pmtiles.functions import pmtiles_agg
 
     c = cfg(spark)
@@ -211,6 +215,10 @@ def pmtiles_shards():
 def overview_manifest():
     from pyspark.sql import SparkSession
     spark = SparkSession.getActiveSession()
+    # Register in THIS body, like every other dataset: a registration made while another
+    # flow's body ran does not resolve here, and pmtiles_agg's first-use registration is
+    # skipped once the session has registered the name (UNRESOLVED_ROUTINE otherwise).
+    register_gbx(spark)
     from databricks.labs.gbx.pmtiles.functions import pmtiles_agg
 
     c = cfg(spark)

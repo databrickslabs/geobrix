@@ -135,6 +135,10 @@ resources:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
               - ${var.gbx_wheel}[stac,vizx]
+              # The EMIT download (NASA Earthdata) needs earthaccess, which no env wheel
+              # extra carries: separate entries, the same pins as the notebook series.
+              - earthaccess>=0.11,<1
+              - botocore<1.44.0
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

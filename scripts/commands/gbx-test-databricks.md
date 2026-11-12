@@ -161,11 +161,13 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
 - Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
 - The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.
-- A Serverless chunk spends 1.5-3 min before its first test. A 3-5 min chunk there is about half setup.
+- A Serverless chunk spends 1.2-3 min before its first test. A 3-5 min chunk there is about half setup.
 - Each chunk records its setup phases from the runner's call: `phase=<name> t=<s>` in its output, `phases` in `result.json`, and a table in `summary.md`.
-  - Run `tst-sls-ph1` (2026-11-12): the notebook run's start 24 s, the wheel guard cell 4-5 s, the checkout 13-22 s.
-  - Then the worker wheel check 17-23 s, the queue note 3 s, collection 5 s. The first test started at 77-79 s.
-  - The worker check now runs in a thread during the unpack: Serverless workers run the wheel, not the overlaid checkout.
+  - Medians over 9 chunks (2026-11-12, `tst-sls-ph1`, `-b2` to `-b5`): the notebook run's start 25 s, the wheel guard cell 4 s.
+  - Then the checkout 13 s (up to 42 s with 8 chunks unpacking at once), the worker wheel check 24 s, the queue note 3 s, collection 5 s.
+  - The first test started at 79 s (76-176 s).
+  - The worker check now runs in a thread during the unpack, in one stage. Serverless workers run the wheel, not the overlaid checkout.
+  - After it (`tst-sls-b8` to `-b10`, 5 chunks): the first test at 72 s (72-126 s). The notebook start and the first UDF are the platform's.
 - A Serverless run records its times under `sls:<key>` in the timing history. A Serverless plan uses them, else the pools' solo times; a pool plan never reads them.
 - Run `t26-eq-sls3` (2026-11-11) planned 26 chunks of 30-76 min each from the pools' contention factors. The same selection now plans 22 chunks of 2-16 min.
 

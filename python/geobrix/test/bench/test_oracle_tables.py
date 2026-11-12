@@ -1264,3 +1264,36 @@ def test_the_driver_check_registers_what_the_listing_registers(tmp_path):
     out = subprocess.run([sys.executable, "-c", judge], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "None", out.stdout
+
+
+def test_the_overview_fixture_reaches_its_folder_in_one_sequential_write(
+    tmp_path, monkeypatch
+):
+    """On Serverless the fixture folder is a UC Volume, whose FUSE mount takes no random-access write: a GTiff written
+    in place and reopened r+ for its overviews was not a TIFF there (2026-11-12, tst-sls-b8: resample_virtual_cog read
+    'not recognized as being in a supported file format'). The file is built on local disk and copied whole.
+    """
+    import os
+
+    import rasterio
+
+    from databricks.labs.gbx.bench import oracles
+
+    oracles.TABLES.get("SPEC_WARP")  # registers the family modules' builders
+    opened = []
+    real_open = rasterio.open
+
+    def spy(path, mode="r", *a, **k):
+        opened.append((str(path), mode))
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr(rasterio, "open", spy)
+    tile = oracles._build("dem_cog_overviews", str(tmp_path))
+    path = str(tmp_path / "warp_dem_overviews.tif")
+    assert not [
+        m for p, m in opened if os.path.abspath(p) == path and m != "r"
+    ], "never written in place"
+    monkeypatch.setattr(rasterio, "open", real_open)
+    with rasterio.open(path) as ds:
+        assert ds.overviews(1) == [2] and ds.width == 64
+    assert tile is not None

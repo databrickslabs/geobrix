@@ -188,10 +188,20 @@ def _dem_cog(tmpdir):
                 blockysize=32,
             )
             data = np.asarray(src.read())
-        with rasterio.open(path, "w", **profile) as dst:
-            dst.write(data)
-        with rasterio.open(path, "r+") as dst:
-            dst.build_overviews([2], Resampling.average)
+        # built on local disk, then copied whole: tmpdir may be a UC Volume (Serverless), whose FUSE mount takes no
+        # random-access write, and a GTiff written in place and reopened r+ for its overviews is no TIFF there
+        import shutil
+        import tempfile
+
+        from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+
+        with tempfile.TemporaryDirectory(dir=local_temp_root()) as work:
+            local = os.path.join(work, "warp_dem_overviews.tif")
+            with rasterio.open(local, "w", **profile) as dst:
+                dst.write(data)
+            with rasterio.open(local, "r+") as dst:
+                dst.build_overviews([2], Resampling.average)
+            shutil.copyfile(local, path)
     return _tile(None, path, None)
 
 

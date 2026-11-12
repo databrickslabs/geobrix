@@ -2,7 +2,23 @@ import { useCallback, useMemo } from 'react';
 import { sql } from '@databricks/appkit-ui/js';
 import { useKeplerDataset } from './useKeplerDataset';
 import { createH3LayerConfig } from '../config/h3-layer-config';
+import { toKeplerValue } from './arrowRows';
 import type { LayerDef, ViewportBounds } from '@shared/types';
+
+export type LayerQueryFormat = 'JSON_ARRAY' | 'ARROW_STREAM';
+
+/**
+ * Result format for a layer's analytics query.
+ *
+ * AppKit delivers a JSON_ARRAY result as ONE server-sent event and rejects events over
+ * 1 MiB, so a row-level point query at full density (12k+ wells in a zoom-8 view) cannot
+ * ride it. ARROW_STREAM comes back as raw Arrow IPC in the HTTP response body, with no
+ * SSE event and no 1 MiB cap. H3 layers are density-bounded (target_cells) and stay on
+ * JSON_ARRAY, which also carries warehouse-startup progress.
+ */
+export function queryFormatFor(layer: LayerDef): LayerQueryFormat {
+  return layer.kind === 'point' ? 'ARROW_STREAM' : 'JSON_ARRAY';
+}
 
 // Module-level identity transform — stable reference so it never re-triggers
 // the kepler-update memo in useKeplerDataset (see its transformRows contract).
@@ -86,26 +102,17 @@ export function useLayerData(layer: LayerDef, bounds: ViewportBounds | null, tab
 
   // Stable reference keyed on `fields` — identity only changes when the field
   // list does, so the kepler-update effect does not re-fire every render.
-  // Numeric-typed fields (esp. point lat/lng) arrive from the analytics query as STRINGS
-  // (e.g. "-103.74"); kepler/deck.gl need real numbers to compute point positions, so a
-  // string coordinate yields NaN → the layer renders nothing. Coerce real/integer fields
-  // to numbers here. (H3 layers are unaffected — their key column is a string hex id.)
+  // JSON_ARRAY cells arrive as STRINGS (e.g. "-103.74"); kepler/deck.gl need real numbers
+  // to compute point positions, so a string coordinate yields NaN → the layer renders
+  // nothing. toKeplerValue coerces real/integer fields to numbers, and renders typed
+  // ARROW_STREAM numbers in string (tooltip) fields as strings.
   const toKeplerRow = useCallback(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (row: Record<string, unknown>) => fields.map((f) => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const v = (row as any)[f.name];
-      if ((f.type === 'real' || f.type === 'integer') && typeof v === 'string' && v.trim() !== '') {
-        const n = Number(v);
-        return Number.isFinite(n) ? n : v;
-      }
-      return v;
-    }),
+    (row: Record<string, unknown>) => fields.map((f) => toKeplerValue(f.type, row[f.name])),
     [fields],
   );
 
   return useKeplerDataset<Record<string, unknown>>({
-    queryName: layer.queryName, params,
+    queryName: layer.queryName, params, format: queryFormatFor(layer),
     transformRows: identityRows,
     toKeplerRow,
     fields, datasetId: layer.id, datasetLabel: layer.label, layerConfig,

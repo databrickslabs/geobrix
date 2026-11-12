@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useDispatch } from 'react-redux';
 import { addDataToMap, replaceDataInMap } from '@kepler.gl/actions';
 import { useAnalyticsQuery } from '@databricks/appkit-ui/react';
+import { arrowTableToRows, isArrowTableLike } from './arrowRows';
 
 /**
  * Configuration for a single kepler.gl dataset driven by an analytics query.
@@ -18,6 +19,13 @@ export interface KeplerDatasetConfig<TRow> {
    * (e.g. while zoom is in the wrong tier, or the table name is missing).
    */
   params: Record<string, unknown> | null;
+
+  /**
+   * Result format. `JSON_ARRAY` (default) streams rows over one SSE event, which AppKit
+   * caps at 1 MiB. `ARROW_STREAM` returns Arrow IPC in the response body (no event cap);
+   * its Table is converted to the same row objects before `transformRows`.
+   */
+  format?: 'JSON_ARRAY' | 'ARROW_STREAM';
 
   /**
    * Transform raw API rows to the typed shape used by the rest of the app.
@@ -77,6 +85,7 @@ export function useKeplerDataset<TRow>(
   const {
     queryName,
     params,
+    format = 'JSON_ARRAY',
     transformRows,
     toKeplerRow,
     fields,
@@ -101,11 +110,14 @@ export function useKeplerDataset<TRow>(
   // by gating autoStart on params being present.
   const { data: rawData, loading, error } = useAnalyticsQuery(queryName, params, {
     autoStart: params != null,
+    format,
   });
 
   const data = useMemo((): TRow[] => {
-    if (!rawData || !Array.isArray(rawData)) return [];
-    return transformRows(rawData as unknown[]);
+    if (!rawData) return [];
+    if (Array.isArray(rawData)) return transformRows(rawData as unknown[]);
+    if (isArrowTableLike(rawData)) return transformRows(arrowTableToRows(rawData));
+    return [];
   }, [rawData, transformRows]);
 
   const updateKeplerData = useCallback(

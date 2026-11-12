@@ -22,8 +22,14 @@ MAVEN_STEP = "docker_maven_setup.sh"
 
 
 def run(root, link, arch="aarch64", image_jni=None):
+    # the dev container (and CI's JVM step) set the script's own inputs; a caller's value must not leak into a row
+    inherited = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("GBX_NATIVE_ROOT", "GBX_JNI_REQUIRE", "GBX_JNI_IMAGE")
+    }
     env = dict(
-        os.environ,
+        inherited,
         GBX_CONTAINER_ROOT=str(root),
         GBX_JNI_LINK=str(link),
         GBX_JNI_ARCH=arch,

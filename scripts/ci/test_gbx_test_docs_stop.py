@@ -16,6 +16,10 @@ from pathlib import Path
 import pytest
 from conftest import REPO_ROOT
 
+# The docs commands find a server by its port with lsof (common.sh gbx_port_pids/gbx_pid_cwd); they run on the
+# host. A shell without lsof (the dev container) cannot run these rows; CI's runner and the host have it.
+_NEEDS_LSOF = pytest.mark.skipif(shutil.which("lsof") is None, reason="the docs commands need lsof, which this shell lacks")
+
 
 def _free_port() -> int:
     with socket.socket() as s:
@@ -109,6 +113,7 @@ def docs(tmp_path):
     box.cleanup()
 
 
+@_NEEDS_LSOF
 def test_stop_port_stops_only_that_port(docs):
     mine = docs.root / "docs"
     a = docs.serve(mine)
@@ -119,6 +124,7 @@ def test_stop_port_stops_only_that_port(docs):
     assert _listening(b), "stop --port also stopped another port"
 
 
+@_NEEDS_LSOF
 def test_stop_port_refuses_another_checkout_without_force(docs, tmp_path):
     other = (tmp_path / "other-checkout" / "docs").resolve()
     port = docs.serve(other)
@@ -131,6 +137,7 @@ def test_stop_port_refuses_another_checkout_without_force(docs, tmp_path):
     assert "gbx-docs-stop.sh" in out and str(other.parent) in out
 
 
+@_NEEDS_LSOF
 def test_stop_port_force_stops_another_checkout(docs, tmp_path):
     other = (tmp_path / "other-checkout" / "docs").resolve()
     port = docs.serve(other)
@@ -152,6 +159,7 @@ def test_stop_without_port_names_what_it_stops(docs):
     assert "--port" in res.stdout and "--force" in res.stdout
 
 
+@_NEEDS_LSOF
 def test_dev_restart_leaves_other_ports_alone_and_refuses_other_checkout(docs, tmp_path):
     other = (tmp_path / "other-checkout" / "docs").resolve()
     held = docs.serve(other)
@@ -173,6 +181,7 @@ def test_dev_restart_leaves_other_ports_alone_and_refuses_other_checkout(docs, t
     assert "--force" in out and str(other.parent) in out
 
 
+@_NEEDS_LSOF
 def test_restart_refuses_another_checkout_without_force(docs, tmp_path):
     other = (tmp_path / "other-checkout" / "docs").resolve()
     held = docs.serve(other)
@@ -209,6 +218,7 @@ def test_build_leaves_another_checkouts_server_running(docs, tmp_path):
     assert f"port {held} alone" in res.stdout + res.stderr
 
 
+@_NEEDS_LSOF
 def test_build_stops_its_own_servers_only(docs):
     mine = docs.root / "docs"
     own = docs.serve(mine)

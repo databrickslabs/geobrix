@@ -822,7 +822,11 @@ def combine_by_key(
         raise ValueError(f"combine_by_key: stat must be 'avg' or 'max'; got {stat!r}")
     keys, n = _by_key(df, keys, tile_col, num_partitions)
     return _fold_by_key(
-        df, keys, tile_col, n, _aligned(reducers[stat], check_grid=stat == "avg")
+        df,
+        keys,
+        tile_col,
+        n or _merge_partitions(df.sparkSession),
+        _aligned(reducers[stat], check_grid=stat == "avg"),
     )
 
 

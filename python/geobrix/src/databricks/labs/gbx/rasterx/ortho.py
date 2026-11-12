@@ -772,9 +772,11 @@ def _enu_to_utm(xe, ye, ze, ref_lat, ref_lon):
 
 def _write_dense_laz_dataset(spark, cluster_points, out_dir, crs=None):
     """cluster_points: list of (group, cluster, xe, ye, ze, r, g, b) numpy tuples.
-    Assemble a points DataFrame, repartitionByRange by (group, cluster) to
-    guarantee exactly one (group,cluster) key per partition, and write sharded
-    *_<group>_<cluster>.laz via lidar_gbx. Per-cluster numpy arrays are
+    Assemble a points DataFrame, repartition it by (group, cluster) into one
+    partition per cluster, and write sharded *_<group>_<cluster>.laz via
+    lidar_gbx. The hash keeps all of a cluster's points in one partition, but
+    two clusters can share one (a hash collision); the writer names each shard
+    from the cluster key, so the files are the same either way. Per-cluster numpy arrays are
     concatenated into a single pandas DataFrame (Arrow-backed), avoiding a
     monolithic per-point Row list that OOMs the driver for large clouds."""
     import numpy as _np
@@ -811,7 +813,7 @@ def _write_dense_laz_dataset(spark, cluster_points, out_dir, crs=None):
     pdf = _pd.concat(per_cluster, ignore_index=True)
     df = spark.createDataFrame(pdf)
     writer = (
-        df.repartitionByRange(n_parts, "group", "cluster")
+        df.repartition(n_parts, "group", "cluster")
         .write.format("lidar_gbx")
         .option("groupCol", "group")
         .option("clusterCol", "cluster")
@@ -960,9 +962,9 @@ def dense_clusters_to_products(
     )
     # Phase 1: assemble all clusters' UTM points into a Spark DataFrame and write
     # sharded *_<group>_<cluster>.laz via the lidar_gbx DataSource writer.
-    # repartitionByRange on (group, cluster) gives deterministic one-partition-
-    # per-cluster isolation over the fixed key-set, so each shard carries
-    # exactly one cluster's points and the filename is guaranteed correct.
+    # repartition on (group, cluster) keeps each cluster's points in one
+    # partition (a partition can hold more than one cluster); the shard name
+    # comes from the cluster key, so each file carries one cluster's points.
     dense_laz_dir = str(Path(merged_laz).parent)
     _write_dense_laz_dataset(spark, used_points, dense_laz_dir, crs=last_epsg)
     # Phase 2 (best-effort): fold the sharded parts into dense_merged.laz with

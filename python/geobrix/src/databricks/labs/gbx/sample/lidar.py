@@ -495,6 +495,8 @@ class LidarDownloader:
 
         Worker logic lives in ``_make_fetch_nodes`` (module-level, testable without Spark).
         The retry fetch is ``_urllib_fetch`` — single source of truth, no copy here.
+        The nodes are hashed on ``(project, node_key)``: a bare ``repartition(N)`` is coalesced by AQE
+        (Serverless in particular), which would download the nodes one after another.
         """
         from pyspark.sql.types import (
             DoubleType,
@@ -531,7 +533,7 @@ class LidarDownloader:
         )
         nodes_df = spark.createDataFrame(
             node_rows, "project string, node_key string"
-        ).repartition(num_partitions)
+        ).repartition(num_partitions, "project", "node_key")
         return nodes_df.mapInPandas(fetch_nodes, schema=_OUT_SCHEMA)
 
 

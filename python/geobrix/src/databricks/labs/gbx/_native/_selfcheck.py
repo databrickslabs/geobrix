@@ -673,7 +673,7 @@ def install_paths(spark):
     where = F.udf(_where, StringType())
     rows = (
         spark.range(4)
-        .repartition(4)
+        .repartition(4, "id")
         .select(where("id").alias("w"))
         .distinct()
         .collect()

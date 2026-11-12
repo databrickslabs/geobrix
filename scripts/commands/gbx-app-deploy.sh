@@ -78,6 +78,9 @@ cd "$APP_DIR" || exit 1
 
 # Require + source the populated env file
 [ -f "$ENV_FILE" ] || { echo "❌ examples/apps/genie_map/databricks.env missing — copy databricks.env.example and fill it"; exit 1; }
+# A shell syntax error (an unfilled <placeholder> value) makes `source` stop at that line
+# and silently drop every later var, so check it first.
+bash -n "$ENV_FILE" || { echo "❌ examples/apps/genie_map/databricks.env is not valid shell (an unfilled <placeholder>? leave unknown values empty)"; exit 1; }
 set -a; source "$ENV_FILE"; set +a
 
 # Install deps if needed

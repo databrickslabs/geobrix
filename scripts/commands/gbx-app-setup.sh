@@ -1,8 +1,7 @@
 #!/bin/bash
 # gbx:app:setup - One-time, idempotent setup for the Genie Map app that the DAB
 # bundle can't express: grant the app's service principal access to the gold
-# catalog/schema, verify the required UC secrets exist, and print the manual
-# Genie-UI curation step. Run AFTER `gbx:app:deploy` has created the app.
+# catalog/schema and verify the required UC secrets exist. Run AFTER `gbx:app:deploy` has created the app.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -30,7 +29,7 @@ Idempotent setup for the parts of Genie Map that the DAB bundle cannot declare:
     gold schema (without these the viewport queries + Genie return 403/insufficient
     privileges)
   - verifies the Earthdata + Carbon Mapper UC secrets exist (pipeline needs them)
-  - prints the manual Genie-Space UI curation step (docs/GENIE-SPACE.md)
+  - points at gbx:app:seed-genie for the Genie-Space instructions
 
 USAGE:
     bash scripts/commands/gbx-app-setup.sh [OPTIONS]
@@ -113,18 +112,12 @@ for want in earthdata_token carbon_mapper_token; do
 done
 
 set +e
-# --- 4. Print the manual Genie-UI curation step -----------------------------
+# --- 4. Point at the Genie-space seeding step ------------------------------
 cat <<EOF
 
-────────────────────────────────────────────────────────────────────────────
-MANUAL STEP (not automatable): curate the Genie Space in the UI.
-The bundle creates the space + table set + a short description, but the rich
-instructions and example SQL must be pasted in the Genie Space editor.
-  1. Open the "Vapor-Eyes — Permian Methane (Genie Map)" space.
-  2. Instructions tab → paste the "General instructions" block from:
-       examples/apps/genie_map/docs/GENIE-SPACE.md
-  3. Example SQL queries → add each verified example from the same doc.
+Next: the Genie Space instructions + example SQL are written by
+  bash scripts/commands/gbx-app-seed-genie.sh --profile $PROFILE
+(gbx:app:deploy runs it after every deploy; source: examples/apps/genie_map/docs/GENIE-SPACE.md).
 See docs/SETUP.md for the full runbook.
-────────────────────────────────────────────────────────────────────────────
 EOF
 echo "✅ Setup complete."

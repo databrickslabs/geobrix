@@ -2,8 +2,7 @@
 
 One-time, idempotent setup for the Genie Map app covering the pieces the DAB
 bundle cannot declare: grants the app's service principal access to the gold
-catalog/schema, verifies the required Unity Catalog secrets exist, and prints
-the manual Genie-Space UI curation step.
+catalog/schema and verifies the required Unity Catalog secrets exist.
 
 Run **after** `gbx:app:deploy` has created the app.
 
@@ -32,6 +31,6 @@ bash scripts/commands/gbx-app-setup.sh --profile <profile>
 
 Automates: the app-SP UC grants (`USE CATALOG` / `USE SCHEMA` / `SELECT`) and a
 secret-existence check. Does **not** automate: creating the UC secret values,
-the pipeline run, or the Genie-Space instruction/example-SQL curation (pasted in
-the UI — see `examples/apps/genie_map/docs/GENIE-SPACE.md`). Full sequence in
+the pipeline run, or the Genie-Space instructions/example SQL (written by
+`gbx:app:seed-genie`, which `gbx:app:deploy` runs after each deploy). Full sequence in
 `examples/apps/genie_map/docs/SETUP.md`.

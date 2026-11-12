@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import warnings
 
-from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx._gdal_policy import open_data
 
 
 def _strip_scheme(path: str) -> str:
@@ -161,8 +161,9 @@ def plot_tile(
 ):
     """Drape a single raster-tile band over a contextily basemap (static figure).
 
-    The in-memory companion to :func:`plot_cog`: takes a GeoBrix tile struct (a
-    Row/dict with a ``raster`` GeoTIFF ``bytes`` member) or raw ``bytes`` rather
+    The in-memory companion to :func:`plot_cog`: takes a GeoBrix tile (a
+    materialized struct with ``raster`` GeoTIFF bytes, a virtual tile with
+    ``raster`` NULL and a ``path``, or a ``VirtualTile``) or raw ``bytes`` rather
     than a file path. Reads ``band`` (1-based), optionally windowed to
     ``window_bounds`` ``(minx, miny, maxx, maxy)`` in the tile's own CRS for a
     zoomed-in view; and masks the background so the basemap shows through and the
@@ -176,15 +177,17 @@ def plot_tile(
     """
     import matplotlib.pyplot as plt
     import numpy as np
-    from rasterio.io import MemoryFile
     from rasterio.transform import array_bounds
     from rasterio.windows import from_bounds
 
     from databricks.labs.gbx.vizx._env import assert_viz_available
+    from databricks.labs.gbx.vizx._tiles import resolve_tile_row
 
     assert_viz_available()
-    raw = tile if isinstance(tile, (bytes, bytearray)) else tile["raster"]
-    with MemoryFile(bytes(raw)) as mf, open_bytes(mf) as ds:
+    # resolve_tile_row is the tile->pixels boundary shared with plot_tiles: bytes, a
+    # materialized tile and a VIRTUAL tile (raster NULL, path set, as the readers
+    # return) all open the same way, with the window applied.
+    with resolve_tile_row(tile) as ds:
         # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less tile.
         crs = _resolve_plot_crs(ds.crs, crs)
         if window_bounds is not None:

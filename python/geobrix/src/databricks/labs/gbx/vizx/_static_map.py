@@ -439,8 +439,10 @@ def _draw_one_layer(
                 try:
                     from databricks.labs.gbx.vizx._raster import _resolve_tile_input
 
-                    _rb, _, _ = _resolve_tile_input(lyr.data)
-                    _is_inmem = _rb is not None
+                    # A virtual tile (raster NULL, path set) resolves to a path, not
+                    # bytes; plot_raster opens either, so both take the tile branch.
+                    _resolve_tile_input(lyr.data)
+                    _is_inmem = True
                 except Exception:
                     pass
             if _is_inmem:

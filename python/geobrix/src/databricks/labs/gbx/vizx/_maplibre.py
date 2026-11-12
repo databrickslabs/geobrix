@@ -1552,6 +1552,8 @@ def _raster_to_image(
     - A filesystem path (str) to a GeoTIFF/COG.
     - ``bytes`` or ``bytearray`` of an in-memory GeoTIFF (e.g. a tile's
       ``raster`` field).
+    - A tile struct / ``VirtualTile`` (materialized, or virtual: ``raster`` NULL with a
+      ``path``).
     - A bare ``numpy.ndarray`` (no geo metadata; unit-square [0,1] corners
       are synthesised).
 
@@ -1593,10 +1595,19 @@ def _raster_to_image(
             png_b64, corners = _src_to_png_b64(src, raster_max_px)
         return png_b64, corners
     else:
-        raise TypeError(
-            f"_raster_to_image: unsupported data type {type(data).__name__!r}; "
-            "expected str path, bytes, or numpy.ndarray"
-        )
+        # A tile struct (Row/dict), VirtualTile: materialized or virtual (raster NULL,
+        # path set, as the readers return). resolve_tile_row opens either, window applied.
+        from databricks.labs.gbx.vizx._tiles import resolve_tile_row
+
+        try:
+            with resolve_tile_row(data) as src:
+                png_b64, corners = _src_to_png_b64(src, raster_max_px)
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise TypeError(
+                f"_raster_to_image: unsupported data type {type(data).__name__!r}; "
+                "expected str path, bytes, numpy.ndarray, or a raster tile"
+            ) from exc
+        return png_b64, corners
 
 
 def _src_to_png_b64(src, raster_max_px: int) -> tuple[str, list]:

@@ -21,8 +21,8 @@ Options:
   --bundle <name|dir>    vapor_eyes_lf, wireless_coverage_lf, or a folder with a databricks.yml (required)
   --profile <name>       Databricks config profile (required; never chosen for you)
   --target <t>           Bundle target (default: the bundle's default target)
-  --wheel <volpath>      The env wheel passed as --var gbx_wheel (default: the versioned staged env5
-                         wheel, sample-data/geobrix/<version>/env5/); it must match the job environments
+  --wheel <volpath>      The env wheel passed as --var gbx_wheel (default: the versioned staged env6
+                         wheel, sample-data/geobrix/<version>/env6/); it must match the job environments
   --var NAME=VALUE       A bundle variable, e.g. full_aoi=false (repeatable)
   --job <key>            The job to run (default: the bundle's only job)
   --only <tasks>         Comma list of the job's task keys to run (e.g. land,pipeline)

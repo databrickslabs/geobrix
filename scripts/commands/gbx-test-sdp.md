@@ -13,7 +13,7 @@ bash scripts/commands/gbx-test-sdp.sh --bundle <name|dir> --profile <name> [OPTI
 - `--bundle <name|dir>` – `vapor_eyes_lf`, `wireless_coverage_lf`, or a folder with a `databricks.yml` (required).
 - `--profile <name>` – Databricks config profile (required; never chosen for you).
 - `--target <t>` – Bundle target (default: the bundle's default target).
-- `--wheel <volpath>` – The env wheel, passed as `--var gbx_wheel`. Default: the versioned staged env5 wheel, `sample-data/geobrix/<version>/env5/`.
+- `--wheel <volpath>` – The env wheel, passed as `--var gbx_wheel`. Default: the versioned staged env6 wheel, `sample-data/geobrix/<version>/env6/`. The bundles run the pipeline on the `PREVIEW` channel (DBR 19); for the `CURRENT` channel pass `--var pipeline_channel=CURRENT` and an env5 wheel (and set the job `environment_version` to 5).
 - `--var NAME=VALUE` – A bundle variable, for example `full_aoi=false` (repeatable).
 - `--job <key>` – The job to run (default: the bundle's only job).
 - `--only <tasks>` – Comma list of the job's task keys to run, for example `land,pipeline`.
@@ -42,7 +42,7 @@ bash scripts/commands/gbx-test-sdp.sh --bundle vapor_eyes_lf --profile oauth-fe 
 
 ## Steps
 
-1. `databricks bundle validate` with `--var gbx_wheel=<wheel>` and every `--var`. The wheel's environment must match the bundle's job `environment_version` (both example bundles: 5).
+1. `databricks bundle validate` with `--var gbx_wheel=<wheel>` and every `--var`. The wheel's environment must match the bundle's job `environment_version` (both example bundles: 6).
 2. `databricks bundle plan`. A plan that deletes or recreates a resource stops here, with one `DESTRUCTIVE PLAN:` line. Deleting a pipeline drops its tables.
 3. The SQL warehouse is looked up. A deleted warehouse stops the command before the deploy.
 4. `databricks bundle deploy` (no `--auto-approve`), then `bundle summary` for the job and pipeline ids.

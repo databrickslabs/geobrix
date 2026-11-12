@@ -43,9 +43,12 @@ variables:
   max_z: {default: "13"}
   overview_max_z: {default: "12"}
   earthdata_secret: {default: "geospatial_docs.vapor_eyes.earthdata_token"}
-  # The env wheel for the pipeline's runtime: CURRENT is DBR 18 as of this example -> +env5 (a DBR 19
-  # channel takes +env6); the land job environment below is Serverless environment 5, the same family.
-  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl"}
+  # The pipeline runs on the PREVIEW Lakeflow channel (DBR 19) with the +env6 wheel; the land job
+  # environment below is Serverless environment 6, the same family. To fall back to the CURRENT
+  # channel (DBR 18) set pipeline_channel=CURRENT, gbx_wheel to the +env5 wheel and the job
+  # environment_version to "5": the wheel must follow the channel.
+  pipeline_channel: {default: "PREVIEW"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
   # SQL warehouse for validation queries + the AI/BI dashboard. No portable default —
   # set it in databricks.override.yml (see databricks.override.yml.example).
   warehouse_id: {default: ""}
@@ -68,6 +71,7 @@ resources:
     vapor_eyes_lf_pipeline:
       name: vapor_eyes_lf_pipeline
       serverless: true
+      channel: ${var.pipeline_channel}
       catalog: ${var.catalog}
       schema: ${var.schema}
       root_path: ./transformations
@@ -76,13 +80,12 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          # The pipeline runs on its Lakeflow runtime channel (`channel` is unset, so
-          # the default, CURRENT). As of this example CURRENT is DBR 18, so gbx_wheel is
-          # the +env5 wheel. A PREVIEW channel (`channel: PREVIEW`) is DBR 19 -> the
-          # +env6 wheel. The wheel must follow the channel.
-          # >>> Before you deploy, check the current Lakeflow runtime channel at
+          # The pipeline runs on the Lakeflow runtime channel in `pipeline_channel`: PREVIEW is
+          # DBR 19, so gbx_wheel is the +env6 wheel. The CURRENT channel is DBR 18 -> the +env5
+          # wheel. The wheel must follow the channel.
+          # >>> Before you deploy, check the Lakeflow runtime channels at
           # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
-          # and switch to the matching GeoBrix wheel if it has moved.
+          # and switch to the matching GeoBrix wheel if they have moved.
           # Install the geobrix wheel WITH its extras in ONE pip resolution (the same
           # `wheel[extras]` form as the notebook's `%pip install`). Lakeflow runs one
           # `%pip install` per dependency entry, so enumerating the extras separately
@@ -124,10 +127,10 @@ resources:
       environments:
         - environment_key: land_env
           spec:
-            # Serverless job tasks use Environment-language versioning: Env 5 is the
-            # family of DBR 18 and of the +env5 wheel. Keep the env version and the
-            # wheel in lockstep (Env 6 pairs with the +env6 wheel).
-            environment_version: "5"
+            # Serverless job tasks use Environment-language versioning: Env 6 is the
+            # family of DBR 19 and of the +env6 wheel. Keep the env version and the
+            # wheel in lockstep (Env 5 pairs with the +env5 wheel and the CURRENT channel).
+            environment_version: "6"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).

@@ -3,8 +3,8 @@
 
 Steps, each stopping the command on a failure:
 
-1. ``databricks bundle validate`` with ``--var gbx_wheel=<wheel>`` (default: the versioned staged env5 wheel; the
-   example pipelines run on the Lakeflow DBR 18 channel and their job tasks on Serverless environment 5) and every
+1. ``databricks bundle validate`` with ``--var gbx_wheel=<wheel>`` (default: the versioned staged env6 wheel; the
+   example pipelines run on the Lakeflow PREVIEW channel, DBR 19, and their job tasks on Serverless environment 6) and every
    ``--var``. The wheel's environment must be the bundle's ``environment_version``.
 2. ``databricks bundle plan``: a plan that deletes or recreates a resource stops here. Deleting a pipeline drops its
    tables, so this command never does it; it prints one line for the orchestrator.
@@ -69,6 +69,10 @@ def bundle_name(text: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+# The env wheel the example bundles take by default: the PREVIEW channel is DBR 19, the job tasks Serverless env 6.
+DEFAULT_WHEEL_ENV = 6
+
+
 def environment_versions(text: str) -> set[str]:
     """The ``environment_version`` values of the bundle's job environments."""
     return set(re.findall(r"^\s*environment_version:\s*['\"]?(\d+)", text, re.M))
@@ -92,7 +96,7 @@ def wheel_problem(wheel: str, text: str) -> Optional[str]:
     return None
 
 
-def default_wheel(env: int = 5) -> str:
+def default_wheel(env: int = DEFAULT_WHEEL_ENV) -> str:
     sys.path.insert(0, str(_SCRIPT_DIR))
     from run_notebooks_serverless import default_wheel as _dw  # the one place the staged layout is spelled
 
@@ -358,7 +362,7 @@ def main(argv=None) -> int:
     p.add_argument("--bundle", required=True, help=f"a bundle name ({', '.join(sorted(BUNDLES))}) or its directory")
     p.add_argument("--profile", default=None, help="Databricks CLI profile (required)")
     p.add_argument("--target", default=None, help="bundle target (default: the bundle's default target)")
-    p.add_argument("--wheel", default=None, help="the env wheel for --var gbx_wheel (default: the versioned staged env5 wheel)")
+    p.add_argument("--wheel", default=None, help="the env wheel for --var gbx_wheel (default: the versioned staged env6 wheel)")
     p.add_argument("--var", action="append", default=[], metavar="NAME=VALUE", help="a bundle variable (repeatable)")
     p.add_argument("--job", default=None, help="the job to run (default: the bundle's only job)")
     p.add_argument("--only", default=None, metavar="TASKS", help="comma-separated task keys of the job to run")
@@ -387,7 +391,7 @@ def main(argv=None) -> int:
         variables[k.strip()] = v
     if "gbx_wheel" in variables and args.wheel:
         p.error("give the wheel once: --wheel or --var gbx_wheel=...")
-    wheel = variables.pop("gbx_wheel", None) or args.wheel or default_wheel(5)
+    wheel = variables.pop("gbx_wheel", None) or args.wheel or default_wheel()
     problem = wheel_problem(wheel, text)
     if problem:
         p.error(problem)

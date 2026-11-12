@@ -35,18 +35,30 @@ def test_the_known_bundles_resolve_to_their_databricks_yml(sdp):
     for name, path in sdp.BUNDLES.items():
         assert sdp.resolve_bundle(name) == path
         assert sdp.bundle_name(sdp.bundle_text(path)) == name
-        assert sdp.environment_versions(sdp.bundle_text(path)) == {"5"}  # the example jobs run Serverless env 5
+        assert sdp.environment_versions(sdp.bundle_text(path)) == {"6"}  # the example jobs run Serverless env 6 (PREVIEW channel, DBR 19)
     with pytest.raises(SystemExit, match="no databricks.yml"):
         sdp.resolve_bundle(str(REPO_ROOT / "docs"))
 
 
-def test_the_default_wheel_is_the_versioned_staged_env5_wheel(sdp):
-    w = sdp.default_wheel(5)
-    assert "/sample-data/geobrix/" in w and w.endswith("/env5/geobrix-%s+env5-py3-none-any.whl" % w.split("/")[-3])
-    text = sdp.bundle_text(sdp.BUNDLES["wireless_coverage_lf"])
-    assert sdp.wheel_problem(w, text) is None
-    assert "refuses to import" in sdp.wheel_problem(w.replace("env5", "env6"), text)
-    assert "not an env wheel" in sdp.wheel_problem("/Volumes/x/geobrix-0.6.0-py3-none-any.whl", text)
+def test_the_default_wheel_is_the_versioned_staged_env6_wheel(sdp):
+    w = sdp.default_wheel(sdp.DEFAULT_WHEEL_ENV)
+    assert "/sample-data/geobrix/" in w and w.endswith("/env6/geobrix-%s+env6-py3-none-any.whl" % w.split("/")[-3])
+    for name in sdp.BUNDLES:
+        text = sdp.bundle_text(sdp.BUNDLES[name])
+        assert sdp.wheel_problem(w, text) is None
+        assert "refuses to import" in sdp.wheel_problem(w.replace("env6", "env5"), text)
+        assert "not an env wheel" in sdp.wheel_problem("/Volumes/x/geobrix-0.6.0-py3-none-any.whl", text)
+
+
+def test_the_bundles_run_the_pipeline_on_the_preview_channel_with_a_fallback_variable(sdp):
+    import re
+
+    for name in sdp.BUNDLES:
+        text = sdp.bundle_text(sdp.BUNDLES[name])
+        assert re.search(r'^\s+pipeline_channel:\s*\{default:\s*"PREVIEW"\}', text, re.M), name
+        assert re.search(r"^\s+channel:\s*\$\{var\.pipeline_channel\}", text, re.M), name
+        assert re.search(r"^\s+serverless:\s*true", text, re.M), name
+        assert "+env6-py3-none-any.whl" in text, name
 
 
 def test_the_cli_lines_carry_the_profile_target_and_vars(sdp):

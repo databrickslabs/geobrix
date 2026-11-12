@@ -22,6 +22,7 @@ so this module stays importable (and Serverless-safe: no ``spark.conf``/``_jvm``
 ``.rdd``/``sparkContext``) with no GPU deps installed.
 """
 
+import os
 from contextlib import contextmanager
 from threading import Lock
 
@@ -34,6 +35,7 @@ from shapely.ops import unary_union
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.core.crs import area_m2 as _area_m2
+from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.pyrx.core import features, tiling
 from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
 
@@ -180,10 +182,39 @@ def _merge_seams(frags, min_area, crs):
     return rows
 
 
-def _default_geosam_factory(gpu_id: int):
+def _resolve_weights(weights, segmenter) -> str | None:
+    """Validate ``weights`` and return its bare local path (``None`` stays ``None``).
+
+    ``dbfs:/Volumes/...`` and ``file:`` forms are normalised through
+    ``ds._listing.to_local_path``. Refused up front, on the driver and before any chip
+    is cut or model is loaded: ``weights`` together with ``segmenter`` (an injected
+    segmenter never loads a checkpoint, so ``weights`` would be silently ignored), and a
+    path that is not a file.
+    """
+    if weights is None:
+        return None
+    if segmenter is not None:
+        raise ValueError(
+            "segment_raster: weights= and segmenter= cannot be used together; an "
+            "injected segmenter loads no checkpoint, so weights= would be ignored. "
+            "Fix: pass only one of them -- load the checkpoint inside your segmenter, "
+            "or drop segmenter= to use the built-in GeoSAM with weights=."
+        )
+    local = to_local_path(os.fspath(weights))
+    if not os.path.isfile(local):
+        raise FileNotFoundError(
+            f"segment_raster: GeoSAM checkpoint not found at {local!r} "
+            f"(weights={weights!r}). Fix: stage the checkpoint file (for example "
+            "sam_vit_h_4b8939.pth) on a Volume and pass its /Volumes/... path, or "
+            "omit weights= to let SamGeo download it (needs internet egress)."
+        )
+    return local
+
+
+def _default_geosam_factory(gpu_id: int, weights: str | None = None):
     """Per-device GeoSAM handle builder -- the default (``segmenter is None``)
     ``segment_raster`` factory. Binds inference to device ``gpu_id`` (``torch.cuda.
-    set_device`` + ``load_geosam(device=f"cuda:{gpu_id}")``) and returns a
+    set_device`` + ``load_geosam(weights=weights, device=f"cuda:{gpu_id}")``) and returns a
     ``(image) -> mask`` callable closed over that device-bound handle.
 
     ``segment_raster`` calls this at most ONCE per distinct ``gpu_id`` (caches the
@@ -197,6 +228,10 @@ def _default_geosam_factory(gpu_id: int):
     can ``monkeypatch.setattr(runner, "_default_geosam_factory", fake)`` to exercise the
     per-device plumbing without torch/GPU installed.
 
+    ``weights`` is a bare local checkpoint path (already validated by
+    ``_resolve_weights``) passed straight to ``load_geosam``; ``None`` lets SamGeo
+    download its default checkpoint.
+
     torch is imported lazily here, inside the default factory -- which only ever runs
     on a GPU worker taking the ``segmenter=None`` path -- so the light wheel stays
     importable with no torch installed.
@@ -207,7 +242,7 @@ def _default_geosam_factory(gpu_id: int):
     from databricks.labs.gbx.models.geosam import segment as _geosam_segment
 
     torch.cuda.set_device(gpu_id)
-    handle = load_geosam(device=f"cuda:{gpu_id}")
+    handle = load_geosam(weights=weights, device=f"cuda:{gpu_id}")
 
     def _segment(image):
         return _geosam_segment(handle, image)
@@ -219,6 +254,7 @@ def segment_raster(
     tile_or_path,
     *,
     segmenter=None,
+    weights=None,
     model: str = "geosam",
     gpus="all",
     tile_px: int = 1024,
@@ -242,6 +278,12 @@ def segment_raster(
             Device-agnostic -- every chip, on every GPU device slot, calls the SAME
             ``segmenter``. Defaults to a per-device GeoSAM handle (``model="geosam"``,
             the only backend wired up so far) when ``None``. Tests inject a fake.
+        weights: optional path to a GeoSAM checkpoint file -- a local path, a
+            ``/Volumes/...`` path or a ``dbfs:/Volumes/...`` URI. Passed to
+            ``load_geosam(weights=...)``. ``None`` (default) lets SamGeo download
+            ``sam_vit_h_4b8939.pth`` from its CDN, which needs internet egress; on a
+            workspace without it, stage the checkpoint on a Volume and pass its path.
+            Cannot be combined with ``segmenter``.
         model: which built-in backend to default to when ``segmenter`` is ``None``.
             Only ``"geosam"`` is implemented today.
         gpus: ``"all"`` probes ``torch.cuda.device_count()`` (lazy import); an int
@@ -262,6 +304,7 @@ def segment_raster(
         mask carries no per-object confidence; wire a real score through once a
         confidence-scored backend exists.
     """
+    local_weights = _resolve_weights(weights, segmenter)
     if segmenter is None:
         if model != "geosam":
             raise ValueError(
@@ -271,7 +314,13 @@ def segment_raster(
         # Per-device factory: segment_raster (below) calls this at most once per
         # distinct gpu_id and caches the result, so the default path binds inference to
         # the chip's actual assigned device instead of one shared cuda:0 handle.
-        factory = _default_geosam_factory
+        if local_weights is None:
+            factory = _default_geosam_factory
+        else:
+
+            def factory(gpu_id):
+                return _default_geosam_factory(gpu_id, weights=local_weights)
+
     else:
         # Injected segmenter is device-agnostic: every gpu_id gets the same callable.
         def factory(_gpu_id):

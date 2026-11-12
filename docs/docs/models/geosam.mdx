@@ -30,8 +30,7 @@ GeoSAM requires the model deps: install them after the env wheel on Serverless G
 
 - `model_type` — the SAM model variant (default `"vit_h"`).
 - `weights` — optional path to a local checkpoint; `None` defers to SamGeo's default
-  weight resolution (the exact download behavior is finalized when the GeoSAM backend is
-  wired against `segment-geospatial`).
+  weight resolution, which downloads `sam_vit_h_4b8939.pth` from Meta's CDN.
 - `device` — `"cuda"` (default) or `"cpu"`.
 
 ## Segmenting a single image
@@ -79,6 +78,7 @@ segment_raster(
     tile_or_path,
     *,
     segmenter=None,
+    weights=None,
     model: str = "geosam",
     gpus="all",
     tile_px: int = 1024,
@@ -91,6 +91,7 @@ segment_raster(
 |---|---|---|---|
 | `tile_or_path` | dataset / bytes / path | — | An open `rasterio` dataset, raw GeoTIFF bytes, or a file path. |
 | `segmenter` | callable | `None` | Injectable `(image: HxWx3 uint8) -> mask: HxW int`. Defaults to a GeoSAM handle when `None`. |
+| `weights` | `str` | `None` | Path to a GeoSAM checkpoint file: a local, `/Volumes/...` or `dbfs:/Volumes/...` path. `None` lets SamGeo download the default checkpoint. Cannot be combined with `segmenter`. |
 | `model` | `str` | `"geosam"` | Which built-in backend to use when `segmenter` is `None`. Only `"geosam"` is implemented today; pass `segmenter=` explicitly for anything else. |
 | `gpus` | `"all"` or `int` | `"all"` | `"all"` probes `torch.cuda.device_count()` (lazy `torch` import); a positive `int` passes through untouched and **never** imports `torch`. |
 | `tile_px` | `int` | `1024` | Square tile size in pixels. |
@@ -101,6 +102,21 @@ Returns a `pandas.DataFrame` with columns `label` (`int`), `geom` (`bytes`, WKB)
 `score` (`float`). `score` is currently a constant `1.0` — a bare label mask carries no
 per-object confidence; it will carry a real score once a confidence-scored backend is
 wired up.
+
+### Workspaces without internet egress
+
+By default SamGeo downloads the checkpoint `sam_vit_h_4b8939.pth` from Meta's CDN. Many
+workspaces block that egress. Stage the file on a Volume once, then pass its path as `weights`:
+
+```python
+df = segment_raster(
+    "/Volumes/catalog/schema/volume/orthomosaic.tif",
+    weights="/Volumes/catalog/schema/volume/models/sam_vit_h_4b8939.pth",
+)
+```
+
+A `dbfs:/Volumes/...` URI works too. A missing file raises `FileNotFoundError` with the path.
+`weights` cannot be combined with `segmenter`, because an injected segmenter loads no checkpoint.
 
 ### Choosing `gpus`
 

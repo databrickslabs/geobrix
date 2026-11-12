@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from shapely.geometry import box
 
 from databricks.labs.gbx.models import runner
@@ -137,3 +138,85 @@ def test_default_segmenter_binds_per_device(monkeypatch, multi_chip_rgb_tile):
     assert set(usages) <= set(builds)
     # (c) per-device fan-out still recombines into the same two real-world objects
     assert len(df) == 2
+
+
+# --- weights= : a checkpoint staged on a Volume (no CDN download) ---------------------
+
+
+@pytest.fixture
+def fake_geosam(monkeypatch):
+    """Fake the model load (no torch / SamGeo / GPU in CI). Records every
+    ``load_geosam`` call's kwargs; ``segment`` draws two boxes."""
+    import sys
+    import types
+
+    from databricks.labs.gbx.models import geosam
+
+    calls = []
+
+    def fake_load(**kwargs):
+        calls.append(kwargs)
+        return object()
+
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(set_device=lambda i: None)
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setattr(geosam, "load_geosam", fake_load)
+    monkeypatch.setattr(geosam, "segment", lambda handle, image: _fake_two_boxes(image))
+    return calls
+
+
+@pytest.fixture
+def checkpoint(tmp_path):
+    p = tmp_path / "sam_vit_h_4b8939.pth"
+    p.write_bytes(b"weights")
+    return str(p)
+
+
+def test_weights_default_none_keeps_samgeo_download(fake_geosam, synthetic_rgb_tile):
+    runner.segment_raster(synthetic_rgb_tile, gpus=1, tile_px=64, overlap=0)
+    assert fake_geosam and all(c["weights"] is None for c in fake_geosam)
+
+
+def test_weights_passed_through_to_load_geosam(
+    fake_geosam, synthetic_rgb_tile, checkpoint
+):
+    df = runner.segment_raster(
+        synthetic_rgb_tile,
+        weights=checkpoint,
+        gpus=1,
+        tile_px=64,
+        overlap=0,
+        min_area=1.0,
+    )
+    assert len(df) == 2
+    assert [c["weights"] for c in fake_geosam] == [checkpoint]
+    assert fake_geosam[0]["device"] == "cuda:0"
+
+
+def test_weights_dbfs_uri_is_normalised(fake_geosam, synthetic_rgb_tile, checkpoint):
+    runner.segment_raster(
+        synthetic_rgb_tile, weights=f"dbfs:{checkpoint}", gpus=1, tile_px=64, overlap=0
+    )
+    assert [c["weights"] for c in fake_geosam] == [checkpoint]
+
+
+def test_weights_with_segmenter_is_refused(synthetic_rgb_tile, checkpoint):
+    with pytest.raises(ValueError, match=r"weights.*segmenter") as e:
+        runner.segment_raster(
+            synthetic_rgb_tile,
+            weights=checkpoint,
+            segmenter=_two_color_objects,
+            gpus=1,
+            tile_px=64,
+        )
+    assert "Fix:" in str(e.value)
+
+
+def test_missing_weights_file_is_refused(fake_geosam, synthetic_rgb_tile, tmp_path):
+    missing = str(tmp_path / "nope.pth")
+    with pytest.raises(FileNotFoundError, match="nope.pth") as e:
+        runner.segment_raster(synthetic_rgb_tile, weights=missing, gpus=1, tile_px=64)
+    assert "Fix:" in str(e.value)
+    assert fake_geosam == []  # refused before any model load

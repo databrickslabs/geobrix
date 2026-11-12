@@ -157,7 +157,7 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
             col("tile"),
             col("tile.metadata").alias("metadata_direct"),
             rst_width(col("tile")).alias("width"),
-            rst_height(col("tile")).alias("height")
+            rst_numbands(col("tile")).alias("bands")
           )
 
         val result = df.collect()
@@ -169,9 +169,9 @@ class RST_TileStructureTest extends PlanTest with SilentSparkSession {
 
         // Verify accessor functions work with tile
         val width = result(0).getAs[Int]("width")
-        val height = result(0).getAs[Int]("height")
+        val bands = result(0).getAs[Int]("bands")
         width should be > 0
-        height should be > 0
+        bands should be > 0
     }
 
     test("Filter tiles by metadata fields") {

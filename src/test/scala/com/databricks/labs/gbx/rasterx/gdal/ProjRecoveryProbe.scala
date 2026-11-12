@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.operations.ProjDatabase
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_SRID
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.gdal
@@ -16,15 +15,21 @@ import scala.jdk.CollectionConverters._
 
 /** A child JVM of [[GDALManagerStaleNativeDirTest]]: loads GDAL in place from the native directory `args(0)` with the
   * user's `spark.gdal.PROJ_DATA` naming `args(2)` before the payload's PROJ data, names the byte-identical payload
-  * `args(1)`, then removes the first payload's `share/proj` and reads an EPSG:27700 GeoTIFF's srid on a new thread
-  * through [[ProjDatabase.guarded]], as `gbx_rst_srid` does. Prints `PRE=`, `GONE=`, `SRID=`, `PROJ_DATA=`, `PATH=`
+  * `args(1)`, then removes the first payload's `share/proj` and, on a new thread whose PROJ context finds no database,
+  * points PROJ at this JVM's PROJ data again ([[ProjDatabase.recoverOrFail]]) and reads an EPSG:27700 GeoTIFF's srid.
+  * Prints `PRE=`, `GONE=`, `SRID=`, `PROJ_DATA=`, `PATH=`
   * (PROJ's search path), `LOADED=` (the loaded choice's PROJ data) and `DONE`.
   */
 object ProjRecoveryProbe {
 
+    /** The GeoTIFF's EPSG code (0: none), which needs PROJ's database to identify. */
     private def srid(path: String): Int = {
         val ds = gdal.Open(path, gdalconstConstants.GA_ReadOnly)
-        try RST_SRID.execute(ds) finally ds.delete()
+        try {
+            val sr = new SpatialReference(ds.GetProjection())
+            try { scala.util.Try(sr.AutoIdentifyEPSG()); Option(sr.GetAuthorityCode(null)).map(_.toInt).getOrElse(0) }
+            finally sr.delete()
+        } finally ds.delete()
     }
 
     private def onNewThread(body: => String): String = {
@@ -57,7 +62,7 @@ object ProjRecoveryProbe {
         println(s"PRE=${onNewThread(srid(path).toString)}")
         Option(new File(firstProj).listFiles()).foreach(_.foreach(_.delete()))
         println(s"GONE=${!Files.exists(Paths.get(firstProj, "proj.db"))}")
-        println(s"SRID=${onNewThread(ProjDatabase.guarded(() => srid(path))(_ == 0).toString)}")
+        println(s"SRID=${onNewThread { if (!ProjDatabase.reachable()) ProjDatabase.recoverOrFail(); srid(path).toString }}")
         println(s"PROJ_DATA=${Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("<unset>")}")
         println(s"PATH=${Option(osr.GetPROJSearchPaths()).map(_.asScala.mkString(":")).getOrElse("<unset>")}")
         println(s"LOADED=${GDALManager.ensureJniLoaded(None).projData.getOrElse("<none>")}")

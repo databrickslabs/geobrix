@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Crs, RST_SRID}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.operations.{ProjDatabase, ProjDatabaseException, SpatialRefOps}
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, V2Tile}
@@ -20,10 +19,9 @@ import java.util.concurrent.{Callable, Executors, TimeUnit}
 import scala.jdk.CollectionConverters._
 
 /**
-  * A Spark task thread whose PROJ context cannot read PROJ's database (proj.db) reads a GeoTIFF's CRS from its keys
-  * alone: GDAL gives a `LOCAL_CS` with no authority code. `gbx_rst_srid` then answered NULL and `gbx_rst_crs` a
-  * `LOCAL_CS` WKT, with no error, where the light level gives 27700 and `EPSG:27700`. The read must give the tile's CRS
-  * (PROJ re-pointed at its database and the tile read again), or fail with the reason, never a silent NULL.
+  * A Spark task thread whose PROJ context cannot read PROJ's database (proj.db) does not resolve an EPSG code. The
+  * resolution must give the code's CRS (PROJ re-pointed at its database and the code resolved again), or fail with
+  * the reason, never a silent NULL.
   */
 class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
 
@@ -75,17 +73,6 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         finally { pool.shutdown(); pool.awaitTermination(1, TimeUnit.MINUTES) }
     }
 
-    test("srid and crs on fresh threads whose PROJ database is gone are the tile's, not NULL") {
-        val tile = bngTile()
-        val c = exprConf
-        RST_SRID.eval(tile, c) shouldBe 27700
-        withProjDatabaseGone {
-            val out = onFreshThreads(8)(() => (RST_SRID.eval(tile, c), RST_Crs.eval(tile, c)))
-            out.map(_._1) shouldBe Seq.fill(8)(Integer.valueOf(27700))
-            out.map(o => Option(o._2).map(_.toString).orNull) shouldBe Seq.fill(8)("EPSG:27700")
-        }
-    }
-
     test("an EPSG code resolves on fresh threads whose PROJ database is gone") {
         withProjDatabaseGone {
             onFreshThreads(4)(() => {
@@ -97,7 +84,7 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
 
     test("a PROJ database that stays unreadable fails the read with the reason, never NULL") {
         val e = intercept[ProjDatabaseException] {
-            ProjDatabase.guardedWith[Int](() => 0, _ == 0, () => false, () => Seq("/gone/proj"))
+            ProjDatabase.recoverOrFail(() => false, () => Seq("/gone/proj"), null)
         }
         e.getMessage should include("proj.db")
         e.getMessage should include("/gone/proj")
@@ -106,72 +93,6 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         intercept[ProjDatabaseException] {
             RST_ErrorHandler.safeEval(() => throw new ProjDatabaseException("gone"), bngTile(), BinaryType, exprConf)
         }
-    }
-
-    test("a thread checks PROJ's database once per search path; a failed check is checked again") {
-        onFreshThreads(1)(() => {
-            var calls = 0
-            val pass = () => { calls += 1; true }
-            ProjDatabase.cachedWith(() => { calls += 1; false }) shouldBe false
-            ProjDatabase.cachedWith(pass) shouldBe true
-            ProjDatabase.cachedWith(pass) shouldBe true
-            val beforeChange = calls
-            // a new search path: the thread checks again
-            ProjDatabase.invalidate()
-            ProjDatabase.cachedWith(pass) shouldBe true
-            (beforeChange, calls)
-        }) shouldBe Seq((2, 3))
-    }
-
-    test("a check is kept only when GDAL was loaded from a node-local copy; in place it runs every time") {
-        onFreshThreads(1)(() => {
-            var calls = 0
-            val pass = () => { calls += 1; true }
-            Seq(true, true).foreach(_ => ProjDatabase.reachableCachedWith(fromCopy = true, pass))
-            val copied = calls
-            Seq(true, true).foreach(_ => ProjDatabase.reachableCachedWith(fromCopy = false, pass))
-            (copied, calls)
-        }) shouldBe Seq((1, 3))
-    }
-
-    test("a CRS with no authority code is the data's own when PROJ's database is readable") {
-        var recovered = false
-        ProjDatabase.guardedWith[Int](() => 0, _ == 0, () => true, () => { recovered = true; Nil }) shouldBe 0
-        recovered shouldBe false
-        // an answer that is not suspect is never checked
-        ProjDatabase.guardedWith[Int](() => 27700, _ == 0, () => fail("checked"), () => fail("recovered")) shouldBe 27700
-    }
-
-    test("a suspect answer read before another thread pointed PROJ at its data again is read again") {
-        // the read ran while this thread's PROJ context had no database; by the check another thread's recovery had
-        // fixed the path, so the database reads: the first answer is not the data's own
-        val answers = Iterator(0, 27700)
-        ProjDatabase.guardedWith[Int](() => answers.next(), _ == 0, () => true, () => fail("recovered")) shouldBe 27700
-        // a thread that had confirmed the database on the same path before the read keeps its answer, with one read
-        var reads = 0
-        ProjDatabase.guardedWith[Int](() => { reads += 1; 0 }, _ == 0, () => true, () => fail("recovered"), () => true) shouldBe 0
-        reads shouldBe 1
-    }
-
-    test("guarded keeps a suspect answer only for a thread that confirmed PROJ's database on the same path before and after the read") {
-        def run(fromCopy: Boolean, confirm: Boolean, changePathDuringRead: Boolean): (Int, Int) =
-            onFreshThreads(1)(() => {
-                if (confirm) ProjDatabase.cachedWith(() => true) shouldBe true
-                var reads = 0
-                val out = ProjDatabase.guardedFrom[Int](
-                  fromCopy,
-                  () => { reads += 1; if (reads == 1) { if (changePathDuringRead) ProjDatabase.invalidate(); 0 } else 27700 },
-                  _ == 0, () => true, () => fail("recovered")
-                )
-                (out, reads)
-            }).head
-        // a copy-loaded JVM, a thread that confirmed the path: its suspect answer is the data's own, with one read
-        run(fromCopy = true, confirm = true, changePathDuringRead = false) shouldBe ((0, 1))
-        // another thread re-pointed PROJ during the read: the answer came from the replaced path, so it is read again
-        run(fromCopy = true, confirm = true, changePathDuringRead = true) shouldBe ((27700, 2))
-        // no confirmation, or a JVM that loaded GDAL in place: the suspect answer is read again
-        run(fromCopy = true, confirm = false, changePathDuringRead = false) shouldBe ((27700, 2))
-        run(fromCopy = false, confirm = true, changePathDuringRead = false) shouldBe ((27700, 2))
     }
 
     test("a refusal raised before another thread pointed PROJ at its data again is tried again") {

@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_SRID
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.gdal
@@ -29,7 +28,11 @@ object NodeCopyNativeProbe {
     private def srid(path: String): String = {
         val ds = gdal.Open(path, gdalconstConstants.GA_ReadOnly)
         if (ds == null) s"ERROR open: ${gdal.GetLastErrorMsg}"
-        else try RST_SRID.execute(ds).toString finally ds.delete()
+        else try {
+            val sr = new SpatialReference(ds.GetProjection())
+            try { scala.util.Try(sr.AutoIdentifyEPSG()); Option(sr.GetAuthorityCode(null)).getOrElse("0") }
+            finally sr.delete()
+        } finally ds.delete()
     }
 
     private def transform(): String = {

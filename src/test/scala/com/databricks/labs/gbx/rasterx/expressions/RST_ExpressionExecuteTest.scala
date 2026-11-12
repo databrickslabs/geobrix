@@ -27,11 +27,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         x should not be 0.0
     }
 
-    test("RST_RasterToWorldCoordY should convert raster to world Y coordinate") {
-        val y = RST_RasterToWorldCoordY.execute(ds, 10000, 10000)
-        y should not be 0.0
-    }
-
     test("RST_WorldToRasterCoordX should convert world X coordinate to raster") {
         val x = RST_WorldToRasterCoordX.execute(ds, 0.0, 0.0)
         x should be >= 0

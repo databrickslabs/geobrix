@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.bench
 
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
-import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
@@ -33,16 +32,12 @@ object BenchDispatch {
   private val multiBand: Set[String] = Set.empty
 
   private val cats: Map[String, String] = Map(
-    "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
-    // scalar accessors
-    "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
-    "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
-    "rst_scaley" -> ACC, "rst_skewx" -> ACC, "rst_skewy" -> ACC,
-    "rst_rotation" -> ACC,
-    "rst_format" -> ACC, "rst_memsize" -> ACC,
-    // coordinate / index accessors
+    "rst_width" -> ACC, "rst_numbands" -> ACC,
+    // scalar accessors (crs, format, height, memsize, pixelheight, pixelwidth, rotation, scalex, scaley, skewx, skewy,
+    // srid and upperleftx have no heavyweight level: they measured under 1.2x of the Arrow light form.)
+    "rst_upperlefty" -> ACC,
+    // coordinate / index accessors (rastertoworldcoordy has no heavyweight level, as above)
     "rst_rastertoworldcoordx" -> ACC,
-    "rst_rastertoworldcoordy" -> ACC,
     "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
     // timing-only accessors
@@ -263,32 +258,13 @@ object BenchDispatch {
     Files.createDirectories(NodeFilePathUtil.rootPath)
     fn match {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
-    case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
     // scalar accessors
-    case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
-    // rst_crs: canonical CRS STRING (authority else WKT). ofScalar coerces the
-    // String via toString -> a "scalar" fingerprint (CRS-string-comparable).
-    case "rst_crs"         => BenchFingerprint.ofScalar(RST_Crs.execute(ds))
-    case "rst_pixelwidth"  => BenchFingerprint.ofScalar(RST_PixelWidth.execute(ds))
-    case "rst_pixelheight" => BenchFingerprint.ofScalar(RST_PixelHeight.execute(ds))
-    case "rst_upperleftx"  => BenchFingerprint.ofScalar(RST_UpperLeftX.execute(ds))
     case "rst_upperlefty"  => BenchFingerprint.ofScalar(RST_UpperLeftY.execute(ds))
-    case "rst_scalex"      => BenchFingerprint.ofScalar(RST_ScaleX.execute(ds))
-    case "rst_scaley"      => BenchFingerprint.ofScalar(RST_ScaleY.execute(ds))
-    case "rst_skewx"       => BenchFingerprint.ofScalar(RST_SkewX.execute(ds))
-    case "rst_skewy"       => BenchFingerprint.ofScalar(RST_SkewY.execute(ds))
-    case "rst_rotation"    => BenchFingerprint.ofScalar(RST_Rotation.execute(ds))
-    case "rst_format"      => BenchFingerprint.ofScalar(RST_Format.execute(ds))
-    // timing-only (per-band string array; no cross-engine fingerprint)
-    // timing-only (file size vs in-memory size; not comparable)
-    case "rst_memsize"     => { RST_MemSize.execute(ds); BenchFingerprint.empty }
     // coordinate / index accessors.
-    // raster->world: forward affine; X = pair._1, Y = pair._2; pair as scalar_list.
+    // raster->world: forward affine; X = pair._1.
     case "rst_rastertoworldcoordx" =>
       BenchFingerprint.ofScalar(RST_RasterToWorldCoordX.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._1)
-    case "rst_rastertoworldcoordy" =>
-      BenchFingerprint.ofScalar(RST_RasterToWorldCoordY.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._2)
     // world->raster: timing-only (CRS-dependent inverse-affine index; not comparable).
     case "rst_worldtorastercoordx" =>
       RST_WorldToRasterCoordX.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
@@ -350,7 +326,7 @@ object BenchDispatch {
   // (xmin, ymin, xmax, ymax, widthPx, heightPx, srid) from an open Dataset --
   // the heavy analogue of the pyrx _tile_extent_size_srid(ds). Extent is the
   // dataset bounds (geotransform + size, rotation terms 0 for the corpus); srid
-  // via RST_SRID.execute. The geometry-in constructors burn/interpolate into a
+  // the CRS's EPSG code (0: none). The geometry-in constructors burn/interpolate into a
   // NEW raster at the SAME extent/size/srid as the tile the geometry was derived
   // from, so the heavy + light grids are pixel-comparable on every CRS.
   private def tileExtentSizeSrid(ds: Dataset): (Double, Double, Double, Double, Int, Int, Int) = {
@@ -360,7 +336,11 @@ object BenchDispatch {
     val x1 = gt(0) + w * gt(1); val y1 = gt(3) + h * gt(5)
     val (xmin, xmax) = (math.min(x0, x1), math.max(x0, x1))
     val (ymin, ymax) = (math.min(y0, y1), math.max(y0, y1))
-    (xmin, ymin, xmax, ymax, w, h, RST_SRID.execute(ds))
+    val sr = new org.gdal.osr.SpatialReference(ds.GetProjection())
+    val srid =
+      try { scala.util.Try(sr.AutoIdentifyEPSG()); Option(sr.GetAuthorityCode(null)).flatMap(_.toIntOption).getOrElse(0) }
+      finally sr.delete()
+    (xmin, ymin, xmax, ymax, w, h, srid)
   }
 
   /** Pure-core dispatch for `input_kind == "geometry"` constructor fns: the open
@@ -389,25 +369,11 @@ object BenchDispatch {
     import functions._
     fn match {
       case "rst_width"      => rst_width(tile)
-      case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
       // scalar accessors
-      case "rst_srid"        => rst_srid(tile)
-      case "rst_crs"         => rst_crs(tile)
-      case "rst_pixelwidth"  => rst_pixelwidth(tile)
-      case "rst_pixelheight" => rst_pixelheight(tile)
-      case "rst_upperleftx"  => rst_upperleftx(tile)
       case "rst_upperlefty"  => rst_upperlefty(tile)
-      case "rst_scalex"      => rst_scalex(tile)
-      case "rst_scaley"      => rst_scaley(tile)
-      case "rst_skewx"       => rst_skewx(tile)
-      case "rst_skewy"       => rst_skewy(tile)
-      case "rst_rotation"    => rst_rotation(tile)
-      case "rst_format"      => rst_format(tile)
-      case "rst_memsize"     => rst_memsize(tile)
       // coordinate / index accessors
       case "rst_rastertoworldcoordx" => rst_rastertoworldcoordx(tile, argI(a, "x", 64), argI(a, "y", 64))
-      case "rst_rastertoworldcoordy" => rst_rastertoworldcoordy(tile, argI(a, "x", 64), argI(a, "y", 64))
       // world->raster + tilexyz are pure-core-only; the column form is here only
       // to keep the match exhaustive (the spark-path runner filters by modes).
       case "rst_worldtorastercoordx" => rst_worldtorastercoordx(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))

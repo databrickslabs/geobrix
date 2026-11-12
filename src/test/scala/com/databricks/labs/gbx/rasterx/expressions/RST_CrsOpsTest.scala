@@ -1,37 +1,24 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Crs
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_SRID
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
-import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdal.gdal
 import org.gdal.osr.SpatialReference
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 /**
-  * Direct-execute tests for the CRS-string ops (RST_Crs / RST_SRID)
-  * plus the SpatialRefOps.resolveCrs / crsToCanonical helpers. The MODIS fixture is a
-  * NON-EPSG raster (World Sinusoidal — the case that surfaced the need for CRS strings),
-  * so it exercises the authority-else-WKT paths that rst_srid (int/0)
-  * cannot represent. Requires GDAL native libs (run in Docker).
+  * Direct tests of the SpatialRefOps.resolveCrs / crsToCanonical helpers (the int-cast rule and the
+  * authority-else-WKT rule) and of the CRS the vector-raster bridge stamps. Requires GDAL native libs (run in Docker).
   */
 class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
-
-    var ds: Dataset = _
 
     override def beforeAll(): Unit = {
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
         gdal.AllRegister()
-        val tif = this.getClass
-            .getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-            .toString.replace("file:/", "/")
-        ds = gdal.Open(tif)
     }
-
-    override def afterAll(): Unit = if (ds != null) ds.delete()
 
     // --- SpatialRefOps.resolveCrs: the shared int-cast rule ---
 
@@ -86,55 +73,6 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("crsToCanonical: null SR -> null") {
         SpatialRefOps.crsToCanonical(null) shouldBe null
-    }
-
-    // --- RST_Crs accessor ---
-
-    test("RST_Crs returns a non-null canonical string on the non-EPSG MODIS fixture") {
-        val crs = RST_Crs.execute(ds)
-        crs should not be null
-        crs.nonEmpty shouldBe true
-    }
-
-    // --- Cross-tier CRS parity (T8): the non-EPSG MODIS fixture must report an
-    // EQUIVALENT CRS on the heavy tier and the light tier. The light tier
-    // (rasterio/pyproj) reads this exact fixture as the authority string
-    // "ESRI:54008" (pinned in the pyrx suite test_crs_accessors.test_crs_esri_raster:
-    // accessors.crs(ds) == "ESRI:54008"), because pyproj auto-identifies the
-    // embedded World Sinusoidal WKT against the ESRI authority DB.
-    //
-    // The heavy tier follows the authority-else-WKT rule (SpatialRefOps.crsToCanonical). GDAL 3.13 identifies the
-    // fixture's World Sinusoidal header WKT as ESRI:54008 too, so heavy now emits the same "ESRI:54008" string and
-    // the same SRID (GDAL 3.11 attached no authority and heavy emitted the WKT, with SRID 0). The cross-tier contract
-    // is still CRS-EQUIVALENCE, asserted below, and the strings are now equal as well.
-    test("RST_Crs on the MODIS fixture is CRS-equivalent to the light tier's 'ESRI:54008' (cross-tier CRS parity)") {
-        val heavyCanonical = RST_Crs.execute(ds)
-        heavyCanonical should not be null
-        // GDAL 3.13 names the fixture's CRS by its ESRI authority, as the light tier does (documented above).
-        heavyCanonical shouldBe "ESRI:54008"
-        // CRS-EQUIVALENCE across tiers: the heavy canonical string and the light
-        // tier's "ESRI:54008" resolve to the SAME CRS (IsSame == 1).
-        val heavySr = SpatialRefOps.resolveCrs(heavyCanonical)
-        val esriSr = SpatialRefOps.resolveCrs("ESRI:54008")
-        try {
-            heavySr.IsSame(esriSr) shouldBe 1
-        } finally {
-            heavySr.delete(); esriSr.delete()
-        }
-        // The SRID is the ESRI code, as the light tier's srid() gives (54008) and rst_srid documents.
-        RST_SRID.execute(ds) shouldBe 54008
-    }
-
-    test("RST_Crs and RST_SRID agree on an EPSG raster (relabelled to 4326)") {
-        // Relabel a copy of the fixture to EPSG:4326 (header only), then read both accessors back.
-        val relabelled = gdal.GetDriverByName("MEM").CreateCopy("", ds)
-        try {
-            val sr4326 = SpatialRefOps.resolveCrs("4326")
-            relabelled.SetProjection(sr4326.ExportToWkt())
-            sr4326.delete()
-            RST_Crs.execute(relabelled) shouldBe "EPSG:4326"
-            RST_SRID.execute(relabelled) shouldBe 4326
-        } finally relabelled.delete()
     }
 
     test("VectorRasterBridge.buildEmptyRaster stamps an ESRI srid as ESRI (resolveCrs)") {

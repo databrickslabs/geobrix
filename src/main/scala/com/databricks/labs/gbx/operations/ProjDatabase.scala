@@ -20,16 +20,12 @@ final class ProjDatabaseException(msg: String, cause: Throwable = null) extends 
   * GDAL gives each thread its own PROJ context, which opens `proj.db` at its first use. A context that cannot read it
   * (the PROJ data directory is gone or unreadable, as for an executor that outlives the Python environment it loaded
   * GDAL from) still answers: a GeoTIFF's CRS is built from its keys alone, with no authority code, and an EPSG code
-  * does not resolve. Nothing raises. A result that may come from such a context (no authority code, an unresolved CRS)
-  * is checked here: when the database cannot be read, PROJ is pointed at this JVM's PROJ data again
-  * ([[GDALManager.recoverProjData]]) and the read runs once more; when it still cannot be read, the read fails with
-  * the reason ([[ProjDatabaseException]]).
+  * does not resolve. A read that a context without the database refuses ([[retried]]) runs once more, after PROJ is
+  * pointed at this JVM's PROJ data again ([[GDALManager.recoverProjData]]) when the database cannot be read; when it
+  * still cannot be read, the read fails with the reason ([[ProjDatabaseException]]).
   *
   * Known limit: the check is a database lookup on this thread's context, which PROJ may answer from its cache, plus
   * a readable `proj.db` on the search path. A context whose database reads fail only now and then is not detected.
-  * When the JVM loaded GDAL from a node-local copy of its payload (which a finished run does not remove), a thread
-  * whose check passed is not checked again until this JVM changes PROJ's search path ([[invalidate]]). A JVM that
-  * loaded GDAL in place checks every suspect answer, as a database removed later under an unchanged path is possible.
   */
 object ProjDatabase extends Logging {
 
@@ -52,32 +48,6 @@ object ProjDatabase extends Logging {
         }
     }
 
-    // the search-path generation at which this thread's check last passed (-1: never)
-    private val generation = new java.util.concurrent.atomic.AtomicLong(0L)
-    private val confirmedAt = ThreadLocal.withInitial[java.lang.Long](() => -1L)
-
-    /** A change of PROJ's search path: every thread checks again at its next suspect answer. */
-    def invalidate(): Unit = { generation.incrementAndGet(); () }
-
-    /** [[reachable]], once per thread and search path: a check that passed holds until [[invalidate]]. A check that
-      * fails is not kept, so the next suspect answer checks again. */
-    def reachableCached(): Boolean = reachableCachedWith(GDALManager.loadedFromNodeCopy, () => reachable())
-
-    /** A GDAL loaded in place keeps its PROJ database in the Python environment, which can be removed later: its check
-      * is never kept. */
-    private[gbx] def reachableCachedWith(fromCopy: Boolean, check: () => Boolean): Boolean =
-        if (fromCopy) cachedWith(check) else check()
-
-    private[gbx] def cachedWith(check: () => Boolean): Boolean = {
-        val g = generation.get()
-        if (confirmedAt.get() == g) true
-        else {
-            val ok = check()
-            if (ok) confirmedAt.set(g)
-            ok
-        }
-    }
-
     private def unreachable(dirs: Seq[String], cause: Throwable): ProjDatabaseException =
         new ProjDatabaseException(
           s"geobrix: this thread's PROJ context cannot read PROJ's database (proj.db) under ${dirs.mkString(":")}, " +
@@ -93,41 +63,6 @@ object ProjDatabase extends Logging {
         val dirs = recover()
         if (!isReachable()) throw unreachable(dirs, cause)
         logWarning(s"PROJ's database could not be read on this thread; PROJ was pointed at ${dirs.mkString(":")} again")
-    }
-
-    /** `read()`; when `suspect` holds for its answer (one a context without PROJ's database would give) and the database
-      * cannot be read, [[recoverOrFail]] and `read()` once more. A suspect answer with the database readable is the
-      * data's own (a CRS with no authority code) when this thread had confirmed the database on the same search path
-      * before the read; else it is read once more, and that answer stands. The database may have become readable
-      * between the read and the check: another thread's [[recoverOrFail]] re-points every thread's PROJ, and this
-      * thread's suspect answer then came from the path that was replaced (it gave a NULL srid with no error). */
-    def guarded[T](read: () => T)(suspect: T => Boolean): T =
-        guardedFrom(GDALManager.loadedFromNodeCopy, read, suspect, () => reachableCached(), () => GDALManager.recoverProjData())
-
-    /** [[guarded]] over what it reads: whether GDAL was loaded from a node-local copy (`fromCopy`), the check and the
-      * recovery. This thread's earlier confirmation counts only when the search path is the same one after the read. */
-    private[gbx] def guardedFrom[T](
-        fromCopy: Boolean, read: () => T, suspect: T => Boolean, isReachable: () => Boolean, recover: () => Seq[String]
-    ): T = {
-        val g = generation.get()
-        val confirmed = fromCopy && confirmedAt.get() == g
-        guardedWith(read, suspect, isReachable, recover, () => confirmed && generation.get() == g)
-    }
-
-    private[gbx] def guardedWith[T](
-        read: () => T,
-        suspect: T => Boolean,
-        isReachable: () => Boolean,
-        recover: () => Seq[String],
-        confirmedBefore: () => Boolean = () => false
-    ): T = {
-        val first = read()
-        if (!suspect(first)) first
-        else if (isReachable()) { if (confirmedBefore()) first else read() }
-        else {
-            recoverOrFail(isReachable, recover, null)
-            read()
-        }
     }
 
     /** `attempt()`; when it fails with a `refusal` (what a context without PROJ's database raises, as an EPSG code

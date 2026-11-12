@@ -76,7 +76,7 @@ val metadata = rasters.select(
   col("path"),
   rx.rst_boundingbox(col("tile")).alias("bbox"),
   rx.rst_width(col("tile")).alias("width"),
-  rx.rst_height(col("tile")).alias("height"),
+  call_function("gbx_rst_height", col("tile")).alias("height"),
   rx.rst_numbands(col("tile")).alias("num_bands"),
   call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 )
@@ -117,7 +117,7 @@ val catalog = rasters.select(
   col("path"),
   rx.rst_boundingbox(col("tile")).alias("bbox"),
   rx.rst_width(col("tile")).alias("width"),
-  rx.rst_height(col("tile")).alias("height"),
+  call_function("gbx_rst_height", col("tile")).alias("height"),
   rx.rst_numbands(col("tile")).alias("bands"),
   call_function("gbx_rst_metadata", col("tile")).alias("metadata")
 ).filter(
@@ -305,253 +305,6 @@ result.show()
 +-----+
 """.trim
 
-  val rst_format_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_format(col("tile")).alias("format"))
-result.show()
-""".trim
-
-  val rst_format_scala_example_output: String =
-    """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-""".trim
-
-  val rst_height_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_height(col("tile")).alias("height"))
-result.show()
-""".trim
-
-  val rst_height_scala_example_output: String =
-    """
-+------+
-|height|
-+------+
-|161   |
-+------+
-""".trim
-
-  val rst_memsize_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_memsize(col("tile")).alias("memsize"))
-result.show()
-""".trim
-
-  val rst_memsize_scala_example_output: String =
-    """
-+-------+
-|memsize|
-+-------+
-|71749  |
-+-------+
-""".trim
-
-  val rst_pixelheight_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_pixelheight(col("tile")).alias("pixel_height"))
-result.show()
-""".trim
-
-  val rst_pixelheight_scala_example_output: String =
-    """
-+------------+
-|pixel_height|
-+------------+
-|10.0        |
-+------------+
-""".trim
-
-  val rst_pixelwidth_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_pixelwidth(col("tile")).alias("pixel_width"))
-result.show()
-""".trim
-
-  val rst_pixelwidth_scala_example_output: String =
-    """
-+-----------+
-|pixel_width|
-+-----------+
-|10.0       |
-+-----------+
-""".trim
-
-  val rst_rotation_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_rotation(col("tile")).alias("rotation"))
-result.show()
-""".trim
-
-  val rst_rotation_scala_example_output: String =
-    """
-+--------+
-|rotation|
-+--------+
-|0.0     |
-+--------+
-""".trim
-
-  val rst_scalex_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_scalex(col("tile")).alias("scale_x"))
-result.show()
-""".trim
-
-  val rst_scalex_scala_example_output: String =
-    """
-+-------+
-|scale_x|
-+-------+
-|10.0   |
-+-------+
-""".trim
-
-  val rst_scaley_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_scaley(col("tile")).alias("scale_y"))
-result.show()
-""".trim
-
-  val rst_scaley_scala_example_output: String =
-    """
-+-------+
-|scale_y|
-+-------+
-|-10.0  |
-+-------+
-""".trim
-
-  val rst_skewx_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_skewx(col("tile")).alias("skew_x"))
-result.show()
-""".trim
-
-  val rst_skewx_scala_example_output: String =
-    """
-+------+
-|skew_x|
-+------+
-|0.0   |
-+------+
-""".trim
-
-  val rst_skewy_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_skewy(col("tile")).alias("skew_y"))
-result.show()
-""".trim
-
-  val rst_skewy_scala_example_output: String =
-    """
-+------+
-|skew_y|
-+------+
-|0.0   |
-+------+
-""".trim
-
-  val rst_srid_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_srid(col("tile")).alias("srid"))
-result.show()
-""".trim
-
-  val rst_srid_scala_example_output: String =
-    """
-+-----+
-|srid |
-+-----+
-|32618|
-+-----+
-""".trim
-
-  val rst_crs_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_crs(col("tile")).alias("crs"))
-result.show(truncate = false)
-""".trim
-
-  val rst_crs_scala_example_output: String =
-    """
-+----------+
-|crs       |
-+----------+
-|EPSG:32618|
-+----------+
-""".trim
-
-  val rst_upperleftx_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_upperleftx(col("tile")).alias("upper_left_x"))
-result.show()
-""".trim
-
-  val rst_upperleftx_scala_example_output: String =
-    """
-+------------+
-|upper_left_x|
-+------------+
-|2121950.0   |
-+------------+
-""".trim
-
   val rst_upperlefty_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -586,7 +339,7 @@ import org.apache.spark.sql.functions._
 val binary = spark.read.format("binaryFile")
   .load("/Volumes/main/default/test-data/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
 val tiles = binary.select(rx.rst_fromcontent(col("content"), lit("GTiff")).alias("tile"))
-val result = tiles.select(rx.rst_format(col("tile")).alias("format"))
+val result = tiles.select(call_function("gbx_rst_format", col("tile")).alias("format"))
 result.show()
 """.trim
 
@@ -714,25 +467,6 @@ result.show(truncate = false)
 +-------+
 |500980 |
 +-------+
-"""
-
-  val rst_rastertoworldcoordy_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_rastertoworldcoordy(col("tile"), lit(100), lit(80)).alias("northing"))
-result.show(truncate = false)
-""".trim
-
-  val rst_rastertoworldcoordy_scala_example_output: String =
-    """
-+--------+
-|northing|
-+--------+
-|4599220 |
-+--------+
 """
 
   val rst_worldtorastercoordx_scala_example: String =

@@ -27,7 +27,7 @@ class HeavyRunnerTest extends AnyFunSuite with BeforeAndAfterAll {
     val rows = HeavyRunner.runPureCore(
       corpusRoot = dir.toString,
       corpus = BenchManifest.read(dir.resolve("corpus.json").toString),
-      fns = Seq("rst_width", "rst_height"),
+      fns = Seq("rst_width", "rst_numbands"),
       runId = "t", warmup = 1, measured = 2, argsByFn = Map.empty)
 
     assert(rows.nonEmpty)
@@ -47,7 +47,7 @@ class HeavyRunnerTest extends AnyFunSuite with BeforeAndAfterAll {
          | "row_pool":{"tile_px":1200,"bands":1,"dtype":"float32","tiles":[]}}""".stripMargin
     Files.write(dir.resolve("corpus.json"), json.getBytes)
     val corpus = BenchManifest.read(dir.resolve("corpus.json").toString)
-    val fns = Seq("rst_width", "rst_height")
+    val fns = Seq("rst_width", "rst_numbands")
 
     // Sink fires once per produced row, in order.
     val sunk = scala.collection.mutable.ArrayBuffer.empty[BenchRow]

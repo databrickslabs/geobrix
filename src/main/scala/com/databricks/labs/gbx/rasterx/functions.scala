@@ -19,20 +19,7 @@ object functions extends Serializable {
 
     // Accessors
     def rst_boundingbox(tile: Column): Column = ColumnAdapter(RST_BoundingBox.name, Seq(tile))
-    def rst_format(tile: Column): Column = ColumnAdapter(RST_Format.name, Seq(tile))
-    def rst_height(tile: Column): Column = ColumnAdapter(RST_Height.name, Seq(tile))
-    def rst_memsize(tile: Column): Column = ColumnAdapter(RST_MemSize.name, Seq(tile))
     def rst_numbands(tile: Column): Column = ColumnAdapter(RST_NumBands.name, Seq(tile))
-    def rst_pixelheight(tile: Column): Column = ColumnAdapter(RST_PixelHeight.name, Seq(tile))
-    def rst_pixelwidth(tile: Column): Column = ColumnAdapter(RST_PixelWidth.name, Seq(tile))
-    def rst_rotation(tile: Column): Column = ColumnAdapter(RST_Rotation.name, Seq(tile))
-    def rst_scalex(tile: Column): Column = ColumnAdapter(RST_ScaleX.name, Seq(tile))
-    def rst_scaley(tile: Column): Column = ColumnAdapter(RST_ScaleY.name, Seq(tile))
-    def rst_skewx(tile: Column): Column = ColumnAdapter(RST_SkewX.name, Seq(tile))
-    def rst_skewy(tile: Column): Column = ColumnAdapter(RST_SkewY.name, Seq(tile))
-    def rst_crs(tile: Column): Column = ColumnAdapter(RST_Crs.name, Seq(tile))
-    def rst_srid(tile: Column): Column = ColumnAdapter(RST_SRID.name, Seq(tile))
-    def rst_upperleftx(tile: Column): Column = ColumnAdapter(RST_UpperLeftX.name, Seq(tile))
     def rst_upperlefty(tile: Column): Column = ColumnAdapter(RST_UpperLeftY.name, Seq(tile))
     def rst_width(tile: Column): Column = ColumnAdapter(RST_Width.name, Seq(tile))
 
@@ -180,8 +167,6 @@ object functions extends Serializable {
     // Operations
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
-    def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
     def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
     def rst_worldtorastercoordy(tile: Column, x: Column, y: Column): Column =
@@ -195,8 +180,6 @@ object functions extends Serializable {
     // overloads (the JVM cannot read UC Volumes -- see register/#34). Use the Python/SQL binding.
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
-    def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
-        rst_rastertoworldcoordy(tile, lit(x), lit(y))
     def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordx(tile, lit(x), lit(y))
     def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =

@@ -21,7 +21,7 @@ val rasterDf = spark.read.format("binaryFile").load(rasterPath).select(col("path
 val metadataDf = rasterDf.select(
   col("path"),
   rx.rst_width(col("tile")).alias("width"),
-  rx.rst_height(col("tile")).alias("height"),
+  call_function("gbx_rst_height", col("tile")).alias("height"),
   rx.rst_numbands(col("tile")).alias("num_bands")
 )
 

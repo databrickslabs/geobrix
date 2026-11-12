@@ -58,14 +58,14 @@ def crs(ds) -> Optional[str]:
 
 def pixelwidth(ds) -> float:
     # Ground pixel size in X = magnitude including skew: sqrt(scaleX^2 + skewY^2).
-    # Mirrors heavyweight RST_PixelWidth (always non-negative); distinct from the
+    # Always non-negative; distinct from the
     # raw signed scalex(). rasterio Affine: a=scaleX(gt1), d=skewY(gt4).
     return float(math.hypot(ds.transform.a, ds.transform.d))
 
 
 def pixelheight(ds) -> float:
     # Ground pixel size in Y = magnitude including skew: sqrt(scaleY^2 + skewX^2).
-    # Mirrors heavyweight RST_PixelHeight (always non-negative); distinct from the
+    # Always non-negative; distinct from the
     # raw signed scaley(). rasterio Affine: e=scaleY(gt5), b=skewX(gt2).
     return float(math.hypot(ds.transform.e, ds.transform.b))
 

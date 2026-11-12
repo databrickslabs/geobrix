@@ -76,7 +76,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // derivedband and xyzpyramid left too (the level order never picks them): 40 - 2 = 38.
     // asformat, convolve, initnodata, updatetype and frombands left (slower than light on dedicated compute): 38 - 5 = 33.
     // band, setsrid, setcrs, getsubdataset and tri left too (0.28x to 1.16x of light on dedicated compute): 33 - 5 = 28.
-    assert(BenchDispatch.all.size == 28)
+    // crs, format, height, memsize, pixelheight, pixelwidth, rotation, scalex, scaley, skewx, skewy, srid, upperleftx and
+    // rastertoworldcoordy left too (1.05x to 1.19x of the Arrow light form on dedicated compute): 28 - 14 = 14.
+    assert(BenchDispatch.all.size == 14)
     // rst_h3_rasterize_agg: grid_aggregate kind, dggs category, deterministic 331-cell set.
     assert(BenchDispatch.inputKind("rst_h3_rasterize_agg") == "grid_aggregate")
     assert(BenchDispatch.category("rst_h3_rasterize_agg") == "dggs")
@@ -99,10 +101,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
     assert(BenchDispatch.minBands("rst_width") == 1)
-    assert(BenchDispatch.category("rst_srid") == "accessor")
-    // CRS-string accessor: rst_crs is an accessor (like rst_srid).
-    assert(BenchDispatch.category("rst_crs") == "accessor")
-    assert(BenchDispatch.inputKind("rst_crs") == "tile")
+    assert(BenchDispatch.category("rst_upperlefty") == "accessor")
+    assert(BenchDispatch.inputKind("rst_upperlefty") == "tile")
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {

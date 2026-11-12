@@ -73,9 +73,9 @@ def basic_python_udf_example(spark):
             
             # Use execute methods
             metadata = {}
-            # metadata["format"] = accessors.RST_Format.execute(dataset)
+            # metadata["format"] = dataset.GetDriver().ShortName
             # metadata["width"] = str(accessors.RST_Width.execute(dataset))
-            # metadata["height"] = str(accessors.RST_Height.execute(dataset))
+            # metadata["height"] = str(dataset.RasterYSize)
             
             # Add custom logic
             metadata["aspect_ratio"] = "1.0"  # Placeholder

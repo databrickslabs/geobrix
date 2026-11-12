@@ -61,14 +61,6 @@ SCALA_FILE_ALLOW = {
 }
 SCALA_SITES = {
     (
-        "rasterx/expressions/accessors/RST_Crs.scala",
-        "val sr = new SpatialReference(proj)",
-    ): DATASET_WKT,
-    (
-        "rasterx/expressions/accessors/RST_SRID.scala",
-        "val proj = new SpatialReference(ds.GetProjection())",
-    ): DATASET_WKT,
-    (
         "rasterx/expressions/agg/RST_Custom_RasterizeAgg.scala",
         "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(gridCrs)",
     ): INT_EPSG,

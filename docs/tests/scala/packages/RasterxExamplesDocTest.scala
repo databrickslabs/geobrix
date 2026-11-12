@@ -54,7 +54,7 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         // val metadataDf = rasterDf.select(
         //   col("path"),
         //   rx.rst_width(col("tile")).alias("width"),
-        //   rx.rst_height(col("tile")).alias("height"),
+        //   call_function("gbx_rst_height", col("tile")).alias("height"),
         //   rx.rst_numbands(col("tile")).alias("num_bands")
         // )
         // metadataDf.show()
@@ -69,7 +69,6 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         // Verify the functions used in the example are accessible
         noException should be thrownBy {
             val _ = rx.rst_width _
-            val _ = rx.rst_height _
             val _ = rx.rst_numbands _
         }
     }

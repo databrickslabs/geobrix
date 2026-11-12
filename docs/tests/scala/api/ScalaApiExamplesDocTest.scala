@@ -26,7 +26,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
   test("RasterX accessor signatures compile") {
     val _: Column = rx.rst_boundingbox(col("tile"))
     val _: Column = rx.rst_width(col("tile"))
-    val _: Column = rx.rst_height(col("tile"))
     val _: Column = rx.rst_numbands(col("tile"))
     succeed
   }
@@ -152,54 +151,15 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
   }
 
   test("RasterX accessor signatures compile — the accessors with a wrapper") {
-    val _: Column = rx.rst_format(col("tile"))
-    val _: Column = rx.rst_height(col("tile"))
-    val _: Column = rx.rst_memsize(col("tile"))
-    val _: Column = rx.rst_pixelheight(col("tile"))
-    val _: Column = rx.rst_pixelwidth(col("tile"))
-    val _: Column = rx.rst_rotation(col("tile"))
-    val _: Column = rx.rst_scalex(col("tile"))
-    val _: Column = rx.rst_scaley(col("tile"))
-    val _: Column = rx.rst_skewx(col("tile"))
-    val _: Column = rx.rst_skewy(col("tile"))
-    val _: Column = rx.rst_srid(col("tile"))
-    val _: Column = rx.rst_crs(col("tile"))
-    val _: Column = rx.rst_upperleftx(col("tile"))
     val _: Column = rx.rst_upperlefty(col("tile"))
     succeed
   }
 
   test("ScalaApiExamples accessor snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_format_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_height_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_memsize_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelheight_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelwidth_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_rotation_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_scalex_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_scaley_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_skewx_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_skewy_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_srid_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_crs_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_upperleftx_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_upperlefty_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples accessor output vals are non-empty") {
-    assert(ScalaApiExamples.rst_format_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_height_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_memsize_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelheight_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_pixelwidth_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_rotation_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_scalex_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_scaley_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_skewx_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_skewy_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_srid_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_crs_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_upperleftx_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_upperlefty_scala_example_output.nonEmpty)
   }
 

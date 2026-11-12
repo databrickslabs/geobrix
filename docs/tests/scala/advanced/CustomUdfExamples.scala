@@ -32,13 +32,13 @@ object CustomRasterUDFs {
       
       // Use execute methods to get statistics
       val width = RST_Width.execute(ds)
-      val height = RST_Height.execute(ds)
+      val height = ds.GetRasterYSize()
       val numBands = RST_NumBands.execute(ds)
       
       // Custom calculation
       val totalPixels = width * height * numBands
-      val pixelWidth = RST_PixelWidth.execute(ds)
-      val pixelHeight = RST_PixelHeight.execute(ds)
+      val pixelWidth = ds.GetGeoTransform()(1)
+      val pixelHeight = math.abs(ds.GetGeoTransform()(5))
       val coverage = width * pixelWidth * height * pixelHeight
       
       // Clean up
@@ -92,7 +92,7 @@ object CustomRasterUDFs {
       
       // Multiple execute calls for criteria
       val width = RST_Width.execute(ds)
-      val height = RST_Height.execute(ds)
+      val height = ds.GetRasterYSize()
       val numBands = RST_NumBands.execute(ds)
       
       // Custom quality logic
@@ -124,7 +124,7 @@ def applyCloudMask: UserDefinedFunction = udf((tileBytes: Array[Byte]) => {
     val band3 = ds.GetRasterBand(3)
     
     val width = RST_Width.execute(ds)
-    val height = RST_Height.execute(ds)
+    val height = ds.GetRasterYSize()
     
     // Read pixel data
     val pixels1 = band1.ReadRaster(0, 0, width, height)
@@ -204,7 +204,7 @@ def processProprietaryFormat: UserDefinedFunction =
       // Get band data
       val band = ds.GetRasterBand(1)
       val width = RST_Width.execute(ds)
-      val height = RST_Height.execute(ds)
+      val height = ds.GetRasterYSize()
       
       // Read and calibrate
       val pixels = band.ReadRaster(0, 0, width, height)
@@ -241,7 +241,7 @@ def processProprietaryFormat: UserDefinedFunction =
 def robustUDF(bytes: Array[Byte]): Option[String] = {
   try {
     val ds = loadDataset(bytes)
-    val result = RST_Format.execute(ds)
+    val result = ds.GetDriver().getShortName
     ds.delete()
     Some(result)
   } catch {
@@ -258,11 +258,10 @@ def robustUDF(bytes: Array[Byte]): Option[String] = {
   try {
     // Single dataset load, multiple operations
     val results = Map(
-      "format" -> RST_Format.execute(ds),
+      "format" -> ds.GetDriver().getShortName,
       "width" -> RST_Width.execute(ds).toString,
-      "height" -> RST_Height.execute(ds).toString,
-      "bands" -> RST_NumBands.execute(ds).toString,
-      "srid" -> RST_SRID.execute(ds).toString
+      "height" -> ds.GetRasterYSize().toString,
+      "bands" -> RST_NumBands.execute(ds).toString
     )
     results
   } finally {
@@ -283,7 +282,7 @@ spark.udf.register("raster_dims",
   (bytes: Array[Byte]) => {
     val ds = loadDataset(bytes)
     val w = RST_Width.execute(ds)
-    val h = RST_Height.execute(ds)
+    val h = ds.GetRasterYSize()
     ds.delete()
     (w, h, w.toDouble / h.toDouble)
   }, 

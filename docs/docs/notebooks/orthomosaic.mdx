@@ -47,8 +47,8 @@ The env5 wheel carries `rasterio` and the PMTiles toolchain; `pycolmap` (COLMAP)
 install after it (`pycolmap-cuda12` for the GPU pass). No JAR is needed.
 
 **`01a` runs sparse SfM on CPU.** An optional dense pass (`01b`) runs COLMAP
-`patch_match_stereo` on the **Serverless GPU AI Runtime** (environment 6 and the env6 wheel; `pycolmap-cuda12`, CUDA 12),
-producing a dense orthomosaic, DSM, and LAZ point cloud. The sparse ortho alone is
+`patch_match_stereo` on the **Serverless GPU AI Runtime**. It makes a dense orthomosaic, DSM, and LAZ point cloud.
+It needs environment 6, the env6 wheel and `pycolmap-cuda12` (CUDA 12). The sparse ortho alone is
 suitable for GSD estimation, visual inspection, and georeferenced tile serving; the dense
 pass adds fidelity for measurement workflows. `02_publish` uses whichever orthomosaic is
 present (dense if `01b` ran, else sparse).

@@ -283,6 +283,24 @@ def block_cache_bytes(
     return block_cache_for(decoded_budget_bytes(s), ceiling=ceiling)
 
 
+def streaming_cache_bytes(budget_bytes: int, held_bytes: int) -> int:
+    """Size in bytes for GDAL's block cache in a GDAL spec engine call that streams its raster (a file read by its path,
+    or a reprojection over its decoded budget): what the call's budget leaves after what it holds (``held_bytes``),
+    under ``_BLOCK_CACHE_MAX``, and never less than :func:`block_cache_bytes`. A budget of 0 (none) gets the ceiling.
+
+    GDAL's line-at-a-time algorithms (the viewshed) read across the whole window, so one line touches a row of the
+    source's blocks. A cache smaller than that row decodes each block again for each of its lines: a 4393-pixel-wide
+    window of 512-pixel float32 blocks needs 10 MiB, and the 4 MiB share took minutes on Serverless where it fits
+    in seconds.
+    """
+    spare = (
+        _BLOCK_CACHE_MAX
+        if not budget_bytes
+        else max(0, int(budget_bytes) - int(held_bytes))
+    )
+    return max(block_cache_bytes(), min(_BLOCK_CACHE_MAX, spare))
+
+
 def block_cache_for(budget_bytes: int, *, ceiling: int = _BLOCK_CACHE_MAX) -> int:
     """Size in bytes for GDAL's block cache in a fold that works within ``budget_bytes`` (the same share of it as
     :func:`block_cache_bytes` takes of a tile budget): the many members a fold keeps open are read a window at a

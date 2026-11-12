@@ -1507,16 +1507,17 @@ def _path_input_format(gdal, tokens, path: str, on_path: bool) -> list:
     ]
 
 
-def _streaming_cache(on_path: bool):
-    """GDAL's block cache held to a share of the compute's memory while an algorithm reads a file by its path: it reads the
-    raster block by block, so the cache, not the raster's size, is what it holds. Nothing for bytes in /vsimem.
+def _streaming_cache(on_path: bool, budget: int = 0, held: int = 0):
+    """GDAL's block cache held to what the call's decoded `budget` leaves after what it `held`s
+    (``budget.streaming_cache_bytes``) while an algorithm reads a file by its path: it reads the raster block by block,
+    so the cache, not the raster's size, is what it holds. Nothing for bytes in /vsimem.
     """
     if not on_path:
         return contextlib.nullcontext()
     from databricks.labs.gbx.pyrx._env import capped_block_cache
-    from databricks.labs.gbx.pyrx.core.budget import block_cache_bytes
+    from databricks.labs.gbx.pyrx.core.budget import streaming_cache_bytes
 
-    return capped_block_cache(block_cache_bytes())
+    return capped_block_cache(streaming_cache_bytes(budget, held))
 
 
 def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple:
@@ -1688,14 +1689,15 @@ def _judge_read_cap(fn, sizes, cap: Optional[int] = None) -> None:
 
 def _judge_budget(
     gdal, fn, tokens, props, names, sources, drivers, decoded, budget
-) -> None:
-    """OverCap (with a Fix) unless the call's inputs and its estimated output fit the decoded budget at once (spec
-    4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the header. A command is judged
-    by the largest state any of its steps leaves (``argv.pipeline_peak``): each step is sized from the one before it.
+) -> int:
+    """The decoded bytes the call holds (its inputs and its estimated output); OverCap (with a Fix) unless they fit the
+    decoded budget at once (spec 4.1). A reprojection's output grid is the one GDAL picks (``_warp_grid``), read from the
+    header. A command is judged by the largest state any of its steps leaves (``argv.pipeline_peak``): each step is sized
+    from the one before it.
     """
     if fn.gdal.alg == command_mod.PIPELINE_ALG:
         if not budget:
-            return
+            return decoded
         name = sources.get(0, names[0])
         drv = (
             drivers
@@ -1729,6 +1731,7 @@ def _judge_budget(
             f"compute's {budget // 2**20} MiB. Fix: retile the tile first (gbx_rst_retile), or ask for a "
             "smaller output"
         )
+    return need
 
 
 def run(
@@ -1799,7 +1802,7 @@ def run(
             # is translated: the bytes returned are the GeoTIFF's.
             if 0 not in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
-            _judge_budget(
+            held = _judge_budget(
                 gdal, fn, tokens, props, names, sources, drivers, decoded, budget
             )
             if block.out_kind == "json":
@@ -1873,7 +1876,7 @@ def run(
                     alpha,
                 )
                 return Result(_read(gdal, out), None, command)
-            with _streaming_cache(on_path):
+            with _streaming_cache(on_path, budget, held):
                 _execute(gdal, block.alg, tokens, shown, refused, strict=on_path)
             if block.per_band and props[0].bands > 1:
                 _fill_bands(

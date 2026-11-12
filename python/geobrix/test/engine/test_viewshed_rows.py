@@ -333,7 +333,7 @@ def test_the_block_cache_is_capped_while_gdal_reads_a_file_by_its_path(
     tmp_path, monkeypatch
 ):
     """GDAL reads a file by its path block by block, so its block cache is what it holds: capped to
-    ``block_cache_bytes`` during the run and put back after. A bytes tile in /vsimem runs with the cache as it is.
+    ``streaming_cache_bytes`` during the run and put back after. A bytes tile in /vsimem runs with the cache as it is.
     """
     import contextlib
 
@@ -352,7 +352,7 @@ def test_the_block_cache_is_capped_while_gdal_reads_a_file_by_its_path(
 
     monkeypatch.setattr(run, "_execute", recorded)
     before = gdal.GetCacheMax()
-    monkeypatch.setattr(budget, "block_cache_bytes", lambda: before // 2)
+    monkeypatch.setattr(budget, "streaming_cache_bytes", lambda *a: before // 2)
     with contextlib.ExitStack() as stack:
         rasters, _, _ = l3._inputs(
             fn, _file_tile(dem), 1 << 30, None, None, _VALUES, stack
@@ -361,3 +361,67 @@ def test_the_block_cache_is_capped_while_gdal_reads_a_file_by_its_path(
     assert run.run(fn, [dem.read_bytes()], _VALUES).error is None
     assert seen == [before // 2, before]
     assert gdal.GetCacheMax() == before
+
+
+def test_a_file_read_by_its_path_gets_the_cache_its_budget_leaves(tmp_path, monkeypatch):
+    """GDAL's viewshed reads its DEM a line at a time, across the whole window. Over tiled sources a line touches a row
+    of blocks, and a cache smaller than that row decodes each block again for each of its lines: a 25-tile window of
+    512-pixel float32 blocks took minutes under the 4 MiB share. The cache takes what the call's budget leaves after its
+    output, so a row of blocks stays cached and the output is the same."""
+    import contextlib
+
+    import rasterio
+
+    from databricks.labs.gbx.ds._mosaic import mint_vrt
+    from databricks.labs.gbx.engine import l3
+    from databricks.labs.gbx.pyrx.core import budget
+
+    fn = manifest.load().functions[FN]
+    gdal = run._gdal()
+    rng = np.random.default_rng(0)
+    paths = []
+    for i in range(4):  # 4 tiles side by side: a line of the window crosses 8 blocks of 128 x 128 float32 (512 KiB)
+        p = str(tmp_path / f"t{i}.tif")
+        with rasterio.open(
+            p,
+            "w",
+            driver="GTiff",
+            width=256,
+            height=256,
+            count=1,
+            dtype="float32",
+            crs="EPSG:27700",
+            transform=from_origin(256.0 * i, 256.0, 1.0, 1.0),
+            tiled=True,
+            blockxsize=128,
+            blockysize=128,
+            compress="deflate",
+        ) as dst:
+            dst.write((rng.random((1, 256, 256)) * 5).astype("float32"))
+        paths.append(p)
+    vrt = mint_vrt(paths, out=str(tmp_path / "w.vrt"))
+    values = {**_VALUES, "observer_geom": "POINT(512.5 127.5)"}
+    seen, execute = [], run._execute
+
+    def recorded(*a, **k):
+        seen.append(gdal.GetCacheMax())
+        return execute(*a, **k)
+
+    def viewshed():
+        with contextlib.ExitStack() as stack:
+            rasters, _, _ = l3._inputs(fn, _file_tile(vrt), 1 << 30, None, None, values, stack)
+            res = run.run(fn, rasters, values)
+        assert res.error is None, res.error
+        return res.raster
+
+    reference = viewshed()
+    monkeypatch.setattr(run, "_execute", recorded)
+    monkeypatch.setattr(run, "decoded_budget", lambda: 8 << 20)
+    monkeypatch.setattr(budget, "block_cache_bytes", lambda *a, **k: 64 << 10)
+    before = gdal.GetCacheMax()
+    got = viewshed()
+    row_of_blocks = 8 * 128 * 128 * 4
+    assert row_of_blocks < seen[0] <= 8 << 20  # one 1024 x 256 Byte output (256 KiB) held beside it
+    assert gdal.GetCacheMax() == before
+    with MemoryFile(reference) as a, a.open() as x, MemoryFile(got) as b, b.open() as y:
+        assert (x.read(1) == y.read(1)).all()

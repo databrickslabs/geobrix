@@ -14,6 +14,66 @@ from databricks.labs.gbx.manager import capabilities, levels, messages
 from databricks.labs.gbx.manager.levels import Choice
 
 
+class RegisterResult(Dict[str, Choice]):
+    """What ``register`` returns: the level chosen for each name, as a plain ``dict`` (same keys, values and
+    iteration), that shows itself as a one-line summary. A notebook cell that ends in ``gbx.register(spark)``
+    displays the return value; a line per function is noise. ``notes`` are the lines register said (the
+    names it skipped, the levels it fell back from)."""
+
+    _MAX_NOTES = 1  # notes shown after the summary line; the rest are counted
+
+    def __init__(self, *args, notes: Optional[List[str]] = None, label=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.notes: List[str] = list(notes or [])
+        self.label: Optional[str] = label
+
+    def __reduce__(self):
+        return (_rebuild_result, (dict(self), self.notes, self.label))
+
+    def __copy__(self):
+        return _rebuild_result(dict(self), self.notes, self.label)
+
+    def summary(self) -> str:
+        from databricks.labs.gbx import __version__
+
+        if self.label is not None:
+            return f"GeoBrix {__version__}: {self.label}"
+        n = len(self)
+        by_level: Dict[str, int] = {}
+        for choice in self.values():
+            by_level[choice.level] = by_level.get(choice.level, 0) + 1
+        levels_ = ", ".join(
+            f"{lv} {c}"
+            for lv, c in sorted(by_level.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+        head = f"GeoBrix {__version__}: {n} function{'' if n == 1 else 's'} registered"
+        return f"{head} ({levels_})" if levels_ else head
+
+    def _note_lines(self) -> List[str]:
+        shown = self.notes[: self._MAX_NOTES]
+        rest = len(self.notes) - len(shown)
+        if rest:
+            shown.append(f"... and {rest} more note{'' if rest == 1 else 's'}")
+        return shown
+
+    def __repr__(self) -> str:
+        return "\n".join([self.summary(), *self._note_lines()])
+
+    def _repr_html_(self) -> str:
+        import html
+
+        return "<br>".join(
+            html.escape(x) for x in [self.summary(), *self._note_lines()]
+        )
+
+    def _repr_pretty_(self, p, cycle) -> None:
+        p.text("RegisterResult(...)" if cycle else repr(self))
+
+
+def _rebuild_result(items, notes, label):
+    return RegisterResult(items, notes=notes, label=label)
+
+
 def _active():
     from pyspark.sql import SparkSession
 
@@ -31,6 +91,8 @@ def register(
     _prefer: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Choice]:
     """Register GeoBrix SQL functions on the best level this session offers.
+
+    The return value is a ``dict`` (name -> ``Choice``) that displays as a one-line summary.
 
     With no ``only`` it registers every GeoBrix SQL function and the light data sources (``raster_gbx`` and
     the others). ``target='uc'`` verifies the Unity Catalog functions instead of registering session ones.
@@ -79,7 +141,7 @@ def register(
             schema,
             [n for n in names if "L4" in man.functions[n].levels],
         )
-        return {}
+        return RegisterResult(label="Unity Catalog functions verified")
     overrides = _levels or {}
     prefer = _prefer or {}
     if overrides or only is None:
@@ -88,7 +150,7 @@ def register(
         capabilities.forget(spark)
     need_jvm = any("L1" in man.functions[n].levels for n in names)
     caps = capabilities.detect(spark, need_jvm)
-    out: Dict[str, Choice] = {}
+    out = RegisterResult()
     lines: List[Tuple[str, str]] = []
     chosen = []
     for n in names:
@@ -127,7 +189,7 @@ def register(
                     f"geobrix: light data sources not registered ({why})",
                 )
             )
-    messages.say_grouped(spark, lines)
+    out.notes = messages.say_grouped(spark, lines)
     if catalog is not None and schema is not None:
         _warn_uc_version(spark, catalog, schema)
     from databricks.labs.gbx import _api
@@ -360,7 +422,7 @@ def register_family(
                 f"the manager choose."
             )
     forced = None if level is None else {n: (level, "-") for n in names}
-    return register(spark, only=names, _levels=forced) if names else {}
+    return register(spark, only=names, _levels=forced) if names else RegisterResult()
 
 
 @contextlib.contextmanager

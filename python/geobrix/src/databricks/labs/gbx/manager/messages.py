@@ -38,16 +38,18 @@ def reminder(spark) -> None:
 _PLURAL = {"runs": "run", "is": "are", "has": "have", "needs": "need", "was": "were"}
 
 
-def say_grouped(spark, lines: Iterable[Tuple[str, str]]) -> None:
+def say_grouped(spark, lines: Iterable[Tuple[str, str]]) -> List[str]:
     """(name, line) pairs -> one printed line per distinct reason. A reason shared by several names prints
     once with a count; a reason that names its function prints as it is when only one name has it.
+    Returns those lines, including any printed before in this session (the register result keeps them).
     """
+    said: List[str] = []
     by_reason: Dict[str, List[str]] = {}
     for name, line in lines:
         by_reason.setdefault(line.replace(name, "{fn}"), []).append(name)
     for template, names in by_reason.items():
         if len(names) == 1:
-            say(spark, template.replace("{fn}", names[0]))
+            said.append(template.replace("{fn}", names[0]))
         elif "{fn}" in template:
             shown = ", ".join(sorted(names)[:3]) + (", ..." if len(names) > 3 else "")
             plural = re.sub(
@@ -55,6 +57,9 @@ def say_grouped(spark, lines: Iterable[Tuple[str, str]]) -> None:
                 lambda m: "{fn} " + _PLURAL[m.group(1)],
                 template,
             )
-            say(spark, plural.replace("{fn}", f"{len(names)} functions ({shown})"))
+            said.append(plural.replace("{fn}", f"{len(names)} functions ({shown})"))
         else:
-            say(spark, f"{template} ({len(names)} functions)")
+            said.append(f"{template} ({len(names)} functions)")
+    for line in said:
+        say(spark, line)
+    return said

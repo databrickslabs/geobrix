@@ -3,7 +3,7 @@
 > ## 🏭 Two ways to run Vapor-Eyes
 > **This directory is the notebook series** — an interactive, historical case study you step through cell by cell.
 >
-> **For the production example, see [`lakeflow/`](lakeflow/README.md).** It packages the same Permian methane idea as a standalone, production-grade [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) + [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), shipped as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/): incremental medallion tables on a schedule instead of one-off notebook outputs, and a fifth source — Carbon Mapper Tanager — that makes it a *current* (through 2026) monitoring view rather than a single historical overpass.
+> **For the production example, see [`lakeflow/`](lakeflow/README.md).** It packages the same Permian methane idea as a standalone [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) + [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), shipped as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/): incremental medallion tables on a schedule instead of one-off notebook outputs, and a fifth source — Carbon Mapper Tanager — that makes it a *current* (through 2026) monitoring view rather than a single historical overpass.
 >
 > **→ [Lakeflow SDP + AI/BI example](lakeflow/README.md)**
 

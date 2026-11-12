@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 Vapor-Eyes works a satellite methane signal over the Permian Basin using [GeoBrix](https://databrickslabs.github.io/geobrix/)
 on Databricks. It goes from a wide-area screen down to the operator whose well pad is leaking.
-It comes in two flavors. One is a **production-ready Lakeflow pipeline** that can run
+It comes in two flavors. One is a **Lakeflow pipeline** that can run
 on a schedule to stay current. The other is an **interactive notebook series**. The series is more of a quick
 start for understanding the GeoBrix functions involved in the detection cascade.
 
@@ -29,7 +29,7 @@ start for understanding the GeoBrix functions involved in the detection cascade.
 
 **Requires GeoBrix 0.6.0 or newer.**
 
-A standalone, production-grade Permian Basin methane-monitoring pipeline. It is a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/). It packages as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and runs on the GeoBrix lightweight tier over Serverless compute.
+A standalone Permian Basin methane-monitoring pipeline. It is a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/). It packages as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and runs on the GeoBrix lightweight tier over Serverless compute.
 
 This is the production counterpart to the notebook series (see the other tab). It uses the same Permian AOI and satellite sources. It runs on a schedule with incremental medallion tables instead of one-off notebook outputs. A fifth data source makes it a *current* (through 2026) monitoring view rather than a single historical case study.
 

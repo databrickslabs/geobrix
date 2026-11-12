@@ -1,6 +1,6 @@
 # Vapor-Eyes Lakeflow — Permian Methane Monitoring (SDP + AI/BI)
 
-A standalone, production-grade **Permian Basin methane-monitoring pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
+A standalone **Permian Basin methane-monitoring pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
 > **Requires GeoBrix 0.6.0 or newer.** This example depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — and on `read_paths` (**0.6.0**), which silver uses to read the files bronze inventories, so the staged wheel (`gbx_wheel`) must be `geobrix-0.6.0+env5-py3-none-any.whl` or newer. The pipeline and the `land` task install `[stac,vizx]` from the env5 wheel — the wheel that matches the Lakeflow runtime **as of this example (DBR 18, the default `CURRENT` channel)** and the `land` task's Serverless environment 5. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix wheel** if it has moved (e.g. a DBR 19 channel → the `+env6` wheel, with environment version 6 for the `land` task) — the wheel and the compute runtime must agree (the other family's wheel refuses to import).
 
@@ -40,7 +40,7 @@ Each stage reads only the one before it — declared as table-to-table dependenc
 
 ## Spatial functions used
 
-The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3** — RasterX for raster ops, VectorX + PMTiles for tiles, the light-tier readers (run over the bronze inventories by `read_paths`) for Serverless ingest, and native `st_*` / `h3_*` for geometry and gridding.
+The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3** — RasterX for raster ops, VectorX + PMTiles for tiles, the lightweight readers (run over the bronze inventories by `read_paths`) for Serverless ingest, and native `st_*` / `h3_*` for geometry and gridding.
 
 ![Spatial functions used across the Vapor-Eyes Lakeflow example — GeoBrix RasterX, VectorX + PMTiles, and light readers with read_paths, plus Databricks built-in ST and H3 functions](../../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.png)
 

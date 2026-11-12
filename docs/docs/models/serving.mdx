@@ -42,7 +42,7 @@ that contract into a real MLflow `ModelSignature` lazily, for use at registratio
 model_version = serving.register_to_unity_gateway(
     pyfunc,
     "catalog.schema.geosam_model",
-    profile="oauth-fe",
+    profile="my-profile",
 )
 ```
 
@@ -80,7 +80,7 @@ The bundled wheel is about 90 MB, which the model artifact then carries. GeoBrix
 endpoint = serving.create_endpoint(
     "catalog.schema.geosam_model",
     model_version,
-    profile="oauth-fe",
+    profile="my-profile",
     endpoint_name="geosam-endpoint",
     workload_type="GPU_MEDIUM",
     scale_to_zero=True,
@@ -115,7 +115,7 @@ against an existing `endpoint_name` is not the way to deploy a new version.
 ## Querying the endpoint
 
 ```python
-result = serving.query("geosam-endpoint", raw_image_bytes, profile="oauth-fe")
+result = serving.query("geosam-endpoint", raw_image_bytes, profile="my-profile")
 ```
 
 `query(endpoint_name, image, *, profile)` base64-encodes `image` (raw image/GeoTIFF

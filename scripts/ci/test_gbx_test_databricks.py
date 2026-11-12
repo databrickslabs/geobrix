@@ -195,6 +195,18 @@ def test_a_narrowed_family_file_is_planned_by_the_tables_it_runs(shards):
     assert plan["shards"]["files-family"]["env"]["GBX_ORACLE_TABLES"] == "RASTER_ACCESSOR"
 
 
+def test_each_chunk_of_a_narrowed_family_file_runs_only_its_own_tables(shards):
+    """--env GBX_ORACLE_TABLES=A,B,C narrows the family file, and the cut gives each chunk some of those tables: the chunk's own
+    list must reach its env, not the whole --env list (2026-11-12: two chunks both ran all five tables and both overran)."""
+    fam = ts.narrow_tables(ts.select(shards, "test/manager/test_family_cross_tier.py", [], REPO_ROOT), "WEB_TILES,RASTER_FILE_OP")
+    parts = ts.split_tables(fam[0], 2, {"table:WEB_TILES": 60.0, "table:RASTER_FILE_OP": 60.0})
+    assert len(parts) == 2 and {p.oracle_tables for p in parts} == {"WEB_TILES", "RASTER_FILE_OP"}
+    plan = _plan(_args("--env", "GBX_ORACLE_TABLES=WEB_TILES,RASTER_FILE_OP", "--env", "X=1"), parts)
+    envs = sorted(c["env"]["GBX_ORACLE_TABLES"] for k, c in plan["shards"].items() if k.startswith("files-family"))
+    assert envs == ["RASTER_FILE_OP", "WEB_TILES"]
+    assert all(c["env"].get("X") == "1" for c in plan["shards"].values()), "the other --env variables still reach every chunk"
+
+
 def test_a_cut_with_no_units_keeps_the_shard_whole(monkeypatch):
     monkeypatch.setattr(ts, "_items", lambda *a, **k: ({}, 0, 0.0))
     s = ts.Shard(name="x", kind="light", paths=["test/x"])
@@ -1918,6 +1930,31 @@ def test_the_chunk_records_its_setup_phases_in_order(shards):
     for hook in ("collected", "first_test_start", "first_test_end"):
         assert 'phase("%s")' % hook in run
     assert "phases=PHASES_OUT()" in run, "the result carries the phases"
+
+
+def test_a_serverless_chunk_checks_its_workers_while_it_unpacks(shards):
+    """On Serverless the workers run the wheel, not the checkout, so their check needs no overlay: it starts before the
+    unpack, in a thread, and the guard after the overlay takes what it found. On a pool node it stays after the overlay."""
+    run = launcher.run_source({"stage": "/x"})
+    early, unpack, guard = run.index("_WORKER_CHECK.start()"), run.index("CHECKOUT, repo, CHECKOUT_WHY = node_checkout("), run.index('run_guard({"tree": src_pkg}')
+    assert early < unpack < guard
+    assert "EARLY_WORKERS = bool(PLAN.get(\"serverless\"))" in run[:unpack] and "workers=_early_workers" in run[guard:]
+    ns = {"time": __import__("time"), "threading": threading, "PLAN": {"serverless": True}, "spark": object()}
+    seen = []
+
+    def collect_workers(spark, tasks=8, exclude=()):
+        seen.append(exclude)
+        return [{"host": "w1"}]
+
+    ns["collect_workers"] = collect_workers
+    head = run[run.index("_EARLY = {}"): run.index("EARLY_WORKERS = bool(")] + "_WORKER_CHECK.start()\n"
+    tail = run[run.index("def _early_workers"): run.index("if EARLY_WORKERS:\n    WHEEL_GUARD_TREE")]
+    exec(compile(head + tail, "early", "exec"), ns)  # noqa: S102
+    assert ns["_early_workers"]() == [{"host": "w1"}] and seen == [("_build_info.py",)]
+    ns2 = dict(ns, collect_workers=lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no workers")))
+    exec(compile(head + tail, "early", "exec"), ns2)  # noqa: S102
+    with pytest.raises(RuntimeError, match="no workers"):
+        ns2["_early_workers"]()
 
 
 def test_the_summary_breaks_each_chunk_s_setup_into_phases():

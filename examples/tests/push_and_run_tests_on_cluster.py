@@ -228,6 +228,17 @@ def extra_env(a) -> dict:
     return dict(kv.split("=", 1) for kv in a.env)
 
 
+def chunk_env(s, a) -> dict:
+    """A chunk's env: its own (GBX_SHARD, GBX_ORACLE_TABLES), then --env over it. A chunk's own oracle tables win: --env
+    GBX_ORACLE_TABLES narrowed the family file to them, and the cut gave this chunk some of them (the whole --env list here
+    would run every chunk on every table)."""
+    own = ts.shard_env(s)
+    env = {**own, **extra_env(a)}
+    if own.get("GBX_ORACLE_TABLES"):
+        env["GBX_ORACLE_TABLES"] = own["GBX_ORACLE_TABLES"]
+    return env
+
+
 def spark_confs(a) -> dict:
     """The --spark-conf settings, as every shard's session sets them before its tests."""
     return dict(kv.split("=", 1) for kv in a.spark_conf)
@@ -298,7 +309,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         "local_out": f"test-logs/databricks-tests/{run_id}",
         "shards": {
             s.slug: {
-                "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": {**ts.shard_env(s), **extra_env(a)}, "spark_conf": spark_confs(a), "expected_min": round(s.expected_min, 1),
+                "name": s.name, "kind": s.kind, "args": ts.pytest_args(s), "env": chunk_env(s, a), "spark_conf": spark_confs(a), "expected_min": round(s.expected_min, 1),
                 "test_part": s.test_part, "est_src": s.est_src or "ci", "heavy": bool(s.heavy and not a.serverless), "unit_max_min": round(s.unit_max_min, 1), "subset": bool(s.subset),
                 "solo_min": round(s.solo_min or s.expected_min, 1),
                 "contention": round(s.expected_min / s.solo_min, 2) if s.solo_min else 1.0,
@@ -616,6 +627,24 @@ try:  # the runner that runs this chunk: its chunks share one checkout, one afte
 except Exception:
     RUNNER = ""
 phase("scratch")
+# On Serverless the Python workers are other machines: they run the wheel (the environment spec's), never the checkout laid
+# over the driver's copy, so their check needs no overlay. It starts here, in a thread, and runs while the checkout unpacks
+# (its first UDF also starts the workers, about 20 s); the guard after the overlay compares what it found. On a pool node the
+# workers share the driver's environment, so there it runs after the overlay, as before.
+_EARLY = {}
+
+
+def _collect_early():
+    try:
+        _EARLY["seen"] = collect_workers(spark, exclude=("_build_info.py",))
+    except Exception as exc:  # the guard reports it as a failed worker check
+        _EARLY["error"] = exc
+
+
+_WORKER_CHECK = threading.Thread(target=_collect_early, daemon=True)
+EARLY_WORKERS = bool(PLAN.get("serverless"))
+if EARLY_WORKERS:
+    _WORKER_CHECK.start()
 
 
 def _unpack(repo):
@@ -702,7 +731,19 @@ assert os.path.realpath(_gbx.__file__).startswith(os.path.realpath(sitedir)) and
 phase("import_gbx")
 # The checkout wins, in the driver AND in the Python workers: every .py file of the imported package is the checkout's (the wheel's
 # _build_info.py aside); the shard fails here, naming the differing files, rather than test the wheel's older copy
-WHEEL_GUARD_TREE = run_guard({"tree": src_pkg}, spark=spark, exclude=("_build_info.py",))
+def _early_workers():  # what the early worker check found (it raises what the check raised)
+    _WORKER_CHECK.join(600)
+    if "error" in _EARLY:
+        raise _EARLY["error"]
+    if "seen" not in _EARLY:
+        raise RuntimeError("the early worker check did not return in 600 s")
+    return _EARLY["seen"]
+
+
+if EARLY_WORKERS:
+    WHEEL_GUARD_TREE = run_guard({"tree": src_pkg}, spark=spark, workers=_early_workers, exclude=("_build_info.py",))
+else:
+    WHEEL_GUARD_TREE = run_guard({"tree": src_pkg}, spark=spark, exclude=("_build_info.py",))
 phase("guard_tree")
 os.chdir(repo + "/" + S["cwd"])
 os.environ.update(S["env"])

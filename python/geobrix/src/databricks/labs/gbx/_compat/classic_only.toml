@@ -69,6 +69,17 @@ gate = "capability"
 gate_detail = "manager/levels.py _jvm_unavailable: level L1 is unavailable when Capabilities.connect is true (Serverless and standard access), when no JAR of the wheel's version loaded (jar_reason), or when the JVM's GDAL does not load (gdal_reason); the registrar then takes the next level, light, and prints one line with the reason"
 why = "The level table lists the JVM level first for the functions where it measured faster; on any other compute the same names run on the light level"
 
+# --- the Python API's first-use cache ----------------------------------------------------------------------------
+
+[[site]]
+path = "_api.py"
+symbol = "_flow"
+api = ["_jsparkSession"]
+computes = ["dedicated", "standard"]
+gate = "capability"
+gate_detail = "read only when the session has no Connect client and capabilities.is_connect (a type check) says it is classic; inside try/except that falls back to one cache key"
+why = "Keys the registration cache by the JVM session a Databricks Lakeflow flow runs in (an attribute read, no py4j call)"
+
 # --- JAR capability probes ---------------------------------------------------------------------------------------
 
 [[site]]

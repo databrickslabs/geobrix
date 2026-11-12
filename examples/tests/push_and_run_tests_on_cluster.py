@@ -555,6 +555,20 @@ S = PLAN["shards"][SLUG]
 CAPS = PLAN["caps"]
 STALL_MIN = S.get("stall_min") or CAPS["stall_min"]  # scaled to the chunk's longest file or table (see _test_shards.stall_min_for)
 t0 = time.time()
+PHASES = globals().get("_GBX_PHASES") or {}  # the start cell's marks (the runner's call, the notebook's start), then this cell's
+PHASES["run_cell"] = t0
+PHASE_T0 = PHASES.get("call") or PHASES.get("nb_start") or t0
+
+
+def phase(name):  # a setup phase ends: its time since the runner's call, printed and kept for the result (the first mark of a name wins)
+    PHASES.setdefault(name, time.time())
+    print("phase=%%s t=%%.1f" %% (name, PHASES[name] - PHASE_T0), flush=True)
+
+
+def PHASES_OUT():
+    return {k: round(v - PHASE_T0, 1) for k, v in sorted(PHASES.items(), key=lambda kv: kv[1])}
+
+
 try:  # the node's local disk; Serverless has none to write
     os.makedirs("/local_disk0/gbxtest", exist_ok=True)
     scratch = "/local_disk0/gbxtest"
@@ -601,6 +615,7 @@ try:  # the runner that runs this chunk: its chunks share one checkout, one afte
     RUNNER = dbutils.widgets.get("runner")
 except Exception:
     RUNNER = ""
+phase("scratch")
 
 
 def _unpack(repo):
@@ -638,6 +653,7 @@ t_co = time.time()
 CHECKOUT, repo, CHECKOUT_WHY = node_checkout(base, RUNNER or SLUG, {"tarball": PLAN["tarball"], "resources": (PLAN.get("resources") or {}).get("tree", "")},
                                              _unpack, _reset)
 CHECKOUT_S = round(time.time() - t_co, 1)
+phase("checkout")
 print("checkout:", CHECKOUT, "for runner", RUNNER or "-", "in", CHECKOUT_S, "s:", repo, ("(" + CHECKOUT_WHY + ")") if CHECKOUT_WHY else "", flush=True)
 try:  # said at once, beside child.json: a chunk that fails later (the wheel guard, before pytest) still says how it got its tree
     with open(STAGE + "/out/" + SLUG + "/checkout.json", "w") as _f:
@@ -677,18 +693,22 @@ os.environ["PYTHONPATH"] = os.pathsep.join(x for x in [root + "/sc", sitedir, os
 sys.path.insert(0, pkg)
 for m in [m for m in sys.modules if m == "test" or m.startswith("test.") or m == "databricks.labs" or m.startswith("databricks.labs.")]:
     del sys.modules[m]
+phase("overlay")
 # On a cluster `databricks` is a regular package of the runtime whose path was fixed when the REPL started: add the sitedir's.
 import databricks, pkgutil, filecmp
 databricks.__path__ = pkgutil.extend_path(databricks.__path__, "databricks")
 import databricks.labs.gbx as _gbx
 assert os.path.realpath(_gbx.__file__).startswith(os.path.realpath(sitedir)) and filecmp.cmp(_gbx.__file__, pkg + "/src/databricks/labs/gbx/__init__.py", shallow=False), "the package under test is not the checkout's: " + _gbx.__file__
+phase("import_gbx")
 # The checkout wins, in the driver AND in the Python workers: every .py file of the imported package is the checkout's (the wheel's
 # _build_info.py aside); the shard fails here, naming the differing files, rather than test the wheel's older copy
 WHEEL_GUARD_TREE = run_guard({"tree": src_pkg}, spark=spark, exclude=("_build_info.py",))
+phase("guard_tree")
 os.chdir(repo + "/" + S["cwd"])
 os.environ.update(S["env"])
 os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
 import pytest
+phase("import_pytest")
 
 log = open(root + "/out/pytest.log", "w")
 class Tee:
@@ -775,8 +795,11 @@ def first_failure(nodeid, report):  # the chunk's first failure, for its one-lin
 class Counter:
     def pytest_collection_finish(self, session):
         state["total"] = len(session.items); state["last_t"] = time.time(); beat()
+        phase("collected")
     def pytest_runtest_logstart(self, nodeid, location):
         state["last_t"] = time.time()  # a test that starts counts as progress; only a test that outlasts stall_min is a stall
+        if "first_test_start" not in PHASES:
+            phase("first_test_start")
 
     def _phase(self, item, phase):  # the per-test timeout counts each phase: the call gets TEST_TIMEOUT, setup and teardown 3x it
         state["cur"], state["cur_t"], state["phase"] = item.nodeid, time.time(), phase
@@ -798,6 +821,8 @@ class Counter:
 
     def pytest_runtest_logfinish(self, nodeid, location):
         state["cur"] = ""
+        if "first_test_end" not in PHASES:  # the first test's setup holds the session fixtures (the Spark session, register)
+            phase("first_test_end")
 
     def pytest_collectreport(self, report):  # an import error of a test file: the shape of an environment-wide failure
         if report.failed:
@@ -882,6 +907,7 @@ def watchdog():
                 os.kill(os.getpid(), signal.SIGKILL)
 threading.Thread(target=watchdog, daemon=True).start()
 note_child()
+phase("note_child")
 print("chunk run:", CHILD, flush=True)
 
 # Isolation probe: a shard before this one in the same runner leaves a temp view and a conf in its own session. Seeing
@@ -899,6 +925,7 @@ for _k, _v in S.get("spark_conf", {}).items():  # --spark-conf: set before the t
     except Exception as exc:
         CONF_ERR = CONF_ERR or "--spark-conf %%s=%%s refused by this session: %%s: %%s" %% (_k, _v, type(exc).__name__, " ".join(str(exc).split())[:240])
 print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| spark conf", S.get("spark_conf", {}), "| cores", os.cpu_count(), "| session", type(spark).__name__, "| isolation", iso, flush=True)
+phase("probe")
 # a test's tmp_path holds the files its virtual tiles name; on Serverless the Python workers are other machines that
 # cannot see the driver's disk, so there tmp_path is under the run's Volume folder, which every worker reads
 basetemp = root + "/tmp" if scratch == "/local_disk0/gbxtest" else STAGE + "/tmp/" + PLAN.get("attempt", "0") + "/" + SLUG
@@ -958,6 +985,7 @@ def smoke_pick():  # the first tests of the run's fastest chunk that collects an
 
 
 rc = 0
+phase("pytest_start")
 try:
     if CONF_ERR:
         rc = 2
@@ -984,6 +1012,7 @@ except BaseException as exc:  # an interrupt from the watchdog, or a crash of th
     state["reason"] = state["reason"] or "%%s: %%s" %% (type(exc).__name__, exc)
     rc = 130
 state["done"] = True
+phase("pytest_end")
 sys.stdout, sys.stderr = sys.stdout.a, sys.stderr.a
 log.close()
 try:  # what the next shard's probe looks for
@@ -998,7 +1027,7 @@ result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0),
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
               timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER,
-              empty_ok=S.get("empty_ok", True))
+              empty_ok=S.get("empty_ok", True), phases=PHASES_OUT(), phase_origin="call" if "call" in PHASES else "nb_start")
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
@@ -1074,11 +1103,14 @@ else:
 
     def execute(slug):
         print("+%ds" % (time.time() - T0), WHO, "runs", PLAN["shards"][slug]["name"], flush=True)
-        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug, "runner": WHO}), TIMEOUT_S,
+        t_call = time.time()  # the chunk measures its setup phases from here (its notebook run's start included)
+        res = run_shard(lambda: dbutils.notebook.run(SHARD_NB, TIMEOUT_S, {"shard": slug, "runner": WHO, "t_call": "%.3f" % t_call}), TIMEOUT_S,
                         watchdog=lambda: heartbeat_watchdog(STAGE + "/hb/" + slug + ".json"),
                         result=lambda: read_json_file(STAGE + "/out/" + slug + "/result.json"))
         if not res.get("child"):  # a chunk that failed before pytest: its first cell named its run, so the launcher can read why
             res["child"] = read_json_file(STAGE + "/out/" + slug + "/child.json") or {}
+        if isinstance(res.get("phases"), dict):  # the notebook run's exit reached the runner: the last phase
+            res["phases"]["returned"] = round(time.time() - t_call, 1)
         print("+%ds" % (time.time() - T0), WHO, "ran", PLAN["shards"][slug]["name"], "rc", res.get("rc"), res.get("reason") or "", flush=True)
         return res
 
@@ -1168,6 +1200,14 @@ def cell(source: str, kind: str = "code") -> dict:
 
 START_SOURCE = '''# the chunk names its own run first: if a later cell fails before pytest, the launcher reads that run's error
 import json, os
+import time as _time
+
+# the setup phases (epoch seconds), from the runner's call (widget t_call) on: the run cell adds its own, the result carries them
+_GBX_PHASES = {"nb_start": _time.time()}
+try:
+    _GBX_PHASES["call"] = float(dbutils.widgets.get("t_call"))
+except Exception:  # a chunk run by hand, or by a runner that predates the widget
+    pass
 _ctx = {}
 try:
     _ctx = json.loads(dbutils.notebook.entry_point.getDbutils().notebook().getContext().safeToJson()).get("attributes") or {}
@@ -1181,6 +1221,8 @@ os.makedirs(_out, exist_ok=True)
 with open(_out + "/child.json", "w") as _f:
     json.dump(_child, _f)
 print("chunk run:", _child)
+print("phase=nb_start t=%.1f" % (_GBX_PHASES["nb_start"] - _GBX_PHASES.get("call", _GBX_PHASES["nb_start"])), flush=True)
+_GBX_PHASES["start_cell_end"] = _time.time()
 '''
 
 
@@ -1353,12 +1395,42 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
                 out.append(f"- ... {len(r['failures']) - 25} more in the junit.xml")
         if r.get("reason"):
             out += ["", f"## {r['name']}: stopped", "", f"- {r['reason']}"]
+    out += phase_lines(rows)
     skips = [r for r in rows if r["skip_reasons"]]
     if skips:
         out += ["", "## Skipped (top reasons per shard)", ""]
         for r in skips:
             out.append(f"- {r['name']}: " + "; ".join(f"{n} x {m or '(no reason)'}" for m, n in r["skip_reasons"].most_common(4)))
     return "\n".join(out) + "\n"
+
+
+# the setup phases a chunk marks (its notebook's start cell, then its run cell), in the order they happen
+PHASE_ORDER = ("nb_start", "start_cell_end", "run_cell", "scratch", "checkout", "overlay", "import_gbx", "guard_tree", "import_pytest",
+               "note_child", "probe", "pytest_start", "collected", "first_test_start", "first_test_end", "pytest_end", "returned")
+
+
+def phase_lines(rows: List[dict]) -> List[str]:
+    """Where each chunk's time went before (and around) its tests: per phase, the seconds since the phase before it, from the runner's
+    call of the chunk's notebook (``call``). ``run_cell`` after ``start_cell_end`` is the wheel guard cell; ``first_test_end`` after
+    ``first_test_start`` holds the session fixtures. The last column is the time from the call to the first test."""
+    have = [r for r in rows if isinstance(r.get("phases"), dict) and r["phases"]]
+    if not have:
+        return []
+    cols = [p for p in PHASE_ORDER if any(p in r["phases"] for r in have)]
+    out = ["", "## Setup phases (s since the phase before; from the runner's call of the chunk's notebook)", "",
+           "| chunk | " + " | ".join(cols) + " | to first test |", "|---|" + "---|" * (len(cols) + 1)]
+    for r in have:
+        ph, prev, cells = r["phases"], float(r["phases"].get("call", 0.0)), []
+        for c in cols:
+            if c in ph:
+                cells.append(f"{float(ph[c]) - prev:.0f}")
+                prev = float(ph[c])
+            else:
+                cells.append("-")
+        first = ph.get("first_test_start")
+        out.append(f"| {r['name']} | " + " | ".join(cells) + f" | {float(first) - float(ph.get('call', 0.0)):.0f} |" if first is not None
+                   else f"| {r['name']} | " + " | ".join(cells) + " | - |")
+    return out
 
 
 def contention_cell(row: dict) -> str:
@@ -2493,6 +2565,7 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
             "actual_s": int(mine[-1]["end"] - mine[-1]["start"]) if mine and mine[-1].get("end") is not None else None,
             "isolation": (res or {}).get("isolation"), "maxfail_hit": bool((res or {}).get("maxfail_hit")), "smoke": slug in smokes,
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),
+            "phases": (res or {}).get("phases"),
         })
         print(f"  downloaded {len(got)} file(s) for {s['name']}", flush=True)
     return rows

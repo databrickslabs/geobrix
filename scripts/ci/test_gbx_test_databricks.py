@@ -1856,7 +1856,7 @@ def test_the_runner_notebook_seeds_the_queue_then_runs_every_shard_once(shards, 
     src = "".join(nb["cells"][1]["source"])
     assert "__STAGE__" not in src and "def run_loop" in src
     fake = _FakeDelta()
-    ran = []
+    ran, t_calls = [], []
 
     class Spark:
         def sql(self, q):
@@ -1866,6 +1866,7 @@ def test_the_runner_notebook_seeds_the_queue_then_runs_every_shard_once(shards, 
     def dbutils(widgets):
         def run(path, timeout, args):
             ran.append((widgets["runner"], args["shard"]))
+            t_calls.append(args["t_call"])
             return json.dumps({"rc": 0, "pid": 100 + len(ran)})
 
         def exit_(v):
@@ -1884,6 +1885,52 @@ def test_the_runner_notebook_seeds_the_queue_then_runs_every_shard_once(shards, 
     assert sorted(s for _, s in ran) == sorted(plan["shards"]) and sum(o["shards"] for o in out) == len(plan["shards"])
     rec = json.loads((stage / "runners" / "gbx-test-1n" / "r0.json").read_text())
     assert rec["done"] and rec["pool"] == "gbx-test-1n" and rec["shards"], "the record reached the Volume folder"
+    assert len(t_calls) == len(ran) and all(float(t) > 0 for t in t_calls), "each call passes its time to the chunk"
+
+
+# ---- setup phases: where a chunk's minutes go before its first test
+
+
+def test_the_runner_passes_the_time_of_its_call_to_the_chunk():
+    src = launcher.runner_source({"stage": "/x"})
+    assert '"t_call": "%.3f" % t_call' in src, "the chunk measures its own start against the runner's call"
+
+
+def test_the_chunk_records_its_setup_phases_in_order(shards):
+    plan = _plan(_args("--serverless"), ts.select(shards, "ds"), wheel=Path("/x/geobrix-0.6.0+env6-py3-none-any.whl"))
+    nb = launcher.build_notebook(plan, "serverless")
+    start = "".join(nb["cells"][1]["source"])
+    ns = {}
+
+    class W:
+        @staticmethod
+        def get(k):
+            return {"shard": "s", "t_call": "100.5"}[k]
+
+    d = type("D", (), {"widgets": W, "notebook": type("N", (), {"entry_point": None})})
+    snippet = start[: start.index("_out = ")] + start[start.index('print("phase=nb_start'):]
+    exec(compile(snippet, "start", "exec"), {"dbutils": d, **ns}, ns)  # noqa: S102
+    assert ns["_GBX_PHASES"]["call"] == 100.5 and ns["_GBX_PHASES"]["nb_start"] > 100.5 and "start_cell_end" in ns["_GBX_PHASES"]
+    run = "".join(nb["cells"][-1]["source"])
+    marks = ["scratch", "checkout", "overlay", "import_gbx", "guard_tree", "import_pytest", "note_child", "probe", "pytest_start", "pytest_end"]
+    at = [run.index('phase("%s")' % m) for m in marks]
+    assert at == sorted(at), "the marks follow the chunk's own order"
+    for hook in ("collected", "first_test_start", "first_test_end"):
+        assert 'phase("%s")' % hook in run
+    assert "phases=PHASES_OUT()" in run, "the result carries the phases"
+
+
+def test_the_summary_breaks_each_chunk_s_setup_into_phases():
+    rows = [{"name": "a", "phases": {"call": 0.0, "nb_start": 30.0, "start_cell_end": 31.0, "run_cell": 45.0, "checkout": 57.0,
+                                     "first_test_start": 80.0, "pytest_end": 200.0}},
+            {"name": "b", "phases": None}]
+    text = "\n".join(launcher.phase_lines(rows))
+    assert "| a |" in text and "| b |" not in text
+    head = [ln for ln in text.splitlines() if ln.startswith("| chunk")][0]
+    assert head.index("nb_start") < head.index("run_cell") < head.index("checkout") < head.index("first_test_start")
+    row = [ln for ln in text.splitlines() if ln.startswith("| a |")][0]
+    assert "| 30 | 1 | 14 | 12 | 23 | 120 | 80 |" in row, "each phase is the time since the one before; the last column is the time to the first test"
+    assert launcher.phase_lines([{"name": "b", "phases": None}]) == []
 
 
 # ---- contention: what a unit takes beside other chunks, against what it takes alone

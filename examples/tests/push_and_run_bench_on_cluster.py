@@ -734,6 +734,7 @@ def run_smoke_stage(
         for pr in problems:
             print(f"  - {pr}", file=sys.stderr)
         return EXIT_SMOKE_FAILED
+    _remove_notebook(w, smoke_path)  # a clean smoke needs no repair run; a failed one keeps its notebook
     if smoke_only:
         print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): --smoke-only, the real run is not submitted.")
         return 0
@@ -2015,7 +2016,8 @@ def _main(_stack) -> int:
         or None
     )
     me = w.current_user.me()
-    base = notebook_path_from_env or f"/Users/{me.user_name}/geobrix_bench_runner"
+    # Under GeoBrix/bench/, never the home root: a flat home folder filled with hundreds of runner notebooks.
+    base = notebook_path_from_env or f"/Users/{me.user_name}/GeoBrix/bench/geobrix_bench_runner"
     base = base.rstrip("/").removesuffix(".ipynb")
     notebook_path = f"{base}_{run_id}.ipynb"
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.

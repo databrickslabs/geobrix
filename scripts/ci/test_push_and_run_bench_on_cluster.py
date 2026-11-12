@@ -193,7 +193,7 @@ def test_every_launch_gets_its_own_notebook(launch, sdk):
         assert launch("--serverless", "--zarr-only", "--no-wait") == 0
     paths = [path for path, _ in sdk.uploads]
     assert len(set(paths)) == 2
-    assert all(p.startswith("/Users/me@example.com/geobrix_bench_runner_cluster-") for p in paths)
+    assert all(p.startswith("/Users/me@example.com/GeoBrix/bench/geobrix_bench_runner_cluster-") for p in paths)
 
     sdk.uploads.clear()
     prefix = dict(GBX_BENCH_RUNNER_NOTEBOOK_PATH="/Users/me@example.com/nb.ipynb")
@@ -739,3 +739,37 @@ def test_the_launcher_reads_the_config_the_command_resolved_when_its_own_dir_has
     assert run().stdout.strip().endswith("yes"), run().stderr
     (tests / "databricks_cluster_config.env").write_text("GBX_T_FROM_MAIN=local\n")
     assert run().stdout.strip().endswith("local")
+
+
+def test_runner_notebooks_live_in_a_bench_folder_not_the_home_root(launch, sdk):
+    """The home folder filled with ~300 runner notebooks: each launch's notebooks go to /Users/<you>/GeoBrix/bench/."""
+    assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t8") == 0
+    (path, _), = sdk.uploads
+    assert path == "/Users/me@example.com/GeoBrix/bench/geobrix_bench_runner_t8.ipynb"
+
+
+def _smoke(module, monkeypatch, problems, smoke_only=False):
+    deleted = []
+    w = SimpleNamespace(workspace=SimpleNamespace(delete=deleted.append))
+    monkeypatch.setattr(module, "watch_to_end", lambda *a, **k: module.Outcome(seconds=5.0))
+    monkeypatch.setattr(module, "smoke_problems", lambda *a, **k: problems)
+    monkeypatch.setattr(module, "print_smoke", lambda *a, **k: None)
+    rc = module.run_smoke_stage(
+        w, lambda *a: 1, do_smoke=True, no_smoke=False, smoke_only=smoke_only, smoke_path="/p/x_smoke.ipynb",
+        run_id="r", out_dir="/o", smoke_rows=10, smoke_timeout_min=5, form_cap_s=60.0, stale_s=60.0, token="t",
+        levels_mvp="H", allow_errors=False,
+    )  # fmt: skip
+    return rc, deleted
+
+
+@pytest.mark.parametrize("smoke_only", [False, True])
+def test_a_clean_smoke_removes_its_notebook(launch, monkeypatch, smoke_only):
+    module = importlib.import_module("push_and_run_bench_on_cluster")
+    rc, deleted = _smoke(module, monkeypatch, [], smoke_only=smoke_only)
+    assert rc == (0 if smoke_only else None) and deleted == ["/p/x_smoke.ipynb"]
+
+
+def test_a_failed_smoke_keeps_its_notebook(launch, monkeypatch):
+    module = importlib.import_module("push_and_run_bench_on_cluster")
+    rc, deleted = _smoke(module, monkeypatch, ["a form failed"])
+    assert rc == module.EXIT_SMOKE_FAILED and deleted == []

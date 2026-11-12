@@ -4,7 +4,8 @@ A Lakeflow pipeline runs every dataset function on the same Spark Connect sessio
 ``PipelineAnalysisContext`` (a thread-local user-context extension naming the flow). A function registered while
 one flow's body ran does not resolve in another flow's analysis, so the registration cache of ``_api.ensure`` is
 kept per flow, not only per session (a body that called ``pmtiles_agg()`` after another body's ``register(spark)``
-failed with ``UNRESOLVED_ROUTINE gbx_pmtiles_agg``).
+failed with ``UNRESOLVED_ROUTINE gbx_pmtiles_agg``). A Databricks Lakeflow session is classic instead: each run of
+a dataset function has its own JVM session, which keys the cache there.
 """
 
 import pytest
@@ -117,3 +118,75 @@ def test_a_new_classic_session_lacks_the_function_and_the_api_registers_it(spark
     assert not other.catalog.functionExists(NAME)
     _api.ensure(other, NAME)
     assert other.catalog.functionExists(NAME)
+
+
+class _JObj:
+    def __init__(self, target_id):
+        self._target_id = target_id
+
+
+class _ClassicFlowSession:
+    """A classic look-alike of the Databricks Lakeflow session: ``client`` raises (no Spark Connect), and
+    ``_jsparkSession`` names the JVM session of the dataset function running now (a fresh one per body run).
+    """
+
+    def __init__(self):
+        self.jvm_session = _JObj("o1")
+
+    @property
+    def client(self):
+        raise RuntimeError("[ONLY_SUPPORTED_WITH_SPARK_CONNECT] client")
+
+    @property
+    def _jsparkSession(self):
+        return self.jvm_session
+
+
+def _recording_register_classic(monkeypatch):
+    calls = []
+
+    def fake(s, target="session", only=None, **kw):
+        calls.append(s._jsparkSession._target_id)
+        return {n: 1 for n in only}
+
+    monkeypatch.setattr(manager, "register", fake)
+    return calls
+
+
+def test_on_a_classic_pipeline_session_each_flow_jvm_session_registers_once(
+    monkeypatch,
+):
+    """Databricks Lakeflow runs each dataset function in its own JVM session behind one classic Python session
+    object: a name registered in one body's JVM session registers again in the next body's.
+    """
+    s = _ClassicFlowSession()
+    calls = _recording_register_classic(monkeypatch)
+    _api.ensure(s, NAME)  # flow A
+    _api.ensure(s, NAME)
+    s.jvm_session = _JObj("o7")  # flow B: another JVM session
+    _api.ensure(s, NAME)
+    _api.ensure(s, NAME)
+    s.jvm_session = _JObj("o1")  # back in A's session: nothing more
+    _api.ensure(s, NAME)
+    assert calls == ["o1", "o7"]
+
+
+def test_a_classic_session_without_a_jvm_session_keeps_one_cache(monkeypatch):
+    class _NoJvm(_ClassicFlowSession):
+        @property
+        def _jsparkSession(self):
+            raise AttributeError("_jsparkSession")
+
+    s = _NoJvm()
+    calls = []
+    monkeypatch.setattr(
+        manager,
+        "register",
+        lambda s, target="session", only=None, **kw: (
+            calls.append(1),
+            {n: 1 for n in only},
+        )[1],
+    )
+    _api.ensure(s, NAME)
+    _api.ensure(s, NAME)
+    assert calls == [1]

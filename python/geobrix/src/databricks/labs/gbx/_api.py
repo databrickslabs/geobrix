@@ -3,7 +3,7 @@
 Every generated function calls the SQL function GeoBrix registers under the same manifest name, so the
 Python API and SQL run one implementation at one level. The first call of a name in a session registers
 it through the manager; later calls are a set lookup. In a Lakeflow pipeline the first call in each flow registers
-(see ``_flow``). Nothing here touches the JVM.
+(see ``_flow``). Nothing here calls into the JVM.
 """
 
 from __future__ import annotations
@@ -49,11 +49,18 @@ def _flow(spark) -> tuple:
     """The Lakeflow flow whose analysis a registration made now belongs to, ``()`` outside a pipeline.
 
     A pipeline runs every dataset function on one session object. A function registered while one flow's body ran does
-    not resolve in another flow's analysis, so the cache of ``ensure`` is kept per flow too.
+    not resolve in another flow's analysis, so the cache of ``ensure`` is kept per flow too. A Databricks pipeline
+    session is classic: each run of a dataset function has its own JVM session behind the one Python object, so the
+    key is that JVM session's py4j id (a plain classic session has one, so a notebook keeps one cache). A Spark
+    Connect pipeline carries the flow as a thread-local ``PipelineAnalysisContext``. Both reads stay in process.
     """
     client = _client(spark)
     if client is None:
-        return ()
+        try:
+            tid = getattr(spark._jsparkSession, "_target_id", None)
+        except Exception:  # noqa: BLE001 - no JVM session to read: one cache
+            return ()
+        return (("jvm", tid),) if tid else ()
     exts = [
         e for _id, e in getattr(client, "global_user_context_extensions", None) or ()
     ]

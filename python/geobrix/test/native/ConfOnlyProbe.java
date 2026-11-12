@@ -35,7 +35,7 @@ public class ConfOnlyProbe {
                         System.out.println("SESSIONS_VISIBLE " + visible);
                     }
                     spark.range(1).foreachPartition((ForeachPartitionFunction<Long>) it ->
-                            com.databricks.labs.gbx.rasterx.gdal.GDALManager$.MODULE$.ensureJniLoaded(scala.Option.empty()));
+                            com.databricks.labs.gbx.rasterx.gdal.GDALManager$.MODULE$.ensureJniLoaded(scala.Option.empty(), scala.Option.empty()));
                     out = "ok:" + org.gdal.gdal.gdal.VersionInfo("RELEASE_NAME");
                     break;
                 case "ogr":

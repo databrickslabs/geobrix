@@ -149,7 +149,10 @@ def _loaded(tree: ast.AST) -> set[str]:
 
 
 def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, list[int]]:
-    """Names the kept cells use that only a skipped code cell defines: {name: [0-based indices of the cells defining it]}."""
+    """Names the kept cells use that only a skipped code cell defines: {name: [0-based indices of the cells defining it]}.
+
+    The piece's cells and the prelude cells outside the automatic setup (``--prelude``) count: both re-run in the
+    piece. A setup cell's reads are left out (its names usually come from a ``%run`` notebook)."""
     kept = set(kept)
     defined_kept: set[str] = set()
     used: set[str] = set()
@@ -157,7 +160,7 @@ def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, lis
         tree = _parse(cell_source(cells[i])) if cells[i].get("cell_type") == "code" else None
         if tree is not None:
             defined_kept |= _defined(tree)
-            if i in rng:
+            if i in rng or not is_setup_cell(cells[i]):
                 used |= _loaded(tree)
     out: dict[str, list[int]] = {}
     for i, cell in enumerate(cells):
@@ -183,9 +186,10 @@ def _inputs(stmt) -> set[str]:
 
 
 def carried_statements(cells: list, missing: dict[str, list[int]],
-                       available: Iterable[str] = ()) -> tuple[Optional[dict], set[str]]:
-    """A cell of the setup STATEMENTS (imports, defs, call-free assignments) of skipped cells that bind a missing name,
-    and the names it binds. A compute cell often starts with its imports or a flag; those lines carry, the compute
+                       available: Iterable[str] = ()) -> tuple[Optional[dict[int, dict]], set[str]]:
+    """Cells of the setup STATEMENTS (imports, defs, call-free assignments) of skipped cells that bind a missing name,
+    and the names they bind: {0-based source cell: its carried cell}, so each runs where its cell was (before a later
+    prelude cell that reads it). A compute cell often starts with its imports or a flag; those lines carry, the compute
     does not. ``available``: the names the kept cells bind. A statement that reads a name neither those cells, an
     earlier carried statement nor the session provides (``wkb = geom.wkb`` after ``geom = make()``) is not carried,
     so its name stays missing and the piece is refused rather than failing with a NameError on the compute."""
@@ -212,20 +216,20 @@ def carried_statements(cells: list, missing: dict[str, list[int]],
             if names & wanted:
                 wanted |= needs - have
         grown = len(wanted) != before
-    lines, covered, sources = [], set(), []
+    by_cell: dict[int, list[str]] = {}  # 0-based source cell -> its carried lines
+    covered: set[str] = set()
     for cell_no, seg, names, needs in candidates:
         if names & wanted and needs <= have:
-            lines.append(seg)
+            by_cell.setdefault(cell_no - 1, []).append(seg)
             covered |= names
             have |= names
-            if cell_no not in sources:
-                sources.append(cell_no)
     covered &= set(missing)
-    if not lines:
+    if not by_cell:
         return None, set()
-    body = f"{CARRIED_PREFIX} {', '.join(map(str, sources))} (the runner's; not in the notebook) ---\n" + "\n".join(lines) + "\n"
-    return {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
-            "source": body.splitlines(keepends=True)}, covered
+    return {i: {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [],
+                "source": (f"{CARRIED_PREFIX} {i + 1} (the runner's; not in the notebook) ---\n"
+                           + "\n".join(lines) + "\n").splitlines(keepends=True)}
+            for i, lines in by_cell.items()}, covered
 
 
 def select_cells(nb: dict, spec: str, prelude: Optional[str] = None) -> tuple[dict, range, list[int]]:
@@ -252,5 +256,6 @@ def select_cells(nb: dict, spec: str, prelude: Optional[str] = None) -> tuple[di
             f"Fix: --prelude {add} (re-runs those cells first), or start the piece earlier"
         )
     out = dict(nb)
-    out["cells"] = [cells[i] for i in pre] + ([carried] if carried else []) + [cells[i] for i in rng]
+    carried = carried or {}  # keyed by skipped cells only, so a carried cell never replaces a kept one
+    out["cells"] = [carried.get(i, cells[i]) for i in sorted(set(pre) | set(carried) | set(rng))]
     return out, rng, pre

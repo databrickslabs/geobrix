@@ -96,6 +96,24 @@ def test_a_carried_statement_whose_inputs_only_the_skipped_compute_binds_is_refu
     assert "SEP = os.sep" in carried and "F = lambda x: x" in carried
 
 
+def test_a_prelude_cell_that_needs_a_skipped_compute_cell_is_refused_too(cr):
+    # The --prelude cell re-runs in the piece, so the names it reads count like the piece's own.
+    nb = {"cells": [_code("import os\nF = make_functions()"), _code("land = F.col('x')"), _code("print(land)")]}
+    with pytest.raises(ValueError, match=r"F \(cell 1\).*--prelude 1"):
+        cr.select_cells(nb, "3:3", prelude="2")
+    assert len(cr.select_cells(nb, "3:3", prelude="1,2")[0]["cells"]) == 3
+
+
+def test_carried_lines_run_where_their_cell_was_before_a_later_prelude_cell(cr):
+    # Cell 1's import is carried; prelude cell 2 reads it, so the carried cell must come before cell 2.
+    nb = {"cells": [_code("from pyspark.sql import functions as F\nrows = spark.range(3).collect()"),
+                    _code("land = F.col('x')\nn = land.count()"), _code("print(land)")]}
+    out, _, pre = cr.select_cells(nb, "3:3", prelude="2")
+    srcs = [cr.cell_source(c) for c in out["cells"]]
+    assert pre == [1] and srcs[0].startswith(cr.CARRIED_PREFIX + " 1 ") and "import functions as F" in srcs[0]
+    assert srcs[1].startswith("land = F.col") and srcs[2] == "print(land)"
+
+
 def test_function_locals_of_a_skipped_cell_are_not_session_names(cr):
     nb = {"cells": [_code("def f(df):\n    n = df.count()\n    return n\nf(spark.range(1))"), _code("x = 1"), _code("n = 3\nprint(n, x)")]}
     out, _, _ = cr.select_cells(nb, "3:3")  # n is bound in the piece; f's locals are not the session's

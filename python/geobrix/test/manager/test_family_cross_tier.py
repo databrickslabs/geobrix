@@ -20,12 +20,57 @@ _ONLY = {t for t in os.environ.get("GBX_ORACLE_TABLES", "").split(",") if t}
 _IMPL_KEYS = ("variants", "factory", "callable", "udtf")
 
 
-def _tables_of(fn) -> list:
-    """The oracle tables whose rows run for `fn` under the table selection: its own, and (a row with a `gdal` block
-    runs on the GDAL spec engine) SPEC_SE's, where the engine's input, bytes-rule and read-cap rows live.
+def _tables_of(fn, only=None) -> list:
+    """The oracle tables whose rows run for `fn` under the table selection (`only`, else GBX_ORACLE_TABLES): its own, and
+    (a row with a `gdal` block runs on the GDAL spec engine) SPEC_SE's, where the engine's input, bytes-rule and read-cap
+    rows live.
     """
+    only = _ONLY if only is None else only
     tables = [fn.oracle] + (["SPEC_SE"] if fn.gdal is not None else [])
-    return [t for t in dict.fromkeys(tables) if not _ONLY or t in _ONLY]
+    return [t for t in dict.fromkeys(tables) if not only or t in only]
+
+
+def _cases(fn, api, only=None, raw=False) -> list:
+    """The rows of `fn` a test of the API leg `api` runs: a SQL leg the session rows, the Python leg those and its own
+    (`raw`, the Catalyst function by its private name, the error-tile rows only)."""
+    surfaces = ("session",) if api == "sql" else ("session", "python")
+    return [
+        c
+        for table in _tables_of(fn, only)
+        for c in oracles.TABLES[table]
+        if c.fn == fn.sql_name
+        and any(s in c.surfaces for s in surfaces)
+        and (not raw or c.kind == "error_tile")
+    ]
+
+
+def _own_item(case) -> bool:
+    """Whether a row is a test item of its own: a row that must raise, which the harness runs as its own query (it would
+    end a batch). On Serverless each such query after the first two of a test took 26-63 s (2026-11-12), so a test that
+    held several passed the per-test cap; alone, each is one query. A row under a lowered read cap stays with its form:
+    the harness sets the cap around it."""
+    return case.kind in oracles._ALONE_KINDS and case.cid not in oracles.READ_CAP_ROWS
+
+
+def _with_own_items(fn, level, variant, api, only, marks=(), raw=False):
+    """The form's item (its id `<sql_name>-<level><variant>-<api>`), less the rows that are items of their own, and one item
+    per such row (`...-raises-<cid>`). A form whose every row is its own item has no form item.
+    """
+    base = f"{fn.sql_name}-{level}{variant}-{api}"
+    cases = _cases(fn, api, only, raw)
+    own = [c for c in cases if _own_item(c)]
+    if not cases or len(own) < len(cases):
+        yield pytest.param(fn.sql_name, level, variant, api, "", marks=marks, id=base)
+    for c in own:
+        yield pytest.param(
+            fn.sql_name,
+            level,
+            variant,
+            api,
+            c.cid,
+            marks=marks,
+            id=f"{base}-raises-{c.cid}",
+        )
 
 
 def _l3_forms(l3) -> list:
@@ -37,37 +82,25 @@ def _l3_forms(l3) -> list:
     return forms
 
 
-def _rows():
+def _rows(only=None):
+    only = _ONLY if only is None else only
     for fn in sorted(manifest.load().functions.values(), key=lambda f: f.sql_name):
-        if fn.status != "stable" or not _tables_of(fn):
+        if fn.status != "stable" or not _tables_of(fn, only):
             continue
         for variant in _l3_forms(fn.levels.get("L3", {})):
             # the Python API leg needs a Python entry: a Column function, or for a generator the DataFrame-first
             # function (`_api.table`), run over the same frame as the SQL leg
             apis = ("sql",) if fn.python is None else ("sql", "python")
             for api in apis:
-                yield pytest.param(
-                    fn.sql_name,
-                    "L3",
-                    variant,
-                    api,
-                    id=f"{fn.sql_name}-L3{variant}-{api}",
-                )
+                yield from _with_own_items(fn, "L3", variant, api, only)
         if (
             "L0" in fn.levels
         ):  # the session's SQL kernel, a temporary SQL function: no JVM, no import
-            yield pytest.param(
-                fn.sql_name, "L0", "-", "sql", id=f"{fn.sql_name}-L0-sql"
-            )
+            yield from _with_own_items(fn, "L0", "-", "sql", only)
         l1 = fn.levels.get("L1", {})
         if "companion" in l1:
-            yield pytest.param(
-                fn.sql_name,
-                "L1",
-                "-",
-                "sql",
-                marks=pytest.mark.integration,
-                id=f"{fn.sql_name}-L1--sql",
+            yield from _with_own_items(
+                fn, "L1", "-", "sql", only, marks=pytest.mark.integration
             )
         if (
             "companion" in l1
@@ -75,7 +108,7 @@ def _rows():
             and fn.kind == "scalar"
             and any(
                 c.fn == fn.sql_name and c.kind == "error_tile"
-                for t in _tables_of(fn)
+                for t in _tables_of(fn, only)
                 for c in oracles.TABLES[t]
             )
         ):
@@ -86,6 +119,7 @@ def _rows():
                 "L1",
                 "raw",
                 "sql",
+                "",
                 marks=pytest.mark.integration,
                 id=f"{fn.sql_name}-L1-raw-sql",
             )
@@ -154,8 +188,8 @@ def _serverless_refusal(fn, level) -> str:
     )
 
 
-@pytest.mark.parametrize("sql_name,level,variant,api", ROWS)
-def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
+@pytest.mark.parametrize("sql_name,level,variant,api,cid", ROWS)
+def test_family_oracle(request, tmp_path, sql_name, level, variant, api, cid):
     if (level, variant) == ("L3", "d") and _rs.unavailable_reason():
         pytest.skip(_rs.unavailable_reason())
     fn = manifest.load().functions[sql_name]
@@ -179,10 +213,12 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     ):  # a body that calls a product built-in the local engine lacks runs against its stand-in
         with product_stand_ins.l0_stand_in(fn):
             _test_family_oracle(
-                spark, request, tmp_path, fn, sql_name, level, variant, api
+                spark, request, tmp_path, fn, sql_name, level, variant, api, cid
             )
         return
-    _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api)
+    _test_family_oracle(
+        spark, request, tmp_path, fn, sql_name, level, variant, api, cid
+    )
 
 
 def _takes_gbx_conf(spark) -> bool:
@@ -199,19 +235,19 @@ def _takes_gbx_conf(spark) -> bool:
         raise
 
 
-def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api):
+def _test_family_oracle(
+    spark, request, tmp_path, fn, sql_name, level, variant, api, cid
+):
     raw = variant == "raw"
     register(
         spark, only=[sql_name], _levels={sql_name: (level, "-" if raw else variant)}
     )
     cases = [
         c
-        for table in _tables_of(fn)
-        for c in oracles.TABLES[table]
-        if c.fn == sql_name
-        and ("session" in c.surfaces or "python" in c.surfaces)
-        and (not raw or c.kind == "error_tile")
+        for c in _cases(fn, api, raw=raw)
+        if (c.cid == cid if cid else not _own_item(c))
     ]
+    assert not cid or len(cases) == 1, f"{cid}: {len(cases)} rows of that id"
     if (
         raw
     ):  # the Catalyst function by its private name: only the error-tile rows apply to it
@@ -252,11 +288,13 @@ def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, 
         for cid, lv in oracles.HEAVY_PENDING.items()
         if level in lv and cid in {c.cid for c in cases}
     }
-    bad = [m for cid, m in red.items() if cid not in pending]
+    bad = [m for k, m in red.items() if k not in pending]
     assert not bad, "\n".join(
         m[-500:] for m in bad
     )  # every red row, not pytest's cut-down list
     assert pending <= set(red), f"{level} now passes {sorted(pending - set(red))}"
+    # an item of one row judged it: a runner that leaves it out would pass it unrun
+    assert not cid or [c.cid for c, _ in ran] == [cid], f"{cid} did not run: {ran}"
 
 
 # A table module opts its scalars in with `L3_CALLABLE = True` (see oracles.l3_opted_in), once its rows pass there.
@@ -688,21 +726,33 @@ _HELPERS = pytest.mark.skipif(
 )
 
 
-def _helpers_red(spark, tmp_path):
-    ran = oracles.run_helpers(spark, oracles.MVP_H, tmpdir=str(tmp_path))
-    assert len(ran) == len(oracles.MVP_H)
+# One test item per row: each runs alone (its own DataFrame and query), so a test of all of them added up past the
+# per-test cap on Serverless (2026-11-12). The id leads with the table, which the timings read the item's table from.
+HELPER_ROWS = [
+    pytest.param(c.cid, id=f"MVP_H-{c.cid}")
+    for c in oracles.MVP_H
+    if "session" in c.surfaces
+]
+
+
+def _helper_red(spark, tmp_path, cid):
+    (case,) = [c for c in oracles.MVP_H if c.cid == cid]
+    ran = oracles.run_helpers(spark, [case], tmpdir=str(tmp_path))
+    assert [c.cid for c, _ in ran] == [cid]
     return [m for _, m in ran if m]
 
 
 @_HELPERS
-def test_helpers_oracle_session(spark, tmp_path):
-    assert _helpers_red(spark, tmp_path) == []
+@pytest.mark.parametrize("cid", HELPER_ROWS)
+def test_helpers_oracle_session(spark, tmp_path, cid):
+    assert _helper_red(spark, tmp_path, cid) == []
 
 
 @_HELPERS
-def test_helpers_oracle_connect(spark_connect_local, tmp_path):
+@pytest.mark.parametrize("cid", HELPER_ROWS)
+def test_helpers_oracle_connect(spark_connect_local, tmp_path, cid):
     """The same rows through a Spark Connect client: the helpers touch no JVM-only API."""
-    assert _helpers_red(spark_connect_local, tmp_path) == []
+    assert _helper_red(spark_connect_local, tmp_path, cid) == []
 
 
 @_HELPERS
@@ -793,6 +843,41 @@ def test_towers_to_crs_adds_the_counts_of_the_reprojected_viewshed(spark, tmp_pa
             after,
             dict(row.asDict()),
         )
+
+
+def test_each_raising_case_is_a_test_item_of_its_own():
+    """A case that must raise runs as its own query; on Serverless each one after the first two of a test took 26-63 s
+    (2026-11-12, gbx_rst_color_relief-L3engine-c1-python: only_nv 27.2, bad_line 27.3, unknown_name 27.3), so a test that
+    held several passed the 120 s per-test cap. Each is now a test item of its own, and the form's item keeps the rest.
+    """
+    only = {"SPEC_DEM"}
+    rows = {p.id: tuple(p.values) for p in _rows(only)}
+    fn = manifest.load().functions["gbx_rst_color_relief"]
+    base = "gbx_rst_color_relief-L3engine-c1-python"
+    raising = [c.cid for c in _cases(fn, "python", only) if _own_item(c)]
+    assert len(raising) >= 3, raising
+    assert rows[base] == ("gbx_rst_color_relief", "L3", "engine-c1", "python", "")
+    for cid in raising:
+        assert rows[f"{base}-raises-{cid}"] == (*rows[base][:4], cid)
+    for sql_name, level, variant, api, cid in rows.values():
+        if level == "L3":
+            mine = [
+                c
+                for c in _cases(manifest.load().functions[sql_name], api, only)
+                if _own_item(c)
+            ]
+            assert cid == "" or cid in {c.cid for c in mine}, (sql_name, cid)
+    # a case that runs under a lowered read cap stays with its form: the harness sets the cap around it
+    assert not any(
+        _own_item(c)
+        for t in oracles.TABLES.values()
+        for c in t
+        if c.cid in oracles.READ_CAP_ROWS
+    )
+    # every helper case is an item of its own (each runs alone), its id led by its table for the timings
+    assert [p.id for p in HELPER_ROWS] == [
+        f"MVP_H-{c.cid}" for c in oracles.MVP_H if "session" in c.surfaces
+    ]
 
 
 def test_a_table_function_that_refuses_serverless_is_skipped_there_only(monkeypatch):

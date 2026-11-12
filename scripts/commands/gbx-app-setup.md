@@ -15,16 +15,17 @@ bash scripts/commands/gbx-app-setup.sh [OPTIONS]
 
 ## Options
 
-- `--profile <p>` — CLI profile (default `genie-map-env`)
+- `--profile <p>` — CLI profile of the app's workspace (required)
 - `--app <name>` — app name (default `genie-map`)
-- `--warehouse <id>` — SQL warehouse id
-- `--catalog <c>` / `--schema <s>` — gold catalog/schema
+- `--warehouse <id>` — SQL warehouse id (default: `DATABRICKS_WAREHOUSE_ID` in `databricks.env`)
+- `--catalog <c>` — gold catalog (default: `VITE_GOLD_CATALOG` in `databricks.env`)
+- `--schema <s>` — gold schema (default: `VITE_GOLD_SCHEMA` in `databricks.env`, else `vapor_eyes_lf`)
 - `--help` — show help and exit
 
 ## Example
 
 ```bash
-bash scripts/commands/gbx-app-setup.sh --profile genie-map-env
+bash scripts/commands/gbx-app-setup.sh --profile <profile>
 ```
 
 ## What it does / doesn't

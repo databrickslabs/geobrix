@@ -10,12 +10,16 @@ source "$SCRIPT_DIR/common.sh"
 
 APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 
-# Defaults (reference deployment). Override via flags for another workspace.
-PROFILE="genie-map-env"
+# --profile is required (no workspace is picked for you). The warehouse, catalog and schema
+# default to the app's own local env file (databricks.env, gitignored), else flags are required.
+ENV_FILE="$APP_DIR/databricks.env"
+PROFILE=""
 APP_NAME="genie-map"
-WAREHOUSE_ID="13e2ed4a49e74f6c"
-CATALOG="serverless_stable_genie_map_catalog"
-SCHEMA="vapor_eyes_lf"
+WAREHOUSE_ID=""
+CATALOG=""
+SCHEMA=""
+# Read one KEY from databricks.env without sourcing it.
+env_value() { [ -f "$ENV_FILE" ] && grep -E "^$1=" "$ENV_FILE" | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'"; }
 
 show_help() {
   cat <<EOF
@@ -32,15 +36,15 @@ USAGE:
     bash scripts/commands/gbx-app-setup.sh [OPTIONS]
 
 OPTIONS:
-    --profile <p>       CLI profile (default: $PROFILE)
+    --profile <p>       CLI profile of the app's workspace (required)
     --app <name>        App name (default: $APP_NAME)
-    --warehouse <id>    SQL warehouse id (default: $WAREHOUSE_ID)
-    --catalog <c>       Gold catalog (default: $CATALOG)
-    --schema <s>        Gold schema (default: $SCHEMA)
+    --warehouse <id>    SQL warehouse id (default: DATABRICKS_WAREHOUSE_ID in databricks.env)
+    --catalog <c>       Gold catalog (default: VITE_GOLD_CATALOG in databricks.env)
+    --schema <s>        Gold schema (default: VITE_GOLD_SCHEMA in databricks.env, else vapor_eyes_lf)
     --help              Show this help
 
 EXAMPLE:
-    bash scripts/commands/gbx-app-setup.sh --profile genie-map-env
+    bash scripts/commands/gbx-app-setup.sh --profile <profile>
 EOF
   exit 0
 }
@@ -56,6 +60,19 @@ while [ $# -gt 0 ]; do
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
+
+[ -n "$WAREHOUSE_ID" ] || WAREHOUSE_ID="$(env_value DATABRICKS_WAREHOUSE_ID)"
+[ -n "$CATALOG" ] || CATALOG="$(env_value VITE_GOLD_CATALOG)"
+[ -n "$SCHEMA" ] || SCHEMA="$(env_value VITE_GOLD_SCHEMA)"
+[ -n "$SCHEMA" ] || SCHEMA="vapor_eyes_lf"
+if [ -z "$PROFILE" ]; then
+  echo "❌ --profile is required (the CLI profile of the app's workspace). Use --help for usage." >&2
+  exit 2
+fi
+if [ -z "$WAREHOUSE_ID" ] || [ -z "$CATALOG" ]; then
+  echo "❌ --warehouse and --catalog are required unless databricks.env sets DATABRICKS_WAREHOUSE_ID and VITE_GOLD_CATALOG." >&2
+  exit 2
+fi
 
 set -e
 print_banner "🛠️  Genie Map setup (profile=$PROFILE, ${CATALOG}.${SCHEMA})"

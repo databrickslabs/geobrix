@@ -10,18 +10,18 @@ bash scripts/commands/gbx-app-deploy.sh [OPTIONS]
 
 ## Options
 
-- `--profile <p>` - Databricks CLI profile (default: `oauth-fe`)
+- `--profile <p>` - Databricks CLI profile of the target workspace (required)
 - `--log <path>` - Tee output to a log file (filename → `test-logs/<name>`)
 - `--help`, `-h` - Display help message
 
 ## Examples
 
 ```bash
-# Build + deploy with the default profile
-bash scripts/commands/gbx-app-deploy.sh
+# Build + deploy to the workspace of a profile
+bash scripts/commands/gbx-app-deploy.sh --profile <profile>
 
-# Deploy with an explicit profile and log
-bash scripts/commands/gbx-app-deploy.sh --profile oauth-fe --log deploy.log
+# With a log
+bash scripts/commands/gbx-app-deploy.sh --profile <profile> --log deploy.log
 ```
 
 ## Notes

@@ -28,7 +28,7 @@ Options:
 Exit code: 0 when the app runs and answers 2xx, 1 on a failure, 2 for bad options.
 
 Example:
-  bash scripts/commands/gbx-app-verify.sh --profile genie-map-env --local-checks --deploy --log app.log
+  bash scripts/commands/gbx-app-verify.sh --profile <profile> --local-checks --deploy --log app.log
 HELP
 }
 

@@ -24,10 +24,10 @@ bash scripts/commands/gbx-app-verify.sh --profile <name> [OPTIONS]
 
 ```bash
 # Lint, test, deploy, then check the app answers
-bash scripts/commands/gbx-app-verify.sh --profile genie-map-env --local-checks --deploy --log app.log
+bash scripts/commands/gbx-app-verify.sh --profile <profile> --local-checks --deploy --log app.log
 
 # Check an app that is already deployed
-bash scripts/commands/gbx-app-verify.sh --profile genie-map-env
+bash scripts/commands/gbx-app-verify.sh --profile <profile>
 ```
 
 ## Limits

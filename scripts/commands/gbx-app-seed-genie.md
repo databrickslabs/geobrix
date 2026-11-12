@@ -29,15 +29,14 @@ bash scripts/commands/gbx-app-seed-genie.sh --profile <p> [OPTIONS]
 
 By default the Genie Space id and warehouse are read from `databricks bundle
 summary` for the given profile — the space this bundle deployed to that
-workspace — so the command follows your deploy target wherever it is (the shared
-`oauth-fe` workspace is perpetually at app capacity, so deploys go elsewhere).
+workspace — so the command follows your deploy target wherever it is.
 
 ## Examples
 
 ```bash
 # Re-seed after a deploy (resolves the space from the bundle)
-bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env
+bash scripts/commands/gbx-app-seed-genie.sh --profile <profile>
 
 # Preview what would be written (no changes)
-bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env --dry-run
+bash scripts/commands/gbx-app-seed-genie.sh --profile <profile> --dry-run
 ```

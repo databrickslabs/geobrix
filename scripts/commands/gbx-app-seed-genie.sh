@@ -14,7 +14,7 @@ APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 # The Genie Space id + warehouse are resolved per-environment from `databricks
 # bundle summary` (the space the bundle actually deployed), so this works for
 # WHATEVER workspace you deploy to — no hardcoded ids and no profile assumptions
-# (oauth-fe is perpetually at capacity; deploys go to other envs). --profile is
+# --profile is
 # still required (which workspace to talk to); --space-id / --warehouse override
 # the bundle-resolved values if ever needed.
 PROFILE=""
@@ -47,11 +47,11 @@ OPTIONS:
 By default the Genie Space id and warehouse are read from
 'databricks bundle summary' for the given profile — i.e. the space this bundle
 deployed to THAT workspace — so this command follows your deploy target
-wherever it is (oauth-fe is perpetually at capacity, so deploys go elsewhere).
+wherever it is.
 
 EXAMPLES:
-    bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env
-    bash scripts/commands/gbx-app-seed-genie.sh --profile genie-map-env --dry-run
+    bash scripts/commands/gbx-app-seed-genie.sh --profile <profile>
+    bash scripts/commands/gbx-app-seed-genie.sh --profile <profile> --dry-run
 EOF
   exit 0
 }

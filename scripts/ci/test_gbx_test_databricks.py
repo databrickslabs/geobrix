@@ -2377,6 +2377,22 @@ def test_the_ramp_holds_the_later_runners_until_two_chunks_passed(tmp_path):
     assert stopped["stopped"] == "the smoke chunk s failed" and not stopped["shards"], "a held runner that sees a stop never claims"
 
 
+def test_runners_the_ramp_releases_start_one_at_a_time_on_serverless(tmp_path):
+    """On Serverless the chunks the ramp released together started their sessions in one 30 s window, and each failure of
+    ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND was one of them (tst-sls-s1-rz: 4 of 6, -s2-rz: 6 of 6, all after a 400 s
+    hang). A released runner now waits its place in the ramp before its first claim, so their sessions start apart."""
+    waits = []
+    q = sr.DirQueue(str(tmp_path / "q"), ["x"])
+    rec = sr.run_loop(q, "r5", lambda slug: {"rc": 0}, hold=lambda: False, stagger_s=60.0, sleep=waits.append)
+    assert waits == [60.0] and [x["slug"] for x in rec["shards"]] == ["x"]
+    assert sr.ramp_stagger_s(5, 2, serverless=True) == 3 * sr.RAMP_STAGGER_S > 0
+    assert sr.ramp_stagger_s(1, 2, serverless=True) == 0, "the first runners start at once"
+    assert sr.ramp_stagger_s(5, 2, serverless=False) == 0, "a pool node installs its environment once"
+    assert sr.ramp_stagger_s(5, 0, serverless=True) == 0
+    src = launcher.run_source({"stage": "/x"}) + launcher.runner_source({"stage": "/x"})
+    assert "stagger_s=ramp_stagger_s(INDEX, START, serverless=" in src
+
+
 def test_the_plan_starts_two_runners_and_waits_for_them_in_its_wall(shards):
     plan = _plan(_args("--max-parallel", "4", "--clusters", "2", "--no-smoke"), ts.select(shards, "pyrx,ds,zarr,scripts/ci"))
     spec = plan["pools"]["gbx-test-1n"]

@@ -168,6 +168,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - So a Serverless plan marks no chunk `xN`, and its summary has no contention cell. A test part's own time is its estimate, not a factor.
 - `--start-chunks 0` is refused with `--serverless`. On 2026-11-12 every runner started at once, and 5 of 8 died to `ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND`.
   - Keep the default ramp, or give a positive n.
+- On Serverless the runners the ramp releases start 20 s apart, in their order. Chunks that started in one window failed together with that error.
 - The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.
 - A Serverless chunk spends 1.2-3 min before its first test. A 3-5 min chunk there is about half setup.
 - Each chunk records its setup phases from the runner's call: `phase=<name> t=<s>` in its output, `phases` in `result.json`, and a table in `summary.md`.

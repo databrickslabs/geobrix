@@ -1224,7 +1224,8 @@ else:
         return not ramp_open(read_results(RESULTS), START, int(queued))
 
     rec = run_loop(q, WHO, execute, offset=INDEX, on_change=save, heavy=HEAVY, gate=gate, stop=should_stop, on_result=write_result,
-                   limit=1 if SMOKE else 0, hold=held if (START and not SMOKE and INDEX >= START) else None)
+                   limit=1 if SMOKE else 0, hold=held if (START and not SMOKE and INDEX >= START) else None,
+                   stagger_s=ramp_stagger_s(INDEX, START, serverless=bool(PLAN.get("serverless"))) if not SMOKE else 0.0)
     rec["conflicts"] = q.conflicts
     save(rec)
     print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s);", rec["stopped"] or "the queue is empty", flush=True)

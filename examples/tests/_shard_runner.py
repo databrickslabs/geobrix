@@ -327,7 +327,7 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
              on_change: Optional[Callable[[dict], None]] = None, heavy: Iterable[str] = (), gate: Optional[HeavyGate] = None,
              wait_s: float = 10.0, sleep: Callable[[float], None] = time.sleep, stop: Optional[Callable[[], str]] = None,
              on_result: Optional[Callable[[str, dict, float, float], None]] = None, limit: int = 0,
-             hold: Optional[Callable[[], bool]] = None, hold_s: float = 15.0) -> dict:
+             hold: Optional[Callable[[], bool]] = None, hold_s: float = 15.0, stagger_s: float = 0.0) -> dict:
     """Claim and run shards until the queue is empty. ``execute(slug)`` runs one shard and returns its result; an exception
     from it is recorded as the shard's reason and the loop goes on. Returns the runner's record: when it started and ended,
     and per shard the claim time, the start, the end, rc and reason.
@@ -339,7 +339,8 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
     ``stop()`` is asked before each claim: a reason ("" to go on) ends the loop and is kept as the record's ``stopped``.
     ``on_result(slug, result, start, end)`` is called the moment a shard ends (the one-line result the launcher polls). ``limit``
     caps the shards this runner takes (the smoke task takes one). ``hold()``, asked before the first claim every ``hold_s``,
-    keeps the runner waiting while it says True (the ramp: the runners past the first few wait for clean results)."""
+    keeps the runner waiting while it says True (the ramp: the runners past the first few wait for clean results). ``stagger_s``
+    is a wait before the first claim, after the hold (``ramp_stagger_s``)."""
     heavy = set(heavy)
     gated = bool(heavy and gate)
     rec = {"runner": who, "start": clock(), "end": None, "current": None, "done": False, "shards": [], "error": "", "stopped": ""}
@@ -353,13 +354,14 @@ def run_loop(queue, who: str, execute: Callable[[str], dict], *, clock: Callable
 
     try:
         return _loop(queue, who, execute, rec, note, clock=clock, offset=offset, heavy=heavy, gate=gate if gated else None, wait_s=wait_s,
-                     sleep=sleep, stop=stop, on_result=on_result, limit=limit, hold=hold, hold_s=hold_s)
+                     sleep=sleep, stop=stop, on_result=on_result, limit=limit, hold=hold, hold_s=hold_s, stagger_s=stagger_s)
     finally:  # whatever ends the loop (an error, an interrupt), the cluster's heavy gate is not left held
         if gated:
             gate.release()
 
 
-def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s, sleep, stop, on_result, limit, hold, hold_s) -> dict:
+def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s, sleep, stop, on_result, limit, hold, hold_s,
+          stagger_s=0.0) -> dict:
     gated = gate is not None
     note(rec)
     first = True
@@ -371,6 +373,8 @@ def _loop(queue, who, execute, rec, note, *, clock, offset, heavy, gate, wait_s,
             sleep(hold_s)
             continue
         break
+    if stagger_s > 0 and not rec["stopped"]:
+        sleep(stagger_s)
     rec["held_s"] = round(clock() - rec["start"], 1)
     while not rec["stopped"]:
         if limit and len(rec["shards"]) >= limit:
@@ -431,6 +435,20 @@ def _held(hold: Callable[[], bool]) -> bool:
         return bool(hold())
     except Exception:  # noqa: BLE001 - a ramp check that cannot read its inputs lets the runner go
         return False
+
+
+# On Serverless the runners the ramp released together started their chunk sessions in one 30 s window, and every
+# ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (a 400 s hang, then the failure) was one of them (2026-11-12, tst-sls-s1-rz and
+# -s2-rz): a released runner waits its place in the ramp, this many seconds each, before its first claim.
+RAMP_STAGGER_S = 20.0
+
+
+def ramp_stagger_s(index: int, start: int, serverless: bool) -> float:
+    """Seconds a runner the ramp held back waits once released (``RAMP_STAGGER_S`` per runner before it among the released): on
+    Serverless only, where each chunk starts a session that downloads its environment; 0 for the first ``start`` runners."""
+    if not serverless or not start or index <= start:
+        return 0.0
+    return (index - start) * RAMP_STAGGER_S
 
 
 def ramp_open(results: List[dict], need: int, queued: int) -> bool:

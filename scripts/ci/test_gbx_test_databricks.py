@@ -891,6 +891,20 @@ def test_the_family_file_is_timed_and_cut_by_oracle_table(shards, tmp_path):
     assert max(c.est_min for c in out) <= 5.0 + 1e-6
 
 
+def test_a_raising_row_and_a_helper_row_of_their_own_are_timed_under_their_table(tmp_path):
+    """A raising row is a test item of its own (`<form id>-raises-<cid>`), and so is each MVP_H row (`MVP_H-<cid>`): the timings
+    count each under its table, as they count the form's item, so a table's minutes stay its whole cost."""
+    cls = "test.manager.test_family_cross_tier"
+    fn_table = tm.table_of_function(REPO_ROOT)
+    junit = _junit(tmp_path / "junit.xml", [
+        (cls, "test_family_oracle[gbx_rst_color_relief-L3engine-c1-python]", 9),
+        (cls, "test_family_oracle[gbx_rst_color_relief-L3engine-c1-python-raises-color_relief_bad_line]", 27),
+        (cls, "test_helpers_oracle_session[MVP_H-h_retile]", 5), (cls, "test_helpers_oracle_connect[MVP_H-h_towers]", 6)])
+    got = {x["key"]: x["s"] for x in tm.run_samples({"tables": ["SPEC_DEM", "MVP_H"]}, "ok", 100, junit, REPO_ROOT, 1, fn_table)}
+    assert fn_table["gbx_rst_color_relief"] == "SPEC_DEM"
+    assert got == {"table:SPEC_DEM": 36.0, "table:MVP_H": 11.0}
+
+
 def test_one_file_longer_than_the_target_gets_a_chunk_of_its_own():
     got = ts.pack({"a": 30.0, "b": 2.0, "c": 2.0, "d": 1.0, "e": 1.0}, 4.0)
     assert got[0] == ["a"] and sorted(x for g in got for x in g) == ["a", "b", "c", "d", "e"]
@@ -2422,6 +2436,16 @@ def test_the_plan_carries_the_policy_and_each_chunk_gets_its_caps(shards):
         assert opt in res.stdout, opt
 
 
+def test_serverless_refuses_start_chunks_0():
+    """Every runner at once on Serverless: 5 of 8 died at once to ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (2026-11-12). The ramp
+    stays on there; a pool may still start every runner at once."""
+    got = launcher.problems(_args("--explain-only", "--serverless", "--start-chunks", "0"))
+    assert any("--start-chunks 0" in e and "ENVIRONMENT_DOWNLOAD_USER_ERROR" in e for e in got), got
+    assert not launcher.problems(_args("--explain-only", "--serverless", "--start-chunks", "3"))
+    assert not launcher.problems(_args("--explain-only", "--start-chunks", "0")), "a pool run may start every runner at once"
+    assert "--start-chunks 0" in (REPO_ROOT / "scripts" / "commands" / "gbx-test-databricks.md").read_text().split("## Serverless")[1]
+
+
 def test_a_chunk_that_fails_fails_its_own_run_and_the_runner_still_gets_its_result(tmp_path):
     out = tmp_path / "result.json"
     out.write_text(json.dumps({"rc": 1, "failed": 9, "passed": 46, "child": {"run_id": "980"}}))
@@ -2614,6 +2638,27 @@ def test_serverless_cuts_small_chunks_from_its_own_history_without_the_pools_con
     plan = _plan(_args("--serverless"), ts.select(shards, "ds"))
     assert set(plan["pools"]) == {"serverless"} and plan["pools"]["serverless"]["slots"] == launcher.SERVERLESS_SLOTS
     assert launcher.job_tasks(plan, "serverless", {"runner": "/r", "shard": "/s"}, [])[1]["environment_key"] == "gbx_env6"
+
+
+def test_a_serverless_test_part_timed_by_its_own_key_carries_no_contention_factor(shards, tmp_path, capsys):
+    """A Serverless plan printed `x1.29` .. `x9.17` on test parts (2026-11-12, tst-sls-d12 to -d15), though Serverless has no
+    contention factor: a part's estimate came from its own key, its "solo" time from its unit's share. The factor is now the
+    estimate with the factors over the one without, on one path, so only a unit's contention factor makes it."""
+    files = ts.files_of(next(s for s in shards if s.name == "ds"), REPO_ROOT)
+    hist = tmp_path / "h.json"
+    samples = [{"key": tm.SLS + f, "s": 30.0, "slots": 1} for f in files[1:]] + [{"key": tm.SLS + files[0], "s": 1200.0, "slots": 1}]
+    samples += [{"key": tm.SLS + files[0] + f"#{j}/5", "s": 600.0 if j == 0 else 150.0, "slots": 1} for j in range(5)]
+    tm.merge(hist, samples, {"run": "sls1"})
+    assert launcher.main(["--explain-only", "--serverless", "--shards", "ds", "--target-min", "5", "--timings", str(hist)]) == 0
+    out = capsys.readouterr().out
+    assert "part 0/" in out, out
+    assert not __import__("re").search(r", x\d", out), [ln for ln in out.splitlines() if ", x" in ln]
+    # a pool unit with a factor still shows it: the factor, not the part's own key, is what a mark says
+    fsec, fsolo = {files[0]: 600.0}, {files[0]: 120.0}
+    one = ts.Shard(name="one", kind="light", paths=[files[0]])
+    assert ts.solo_min(one, REPO_ROOT, fsec, fsolo) == round(one.expected_min * ts.estimate(one, REPO_ROOT, fsolo) / ts.estimate(one, REPO_ROOT, fsec), 2)
+    part = ts.Shard(**{**one.__dict__, "est_min": 9.0, "test_part": "0/4"})
+    assert ts.solo_min(part, REPO_ROOT, fsolo, fsolo) == 9.0, "no factor: the solo time is the estimate"
 
 
 def test_a_unit_over_the_target_is_cut_into_test_parts_and_its_samples_count_whole(tmp_path):

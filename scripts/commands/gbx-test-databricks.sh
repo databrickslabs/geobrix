@@ -40,7 +40,7 @@ show_help() {
     echo -e "  ${GREEN}--maxfail <n>${NC}          pytest --maxfail in each chunk (default 3; 0 off)"
     echo -e "  ${GREEN}--no-fail-fast${NC}         Run every chunk to its end: no stop rule, no --maxfail (the smoke stays)"
     echo -e "  ${GREEN}--no-smoke${NC}             Start the whole queue at once, without the smoke chunk first"
-    echo -e "  ${GREEN}--start-chunks <n>${NC}     Runners that start at once; the rest wait for n passed chunks (default 2; 0 all)"
+    echo -e "  ${GREEN}--start-chunks <n>${NC}     Runners that start at once; the rest wait for n passed chunks (default 2; 0 all, pools only)"
     echo -e "  ${GREEN}--test-timeout <s>${NC}     Fail a test that runs longer than s seconds (default 120; 0 off)"
     echo -e "  ${GREEN}--overrun-x <x>${NC}        Stop a chunk at x times its estimate, at least 3 min (default 2; 0 off)"
     echo -e "  ${GREEN}--max-wall-min <n>${NC}     Stop the run at n minutes of wall (default 20; 0 off)"

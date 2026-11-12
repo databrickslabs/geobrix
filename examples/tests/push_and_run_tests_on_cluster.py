@@ -148,7 +148,7 @@ def parse(argv):
     p.add_argument("--maxfail", type=int, default=None, help=f"pytest's --maxfail in each chunk (default {sr.POLICY['maxfail']}; 0: off)")
     p.add_argument("--no-fail-fast", action="store_true", help="run every chunk to its end: no stop rule, no --maxfail (the smoke stays)")
     p.add_argument("--no-smoke", action="store_true", help="start the whole queue at once, without the smoke chunk first")
-    p.add_argument("--start-chunks", type=int, default=sr.POLICY["start_chunks"], help="runners that start at once; the rest wait for that many passed chunks (0: all)")
+    p.add_argument("--start-chunks", type=int, default=sr.POLICY["start_chunks"], help="runners that start at once; the rest wait for that many passed chunks (0: all; refused with --serverless)")
     p.add_argument("--test-timeout", type=float, default=TEST_TIMEOUT_S, help="fail a test that runs longer than this, in seconds (0: no limit)")
     p.add_argument("--overrun-x", type=float, default=OVERRUN_X, help="stop a chunk at this many times its estimate (0: off)")
     p.add_argument("--max-wall-min", type=float, default=MAX_WALL_MIN, help="stop the run when its wall time reaches this (0: no budget)")
@@ -205,6 +205,9 @@ def problems(a) -> list:
            a.overrun_x, a.max_wall_min) < 0:
         out.append("--first-failed, --max-failed-chunks, --max-failures, --maxfail, --start-chunks, --test-timeout, --overrun-x and --max-wall-min "
                    "must not be negative (0 turns one off)")
+    if a.serverless and a.start_chunks == 0:
+        out.append("--start-chunks 0 is refused with --serverless: every runner starting at once lost 5 of 8 to "
+                   "ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (2026-11-12); keep the default ramp, or give a positive n")
     if a.rerun_failed and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a.rerun_failed):
         out.append("--rerun-failed takes the run id of an earlier run (its results under test-logs/databricks-tests/<run id>/)")
     if a.split not in ("auto", "off"):
@@ -1725,7 +1728,7 @@ def main(argv=None) -> int:
     elif shards and not a.rerun_failed:  # a rerun chunk keeps its estimate: its few test ids, not its whole file or tables
         shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec, hot)
                   for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
-    shards = [ts.Shard(**{**s.__dict__, "solo_min": round(min(s.expected_min, ts.estimate(s, REPO_ROOT, fsolo)), 2)}) for s in shards]
+    shards = [ts.Shard(**{**s.__dict__, "solo_min": ts.solo_min(s, REPO_ROOT, fsec, fsolo)}) for s in shards]
     if shards:
         split_notes.append(estimate_note(shards, hist, a.timings))
         factors = tm.contention(hist)

@@ -47,7 +47,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - The smoke chunk has no overrun stop.
 - `--max-wall-min <n>` - stop the run at n minutes of wall. Default: 20. 0 turns it off.
   - The budget of each pool starts when its job is submitted, after its cluster lease, not during the lease wait.
-- `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all.
+- `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all, on a pool only (Serverless refuses 0).
 - `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.
   - It also reruns a test that `--test-timeout` stopped with its chunk (the chunk's `result.json`, `timed_out`). Its junit holds no failure.
   - Each chunk runs where its file's CI shard runs: a heavy dir's file on the JAR pool, with its integration tests.
@@ -165,6 +165,9 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 - `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
 - Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
+  - So a Serverless plan marks no chunk `xN`. A test part's own time is its estimate, not a factor.
+- `--start-chunks 0` is refused with `--serverless`. On 2026-11-12 every runner started at once, and 5 of 8 died to `ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND`.
+  - Keep the default ramp, or give a positive n.
 - The cut aims at 3-5 min per chunk, by test file or oracle table. A file or table that takes longer alone is cut into test parts.
 - A Serverless chunk spends 1.2-3 min before its first test. A 3-5 min chunk there is about half setup.
 - Each chunk records its setup phases from the runner's call: `phase=<name> t=<s>` in its output, `phases` in `result.json`, and a table in `summary.md`.

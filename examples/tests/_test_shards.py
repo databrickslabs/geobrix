@@ -439,6 +439,15 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     return estimate_src(shard, root, file_seconds)[0]
 
 
+def solo_min(shard: Shard, root: Path, file_seconds: Dict[str, float], solo_seconds: Dict[str, float]) -> float:
+    """The shard's estimate without the contention factors of its units: its estimate times the ratio of ``estimate`` on the solo
+    times (``solo_seconds``) to ``estimate`` on the planned ones (``file_seconds``). Both sides take one path, so only a factor
+    moves the ratio, never how the chunk was estimated (a test part's own key, a lower bound). With no factor it is the estimate
+    (Serverless: none)."""
+    with_f, without = estimate(shard, root, file_seconds), estimate(shard, root, solo_seconds)
+    return round(min(shard.expected_min, shard.expected_min * without / with_f) if with_f > 0 else shard.expected_min, 2)
+
+
 def is_heavy_key(key: str, minutes: float, contended: Iterable[str] = ()) -> bool:
     """Whether a unit (``table:<T>`` or a test file) is heavy: a table of the manifest, a unit recorded at HEAVY_UNIT_MIN or more,
     or a unit ``contended`` names (its contention factor in the history is CONTENTION_HEAVY or more: ``_timings.contended``)."""

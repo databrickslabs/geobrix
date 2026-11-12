@@ -6516,6 +6516,8 @@ result_df = rst_viewshed_towers(
 `observer_x`, `observer_y`, `visible_px` (long), `total_px` (long), `frac` (double,
 visible/total), and — when `to_crs` is set — `visible_px_reproj` and `total_px_reproj`.
 
+An unreadable DSM tile fails the query. A reprojection to `to_crs` that fails also fails the query. The error names the tower and gives the reason.
+
 `databricks.labs.gbx.rasterx.helpers.tile_range` computes the index window covering a circle of
 `radius_m` around a projected coordinate. `rst_viewshed_towers` uses it to select the tiles each
 tower needs before minting the per-tower VRT.

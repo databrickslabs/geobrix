@@ -930,7 +930,8 @@ def rst_viewshed_towers(
     visible part of it. A tower stands on the DSM tile its coordinates fall in
     (tile ``i`` covers ``[origin + i * tile_m, origin + (i + 1) * tile_m)``): one
     outside the DSM, in a grid cell that has no tile, has no row. A NULL
-    ``observer_height`` is 0.0. An unreadable DSM tile fails the query.
+    ``observer_height`` is 0.0. An unreadable DSM tile fails the query, and so does a
+    reprojection to ``to_crs`` that fails (the error names the tower and the reason).
 
     Returns:
         DataFrame with one row per tower that has in-radius DSM coverage:
@@ -1079,6 +1080,24 @@ def rst_viewshed_towers(
 
         piped = piped.withColumn(
             "_vs_reproj", rst_transform("_vs", f.lit(int(to_crs)), materialize=True)
+        )
+        # A reprojection that fails fails the query, as the viewshed does: its error tile has no raster, and the
+        # histogram of it would read as counts of 0.
+        piped = piped.withColumn(
+            "_vs_reproj",
+            _raise_if_null(
+                f.col("_vs_reproj")["raster"],
+                f.concat(
+                    f.lit("rst_viewshed_towers: the reprojection of tower "),
+                    tower,
+                    f.lit(f" to EPSG:{int(to_crs)} failed: "),
+                    f.coalesce(
+                        f.col("_vs_reproj")["metadata"]["last_error"],
+                        f.lit("no reason given"),
+                    ),
+                ),
+                f.col("_vs_reproj"),
+            ),
         ).withColumn("_hist_reproj", histogram("_vs_reproj"))
         vis_r = f.col("_hist_reproj")["band_1"].getItem(1)
         invis_r = f.col("_hist_reproj")["band_1"].getItem(0)

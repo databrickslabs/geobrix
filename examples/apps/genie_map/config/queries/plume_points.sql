@@ -8,4 +8,6 @@ SELECT
 FROM IDENTIFIER(:table_name)
 WHERE lon_max BETWEEN :x_min AND :x_max
   AND lat_max BETWEEN :y_min AND :y_max
-LIMIT 10000
+-- LIMIT 4000: AppKit streams the whole JSON_ARRAY result as one SSE event and rejects
+-- events over 1 MiB; 4000 rows x ~240 B fits (guard: client/src/config/__tests__/query-limits.test.ts).
+LIMIT 4000

@@ -432,7 +432,7 @@ def body_overview():
     bullets = [
         "One row per feature, point, image or tile",
         "Lineage on every row: `_source_path`, `_source_mtime`",
-        "The same light readers and formats",
+        "The same `*_gbx` readers and formats",
         "Pure Python: no JAR, runs on Serverless",
     ]
     by = ey + 64
@@ -763,7 +763,7 @@ def body_sdp():
                 ),
                 (
                     "read_paths",
-                    "reads the listed files with a light reader: rows + lineage",
+                    "reads the listed files with a `*_gbx` reader: rows + lineage",
                     "read_paths(inventory, format)",
                     True,
                 ),
@@ -1103,7 +1103,7 @@ def body_auto_loader():
 
 
 def body_read_paths():
-    """A paths DataFrame -> one light reader per file -> rows with lineage."""
+    """A paths DataFrame -> one *_gbx reader per file -> rows with lineage."""
     out = []
     a, t = READ_PATHS["accent"], READ_PATHS["tint"]
     # A: the input.
@@ -1328,7 +1328,7 @@ DIAGRAMS = {
         ],
     ),
     "read-paths": dict(
-        title="read_paths: one light reader per file",
+        title="read_paths: one *_gbx reader per file",
         subtitle="Paths in (batch or stream), rows with lineage out; rasters and "
         "PMTiles are planned first, then read in parallel",
         page="read_paths",

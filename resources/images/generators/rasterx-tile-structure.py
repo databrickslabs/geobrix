@@ -240,7 +240,7 @@ def render():
     parts.append(text(PAD, PAD + 28, "GeoBrix · Tile Structure", size=30, weight=800, fill=C_INK))
     sub = ('A RasterX <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
            f'font-weight="700" fill="{C_INK}">tile</tspan> is one typed struct — shared by both '
-           'tiers — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata')
+           'levels — carrying raster bytes (or a bytes-free reference) with grid, clip, CRS and format metadata')
     parts.append(f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="{C_MUTED}">{sub}</text>')
     pill_text = "v0.6.0"
     pw = int(len(pill_text) * 6.8) + 24
@@ -282,7 +282,7 @@ def render():
         accent=A_RASTER, tint=T_RASTER, rows=MATERIALIZED_EXAMPLE, virtual=False))
     parts.append(render_example_tile(
         PAD + col_w + CARD_GAP, cmp_y, col_w, cmp_card_h,
-        label="Virtual", sublabel="cog_gbx reader (virtualTiles) — lightweight tier",
+        label="Virtual", sublabel="cog_gbx reader (virtualTiles) — Python level",
         accent=A_REF, tint=T_REF, rows=VIRTUAL_EXAMPLE, virtual=True))
 
     # ---- Footer ----

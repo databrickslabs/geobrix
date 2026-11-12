@@ -4,7 +4,7 @@
 The eye-catcher for the VRT-mosaic storage form: a left->right 4-stage flow
 (SOURCE -> TILE -> INDEX -> READ) showing how one raster too large for a single
 COG or for per-task memory becomes a directory of bounded mini-COGs plus a
-lightweight GDAL VRT index, then expands back into one virtual tile per member
+small GDAL VRT index, then expands back into one virtual tile per member
 for distributed per-tile work. Virtual vs materialized keeps its fixed meaning:
 teal marks the expanded member tiles (bytes-free virtual tiles); the mini-COG
 files on disk and every stage frame use neutral chrome accents, never teal or
@@ -392,7 +392,7 @@ def render():
                      f'y2="{STAGE_TOP + 167:.1f}" stroke="{ACCENT_INDEX}" '
                      f'stroke-width="1" stroke-opacity="0.4"/>')
     parts.append(lg)
-    parts.append(text(c3, STAGE_TOP + 202, "lightweight VRT XML — indexes every tile",
+    parts.append(text(c3, STAGE_TOP + 202, "small VRT XML — indexes every tile",
                       size=10, weight=600, fill=C_MUTED_2, anchor="middle"))
     # two acquisition routes
     rx3 = x3 + 20; rw3 = col_w - 40
@@ -455,7 +455,7 @@ def render():
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,
-                      "databrickslabs/geobrix  ·  lightweight tier (pyrx) · Serverless-ready · no JAR",
+                      "databrickslabs/geobrix  ·  Python level · Serverless-ready · no JAR",
                       size=11, fill=C_MUTED_3))
     parts.append(text(CANVAS_W - PAD, canvas_h - 12, "docs/api/vrt-mosaic",
                       size=11, fill=C_MUTED_3, anchor="end"))

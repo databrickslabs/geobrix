@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the file_gbx access-flow diagram SVG (light-tier read + write).
+"""Generate the file_gbx access-flow diagram SVG (Python-level read + write).
 
 Two lanes — READ (top) and WRITE (bottom) — each a left->right stage sequence
 in the shared GeoBrix glyph style. The READ lane resolves a source through
@@ -338,7 +338,7 @@ def render():
     parts.append(text(PAD, PAD + 30, "GeoBrix · file_gbx Access Flow",
                       size=30, weight=800, fill=C_INK))
     parts.append(text(PAD, PAD + 58,
-                      "One file-access base under every lightweight reader & writer — capability-tiered "
+                      "One file-access base under every *_gbx reader & writer — capability-tiered "
                       "FILE / FUSE routing on read, governed MANAGED / EXTERNAL / FUSE modes on write, "
                       "chosen per runtime",
                       size=14.5, fill=C_MUTED))
@@ -423,7 +423,7 @@ def render():
 
     # --- Stage 4 — Reader + LRU amortization ---
     parts += stage_card(C4_X, sy, C4_W, num=4, title="Reader",
-                        subtitle="the light-tier engine reads the window", accent=ACCENT_READ)
+                        subtitle="the Python-level engine reads the window", accent=ACCENT_READ)
     parts.append(glyph_reader(C4_X + 48, sy + 96, ACCENT_READ, TINT_READ, s=44))
     rc1, rw1 = chip(C4_X + 92, sy + 78, "rasterio", fg=ACCENT_READ, bg=TINT_READ,
                     border=ACCENT_READ, mono_font=True)
@@ -599,7 +599,7 @@ def render():
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,
-                      "databrickslabs/geobrix  ·  lightweight tier (pyrx)",
+                      "databrickslabs/geobrix  ·  Python level",
                       size=11, fill=C_MUTED_3))
     parts.append(text(CANVAS_W - PAD, canvas_h - 12, "docs/readers-writers",
                       size=11, fill=C_MUTED_3, anchor="end"))

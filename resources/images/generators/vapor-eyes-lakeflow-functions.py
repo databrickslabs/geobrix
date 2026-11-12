@@ -66,7 +66,7 @@ GEOBRIX_CARDS = [
         fns=["gbx_st_asmvt_pyramid", "pmtiles_agg"],
     ),
     Card(
-        title="Light readers",
+        title="*_gbx readers",
         subtitle="Serverless DataSources + read_paths (no JAR)",
         color="#2E8B57", tint="#E0F4EA",
         fns=["read_paths", "netcdf_gbx", "geojson_gbx", "shapefile_gbx", "gtiff_gbx"],

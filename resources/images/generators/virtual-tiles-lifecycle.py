@@ -495,7 +495,7 @@ def render():
     # VIRTUAL lane
     parts.append(lane_band(mid_x, lane_top, mid_w, lane_h, virtual=True,
                            title="VIRTUAL TILES", tag="bytes-free · ",
-                           tag_bold="lightweight tier only"))
+                           tag_bold="Python level only"))
     vt_rows = [("path", "/Vol/…/A.tif"), ("window", "0,0,512,512")]
     dc, _ = tile_deck(mid_x + 24, lane_top + 42, 250, virtual=True,
                       label="one window / tile", detail_rows=vt_rows)
@@ -516,7 +516,7 @@ def render():
     ml_top = lane_top + lane_h + lane_gap
     parts.append(lane_band(mid_x, ml_top, mid_w, lane_h, virtual=False,
                            title="MATERIALIZED TILES", tag="raster bytes in hand · ",
-                           tag_bold="both tiers"))
+                           tag_bold="both levels"))
     mt_rows = [("raster", "<GeoTIFF · 184 KB>"), ("window", "0,0,512,512")]
     dc, _ = tile_deck(mid_x + 24, ml_top + 42, 250, virtual=False,
                       label="decoded window", detail_rows=mt_rows)
@@ -526,7 +526,7 @@ def render():
                       size=10.5, weight=600, fill=C_MUTED))
     parts.append(text(nx, ml_top + 100, "· self-describing bytes (CRS / nodata / overviews)",
                       size=10.5, weight=500, fill=C_MUTED_2))
-    parts.append(text(nx, ml_top + 118, "· required to hand a tile to the heavyweight tier",
+    parts.append(text(nx, ml_top + 118, "· required to hand a tile to the JVM level",
                       size=10.5, weight=500, fill=C_MUTED_2))
     parts.append(text(nx, ml_top + 136, "· write-back is a materialization boundary",
                       size=10.5, weight=500, fill=C_MUTED_2))
@@ -592,7 +592,7 @@ def render():
 
     # ---- Footer ----
     parts.append(text(PAD, canvas_h - 12,
-                      "databrickslabs/geobrix  ·  lightweight tier (pyrx) · Serverless-ready · no JAR",
+                      "databrickslabs/geobrix  ·  Python level · Serverless-ready · no JAR",
                       size=11, fill=C_MUTED_3))
     parts.append(text(CANVAS_W - PAD, canvas_h - 12, "docs/api/virtual-tiles",
                       size=11, fill=C_MUTED_3, anchor="end"))

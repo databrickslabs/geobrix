@@ -26,7 +26,7 @@
 
 <rect x="0" y="0" width="1400" height="922" fill="url(#bg)"/>
 <text x="40" y="70" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="28" font-weight="800" fill="#0F1B2A" text-anchor="start">GeoBrix · GBX Common Functions</text>
-<text x="40" y="96" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#3F4D5E" text-anchor="start">One shared file-access base under every lightweight reader and writer.</text>
+<text x="40" y="96" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#3F4D5E" text-anchor="start">One shared file-access base under every *_gbx reader and writer.</text>
 <rect x="1000" y="52" width="16" height="16" rx="3" fill="#E7E9F6" stroke="#5060A8" stroke-width="2"/>
 <text x="1024" y="65" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="600" fill="#3F4D5E" text-anchor="start">FILE — session-ful (managed / external)</text>
 <rect x="1000" y="76" width="16" height="16" rx="3" fill="#EAEEF3" stroke="#41546A" stroke-width="2" stroke-dasharray="4 3"/>
@@ -96,6 +96,6 @@
 <line x1="284" y1="680" x2="284" y2="702" stroke="#41546A" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrow-fuse)"/>
 <line x1="714" y1="680" x2="714" y2="702" stroke="#41546A" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrow-fuse)"/>
 <line x1="1144" y1="680" x2="1144" y2="702" stroke="#41546A" stroke-width="1.8" stroke-dasharray="4 3" marker-end="url(#arrow-fuse)"/>
-<text x="40" y="910" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="start">databrickslabs/geobrix  ·  lightweight tier  ·  file_gbx common functions</text>
+<text x="40" y="910" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="start">databrickslabs/geobrix  ·  Python level  ·  file_gbx common functions</text>
 <text x="1360" y="910" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">docs/common-functions</text>
 </svg>

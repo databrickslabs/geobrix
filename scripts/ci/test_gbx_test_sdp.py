@@ -184,6 +184,17 @@ def test_a_pipeline_only_update_is_polled_and_stopped_on_failure(sdp):
     w = FakeW([], ["FAILED"])
     (ok, problems), _ = _poll(sdp, w, Clock(), update=("pid", "u1"))
     assert not ok and "FAILED" in problems[0]
+    # a pipeline outside development mode retries a failed update by itself (RETRY_ON_FAILURE): it is stopped
+    assert w.stopped == ["pid"]
+
+
+def test_a_failed_update_in_a_job_run_stops_its_pipeline(sdp):
+    w = FakeW([_run("TERMINATED", "FAILED")], ["FAILED"])
+    (ok, _), _ = _poll(sdp, w, Clock(), run_id=5)
+    assert not ok and w.stopped == ["pid"]
+    w = FakeW([_run("RUNNING")], ["FAILED"])  # the job run goes on: it is cancelled, and the pipeline stopped
+    (ok, _), _ = _poll(sdp, w, Clock(), run_id=5)
+    assert not ok and w.cancelled == [5] and w.stopped == ["pid"]
 
 
 def test_a_failed_job_task_is_reported(sdp):

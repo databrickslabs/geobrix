@@ -12,6 +12,7 @@ Steps, each stopping the command on a failure:
 4. The run: the bundle's job (``run_now``, one idempotency token; ``--only`` for some tasks), or with
    ``--pipeline-only`` one pipeline update. It is polled to its end within ``--timeout-min``; on time-out it is
    cancelled. A failed flow or update of the bundle's pipeline (an ERROR event of this run) stops it at once.
+   A pipeline whose update failed is stopped: outside development mode Lakeflow retries a failed update by itself.
    A failure that needs a table dropped (a materialized view becoming a streaming table, a table owned by another
    pipeline) is printed as one ``DROP NEEDED:`` line: this command drops nothing.
 5. The tables: every Unity Catalog table the pipeline owns (``pipeline_id``) in its catalog and schema must exist
@@ -248,6 +249,7 @@ def poll(
     time limit."""
     start = now()
     last = None
+    failed = set()  # pipelines whose update ended FAILED
     while True:
         line, problems, ended, ok = "", [], False, False
         if run_id is not None:
@@ -277,6 +279,8 @@ def poll(
             st = _state(w.pipelines.get_update(pipeline_id=pid, update_id=up_id), "update", "state")
             line += f"  pipeline {key} update {up_id[:8]}: {st}"
             errors = pipeline_errors(w, pid, up_id) if st not in ("COMPLETED",) else []
+            if st == "FAILED":
+                failed.add(pid)
             if errors or st == "FAILED":
                 problems += [f"pipeline {key}: {where}: {msg[:400]}" for where, msg in errors[:5]]
                 if st == "FAILED" and not errors:
@@ -289,13 +293,26 @@ def poll(
         if problems and not ended:
             say("    a flow failed: stopping the run now (fail fast)")
             _cancel(w, run_id, update, say)
+            _stop_retries(w, failed - {update[0] if update else None}, say)
             return False, problems
         if ended:
+            _stop_retries(w, failed, say)
             return ok and not problems, problems
         if now() - start > timeout_s:
             _cancel(w, run_id, update, say)
             return False, [f"no end within {timeout_s // 60} min (--timeout-min): cancelled"]
         sleep(poll_s)
+
+
+def _stop_retries(w, pipeline_ids, say):
+    """Stop each pipeline whose update failed. Outside development mode Lakeflow retries a failed update by itself
+    (cause RETRY_ON_FAILURE), and this command never retries a run."""
+    for pid in sorted(pipeline_ids):
+        try:
+            w.pipelines.stop(pipeline_id=pid)
+            say(f"    stopped pipeline {pid} (no retry of the failed update)")
+        except Exception as exc:  # noqa: BLE001
+            say(f"    (could not stop pipeline {pid}: {type(exc).__name__}: {str(exc)[:200]})")
 
 
 def _cancel(w, run_id, update, say):

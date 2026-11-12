@@ -50,6 +50,7 @@ bash scripts/commands/gbx-test-sdp.sh --bundle vapor_eyes_lf --profile oauth-fe 
 6. The poll prints a line on each change of the job tasks and the pipeline update.
    - An ERROR event of this update (a failed flow) cancels the run at once.
    - At `--timeout-min` the run is cancelled.
+   - A pipeline whose update failed is stopped. Outside development mode, Lakeflow retries a failed update by itself.
 7. The table check: each Unity Catalog table whose `pipeline_id` is the bundle's pipeline is counted with `SELECT count(*)`. An empty table fails, unless `--allow-empty` names it.
 
 ## Limits

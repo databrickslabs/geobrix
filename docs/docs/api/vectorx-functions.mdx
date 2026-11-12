@@ -189,7 +189,7 @@ register(spark)
 
 ### Compute compatibility
 
-The Python level of both functions runs on every compute: Serverless, standard, dedicated (x86 and Graviton) and Lakeflow declarative pipelines. It needs only the env wheel ([install](../installation#whl-only)), with no JVM access.
+The Python level of both functions runs on every compute: Serverless, standard, dedicated (x86 and Graviton) and Lakeflow declarative pipelines. It needs only the env wheel ([install](../installation#env-wheel)), with no JVM access.
 
 ### Native attribute typing
 
@@ -446,6 +446,8 @@ Rows: `elevation_point` `BINARY`.
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular pixel grid covering an **explicit bounding box**. Use this when you already know the output extent in absolute coordinates. For example, snap to a fixed tile extent or align with a raster grid.
 
+The env wheel triangulates with a Rust kernel at the Python level. See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) and [the measurements](./performance#the-rust-kernel-for-tin-triangulation).
+
 **Generator:** Emits one row per in-hull grid cell (cells whose centers fall outside the TIN convex hull are dropped). The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
 <FunctionExamples
@@ -489,6 +491,8 @@ Rows: `elevation_point` `BINARY`.
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular grid **anchored to a geometry origin** with explicit cell sizes. Use this when the grid must be defined relative to a known point. For example, the grid origin comes from data (a survey control point), or different rows need different grid placements.
 
+The env wheel triangulates with a Rust kernel at the Python level. See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) and [the measurements](./performance#the-rust-kernel-for-tin-triangulation).
+
 **Generator:** Emits one row per in-hull grid cell. The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
 <FunctionExamples
@@ -526,6 +530,8 @@ Rows: `triangle` `BINARY`.
 <Impl udtf/>
 
 Builds a Delaunay TIN from mass-point geometries (with Z values) and optional breakline geometries, emitting one triangle polygon per row. Use this when you need the raw triangulation — e.g., to inspect mesh quality, clip triangles to an area of interest, or feed a custom sampler.
+
+The env wheel triangulates with a Rust kernel at the Python level. See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) and [the measurements](./performance#the-rust-kernel-for-tin-triangulation).
 
 **Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
 

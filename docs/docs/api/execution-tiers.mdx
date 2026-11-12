@@ -3,7 +3,13 @@ sidebar_position: 1
 title: Surfaces and levels
 ---
 
+import Link from '@docusaurus/Link';
+
 # Surfaces and levels
+
+:::tip Lightweight and heavyweight
+These docs use two short names. *Lightweight* means the Python level, without the JVM. *Heavyweight* means the JVM level, which needs the JAR. Neither is an install you pick or a separate API. See [The levels](#the-levels).
+:::
 
 GeoBrix has one function set. You choose a **surface**: where you call a function from. GeoBrix chooses the **level**: which implementation runs it.
 
@@ -19,7 +25,9 @@ You never pick a level. The compute decides, and GeoBrix says why when it falls 
 
 A function has the same name on the SQL surfaces. The Python names drop the `gbx_` prefix.
 
-Scala is the performance tier, not a surface you call. The GeoBrix JAR adds a JVM level to some functions, and GeoBrix picks it where it is faster. A function's **Scala** tag links to [Functions the JAR speeds up](./jar-functions).
+Scala code on dedicated compute calls the same names, through `spark.sql` or the Column wrappers. See [SQL from a JVM job](../installation.mdx#jvm-sql).
+
+The GeoBrix JAR is a performance add-on that dedicated compute can load. It adds a JVM level to some functions, and GeoBrix picks it where it is faster. A function's **Scala** tag links to [Functions the JAR speeds up](./jar-functions).
 
 Not every function exists on every surface. The [availability page](./availability) lists each function and the surfaces it runs on. Each function section shows the same badges.
 
@@ -35,7 +43,7 @@ from databricks.labs.gbx import register
 register(spark)   # every gbx_* SQL function and every *_gbx reader and writer
 ```
 
-- The call registers the functions and the lightweight data sources.
+- The call registers the functions and the `*_gbx` data sources.
 - The Python API also registers a function on its first call, so `register(spark)` is optional for Python-only code.
 - The JAR registers no SQL. See [Functions the JAR speeds up](./jar-functions).
 - The old per-package `register` calls (`rasterx.functions.register` and the like) raise an error. The message gives the fix.
@@ -48,17 +56,29 @@ register(spark, only=["rst_slope", "rst_clip"])   # just these two
 
 A name that no function matches raises a `ValueError`. `only=[]` registers nothing.
 
-## The levels
+## The levels {#the-levels}
 
 A level is one implementation of a function. A function has one to four levels.
 
-| Level | What runs | Where it is available |
-|---|---|---|
-| **L1** | JVM expression (Scala and GDAL) | Dedicated clusters with the GeoBrix JAR |
-| **L3** | Python (rasterio, NumPy, Shapely and the other libraries named in each function's note) | Everywhere the env wheel installs: Serverless, standard, dedicated, Lakeflow pipelines and the UC sandbox |
-| **L4** | Unity Catalog function | SQL warehouses, and any compute through a three-part name |
+| Level | Name | What runs | Where it is available |
+|---|---|---|---|
+| **L0** | SQL expression | Built-in Spark SQL: no UDF, no JAR and no Python | Sessions that can create a SQL function: dedicated and standard clusters |
+| **L1** | JVM | The JAR's Catalyst expressions (Scala and GDAL) | Dedicated clusters with the GeoBrix JAR |
+| **L3** | Python | A Python UDF (rasterio, NumPy, Shapely and the other libraries named in each function's note), sometimes with a Rust kernel inside | Everywhere the env wheel installs: Serverless, standard, dedicated, Lakeflow pipelines and the UC sandbox |
+| **L4** | Unity Catalog function | A SQL, Python or Scala function in a catalog | SQL warehouses, and any compute through a three-part name |
 
-Every function has an L3 level, so the wheel alone runs the whole library. The JAR adds L1 where it is faster. The [Unity Catalog page](./uc-functions) covers L4.
+Every function has a Python level, so the wheel alone runs the whole library. The JAR adds the JVM level where it is faster. A few functions also have a SQL expression level. The [Unity Catalog page](./uc-functions) covers L4.
+
+A surface and a level are separate choices. For example, you call `gbx_bng_eastnorthasbng` from SQL or from Python. It runs as a SQL expression where the session allows one, and at the Python level elsewhere. These docs write L0 as "SQL expression", so that it does not read as the SQL surface.
+
+### Rust kernels in the Python level {#rust-kernels}
+
+Inside the Python level, GeoBrix picks a function's fastest form: a Rust kernel, then Arrow batches, then row by row. Rust kernels exist for two jobs:
+
+- BNG cell encoding, behind `gbx_bng_eastnorthasbng`.
+- TIN triangulation, behind `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom`. It is a Rust port of JTS 1.20 and gives the JVM level's triangles.
+
+The env wheel carries the Rust module, so there is nothing to install. If the module cannot load, GeoBrix runs the pure-Python form. [Performance](./performance#the-rust-kernel-for-bng-cells) has the numbers. GeoBrix continues to assess where Rust can help further.
 
 ## How GeoBrix picks a level
 
@@ -73,14 +93,14 @@ Most functions run on L3. Raster tile operations default to L3, because the Pyth
 When a faster level cannot run, `register` prints one line that names the level and the reason. A reason that applies to several functions prints once, with a count. Each line prints once per session.
 
 ```text
-geobrix: heavy (Catalyst) unavailable: Spark Connect session (standard access mode)
+geobrix: JVM level unavailable: Spark Connect session (standard access mode); using the Python level
 ```
 
 `register` returns a dictionary of the level it chose for each name. Use it to check a session:
 
 ```python
 chosen = register(spark)
-chosen["gbx_bng_eastnorthasbng"].level   # 'L0' (SQL) or 'L3'
+chosen["gbx_bng_eastnorthasbng"].level   # 'L0' (SQL expression) or 'L3' (Python)
 ```
 
 A name that no level can serve on this compute is skipped, with a line that says why. The other names still register.
@@ -117,8 +137,8 @@ The [GeoBrix DCS image](../installation/dcs.mdx) pre-packages everything the JVM
 Limits today:
 
 - It runs on dedicated access mode on DBR 19 only, for Graviton (arm64) and x86.
-- There is no DBR 17.3 or 18 image. Install the env5 wheel and the JAR as [cluster libraries](../installation.mdx#heavyweight).
-- GeoBrix recommends it for dedicated access mode only today. On standard access mode and Serverless, use the [env wheel](../installation.mdx#whl-only). Standard and Serverless support is [coming soon](../installation/dcs.mdx#standard-and-serverless).
+- There is no DBR 17.3 or 18 image. Install the env5 wheel and the JAR as [cluster libraries](../installation.mdx#env-wheel-and-jar).
+- GeoBrix recommends it for dedicated access mode only today. On standard access mode and Serverless, use the [env wheel](../installation.mdx#env-wheel). Standard and Serverless support is [coming soon](../installation/dcs.mdx#standard-and-serverless).
 - The image passes its in-image checks but has not yet run on a cluster. The env wheel and JAR route is the one verified on clusters.
 - STAC search and the sample-data downloaders are not in the image. Add them with `%pip`, as the [DCS page](../installation/dcs.mdx#the-image) describes.
 :::
@@ -137,7 +157,9 @@ Limits today:
 - **Zarr `access="auto"`** reads and writes through the Volume mount where direct access is not available. Only an explicit `"direct"` raises, with a fix.
 - A refusal names the compute that can run the feature, and a fix.
 
-## Virtual tiles and the JVM level {#light-heavy-bridge}
+<Link id="light-heavy-bridge"></Link>
+
+## Virtual tiles and the JVM level {#virtual-tiles-and-the-jvm-level}
 
 A virtual tile has no raster bytes. It holds a path and a window, and a Python worker reads it lazily. A materialized tile carries the encoded raster in its `raster` field. See [Virtual tiles](./virtual-tiles).
 

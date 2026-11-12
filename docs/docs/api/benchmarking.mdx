@@ -14,12 +14,13 @@ GeoBrix is [supported on DBR 17.3 LTS, 18 LTS and 19 LTS](../installation#suppor
 
 ## What the suite measures
 
-**Levels.** A function can run at up to three levels.
+**Levels.** A function can run at up to four [levels](./execution-tiers#the-levels).
 
 | Level | Implementation |
 |---|---|
+| L0 | SQL expression (no UDF, no JAR) |
 | L1 | JVM Catalyst expression (needs the JAR) |
-| L3 | Python, the light level (no JAR) |
+| L3 | Python (no JAR) |
 | L4 | Unity Catalog function |
 
 **Timing models.** Each function runs under two models.
@@ -162,39 +163,39 @@ A pure-core summary uses `hw_ms`, `lw_ms` and megapixels per second instead. Eac
 
 ### Levels by function {#levels-by-function}
 
-Each row compares the JVM (heavy) form with the best lightweight form of the same function. The cluster is dedicated: one driver and four `m5d.2xlarge` workers on DBR 19. The ratio is heavy time divided by light time, at 4x and 16x the base row count. A value below 1 means the JVM form is faster. A JVM form stays, and becomes the default, when it is at least 1.2x faster at 4x or 16x and gives the same decoded output. Rows marked with three iterations are medians of three. The others are single samples.
+Each row compares the JVM form with the best Python form of the same function. The cluster is dedicated: one driver and four `m5d.2xlarge` workers on DBR 19. The ratio is JVM time divided by Python time, at 4x and 16x the base row count. A value below 1 means the JVM form is faster. A JVM form stays, and becomes the default, when it is at least 1.2x faster at 4x or 16x and gives the same decoded output. Rows marked with three iterations are medians of three. The others are single samples.
 
 | Function | 4x | 16x | Outcome |
 |---|---|---|---|
-| `gbx_st_transformcrs` | 0.17 | 0.16 | Heavy default |
-| `gbx_rst_fromcontent` (five iterations, against the Arrow lightweight form) | 0.22 | not run | Heavy default |
-| `gbx_st_triangulate` (five iterations, against the Arrow lightweight form) | 0.62 | 0.40 | Heavy default |
-| `gbx_st_interpolateelevationbbox` (five iterations, against the Arrow lightweight form) | 0.78 | 0.55 | Heavy default |
-| `gbx_bng_tessellateexplode` | 0.42 | 0.45 | Heavy default |
-| `gbx_bng_tessellate` | 0.47 | 0.46 | Heavy default |
-| `gbx_bng_cellfill` (three iterations) | 0.71 | 0.73 | Heavy default |
-| `gbx_bng_kring` (three iterations) | 0.82 | 0.79 | Heavy default |
-| `gbx_rst_bng_rasterize_agg`, cell input | not run | 0.40 | Heavy default |
-| `gbx_rst_bng_rasterize_agg`, group input | not run | 0.50 | Heavy default |
-| `gbx_rst_boundingbox` (five iterations, against the Arrow lightweight form) | 0.79 | not run | Heavy default for a materialized tile; a virtual tile goes to light |
-| `gbx_rst_worldtorastercoordy` (13 iterations over three runs, against the Arrow lightweight form) | 0.85 | 0.82 | Heavy default for a materialized tile; a virtual tile goes to light |
-| `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_numbands`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_width`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoordx` (three to five iterations, against the Arrow lightweight form) | 0.83 to 0.95 | 0.83 to 0.91 | Heavy form removed (under the 1.2x bar) |
-| `gbx_rst_avg` | 0.59 | 0.65 | Heavy form removed (an array result cannot take the routing function) |
-| `gbx_bng_eastnorthasbng` (three iterations) | 1.17 | 1.35 | Heavy form removed |
-| `gbx_rst_gridfrompoints` (three iterations) | 1.78 | 1.91 | Heavy form removed |
-| `gbx_st_asmvt` | 1.67 | 2.94 | Heavy form removed |
-| `gbx_rst_binpoints` | 1.85 | 1.68 | Heavy form removed |
-| `gbx_rst_cog_convert` | 1.25 | 1.46 | Heavy form removed |
-| `gbx_rst_align_to` | 1.61 | not run | Heavy form removed |
-| `gbx_rst_slope` | 0.97 | 1.05 | Heavy form removed |
-| `gbx_rst_mapalgebra` | 1.05 | 1.15 | Heavy form removed |
-| `gbx_rst_transformcrs` | 0.99 | 0.78 | Heavy form removed (it returned NULL tiles for some of 4000 tiles under load; the lightweight forms returned none) |
-| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions (three iterations, `gbx_rst_combineavg` measured) | 1.08 | 1.49 | Heavy form removed |
-| `gbx_rst_bng_tessellate` | 0.97 | 1.03 | Heavy form removed (a tie, under the 1.2x bar) |
+| `gbx_st_transformcrs` | 0.17 | 0.16 | JVM default |
+| `gbx_rst_fromcontent` (five iterations, against the Arrow Python form) | 0.22 | not run | JVM default |
+| `gbx_st_triangulate` (five iterations, against the Arrow Python form) | 0.62 | 0.40 | JVM default |
+| `gbx_st_interpolateelevationbbox` (five iterations, against the Arrow Python form) | 0.78 | 0.55 | JVM default |
+| `gbx_bng_tessellateexplode` | 0.42 | 0.45 | JVM default |
+| `gbx_bng_tessellate` | 0.47 | 0.46 | JVM default |
+| `gbx_bng_cellfill` (three iterations) | 0.71 | 0.73 | JVM default |
+| `gbx_bng_kring` (three iterations) | 0.82 | 0.79 | JVM default |
+| `gbx_rst_bng_rasterize_agg`, cell input | not run | 0.40 | JVM default |
+| `gbx_rst_bng_rasterize_agg`, group input | not run | 0.50 | JVM default |
+| `gbx_rst_boundingbox` (five iterations, against the Arrow Python form) | 0.79 | not run | JVM default for a materialized tile; a virtual tile goes to the Python level |
+| `gbx_rst_worldtorastercoordy` (13 iterations over three runs, against the Arrow Python form) | 0.85 | 0.82 | JVM default for a materialized tile; a virtual tile goes to the Python level |
+| `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_numbands`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_width`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoordx` (three to five iterations, against the Arrow Python form) | 0.83 to 0.95 | 0.83 to 0.91 | JVM form removed (under the 1.2x bar) |
+| `gbx_rst_avg` | 0.59 | 0.65 | JVM form removed (an array result cannot take the routing function) |
+| `gbx_bng_eastnorthasbng` (three iterations) | 1.17 | 1.35 | JVM form removed |
+| `gbx_rst_gridfrompoints` (three iterations) | 1.78 | 1.91 | JVM form removed |
+| `gbx_st_asmvt` | 1.67 | 2.94 | JVM form removed |
+| `gbx_rst_binpoints` | 1.85 | 1.68 | JVM form removed |
+| `gbx_rst_cog_convert` | 1.25 | 1.46 | JVM form removed |
+| `gbx_rst_align_to` | 1.61 | not run | JVM form removed |
+| `gbx_rst_slope` | 0.97 | 1.05 | JVM form removed |
+| `gbx_rst_mapalgebra` | 1.05 | 1.15 | JVM form removed |
+| `gbx_rst_transformcrs` | 0.99 | 0.78 | JVM form removed (it returned NULL tiles for some of 4000 tiles under load; the Python forms returned none) |
+| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions (three iterations, `gbx_rst_combineavg` measured) | 1.08 | 1.49 | JVM form removed |
+| `gbx_rst_bng_tessellate` | 0.97 | 1.03 | JVM form removed (a tie, under the 1.2x bar) |
 
-On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the light batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
+On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the Python batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
 
-The same rule decides each raster accessor that returns one value. Against the lightweight form that moves tiles in Arrow batches, two keep the JVM form: `gbx_rst_boundingbox` and `gbx_rst_worldtorastercoordy`. The other 19 stayed under the 1.2x bar, so they have no JVM form. A function that keeps it runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was.
+The same rule decides each raster accessor that returns one value. Against the Python form that moves tiles in Arrow batches, two keep the JVM form: `gbx_rst_boundingbox` and `gbx_rst_worldtorastercoordy`. The other 19 stayed under the 1.2x bar, so they have no JVM form. A function that keeps it runs on the JVM for a materialized tile. A virtual tile runs at the Python level. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was.
 
 On Serverless, the grouped merge of tiles with bytes failed at every size tried, and the by-reference form ran. Read this as a per-task failure, not as a timing.
 

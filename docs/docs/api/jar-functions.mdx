@@ -11,7 +11,7 @@ The GeoBrix JAR adds a JVM level (L1) to some functions. On a dedicated cluster 
 
 The env wheel alone runs every function. The JAR is optional: install it only where you want the JVM level.
 
-The JAR is a performance tier, not an API. You call every function from SQL or Python, and GeoBrix picks the JVM level where it is faster. The **Scala** tag on a function's API page links here. For the measured speed-ups, see [Performance with the JAR](./performance#heavy-level-with-the-jar) and the [benchmark results by function](./benchmarking#levels-by-function).
+The JAR is a performance add-on that dedicated compute can load, not an API. You call every function from SQL or Python, and GeoBrix picks the JVM level where it is faster. The **Scala** tag on a function's API page links here. For the measured speed-ups, see [Performance with the JAR](./performance#jvm-level-with-the-jar) and the [benchmark results by function](./benchmarking#levels-by-function).
 
 ## Where the JAR loads
 
@@ -30,9 +30,9 @@ The JAR is a performance tier, not an API. You call every function from SQL or P
 
 A few functions are not measured yet. They run the JVM level until a measurement says otherwise.
 
-[Performance](./performance#heavy-level-with-the-jar) has the measured speed-ups. Every function not listed here runs at its Python level, with or without the JAR.
+[Performance](./performance#jvm-level-with-the-jar) has the measured speed-ups. Every function not listed here runs at its Python level, with or without the JAR.
 
-A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#light-heavy-bridge).
+A note "A virtual tile runs in Python" marks a tile function that reads bytes on the JVM. GeoBrix sends a virtual tile to the Python level, and a materialized tile to the JVM. See [Virtual tiles and the JVM level](./execution-tiers#virtual-tiles-and-the-jvm-level).
 
 {/* BEGIN GENERATED jar-functions: edit manifest/functions.json, then run gbx:manifest:gen */}
 48 functions run on the JVM when the JAR is present.

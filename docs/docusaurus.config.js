@@ -138,7 +138,7 @@ const config = {
           },
           {
             to: '/docs/api/execution-tiers',
-            label: 'Lightweight vs Heavyweight',
+            label: 'Surfaces and levels',
             position: 'left'
           },
           {

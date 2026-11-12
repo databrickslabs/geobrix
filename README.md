@@ -32,10 +32,11 @@
 
 ## Implementations
 
-GeoBrix has one function set and one Python API. `gbx.register(spark)` picks the faster implementation of each function on the compute, and says why when it falls back.
+GeoBrix has one function set. You call it from SQL, Python, Unity Catalog SQL or Scala, and `gbx.register(spark)` picks the level that runs each function on the compute. It says why when it falls back. *Lightweight* and *heavyweight* are short names for the Python and JVM [levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers#the-levels).
 
-- **Lightweight (Python)** — runs every function in Python on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR, no init script, no native GDAL bundle**. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM**.
-- **Heavyweight (JVM)** — Scala + native GDAL on dedicated clusters, where it is faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
+- **Python level (lightweight)** — runs every function in Python on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR and no init script**. The env wheel carries its own GDAL, PROJ and GEOS. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM**.
+- **JVM level (heavyweight)** — Scala + GDAL on dedicated clusters, where it is faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
+- **Native kernels where measured faster** — GDAL, plus Rust for BNG cell encoding and TIN triangulation, both in the env wheel. We continue to assess where Rust can help further.
 
 ## Packages
 
@@ -60,9 +61,9 @@ GeoBrix supports the following Databricks Runtime releases:
 
 A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#whl-only) for the wheels and their extras.
+On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#env-wheel) for the wheels and their extras.
 
-## Quick start (lightweight)
+## Quick start
 
 Stage the env wheel for your runtime (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install it (Serverless env 6, recommended; add feature extras such as `[vizx]` on the same line):
 
@@ -133,7 +134,7 @@ Readers and writers (`*_gbx`) are pure Python and need no JAR. Full options, out
 
 The **sharded GeoJSONL** writer writes one shard per partition, with no driver merge. It is the recommended vector writer at any scale.
 
-Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
+The vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 
 ## Examples
 

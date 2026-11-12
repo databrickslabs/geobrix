@@ -1173,7 +1173,7 @@ Convert coordinates or geometries to BNG cells.
 Convert easting/northing coordinates to a BNG cell reference.
 
 :::note Implementation
-Runs as a SQL function that needs no JAR and no Python, and falls back to a numpy-vectorized Python encoder. The env wheel adds a Rust kernel. Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London).
+Runs as a SQL expression that needs no JAR and no Python, and falls back to a numpy-vectorized encoder at the Python level. The env wheel adds a [Rust kernel](./performance#the-rust-kernel-for-bng-cells) there. Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London).
 :::
 
 **Returns:**

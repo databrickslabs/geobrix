@@ -3,8 +3,8 @@
 
 Two free-form diagrams for docs/docs/installation.mdx and its sub-page:
 
-    installation-paths  the three install paths, picked by compute + tier
-    installation-dcs    GeoBrix container image -> dedicated cluster -> tiers
+    installation-paths  the three install paths, picked by compute + level
+    installation-dcs    GeoBrix container image -> dedicated cluster -> levels
 
 Reuses the eo-series / vapor-eyes / genie-map primitive library (card, stripe,
 chip, node, arrow, header/footer helpers), so these sit visually alongside the
@@ -80,10 +80,10 @@ def centered_chip(cx, y, s, theme, *, mono_font=True, h=24):
 
 
 def tier_chips(x, y, tiers):
-    """Row of tier chips ("Lightweight" / "Heavyweight") starting at x."""
+    """Row of level chips ("Python level" / "JVM level") starting at x."""
     out, cx = [], x
     for t in tiers:
-        theme = LIGHT_TIER if t == "Lightweight" else HEAVY_TIER
+        theme = LIGHT_TIER if t == "Python level" else HEAVY_TIER
         svg, w = chip_at(cx, y, t, theme, mono_font=False, h=26)
         out.append(svg)
         cx += w + 10
@@ -202,26 +202,26 @@ def canvas(badge, title, subtitle, pill, theme, body, chips, label="ARTIFACTS"):
 
 PATHS = [
     dict(theme=BLUE, glyph=g_wheel, letter="a",
-         title="WHL-only (Lightweight)", chip="geobrix-<version>+env6 / +env5",
-         branch="Lightweight tier only", badge="RECOMMENDED",
+         title="Env wheel", chip="geobrix-<version>+env6 / +env5",
+         branch="The Python level only", badge="RECOMMENDED",
          runs="Serverless · standard access mode · Lakeflow pipelines · classic clusters · ARM",
          install="The env wheel for the runtime (env5 or env6), from a Volume or the GitHub release",
          extra="Its own GDAL, PROJ and GEOS; no JAR",
-         tiers=["Lightweight"]),
+         tiers=["Python level"]),
     dict(theme=VIOLET, glyph=g_cluster, letter="b",
          title="Cluster libraries", chip="env wheel + GeoBrix JAR",
-         branch="Heavyweight · dedicated cluster", badge=None,
+         branch="Add the JVM level · dedicated cluster", badge=None,
          runs="Dedicated cluster · x86 on DBR 17.3 / 18 / 19 · Graviton on DBR 19",
          install="The env wheel and the GeoBrix JAR, both as cluster libraries from a Volume",
          extra="The wheel's own GDAL serves the JVM too",
-         tiers=["Lightweight", "Heavyweight"]),
+         tiers=["Python level", "JVM level"]),
     dict(theme=TEAL, glyph=g_container, letter="c",
          title="Databricks Container Service", chip="GeoBrix container image",
-         branch="Heavyweight · arm64 or x86 · DBR 19", badge=None,
+         branch="Add the JVM level · arm64 or x86 · DBR 19", badge=None,
          runs="Dedicated cluster · Graviton (arm64) or x86 · DBR 19",
          install="A GeoBrix image with the env6 wheel, its native GDAL and the JAR",
          extra="No library to attach: one GeoBrix JAR per cluster",
-         tiers=["Lightweight", "Heavyweight"]),
+         tiers=["Python level", "JVM level"]),
 ]
 
 
@@ -232,7 +232,7 @@ def body_paths():
     qx = (CANVAS_W - qw) / 2
     out.append(f'<rect x="{qx}" y="{qy}" rx="22" ry="22" width="{qw}" height="{qh}" '
                f'fill="{C_INK}"/>')
-    out.append(text(CANVAS_W / 2, qy + 28, "Which tier do you need, and on which compute?",
+    out.append(text(CANVAS_W / 2, qy + 28, "Which levels do you need, and on which compute?",
                     size=16, weight=700, fill="#FFFFFF", anchor="middle"))
 
     n, gap = len(PATHS), 30
@@ -274,7 +274,7 @@ def body_paths():
                               size=14, line_h=19))
         out.extend(wrap_left(x + 24, ly + 142, cw - 48, p["extra"], size=13, fill=C_MUTED_2))
         tsvg, _ = tier_chips(x + 24, cy0 + ch - 40, p["tiers"])
-        out.append(text(x + cw - 24, cy0 + ch - 22, "TIERS", size=10.5, weight=700,
+        out.append(text(x + cw - 24, cy0 + ch - 22, "LEVELS", size=10.5, weight=700,
                         fill=C_MUTED_3, anchor="end", letter_spacing="1.2"))
         out.append(tsvg)
     return "".join(out)
@@ -334,13 +334,13 @@ def body_dcs():
     out.append(text((x1 + w1 + x2) / 2, top + h / 2 - 12, "image", size=11, weight=700,
                     fill=TEAL["accent"], anchor="middle"))
 
-    # --- column 3: tiers that run ----------------------------------------------
+    # --- column 3: levels that run ----------------------------------------------
     x3, w3 = 1036, CANVAS_W - PAD - 1036
-    out.append(col_label(x3 + 4, top - 8, "3 · TIERS THAT RUN", C_MUTED_3))
+    out.append(col_label(x3 + 4, top - 8, "3 · LEVELS THAT RUN", C_MUTED_3))
     tiers = [
-        (LIGHT_TIER, "Lightweight", "pyrx · pyvx · pygx and the *_gbx readers",
+        (LIGHT_TIER, "Python level", "Every gbx_* function and the *_gbx readers",
          "No %pip step: the wheel is in the image"),
-        (HEAVY_TIER, "Heavyweight", "rasterx · vectorx · gridx (gbx_* on the JVM)",
+        (HEAVY_TIER, "JVM level", "The JAR's faster gbx_* forms, on the JVM",
          "Reads /Volumes through the *_gbx readers"),
     ]
     th_h, th_gap, ty = 124, 14, top
@@ -367,7 +367,7 @@ def body_dcs():
     out.append(text(sx + 18, sy + 24, "OTHER COMPUTE", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
     for yy, msg in ((44, "DBR 17.3 / 18: install the env5 wheel and the JAR as cluster libraries."),
-                    (83, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
+                    (83, "Standard access mode and Serverless: use the env wheel (Python level).")):
         out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
                              line_h=15))
     return "".join(out)
@@ -377,7 +377,7 @@ DIAGRAMS = {
     "paths": dict(
         badge="GB", theme=BLUE,
         title="Three ways to install GeoBrix",
-        subtitle="Pick the path that matches the tier you need and the compute you run on",
+        subtitle="Pick the path that matches the levels you need and the compute you run on",
         pill="Installation  ·  Paths",
         body=body_paths,
         chips=["geobrix-<version>+env<N>-py3-none-any.whl",

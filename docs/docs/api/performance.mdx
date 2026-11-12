@@ -2,6 +2,8 @@
 sidebar_position: 1
 ---
 
+import Link from '@docusaurus/Link';
+
 # Performance
 
 GeoBrix picks the implementation level for each function. You do not choose a level. The compute decides, and GeoBrix says why when it falls back to another level.
@@ -23,32 +25,34 @@ Each item below has the measurement behind it. The [release notes](../release-no
 
 ## Performance by level
 
-GeoBrix has three levels, named by what you install.
+This page measures three levels. It writes *lightweight* for the Python level and *heavyweight* for the JVM level, as [The levels](./execution-tiers#the-levels) defines them.
 
 | Level | What you install | Where it runs |
 |---|---|---|
-| Light | The env wheel. No JAR. | Serverless, standard, dedicated, and a SQL warehouse through Unity Catalog Python functions |
-| Heavy | The env wheel and the GeoBrix JAR | Dedicated clusters. Standard access mode only where a Java handler exists. |
+| Python (lightweight) | The env wheel. No JAR. | Serverless, standard, dedicated, and a SQL warehouse through Unity Catalog Python functions |
+| JVM (heavyweight) | The env wheel and the GeoBrix JAR | Dedicated clusters. Standard access mode only where a Java handler exists. |
 | UC functions | `gbx.uc.install` | SQL warehouses and any compute that reads Unity Catalog |
 
-GeoBrix keeps a heavy level only where it is at least 1.2x faster than the best light form. The test runs on a dedicated cluster at 4x or 16x the base row count, and the output must decode the same. The JAR then makes the heavy level the default. A function with no measurement yet runs at the light level, except a few. [Functions the JAR speeds up](./jar-functions) lists every function that runs the heavy level by default.
+GeoBrix keeps a JVM level only where it is at least 1.2x faster than the best Python form. The test runs on a dedicated cluster at 4x or 16x the base row count, and the output must decode the same. The JAR then makes the JVM level the default. A function with no measurement yet runs at the Python level, except a few. [Functions the JAR speeds up](./jar-functions) lists every function that runs the JVM level by default.
 
-Every function not on that page runs at the light level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
+Every function not on that page runs at the Python level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
 
-### Light level (no JAR)
+<Link id="light-level-no-jar"></Link>
 
-The light level runs every function on every compute. It is the default for most functions. [Functions the JAR speeds up](./jar-functions) lists the exceptions.
+### Python level (no JAR) {#python-level-no-jar}
+
+The Python level runs every function on every compute. It is the default for most functions. [Functions the JAR speeds up](./jar-functions) lists the exceptions.
 
 | Function family | What runs | Measured result |
 |---|---|---|
-| Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The only form. The JVM form was faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows). Such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused, so the JVM form could not be the default. It is no longer shipped. |
-| Band math, spectral indices and canopy height | GDAL `raster calc` in the worker | The JVM form ran `gdal_calc.py` in a subprocess for each row. The lightweight form is the default on every compute, and the JVM form is no longer shipped. |
+| Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The only form. The JVM form was faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the Python time at 4x and 16x rows). Such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to the Python level is refused, so the JVM form could not be the default. It is no longer shipped. |
+| Band math, spectral indices and canopy height | GDAL `raster calc` in the worker | The JVM form ran `gdal_calc.py` in a subprocess for each row. The Python form is the default on every compute, and the JVM form is no longer shipped. |
 | `gbx_rst_transform`, `gbx_rst_resample`, `gbx_rst_resample_to_res` | GDAL `raster reproject` in the worker | The JVM form ran at 0.71x (transform), 1.18x and 0.84x (resample) and 1.10x and 1.01x (resample_to_res) the speed. It is no longer shipped. |
 | `gbx_rst_to_webmercator`, `gbx_rst_resample_to_size` | GDAL `raster reproject` in the worker | The JVM form ran at 0.98x the speed at 4x rows. It is no longer shipped. |
 | Terrain (aspect, hillshade, TRI, TPI, roughness, color relief) | GDAL algorithm in the worker | The JVM form was 1.05x to 1.17x faster at 16x rows, under the 1.2x bar. It is no longer shipped. |
 | `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_numbands`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_width`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoordx` | Arrow scalar UDF | Both forms spend most of the time reading the tile. The JVM form was between 1.05x and 1.2x faster at 4x and 16x rows, under the 1.2x bar. It is no longer shipped. |
 | `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` | Python | The JVM form ran at 0.43x and 0.46x (band), 0.39x and 0.28x (setsrid), 0.38x and 0.37x (setcrs), and 0.53x and 0.45x (getsubdataset) the speed at 4x and 16x rows. It is no longer shipped. |
-| `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the lightweight forms returned none. It is no longer shipped |
+| `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the Python forms returned none. It is no longer shipped |
 | `gbx_rst_fillnodata` | GDAL fill in the worker | The JVM form ran at 0.32x and 0.18x the speed at 4x and 16x rows. It is no longer shipped. |
 | `gbx_rst_proximity` | Exact Euclidean distance in Python | The JVM form ran at 1.0x and 1.16x the speed at 4x and 16x rows. It is no longer shipped. |
 | `gbx_rst_summary` | GDAL `raster info` with statistics | The JVM form wrote no band statistics, so its output differed. It is no longer shipped. |
@@ -59,20 +63,22 @@ The light level runs every function on every compute. It is the default for most
 | Quadbin and the custom-grid arrays | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
 | `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_gridfrompoints` | Python | The JVM form took 1.8x and 1.9x the time at 4x and 16x rows, and is no longer shipped |
-| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions | Python | The JVM form took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows (131.56 s against 122.16 s, and 576.44 s against 387.95 s), and is no longer shipped. For many tiles per key, `combine_by_key` took 261.07 s at 16x rows |
+| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions | Python | The JVM form took 1.08x and 1.49x the time of the best Python form at 4x and 16x rows (131.56 s against 122.16 s, and 576.44 s against 387.95 s), and is no longer shipped. For many tiles per key, `combine_by_key` took 261.07 s at 16x rows |
 | `gbx_rst_bng_tessellate` | Python | The JVM form took 0.97x and 1.03x the time at 4x and 16x rows (1591.42 s against 1540.71 s at 16x), a tie, and is no longer shipped |
 | `gbx_bng_eastnorthasbng` | SQL function, then a Python batch form | The JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows, and is no longer shipped |
-| Other families | Per-function UDF | Not yet measured: the light level |
+| Other families | Per-function UDF | Not yet measured: the Python level |
 
 Source: a dedicated cluster (one driver and four `m5d.2xlarge` workers, DBR 19). Rows are multiples of each function's base row count.
 
-### Heavy level (with the JAR)
+<Link id="heavy-level-with-the-jar"></Link>
 
-The JAR is the default for these functions on a dedicated cluster. Each is at least 1.2x faster than the best light form at 4x or 16x rows, with the same decoded output. Times are seconds per run. Lower is faster.
+### JVM level (with the JAR) {#jvm-level-with-the-jar}
+
+The JAR is the default for these functions on a dedicated cluster. Each is at least 1.2x faster than the best Python form at 4x or 16x rows, with the same decoded output. Times are seconds per run. Lower is faster.
 
 These are the measurements. [Functions the JAR speeds up](./jar-functions) lists every function that runs on the JVM by default.
 
-| Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
+| Function | JVM 4x / 16x (s) | Best Python 4x / 16x (s) | JVM is faster by |
 |---|---|---|---|
 | `gbx_st_transformcrs` | 5.78 / 20.25 | 33.17 / 128.79 | 5.7x / 6.4x |
 | `gbx_rst_fromcontent` | 3.13 / not run | 14.09 / not run | 4.5x at 4x |
@@ -87,11 +93,11 @@ These are the measurements. [Functions the JAR speeds up](./jar-functions) lists
 
 A later run re-measured `gbx_bng_cellfill`, `gbx_bng_kring` and the rasterize aggregate. Its figures replace the single-sample figures of an earlier run.
 
-A further run re-measured `gbx_rst_fromcontent`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox` against the lightweight form that moves tiles in Arrow batches, as medians of five iterations. `gbx_rst_fromcontent` passed at 4x, so 16x was not run.
+A further run re-measured `gbx_rst_fromcontent`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox` against the Python form that moves tiles in Arrow batches, as medians of five iterations. `gbx_rst_fromcontent` passed at 4x, so 16x was not run.
 
 A later pass timed every other JVM form at 1x and 4x rows on the same cluster, with the same decoded output. These 16 functions passed the 1.2x line at 4x rows, so they run on the JVM by default too:
 
-| Function | Heavy 1x / 4x (s) | Best light 1x / 4x (s) | Heavy is faster by |
+| Function | JVM 1x / 4x (s) | Best Python 1x / 4x (s) | JVM is faster by |
 |---|---|---|---|
 | `gbx_custom_polyfill` | 0.48 / 0.68 | 2.03 / 6.65 | 4.2x / 9.8x |
 | `gbx_custom_kring` | 0.72 / 1.34 | 3.33 / 10.91 | 4.6x / 8.1x |
@@ -110,35 +116,35 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 | `gbx_custom_cellfill` | 0.91 / 1.59 | 1.54 / 3.33 | 1.7x / 2.1x |
 | `gbx_bng_kloop` | 2.04 / 6.69 | 3.81 / 11.30 | 1.9x / 1.7x |
 
-`gbx_rst_tilexyz` runs on the JVM by default too. It was measured against the lightweight form that moves tiles in Arrow batches, with the same decoded output:
+`gbx_rst_tilexyz` runs on the JVM by default too. It was measured against the Python form that moves tiles in Arrow batches, with the same decoded output:
 
-| Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
+| Function | JVM 4x / 16x (s) | Best Python 4x / 16x (s) | JVM is faster by |
 |---|---|---|---|
 | `gbx_rst_tilexyz` | 1.71 / 4.75 | 2.14 / 5.80 | 1.25x / 1.22x |
 
-A virtual, NULL or error tile goes to the lightweight form, which returns a transparent image for it.
+A virtual, NULL or error tile goes to the Python form, which returns a transparent image for it.
 
-The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. A pass against the Arrow lightweight form found 19 raster accessors under the line. See the [release notes](../release-notes-0-6).
+The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. A pass against the Arrow Python form found 19 raster accessors under the line. See the [release notes](../release-notes-0-6).
 
-The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the light form:
+The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the Python form:
 
-| Function | JVM time as a fraction of light | Compute |
+| Function | JVM time as a fraction of Python | Compute |
 |---|---|---|
 | The five BNG `*explode` generators | 0.37 to 0.67 | Dedicated |
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
 
-Two raster accessors that return one value run on the JVM for a materialized tile. They were measured against the lightweight form that moves tiles in Arrow batches:
+Two raster accessors that return one value run on the JVM for a materialized tile. They were measured against the Python form that moves tiles in Arrow batches:
 
-| Function | Heavy is faster by | Compute |
+| Function | JVM is faster by | Compute |
 |---|---|---|
 | `gbx_rst_boundingbox` | 1.27x at 4x rows | Dedicated |
 | `gbx_rst_worldtorastercoordy` | 1.22x at 16x rows | Dedicated |
 
-A virtual tile goes to the light form, because the JVM level reads bytes only. The other 19 accessors that return one value stayed under the 1.2x bar against that form, so they run the light form only. The accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` have no JVM form.
+A virtual tile goes to the Python form, because the JVM level reads bytes only. The other 19 accessors that return one value stayed under the 1.2x bar against that form, so they run the Python form only. The accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` have no JVM form.
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 
-The functions not listed above have no cluster measurement of the heavy level. Most of them run the light level. The BNG and custom-grid cell scalars run the JVM first too. In the same pass their JVM forms were 2.0x to 18x faster at 4x rows.
+The functions not listed above have no cluster measurement of the JVM level. Most of them run the Python level. The BNG and custom-grid cell scalars run the JVM first too. In the same pass their JVM forms were 2.0x to 18x faster at 4x rows.
 
 #### The Rust kernel for BNG cells
 
@@ -148,7 +154,11 @@ The functions not listed above have no cluster measurement of the heavy level. M
 |---|---|---|---|
 | Dedicated | 8.0x | 12.4x | 12.3x |
 
-The Rust form runs at the cost of moving the rows, so these ratios are a lower bound on the kernel gain. Rust did not clear its bar for raster decode: the Python decode ran at 1.03x on dedicated and 0.97x on standard.
+The Rust form runs at the cost of moving the rows, so these ratios are a lower bound on the kernel gain.
+
+:::note Rust for raster decode
+Rust did not clear its bar for raster decode: the Python decode ran at 1.03x on dedicated and 0.97x on standard. GeoBrix continues to assess where Rust can help further.
+:::
 
 #### The Rust kernel for TIN triangulation
 
@@ -220,16 +230,16 @@ The array form, `gbx_rst_combineavg(collect_list(tile))` and the six other `gbx_
 | Route | Merge | Combine |
 |---|---|---|
 | Helper (`merge_by_key`, `combine_by_key`) | 48.2 s | 59.7 s |
-| Light aggregate | 67.9 s | 129.6 s |
+| Python aggregate | 67.9 s | 129.6 s |
 | JVM aggregate | 96.3 s | 62.5 s |
 
-These times were measured before the light aggregates streamed their groups, and before `merge_by_key` stopped holding its groups. The helper's peak execution memory was 40.3 GB for the merge, against 7.4 GB for the light aggregate. On Serverless, `merge_by_key(method="vrt")` finished 1,000 groups in 28 minutes, before the shuffle had a fixed width. The streamed aggregates and the new shuffle are not yet measured there.
+These times were measured before the Python aggregates streamed their groups, and before `merge_by_key` stopped holding its groups. The helper's peak execution memory was 40.3 GB for the merge, against 7.4 GB for the Python aggregate. On Serverless, `merge_by_key(method="vrt")` finished 1,000 groups in 28 minutes, before the shuffle had a fixed width. The streamed aggregates and the new shuffle are not yet measured there.
 
 `retile_virtual` is not the large-raster path. It ran 1.16x slower than the plain retile on a dedicated cluster (58.4 s against 50.4 s) and ran out of memory on Serverless.
 
 ### Aggregates by compute
 
-The default is the same on every compute: the grouped aggregate. On a dedicated cluster with the JAR, `gbx_rst_bng_rasterize_agg` runs its JVM form, which is the fastest route measured. For large groups, a different route worked best on each compute. The measured columns are ratios to the light grouped aggregate on the same compute. Lower is faster. Do not compare a ratio from one compute with another.
+The default is the same on every compute: the grouped aggregate. On a dedicated cluster with the JAR, `gbx_rst_bng_rasterize_agg` runs its JVM form, which is the fastest route measured. For large groups, a different route worked best on each compute. The measured columns are ratios to the Python grouped aggregate on the same compute. Lower is faster. Do not compare a ratio from one compute with another.
 
 **Dedicated** (one driver and four `m5d.2xlarge` workers, DBR 19)
 
@@ -332,7 +342,7 @@ Opening a large source via byte-range buffers it into executor RAM. For a **larg
 
 When GDAL opens a raster it looks for the raster's sidecar files: external overviews (`.ovr`), masks (`.msk`), `.aux.xml` metadata and world files (`.tfw`, `.wld`). By default it lists the whole folder to find them, at every open. On a Volume that listing gets slower the more files share the folder. For a folder of 745 GeoTIFFs on a Serverless worker it took from 0.3 s to 10 s per open in our runs. It took about 2 s for 5,000 files and about 14.5 s for 40,000. Checking each sidecar by name instead (GDAL's `GDAL_DISABLE_READDIR_ON_OPEN=TRUE`, 5 to 7 names an open) costs about as much as a small listing. That is because a check for a file that does not exist is slow too. Unlike the listing, the cost does not grow with the folder.
 
-The lightweight implementation lists a folder once per Python worker. It lists the folder when the worker opens a second, different file of it. A folder where the worker opens only one file, however often, is never listed. From then on the worker uses the listing to decide, for each open, where GDAL looks:
+The Python level lists a folder once per Python worker. It lists the folder when the worker opens a second, different file of it. A folder where the worker opens only one file, however often, is never listed. From then on the worker uses the listing to decide, for each open, where GDAL looks:
 
 - **No file in the folder can be a sidecar of this one.** **The file is also a GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file** (`.tif`, `.tiff`, `.png`, `.jpg`, `.jpeg`, `.jp2`, `.nc`, `.h5`, `.he5`, `.hdf`, `.grib`, `.grb`, `.grb2`, `.grib2`, in any case). GDAL then looks for none. On a Serverless worker an open of a fresh file in the 745-file folder took a median of about 165 ms this way. The same open took about 415 ms with the checks by name.
 - **The file has sidecars GDAL finds by name** (for example `x.tif.ovr`, `x.tif.aux.xml`, `x.tfw`): GDAL checks the names.
@@ -341,7 +351,7 @@ The lightweight implementation lists a folder once per Python worker. It lists t
 
 Before a folder is listed, GDAL checks sidecars by name. The open that lists a folder waits for the listing. On a Serverless worker that is about 0.5 s for 1,000 files and 14.5 s for 40,000. A Volume returns a folder's names only once it has fetched them all. The worker lists a folder once, whatever its size, up to 100,000 files. Each file then takes the mode its own sidecars call for. So a file with no sidecar in a folder of 10,000 files opens with no sidecar look-up. In that folder the checks by name cost a 10,000-tile read 1.7 to 3.1 times the time of the same read with no look-up. A folder over GDAL's own listing limit never gives the `NO` choice. That limit is `GDAL_READDIR_LIMIT_ON_OPEN`, 1,000 unless you set it, and GDAL counts `.` and `..` in it. GDAL would list such a folder at every open and then drop the listing, so the open checks sidecars by name instead. A folder of more than 100,000 files is not listed, and its files are opened with the checks by name. Tiles read with `raster_gbx` from such a folder skip that listing too. The reader counts the files of each folder when it plans the read. It puts the count of a folder over 100,000 in each tile's metadata (`path_folder_files`). The count only ever spares the listing; it never makes GDAL skip the sidecar look-up. A file missing from the listing (written after it) has the worker list the folder again. That happens at most once every 10 seconds per folder, and no sooner than 10 times the time the last listing took. The same wait holds for a folder whose listing the worker dropped to save memory. A sidecar added to a folder after a worker listed it is not seen until the folder is listed again or the worker restarts. To pick up a new world file or overview at once, start a new job, or set `GDAL_DISABLE_READDIR_ON_OPEN` yourself. Files read through a cloud path (`/vsis3/`, `s3://`, ...) are opened with the checks by name. The check GeoBrix makes before it reads a Volume file directly never looks for sidecars.
 
-**The setting reaches the rest of the Python process.** Importing the lightweight implementation (anything that imports `databricks.labs.gbx.core.crs`) sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` in the environment of the whole Python process, unless it is set already. Your own rasterio, GDAL (`osgeo`) or Fiona code in that process, and the programs it starts (`gdalinfo`, `tippecanoe`), then check sidecars by name too. The vector readers are not affected. GDAL's shapefile driver uses no folder listing either way. It looks a shapefile's `.prj` up by name (lower-case extension, then upper-case). For rasters, two kinds of file are then found only with GDAL's listing. One is a sidecar whose name mixes case (`x.Tfw`). The other is a vendor metadata file (`METADATA.DIM`, `*_MTL.txt`, `DIM_*.XML`) whose name differs in case from the one GDAL builds. To keep GDAL's own behavior, set `GDAL_DISABLE_READDIR_ON_OPEN=NO`. Set `YES` for the checks by name without the per-file choice. Set the value in the environment of the Python workers before GeoBrix is imported there, as an environment variable of the cluster or the job. A notebook's `os.environ` or a `rasterio.Env` on the driver does not reach the workers.
+**The setting reaches the rest of the Python process.** Importing the Python implementation (anything that imports `databricks.labs.gbx.core.crs`) sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` in the environment of the whole Python process, unless it is set already. Your own rasterio, GDAL (`osgeo`) or Fiona code in that process, and the programs it starts (`gdalinfo`, `tippecanoe`), then check sidecars by name too. The vector readers are not affected. GDAL's shapefile driver uses no folder listing either way. It looks a shapefile's `.prj` up by name (lower-case extension, then upper-case). For rasters, two kinds of file are then found only with GDAL's listing. One is a sidecar whose name mixes case (`x.Tfw`). The other is a vendor metadata file (`METADATA.DIM`, `*_MTL.txt`, `DIM_*.XML`) whose name differs in case from the one GDAL builds. To keep GDAL's own behavior, set `GDAL_DISABLE_READDIR_ON_OPEN=NO`. Set `YES` for the checks by name without the per-file choice. Set the value in the environment of the Python workers before GeoBrix is imported there, as an environment variable of the cluster or the job. A notebook's `os.environ` or a `rasterio.Env` on the driver does not reach the workers.
 
 **Your value decides every open.** If you set `GDAL_DISABLE_READDIR_ON_OPEN` before the import (any value, `TRUE` included), or in a `rasterio.Env` around your own reads in the same process, GeoBrix makes no per-file choice. GDAL uses your value. The value `NO` gives its own listing at each open, `YES` or `TRUE` gives the checks by name, and `EMPTY_DIR` ignores sidecars. A GDAL configuration option set to `TRUE` later (for example with `gdal.SetConfigOption`) cannot be told apart from GeoBrix's own value, so the per-file choice still applies then.
 
@@ -407,7 +417,7 @@ On runtimes without FILE support, `path_mode` is always `null` and virtual tiles
 
 ## How the Python functions run
 
-The light level picks a Spark execution shape for each function. Fan-out generators use streaming UDTFs. Aggregators use grouped-aggregate Arrow UDFs. Per-tile transforms use Arrow scalar UDFs.
+The Python level picks a Spark execution shape for each function. Fan-out generators use streaming UDTFs. Aggregators use grouped-aggregate Arrow UDFs. Per-tile transforms use Arrow scalar UDFs.
 
 ### Streaming UDTFs
 

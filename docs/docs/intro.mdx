@@ -8,7 +8,7 @@ import GeoBrixLogo from '../../resources/images/brand/GeoBriX.png';
 
 # Introduction
 
-GeoBrix is a high-performance [Databricks Labs](https://www.databricks.com/learn/labs) spatial processing library. It has one function set and one Python API. The **lightweight** implementation is pure Python/PySpark (no JAR, no native GDAL; runs on Serverless, standard/shared, Lakeflow, and ARM compute). The **heavyweight** implementation is Scala/GDAL on Apache Spark, for dedicated clusters. Put the GeoBrix JAR beside the env wheel, or use the GeoBrix [DCS image](./installation/dcs.mdx); see [Choose an install path](./installation.mdx#choose-an-install-path). `gbx.register(spark)` picks the faster one for the compute, so your code does not change. The lightweight implementation covers all of **RasterX**. It covers all of **VectorX** (MVT, TIN surfaces, legacy-geometry migration). It covers all of **GridX** (CARTO quadbin, British National Grid (BNG), custom grids, and H3). RasterX's lightweight implementation is, in large part, [distributed rasterio](./api/rasterio-distributed): the familiar rasterio/NumPy raster stack run as Spark UDFs across the cluster. See [Surfaces and levels](./api/execution-tiers).
+GeoBrix is a high-performance [Databricks Labs](https://www.databricks.com/learn/labs) spatial processing library. It has one function set, which you call from SQL, Python, Unity Catalog SQL or Scala. The **Python level** (lightweight) runs every function with no JAR, on Serverless, standard/shared, Lakeflow, and ARM compute. The env wheel carries its own GDAL, PROJ and GEOS. The **JVM level** (heavyweight) is Scala/GDAL on Apache Spark, for dedicated clusters. Put the GeoBrix JAR beside the env wheel, or use the GeoBrix [DCS image](./installation/dcs.mdx); see [Choose an install path](./installation.mdx#choose-an-install-path). `gbx.register(spark)` picks the faster level for the compute, so your code does not change. The Python level covers all of **RasterX**. It covers all of **VectorX** (MVT, TIN surfaces, legacy-geometry migration). It covers all of **GridX** (CARTO quadbin, British National Grid (BNG), custom grids, and H3). RasterX at the Python level is, in large part, [distributed rasterio](./api/rasterio-distributed): the familiar rasterio/NumPy raster stack run as Spark UDFs across the cluster. See [Surfaces and levels](./api/execution-tiers).
 
 {/*
   Function counts — generated from python/geobrix/src/databricks/labs/gbx/manifest/functions.json
@@ -94,13 +94,13 @@ GeoBrix supports the following Databricks Runtime releases. A **single wheel + s
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
 | **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-GeoBrix Light is **Serverless-first**. Install the env wheel for your runtime: `geobrix-<version>+env6` on Serverless environment v6 (recommended) and DBR 19, `geobrix-<version>+env5` on environment 5 and DBR 17.3 / 18. There is no light extra to pick. See [Installation](./installation#whl-only) for details.
+GeoBrix is **Serverless-first**. Install the env wheel for your runtime: `geobrix-<version>+env6` on Serverless environment v6 (recommended) and DBR 19, `geobrix-<version>+env5` on environment 5 and DBR 17.3 / 18. There is no light extra to pick. See [Installation](./installation#env-wheel) for details.
 
 ## Background
 
 Product built-in [Spatial SQL Functions](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-st-geospatial-functions) have reached public preview as of DBR17.1. We are now seeking to deliver the next generation of product-augmenting capabilities to help our customers. GeoBrix project is a streamlined iteration to the existing, and quite popular, [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/index.html) project. 
 
-Beyond just porting existing Mosaic code, GeoBrix is modernized with expressions designed to work with our [Data Intelligence Platform](https://www.databricks.com/product/data-intelligence-platform). GeoBrix will be a combination of heavy-weight (e.g. JAR) as well as lightweight (e.g Python, SQL) code artifacts. It also will focus on techniques to use the Databricks platform more widely.
+Beyond just porting existing Mosaic code, GeoBrix is modernized with expressions designed to work with our [Data Intelligence Platform](https://www.databricks.com/product/data-intelligence-platform). GeoBrix runs each function at the level that suits the compute: a SQL expression, Python, the JVM (with the JAR) or a Unity Catalog function. It also will focus on techniques to use the Databricks platform more widely.
 
 ## Why GeoBrix?
 
@@ -113,7 +113,8 @@ If this were not the case, we would have simply iterated on DBLabs Mosaic "in-pl
 ## Key Features
 
 - **High Performance**: Built on Apache Spark for distributed processing
-- **GDAL-Powered**: Leverages GDAL for heavy-weight spatial operations
+- **GDAL-Powered**: Leverages GDAL for raster and vector I/O and processing
+- **Native kernels where measured faster**: GDAL, plus Rust for BNG cell encoding and TIN triangulation, in the env wheel
 - **Databricks Native**: Designed specifically for Databricks Runtime
 - **Multi-Language Support**: APIs available in Scala, Python, and SQL
 - **Comprehensive Readers**: Support for various geospatial file formats

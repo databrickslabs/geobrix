@@ -3,6 +3,8 @@ sidebar_position: 2
 description: Install GeoBrix the way your compute needs — the env wheel for the runtime, the env wheel plus the GeoBrix JAR on a dedicated cluster, a Databricks Container Service image, or Unity Catalog functions for SQL warehouses.
 ---
 
+import Link from '@docusaurus/Link';
+
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
@@ -10,29 +12,30 @@ import jvmJobBody from '!!raw-loader!../tests/scala/api/JvmJobBody.scala';
 
 # Installation
 
-GeoBrix installs as one **env wheel** for your runtime. The wheel runs every function in Python, the
-**lightweight** implementation. A dedicated cluster can add the GeoBrix JAR for the JVM,
-**heavyweight**, implementation of some functions. You never choose between them in code:
-`gbx.register(spark)` picks the faster one the compute offers. See [Surfaces and levels](./api/execution-tiers.mdx).
+GeoBrix installs as one **env wheel** for your runtime. The wheel runs every function at the Python
+level. A dedicated cluster can also load the GeoBrix JAR, a performance add-on that adds a JVM level to
+some functions. You never choose a level in code: `gbx.register(spark)` picks the faster one the compute
+offers. These docs call the Python level **lightweight** and the JVM level **heavyweight**. See
+[Surfaces and levels](./api/execution-tiers.mdx#the-levels).
 Pick the install path that matches your compute.
 
 ## Choose an install path {#choose-an-install-path}
 
-![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed as the env wheel for the runtime (env5 or env6), running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release that carries its own GDAL, PROJ and GEOS, giving the lightweight tier; heavyweight on a dedicated cluster leads to path b, Cluster libraries, the env wheel and the GeoBrix JAR both installed as cluster libraries from a Volume, running on a dedicated cluster with x86 on DBR 17.3, 18 or 19 or Graviton on DBR 19, where the wheel's own GDAL serves the JVM, giving both the lightweight and heavyweight tiers; heavyweight on arm64 or x86 with DBR 19 leads to path c, Databricks Container Service, a GeoBrix container image with the env6 wheel, its native GDAL and the JAR, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster with no library to attach, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
+![Three ways to install GeoBrix. The question is which levels you need, and on which compute. Path a, the env wheel, is recommended for the Python level only. It installs the env wheel for the runtime (env5 or env6) from a Volume or the GitHub release. It runs on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, and carries its own GDAL, PROJ and GEOS. Path b, cluster libraries, adds the JVM level on a dedicated cluster. It installs the env wheel and the GeoBrix JAR as cluster libraries from a Volume. It runs with x86 on DBR 17.3, 18 or 19 or Graviton on DBR 19, and the wheel's own GDAL serves the JVM. Path c, Databricks Container Service, adds the JVM level on arm64 or x86 with DBR 19. A GeoBrix image holds the env6 wheel, its native GDAL and the JAR, with no library to attach. Paths b and c run both the Python and JVM levels](../../resources/images/diagrams/installation/installation-paths.png)
 
 | Path | Runs | Compute | What you install |
 |---|---|---|---|
-| **(a) [Env wheel](#whl-only)** — recommended | Every function, in Python | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
-| **(b) [Env wheel and JAR](#heavyweight)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
+| **(a) [Env wheel](#env-wheel)** — recommended | Every function, in Python | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
+| **(b) [Env wheel and JAR](#env-wheel-and-jar)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
 | **(c) [Databricks Container Service](./installation/dcs.mdx)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image (the env6 wheel, its native GDAL and the JAR) — no library to attach |
 
 **(a) Env wheel** is the default: if you don't specifically need the JVM engine, install
-the wheel and stop there. The full install steps are [below](#whl-only).
+the wheel and stop there. The full install steps are [below](#env-wheel).
 
 **(b) Env wheel and JAR** adds the JVM engine. A dedicated cluster installs the env wheel
 and the GeoBrix JAR as cluster libraries. `gbx.stage_jar` puts the JAR on a Volume for you. The wheel carries the native GDAL, PROJ and GEOS, and the JVM
 loads them from the wheel, so nothing else is installed. Verified on dedicated
-clusters with x86 on DBR 17.3, 18 and 19, and Graviton (arm64) on DBR 19. See [below](#heavyweight).
+clusters with x86 on DBR 17.3, 18 and 19, and Graviton (arm64) on DBR 19. See [below](#env-wheel-and-jar).
 
 **(c) Databricks Container Service** starts a dedicated DBR 19 cluster from a GeoBrix container image.
 The image already holds the env6 wheel with its native GDAL, and the GeoBrix JAR, so there is no library
@@ -64,15 +67,17 @@ family, and no light extra to pick:
 | Serverless environment 6 (recommended), DBR 19, DBR 19 ML, Lakeflow declarative pipelines on the `PREVIEW` channel, SQL warehouses and UC functions | `geobrix-<version>+env6-py3-none-any.whl` |
 | Serverless environment 5, DBR 17.3, DBR 18, Lakeflow declarative pipelines on the `CURRENT` channel | `geobrix-<version>+env5-py3-none-any.whl` |
 
-See [Env wheel](#whl-only) below for the install steps.
+See [Env wheel](#env-wheel) below for the install steps.
 
 :::note PySpark comes from the runtime
 On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark.
 :::
 
-## Env wheel {#whl-only}
+<Link id="whl-only"></Link>
 
-The env wheel is a single Python wheel for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole library: RasterX (`databricks.labs.gbx.rasterx`), GridX (`databricks.labs.gbx.gridx.<grid>`), VectorX (`databricks.labs.gbx.vectorx`) and `pmtiles`.
+## Env wheel {#env-wheel}
+
+The env wheel is a single Python wheel for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS, and the GeoBrix [Rust module](./api/execution-tiers.mdx#rust-kernels); there is nothing else to install. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole library: RasterX (`databricks.labs.gbx.rasterx`), GridX (`databricks.labs.gbx.gridx.<grid>`), VectorX (`databricks.labs.gbx.vectorx`) and `pmtiles`.
 
 :::note Choose the wheel for your runtime
 | Runtime | Install command |
@@ -207,9 +212,11 @@ tiles.select(
 ).show()
 ```
 
-If the import succeeds and the query returns raster dimensions, the install is ready. To add the JVM engine, continue with [Env wheel and JAR](#heavyweight) or [Databricks Container Service](./installation/dcs.mdx).
+If the import succeeds and the query returns raster dimensions, the install is ready. To add the JVM engine, continue with [Env wheel and JAR](#env-wheel-and-jar) or [Databricks Container Service](./installation/dcs.mdx).
 
-## Env wheel and JAR {#heavyweight}
+<Link id="heavyweight"></Link>
+
+## Env wheel and JAR {#env-wheel-and-jar}
 
 The JVM engine runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. On first use, each node copies the native libraries to local disk. The JVM loads them from that copy, so a finished notebook's Python environment cannot remove them.
 
@@ -340,9 +347,9 @@ What the Scala code can call, checked on a dedicated cluster on DBR 17.3:
 - A scalar function, with `spark.sql`, `functions.expr` or `call_function`.
 - An aggregate function, in a `GROUP BY`.
 - A table function, in `SELECT * FROM gbx_x(...)` and in `FROM t, LATERAL gbx_x(...)`.
-- A lightweight data source, such as `spark.read.format("raster_gbx")`.
+- A `*_gbx` data source, such as `spark.read.format("raster_gbx")`.
 
-A lightweight table function does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces and levels](./api/execution-tiers.mdx).
+A table function at the Python level does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces and levels](./api/execution-tiers.mdx).
 
 :::note Dedicated clusters only
 `spark._jvm` and `spark._jsparkSession` exist only where Python and the JVM share a process. That is a dedicated cluster. Standard access mode and Serverless run Spark Connect, which gives Python no access to the JVM. Use the Unity Catalog route there.

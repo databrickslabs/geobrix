@@ -440,9 +440,9 @@ Returns a `dict` with these keys. `sparse_dir` is the COLMAP sparse-model direct
 `incremental_mapping` produced. `registered` is the number of images registered into the model.
 Both `models` and `registered` are `None` on the reuse and pre-existing-database paths.
 The `dict` also holds `reused: True` when the result came from the `persist_dir` short-circuit.
-Raises `RuntimeError` if feature extraction yields features for no image (the message names the
-first skipped image and why, for example a path the workers cannot open) or matching yields zero
-verified pairs. When only some images are skipped, it prints a warning and goes on.
+Raises `RuntimeError` if feature extraction yields features for no image, or matching yields zero
+verified pairs. The message names the first skipped image and why, for example a path the workers
+cannot open. When only some images are skipped, it prints a warning and goes on.
 
 `run_sfm` imports cleanly with no `pycolmap` installed — only
 reaching the master-DB-assembly/mapping stage requires it, and that import is lazy and

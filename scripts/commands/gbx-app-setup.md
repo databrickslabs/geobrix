@@ -1,8 +1,8 @@
 # gbx:app:setup
 
-One-time, idempotent setup for the Genie Map app covering the pieces the DAB
-bundle cannot declare: grants the app's service principal access to the gold
-catalog/schema and verifies the required Unity Catalog secrets exist.
+One-time, idempotent setup for the pieces of the Genie Map app the DAB bundle
+cannot declare. It grants the app's service principal access to the gold
+catalog/schema and checks that the required Unity Catalog secrets exist.
 
 Run **after** `gbx:app:deploy` has created the app.
 

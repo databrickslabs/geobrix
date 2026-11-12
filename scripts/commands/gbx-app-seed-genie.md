@@ -27,9 +27,9 @@ bash scripts/commands/gbx-app-seed-genie.sh --profile <p> [OPTIONS]
 - `--log <path>` — tee output to `test-logs/<path>`
 - `--help`, `-h` — show help
 
-By default the Genie Space id and warehouse are read from `databricks bundle
-summary` for the given profile — the space this bundle deployed to that
-workspace — so the command follows your deploy target wherever it is.
+By default the Genie Space id and warehouse come from `databricks bundle
+summary` for the given profile. That is the space this bundle deployed to that
+workspace, so the command follows your deploy target.
 
 ## Examples
 

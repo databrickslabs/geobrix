@@ -517,11 +517,19 @@ def cut(shard: Shard, target: float, root: Path, file_seconds: Dict[str, float],
     for g in groups:
         n = math.ceil(mins[g[0]] / work - 1e-9) if len(g) == 1 and FIXED_MIN + rest + mins[g[0]] > target else 1
         total = sum(mins[k] for k in g)
-        if n > 1:  # its parts' own times (a lower bound of a stopped part among them) may sum past the unit's: cut it finer
+        # its parts' own times (a lower bound of a stopped part among them) may sum past the unit's: cut it finer, and again
+        # while the parts at the finer count have own times that sum past that (tst-sls-s3-dem: 2 parts, then 16, planned at 28 min)
+        for _ in range(8):
+            if n <= 1:
+                break
             parts_min = sum(file_seconds[f"{g[0]}#{j}/{n}"] / 60.0 / max(1e-6, min(1.0, shard.share or 1.0))
-                            if f"{g[0]}#{j}/{n}" in file_seconds else mins[g[0]] / n for j in range(n))
-            if parts_min > total + 1e-9:
-                total, n = parts_min, max(n, math.ceil(parts_min / work - 1e-9))
+                            if f"{g[0]}#{j}/{n}" in file_seconds else total / n for j in range(n))
+            if parts_min <= total + 1e-9:
+                break
+            total, finer = parts_min, max(n, math.ceil(parts_min / work - 1e-9))
+            if finer == n:  # the parts at this count fit: their own times plan them
+                break
+            n = finer
         pieces += [(g, f"{j}/{n}" if n > 1 else "", n, total) for j in range(n)]
     out = []
     for i, (g, tpart, n, total) in enumerate(pieces, 1):

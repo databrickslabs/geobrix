@@ -2711,6 +2711,24 @@ def test_a_unit_whose_parts_sum_past_it_is_cut_into_more_parts():
     assert sorted(c.test_part for c in same) == [f"{j}/4" for j in range(4)], "parts that sum to the unit keep their cut"
 
 
+def test_a_finer_cut_whose_own_parts_also_sum_past_it_is_cut_finer_again():
+    """tst-sls-s3-dem planned three SPEC_DEM parts at 22-28 min against a 3 min target: the 2 parts' sum set 16 parts, and the 16
+    parts' own lower bounds (1539 s, 1282 s, 1629 s from a stopped run) summed past that again, unchecked. The cut repeats
+    until the parts' own times at the count it chose fit, so no chunk is planned past the target."""
+    files = _ds_files(1)
+    shard = ts.Shard(name="files", kind="light", paths=files)
+    target, work = 3.0, 3.0 - ts.FIXED_MIN
+    fsec = {files[0]: 233.0, f"{files[0]}#0/2": 1117.0, f"{files[0]}#1/2": 1040.0}
+    n1 = math.ceil((1117.0 + 1040.0) / 60.0 / work - 1e-9)
+    big = {2: 1539.0, 3: 1282.0, 4: 1629.0}
+    fsec.update({f"{files[0]}#{j}/{n1}": big.get(j, 100.0) for j in range(n1)})
+    lower = {f"{files[0]}#{j}/{n1}" for j in big} | {f"{files[0]}#0/2", f"{files[0]}#1/2"}
+    out = ts.cut(shard, target, REPO_ROOT, fsec, lower)
+    assert all(c.est_min <= target + 1e-9 for c in out), sorted(((c.test_part, c.est_min) for c in out), key=lambda x: -x[1])[:4]
+    n2 = math.ceil(sum(fsec[f"{files[0]}#{j}/{n1}"] for j in range(n1)) / 60.0 / work - 1e-9)
+    assert len(out) == n2 > n1
+
+
 def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower_bounds(tmp_path):
     files = _ds_files(2)
     picked = [ts.Shard(name="ds [1/2]", kind="light", paths=[files[0]], est_min=3.0, solo_min=3.0, est_src="history"),

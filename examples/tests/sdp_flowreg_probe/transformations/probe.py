@@ -2,7 +2,8 @@
 
 - fr_a_tiles      registers GeoBrix (gbx.register) and builds a tiny MVT pyramid (gbx_st_asmvt_pyramid).
 - fr_b_api_noreg  reads fr_a_tiles and calls the Python API pmtiles_agg(...) with no register call.
-- fr_c_sql_noreg  reads fr_a_tiles and calls gbx_pmtiles_agg through F.expr with no register call.
+- fr_c_sql_noreg  reads fr_a_tiles and calls gbx_pmtiles_agg through F.expr with no register call (left out when
+                  probe.include_c is "false", so an update gets past initialization and writes its tables).
 - fr_d_api_reg    registers GeoBrix in its own body, then calls pmtiles_agg(...).
 - fr_e_diag       reads fr_a_tiles and only records what this flow's requests can see.
 - fr_f_api_one    registers only gbx_pmtiles_agg in its body (manager.register(only=...)), then pmtiles_agg(...).
@@ -203,6 +204,14 @@ def _register(spark) -> str:
     return repr(gbx.register(spark))[:200]
 
 
+def _archive(tiles, archive):
+    """One row: the tile count and the archive's size. The pandas aggregate is not mixed with a built-in aggregate in
+    one .agg (INVALID_PANDAS_UDF_PLACEMENT): each is grouped alone and the two are joined."""
+    archives = tiles.groupBy(F.lit(1).alias("g")).agg(archive.alias("archive"))
+    counts = tiles.groupBy(F.lit(1).alias("g")).agg(F.count("*").alias("tiles"))
+    return archives.join(counts, "g").select("tiles", F.length("archive").alias("archive_bytes"))
+
+
 def _with_diag(df, diags):
     return df.withColumn("diag", F.lit(json.dumps(diags, default=str)))
 
@@ -241,19 +250,23 @@ def fr_b_api_noreg():
     pmtiles_agg("mvt_bytes", "z", "x", "y", META)  # a second call in the same run: a cache hit when the key is right
     diags.append(_diag("b", "after_api_call", spark, first_call_s=round(t1 - t0, 3),
                        second_call_s=round(time.time() - t1, 3)))
-    out = tiles.groupBy(F.lit(1).alias("g")).agg(col.alias("archive"), F.count("*").alias("tiles"))
-    return _with_diag(out.select("tiles", F.length("archive").alias("archive_bytes")), diags)
+    return _with_diag(_archive(tiles, col), diags)
 
 
-@dp.materialized_view(name="fr_c_sql_noreg", comment="C: gbx_pmtiles_agg by SQL name (F.expr), no register call")
-def fr_c_sql_noreg():
-    spark = _spark()
-    diags = [_diag("c", "enter", spark)]
-    tiles = spark.read.table("fr_a_tiles")
-    out = tiles.groupBy(F.lit(1).alias("g")).agg(
-        F.expr(f"gbx_pmtiles_agg(mvt_bytes, z, x, y, '{META}')").alias("archive"), F.count("*").alias("tiles")
-    )
-    return _with_diag(out.select("tiles", F.length("archive").alias("archive_bytes")), diags)
+def _include_c() -> bool:
+    """C is defined unless ``probe.include_c`` is "false": without it an update gets past initialization."""
+    spark = SparkSession.getActiveSession()
+    return spark is None or spark.conf.get("probe.include_c", "true") != "false"
+
+
+if _include_c():
+
+    @dp.materialized_view(name="fr_c_sql_noreg", comment="C: gbx_pmtiles_agg by SQL name (F.expr), no register call")
+    def fr_c_sql_noreg():
+        spark = _spark()
+        diags = [_diag("c", "enter", spark)]
+        tiles = spark.read.table("fr_a_tiles")
+        return _with_diag(_archive(tiles, F.expr(f"gbx_pmtiles_agg(mvt_bytes, z, x, y, '{META}')")), diags)
 
 
 @dp.materialized_view(name="fr_d_api_reg", comment="D: register in the body, then the Python API pmtiles_agg")
@@ -265,10 +278,7 @@ def fr_d_api_reg():
     from databricks.labs.gbx.pmtiles.functions import pmtiles_agg
 
     tiles = spark.read.table("fr_a_tiles")
-    out = tiles.groupBy(F.lit(1).alias("g")).agg(
-        pmtiles_agg("mvt_bytes", "z", "x", "y", META).alias("archive"), F.count("*").alias("tiles")
-    )
-    return _with_diag(out.select("tiles", F.length("archive").alias("archive_bytes")), diags)
+    return _with_diag(_archive(tiles, pmtiles_agg("mvt_bytes", "z", "x", "y", META)), diags)
 
 
 @dp.materialized_view(name="fr_e_diag", comment="E: no register, no GeoBrix call; what this flow sees")
@@ -291,7 +301,4 @@ def fr_f_api_one():
     manager.register(spark, only=["gbx_pmtiles_agg"])
     diags.append(_diag("f", "after_register_one", spark, register_one_s=round(time.time() - t0, 3)))
     tiles = spark.read.table("fr_a_tiles")
-    out = tiles.groupBy(F.lit(1).alias("g")).agg(
-        pmtiles_agg("mvt_bytes", "z", "x", "y", META).alias("archive"), F.count("*").alias("tiles")
-    )
-    return _with_diag(out.select("tiles", F.length("archive").alias("archive_bytes")), diags)
+    return _with_diag(_archive(tiles, pmtiles_agg("mvt_bytes", "z", "x", "y", META)), diags)

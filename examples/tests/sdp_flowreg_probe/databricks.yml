@@ -17,6 +17,8 @@ variables:
   label: {default: "run"}
   # "true": the probe swaps _api._flow for a proposed classic-session key before each body (a fix under test).
   patch_flow_key: {default: "false"}
+  # "false": flow C (a SQL name with no register, which always fails analysis) is left out.
+  include_c: {default: "true"}
 
 resources:
   pipelines:
@@ -40,6 +42,7 @@ resources:
         probe.diag_dir: ${var.diag_dir}
         probe.label: ${var.label}
         probe.patch_flow_key: ${var.patch_flow_key}
+        probe.include_c: ${var.include_c}
 
 targets:
   dev:

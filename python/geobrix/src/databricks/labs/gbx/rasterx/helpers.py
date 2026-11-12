@@ -884,15 +884,16 @@ def rst_viewshed_towers(
     light: for each tower it selects the in-radius DSM tiles, mints ONE
     bytes-free VRT over them, runs a single pixel-level :func:`rst_viewshed`
     (materialized once, in-memory), and derives coverage counts from a
-    histogram. No raster bytes ever cross a shuffle — each tower row carries a
-    ~100-byte VRT path — so there is no FUSE read-back and no whole-AOI merge.
+    histogram. No raster bytes ever cross a shuffle — each tower row carries
+    only its counts — so there is no FUSE read-back and no whole-AOI merge.
 
     The tile window is computed per tower with :func:`tile_range` (``x0``/``y0``
     grid origin, ``tile_m`` tile size — the grid the ``tx``/``ty`` indices in
-    ``dsm_tiles_df`` reference), then the viewshed, histogram, georeference and
-    optional reproject are chained as Spark ``withColumn`` steps that stay in a
-    single post-``repartition`` stage so the mint and the DEM read run in the
-    same task (the minted VRT is read before any further shuffle).
+    ``dsm_tiles_df`` reference). One Python call per tower, after the
+    ``repartition``, mints the VRT, reads it (its Volume tiles copied to local
+    disk first), runs the viewshed, the histogram and the optional reproject:
+    the VRT never passes from one UDF to another, which on Serverless need not
+    share a local disk.
 
     Args:
         towers_df:    DataFrame of tower sites. Must carry ``tower_id_col`` plus
@@ -916,8 +917,8 @@ def rst_viewshed_towers(
                       result gains ``visible_px_reproj`` / ``total_px_reproj``.
         vrt_dir:      Optional durable, worker-readable directory (e.g. a UC
                       Volume) for the per-tower VRTs (``tower_<id>.vrt``). When
-                      omitted the VRTs are minted transiently on the worker and
-                      read within the same task.
+                      omitted each VRT is minted in a local temp folder by the
+                      call that reads it, and removed after.
         tower_id_col: Tower identity column name. Defaults to "tower_cellid".
         x_col, y_col: Observer coordinate column names. Default "x" / "y".
         num_partitions: Fan-out for the heavy per-tower stage (``repartition`` by
@@ -939,13 +940,9 @@ def rst_viewshed_towers(
         ``total_px`` (long), ``frac`` (double, visible/total), and — when
         ``to_crs`` is set — ``visible_px_reproj`` and ``total_px_reproj``.
     """
+    from databricks.labs.gbx._gdal_policy import _session_read_cap_now, driver_switch
     from databricks.labs.gbx.pyrx.core import analysis as analysis_core
-    from databricks.labs.gbx.pyrx.functions import (  # noqa: PLC0415
-        _fromfile_extra,
-        _light_rst_histogram,
-        _raise_if_null,
-        _tower_window_paths,
-    )
+    from databricks.labs.gbx.pyrx.functions import _tower_window_paths
 
     analysis_core._validate_towers_inputs(dsm_tiles_df.columns, radius_m)
     if tile_m is None or tile_m <= 0:
@@ -962,28 +959,31 @@ def rst_viewshed_towers(
             "COG directory with dsm_<tx>_<ty>.tif tiles."
         )
 
-    _x0, _y0, _tile_m = float(x0), float(y0), float(tile_m)
-    _radius = float(radius_m)
-    _vrt_dir = vrt_dir
+    window_paths = _tower_window_paths(
+        tile_map, float(x0), float(y0), float(tile_m), float(radius_m)
+    )
+    # What a registration carries to its workers, read here on the driver: the remote-path switch and the read cap.
+    carried = (driver_switch(), _session_read_cap_now())
+    run_args = (
+        float(radius_m),
+        float(target_height),
+        None if to_crs is None else int(to_crs),
+        vrt_dir,
+    )
+    counts = (
+        "visible_px long, total_px long, visible_px_reproj long, total_px_reproj long"
+    )
 
-    window_paths = _tower_window_paths(tile_map, _x0, _y0, _tile_m, _radius)
-
-    @f.udf("string")
-    def _mint_window_vrt(tower_id, obs_x, obs_y):
-        # Worker-side: pick the in-radius tiles via tile_range and mint ONE VRT
-        # over their paths (bytes-free: the VRT is tiny XML referencing the COGs
-        # by absolute path). Runs in the same task as the downstream DEM read.
-        import os
-
-        from databricks.labs.gbx.ds._mosaic import mint_vrt
-
+    @f.udf(counts)
+    def _tower_counts(tower_id, obs_x, obs_y, obs_h):
+        # One call does the whole tower: it mints the window VRT and reads it, so the VRT never crosses from one UDF
+        # to another (on Serverless two UDFs of one task need not share a local disk).
         paths = window_paths(obs_x, obs_y)
         if not paths:
             return None
-        if _vrt_dir:
-            os.makedirs(_vrt_dir, exist_ok=True)
-            return mint_vrt(paths, out=os.path.join(_vrt_dir, f"tower_{tower_id}.vrt"))
-        return mint_vrt(paths)
+        return _tower_viewshed_counts(
+            tower_id, paths, obs_x, obs_y, obs_h, run_args, carried
+        )
 
     base = towers_df.select(
         f.col(tower_id_col).alias("tower_id"),
@@ -996,117 +996,130 @@ def rst_viewshed_towers(
         ).alias("observer_height"),
     )
 
-    def with_frac(df: DataFrame) -> DataFrame:
-        return df.withColumn(
-            "frac",
-            f.when(
-                f.col("total_px") > 0, f.col("visible_px") / f.col("total_px")
-            ).otherwise(f.lit(0.0)),
-        )
-
     # One tower per task: an explicit repartition by tower id is the only fan-out
-    # Serverless AQE cannot coalesce. Repartition BEFORE the mint so the mint and
-    # the DEM read share a task (no shuffle between them -> the local/Volume VRT
-    # is readable where it was written).
+    # Serverless AQE cannot coalesce.
     if num_partitions is None:
         num_partitions = max(base.select("tower_id").distinct().count(), 1)
     base = base.repartition(int(num_partitions), "tower_id")
 
-    # Fixed-point WKT POINT (never scientific notation) in the raster CRS.
-    observer_wkt = f.format_string(
-        "POINT (%.6f %.6f)", f.col("observer_x"), f.col("observer_y")
-    )
-
-    def viewshed():
-        from databricks.labs.gbx.rasterx import functions as rx_api
-
-        return rx_api.rst_viewshed(
-            f.col("_dem"),
-            observer_wkt,
-            f.col("observer_height"),
-            f.lit(float(target_height)),
-            f.lit(_radius),
-            materialize=True,
-        )
-
-    def histogram(tile_col: str):
-        return _light_rst_histogram(
-            tile_col, f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False)
-        )
-
-    piped = (
-        base.withColumn(
-            "_vrt", _mint_window_vrt("tower_id", "observer_x", "observer_y")
-        )
-        .where(f.col("_vrt").isNotNull())
-        .withColumn(
-            "_dem", _fromfile_extra(f.col("_vrt"), f.lit("GTiff"), f.lit(False))
-        )
-    )
-    piped = piped.withColumn("_vs", viewshed())
-    # An unreadable DSM tile fails the query: the viewshed of a tile op that cannot read its DEM is the
-    # row's error tile (no raster), which the histogram would count as a (0, 0) row.
-    tower = f.col("tower_id").cast("string")
-    piped = piped.withColumn(
-        "_vs",
-        _raise_if_null(
-            f.col("_vs")["raster"],
-            f.concat(
-                f.lit("rst_viewshed_towers: the viewshed of tower "),
-                tower,
-                f.lit(" failed: "),
-                f.coalesce(
-                    f.col("_vs")["metadata"]["last_error"], f.lit("no reason given")
-                ),
-            ),
-            f.col("_vs"),
+    # Nondeterministic, so the optimizer neither pushes the NULL filter (a tower with no tiles) below the repartition
+    # nor evaluates the UDF twice: the viewshed runs once a tower, after the fan-out.
+    piped = base.withColumn(
+        "_c",
+        _tower_counts.asNondeterministic()(
+            "tower_id", "observer_x", "observer_y", "observer_height"
         ),
-    )
-    piped = piped.withColumn("_hist", histogram("_vs"))
-
-    # Histogram bucket 1 = [128, 256) = the visible class (255); bucket 0 = invisible (0).
-    vis = f.col("_hist")["band_1"].getItem(1)
-    invis = f.col("_hist")["band_1"].getItem(0)
+    ).where(f.col("_c").isNotNull())
     out_cols = [
         f.col("tower_id").alias(tower_id_col),
         f.col("observer_x"),
         f.col("observer_y"),
-        f.coalesce(vis, f.lit(0)).cast("long").alias("visible_px"),
-        f.coalesce(invis + vis, f.lit(0)).cast("long").alias("total_px"),
+        f.col("_c.visible_px").alias("visible_px"),
+        f.col("_c.total_px").alias("total_px"),
+        f.when(f.col("_c.total_px") > 0, f.col("_c.visible_px") / f.col("_c.total_px"))
+        .otherwise(f.lit(0.0))
+        .alias("frac"),
     ]
-
     if to_crs is not None:
-        from databricks.labs.gbx.rasterx.functions import rst_transform
-
-        piped = piped.withColumn(
-            "_vs_reproj", rst_transform("_vs", f.lit(int(to_crs)), materialize=True)
-        )
-        # A reprojection that fails fails the query, as the viewshed does: its error tile has no raster, and the
-        # histogram of it would read as counts of 0.
-        piped = piped.withColumn(
-            "_vs_reproj",
-            _raise_if_null(
-                f.col("_vs_reproj")["raster"],
-                f.concat(
-                    f.lit("rst_viewshed_towers: the reprojection of tower "),
-                    tower,
-                    f.lit(f" to EPSG:{int(to_crs)} failed: "),
-                    f.coalesce(
-                        f.col("_vs_reproj")["metadata"]["last_error"],
-                        f.lit("no reason given"),
-                    ),
-                ),
-                f.col("_vs_reproj"),
-            ),
-        ).withColumn("_hist_reproj", histogram("_vs_reproj"))
-        vis_r = f.col("_hist_reproj")["band_1"].getItem(1)
-        invis_r = f.col("_hist_reproj")["band_1"].getItem(0)
         out_cols += [
-            f.coalesce(vis_r, f.lit(0)).cast("long").alias("visible_px_reproj"),
-            f.coalesce(invis_r + vis_r, f.lit(0)).cast("long").alias("total_px_reproj"),
+            f.col("_c.visible_px_reproj").alias("visible_px_reproj"),
+            f.col("_c.total_px_reproj").alias("total_px_reproj"),
         ]
+    return piped.select(*out_cols)
 
-    return with_frac(piped.select(*out_cols))
+
+def _tower_viewshed_counts(tower_id, paths, obs_x, obs_y, obs_h, run_args, carried):
+    """Worker side of :func:`rst_viewshed_towers` for one tower: mint the VRT over `paths` (under ``vrt_dir``, else in a
+    local temp folder removed at the end), run the engine's viewshed on it read by its path (the light
+    ``gbx_rst_viewshed``, its Volume sources staged to local disk), and count its visible and tested pixels from the
+    histogram of the 0/255 result; with ``to_crs``, the same of its reprojection (the light ``gbx_rst_transform``).
+    A step that gives no tile raises with the tower and the reason, so the query fails: counts of 0 are never made up.
+    """
+    import contextlib
+    import os
+    import shutil
+
+    from databricks.labs.gbx import _gdal_policy, manifest
+    from databricks.labs.gbx.ds._mosaic import mint_vrt
+    from databricks.labs.gbx.engine import l3, run
+    from databricks.labs.gbx.pyrx.core import accessors
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    radius, target_height, to_crs, vrt_dir = run_args
+    functions = manifest.load().functions
+
+    def failed(step: str, reason, target: str = "") -> ValueError:
+        return ValueError(
+            f"rst_viewshed_towers: the {step} of tower {tower_id}{target} failed: "
+            f"{reason or 'the engine gave no tile and no reason'}"
+        )
+
+    def counted(raster: bytes):
+        with ot._open(raster) as ds:
+            hist = accessors.histogram(ds, 2, 0.0, 256.0, False)["band_1"]
+        # bucket 1 = [128, 256) = the visible class (255); bucket 0 = not visible (0)
+        return int(hist[1]), int(hist[0] + hist[1])
+
+    with _gdal_policy.carried(*carried):
+        scratch = None
+        if vrt_dir:
+            os.makedirs(vrt_dir, exist_ok=True)
+            folder = vrt_dir
+        else:
+            folder = scratch = new_local_temp_dir("gbx_towervrt_")
+        try:
+            try:
+                vrt = mint_vrt(
+                    list(paths), out=os.path.join(folder, f"tower_{tower_id}.vrt")
+                )
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - a tile the VRT cannot be built over: its reason
+                raise failed("viewshed", f"{exc} (tiles: {', '.join(paths)})") from exc
+            fn = functions["gbx_rst_viewshed"]
+            values = {
+                "observer_geom": f"POINT ({obs_x:.6f} {obs_y:.6f})",
+                "observer_height": float(obs_h),
+                "target_height": target_height,
+                "max_distance": radius,
+                "crs": None,
+            }
+            tile = {
+                "cellid": 0,
+                "raster": None,
+                "path": vrt,
+                "path_mode": None,
+                "window": None,
+                "clip_polygon": None,
+                "clip_crs": None,
+                "crs": None,
+                "metadata": {},
+            }
+            with contextlib.ExitStack() as stack:
+                try:
+                    rasters, _, _ = l3._inputs(
+                        fn, tile, None, None, None, values, stack
+                    )
+                    res = run.run(fn, rasters, values)
+                except run.DataError as exc:
+                    raise failed("viewshed", exc) from None
+            if res is None or res.raster is None:
+                raise failed("viewshed", None if res is None else res.error)
+            visible, total = counted(res.raster)
+            if to_crs is None:
+                return visible, total, None, None
+            tr = run.run(functions["gbx_rst_transform"], [res.raster], {"srid": to_crs})
+            if tr is None or tr.raster is None:
+                raise failed(
+                    "reprojection",
+                    None if tr is None else tr.error,
+                    f" to EPSG:{to_crs}",
+                )
+            return (visible, total) + counted(tr.raster)
+        finally:
+            if scratch is not None:
+                shutil.rmtree(scratch, ignore_errors=True)
 
 
 def rst_memsize_grouped(df, *, tile_col: str = "tile", out_col: str = "memsize"):

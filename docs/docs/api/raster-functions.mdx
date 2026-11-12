@@ -6470,9 +6470,9 @@ pipeline function in `databricks.labs.gbx.rasterx.helpers`. It runs on Serverles
 row per tower. For each tower it selects the in-radius DSM tiles via the `tile_range` windowing
 helper. The helper uses an EPSG:3857 grid origin + tile size that the `tx`/`ty` indices in `dsm_tiles_df`
 reference. It then mints one bytes-free VRT over those tiles, runs a single `rst_viewshed` (materialized
-once, in-memory), and derives coverage counts from a histogram. No raster bytes cross a shuffle —
-each tower row carries a ~100-byte VRT path — so there is no FUSE read-back and no whole-AOI
-merge. Powers the Wireless Coverage series Part 3b viewshed analysis.
+once, in-memory), and derives coverage counts from a histogram. One call per tower mints the VRT and
+reads it, so the VRT never passes between tasks or UDFs. No raster bytes cross a shuffle, so there is
+no FUSE read-back and no whole-AOI merge. Powers the Wireless Coverage series Part 3b viewshed analysis.
 
 **Signature:**
 ```python
@@ -6505,8 +6505,8 @@ result_df = rst_viewshed_towers(
 - `to_crs` — optional EPSG code to reproject the viewshed into (`rst_transform`, materialized
   once); when set, the result gains `visible_px_reproj` and `total_px_reproj`.
 - `vrt_dir` — optional durable, worker-readable directory (e.g. a UC Volume path) for the
-  per-tower VRTs. When omitted, VRTs are minted transiently on the worker and read within the
-  same task.
+  per-tower VRTs. When omitted, each VRT is minted in a local temp folder by the call that
+  reads it, and removed after.
 - `tower_id_col` / `x_col` / `y_col` — tower identity and coordinate column names; defaults
   `"tower_cellid"` / `"x"` / `"y"`.
 - `num_partitions` — fan-out for the per-tower stage (`repartition` by `tower_id_col`); defaults
@@ -6516,7 +6516,7 @@ result_df = rst_viewshed_towers(
 `observer_x`, `observer_y`, `visible_px` (long), `total_px` (long), `frac` (double,
 visible/total), and — when `to_crs` is set — `visible_px_reproj` and `total_px_reproj`.
 
-An unreadable DSM tile fails the query. A reprojection to `to_crs` that fails also fails the query. The error names the tower and gives the reason.
+An unreadable DSM tile fails the query. A reprojection to `to_crs` that fails also fails the query. The error names the tower and gives the reason the read or the step gave.
 
 `databricks.labs.gbx.rasterx.helpers.tile_range` computes the index window covering a circle of
 `radius_m` around a projected coordinate. `rst_viewshed_towers` uses it to select the tiles each

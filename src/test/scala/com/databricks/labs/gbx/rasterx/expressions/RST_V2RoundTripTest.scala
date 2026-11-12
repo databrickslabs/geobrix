@@ -143,8 +143,8 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         // The IllegalArgumentException from guardMaterialized may be wrapped in a SparkException.
         // Walk the cause chain to find the guard message.
         assert(
-            causeChainContains(ex, Seq("materialize", "lightweight", "virtual tile")),
-            s"Expected 'materialize', 'lightweight', 'virtual tile' somewhere in cause chain.\n" +
+            causeChainContains(ex, Seq("materialize", "Python level", "virtual tile")),
+            s"Expected 'materialize', 'Python level', 'virtual tile' somewhere in cause chain.\n" +
             s"Top-level: ${ex.getMessage}\n" +
             Option(ex.getCause).map(c => s"Cause: ${c.getMessage}").getOrElse("(no cause)")
         )

@@ -108,8 +108,8 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             s"Expected 'virtual tile' in message: ${ex.getMessage}")
         assert(ex.getMessage.toLowerCase.contains("materialize"),
             s"Expected 'materialize' in message: ${ex.getMessage}")
-        assert(ex.getMessage.toLowerCase.contains("lightweight"),
-            s"Expected 'lightweight' in message: ${ex.getMessage}")
+        assert(ex.getMessage.contains("Python level"),
+            s"Expected 'Python level' in message: ${ex.getMessage}")
     }
 
     test("rowToTile on an unrecognized field count throws a clear error") {

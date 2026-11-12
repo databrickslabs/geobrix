@@ -16,15 +16,15 @@ object RST_ExpressionUtil {
 
     /** DataType of the raster field (second field) of the tile struct for the given tile expression.
       * Throws [[IllegalArgumentException]] if the raster field is StringType (v1 path-tile), which
-      * is not supported by the heavyweight tier.
+      * is not supported at the JVM level.
       */
     def rasterType(tile: Expression): DataType = {
         val rdt = tile.dataType.asInstanceOf[StructType].fields(1).dataType
         rdt match {
             case StringType => throw new IllegalArgumentException(
-                "Raster path-tiles (raster field as a String path) are not supported by the " +
-                "heavyweight tier. Materialize the raster to bytes in the lightweight tier " +
-                "(materialize=True, or write + read back) before passing it to a heavyweight function.")
+                "Raster path-tiles (raster field as a String path) are not supported at the " +
+                "JVM level. Materialize the raster to bytes at the Python level first " +
+                "(materialize=True, or write + read back), then pass it to the JVM-level function.")
             case other => other
         }
     }

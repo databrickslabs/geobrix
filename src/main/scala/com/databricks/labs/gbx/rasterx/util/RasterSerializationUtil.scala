@@ -49,10 +49,10 @@ object RasterSerializationUtil {
         if (lyt.isV2 && row.isNullAt(lyt.raster) && lyt.path.exists(p => !row.isNullAt(p))) {
             val path = lyt.path.map(p => row.getUTF8String(p).toString).getOrElse("<unknown>")
             throw new VirtualTileException(
-                s"Heavyweight rst_* received a virtual tile (raster is null, path=$path). The " +
-                "heavyweight tier operates only on materialized (binary) tiles. Materialize it in the " +
-                "lightweight tier first — call the lightweight rst_* with materialize=True, or write it " +
-                "out and read it back — then pass the result to the heavyweight function.")
+                s"A JVM-level rst_* received a virtual tile (raster is null, path=$path). The " +
+                "JVM level reads materialized (binary) tiles only. Materialize it at the Python level " +
+                "first: call the Python rst_* with materialize=True, or write it out and read it back. " +
+                "Then pass the result to the JVM-level function.")
         }
 
     /** Cell id of a tile row (v1 or v2 layout), read without opening the raster; -1 when the row is

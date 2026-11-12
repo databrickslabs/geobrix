@@ -163,7 +163,7 @@ def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, lis
             if i in rng or not is_setup_cell(cells[i]):
                 used |= _loaded(tree)
     out: dict[str, list[int]] = {}
-    for i, cell in enumerate(cells):
+    for i, cell in enumerate(cells[: rng.stop]):  # a cell after the piece never ran before it in the notebook
         if i in kept or cell.get("cell_type") != "code":
             continue
         tree = _parse(cell_source(cell))

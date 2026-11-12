@@ -134,3 +134,11 @@ def test_the_runner_uploads_the_piece_and_harvests_only_its_cells(cr, monkeypatc
     sliced = json.loads(rns._select_piece(raw, "8:9", None))
     srcs = [cr.cell_source(c) for c in sliced["cells"]]
     assert "print(helper(1))" in srcs and "df = spark.table(TABLE)\nheavy = df.count()" not in srcs
+
+
+def test_a_cell_after_the_piece_is_never_a_source(cr):
+    # rx comes from %run ./config_nb; a later cell that re-imports it (or computes it) must not refuse or feed the piece.
+    nb = {"cells": [_code("%run ./config_nb"), _code("print(rx, df)"), _code("df = spark.range(1).toDF('x')"),
+                    _code("from x import functions as rx")]}
+    out, _, _ = cr.select_cells(nb, "1:2")
+    assert [cr.cell_source(c) for c in out["cells"]] == ["%run ./config_nb", "print(rx, df)"]

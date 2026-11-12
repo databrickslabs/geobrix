@@ -1,0 +1,46 @@
+bundle:
+  name: gbx_sdp_flowreg_probe
+
+# A probe, not an example: does a GeoBrix function registered in one Lakeflow flow resolve in another?
+# Run it with gbx:test:sdp --bundle examples/tests/sdp_flowreg_probe --pipeline-only, once per wheel.
+# The workspace profile, catalog and wheel go in a git-ignored databricks.override.yml.
+include:
+  - "*.override.yml"
+
+variables:
+  catalog: {default: geospatial_docs}
+  schema: {default: probe_flowreg}
+  pipeline_channel: {default: "PREVIEW"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl"}
+  # A Volume folder each dataset function writes one JSON line of diagnostics to, under <label>/.
+  diag_dir: {default: ""}
+  label: {default: "run"}
+  # "true": the probe swaps _api._flow for a proposed classic-session key before each body (a fix under test).
+  patch_flow_key: {default: "false"}
+
+resources:
+  pipelines:
+    gbx_sdp_flowreg_probe:
+      name: gbx_sdp_flowreg_probe
+      serverless: true
+      # Development mode: a failed update is not retried (a probe expects failing flows).
+      development: true
+      channel: ${var.pipeline_channel}
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      root_path: ./transformations
+      libraries:
+        - glob:
+            include: transformations/**
+      environment:
+        dependencies:
+          # PREVIEW is DBR 19: the +env6 wheel.
+          - ${var.gbx_wheel}
+      configuration:
+        probe.diag_dir: ${var.diag_dir}
+        probe.label: ${var.label}
+        probe.patch_flow_key: ${var.patch_flow_key}
+
+targets:
+  dev:
+    default: true

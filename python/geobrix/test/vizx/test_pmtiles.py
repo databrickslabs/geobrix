@@ -360,3 +360,39 @@ def test_static_fallback_decodes_one_vector_zoom_and_the_finest_raster_zoom(
     decoded = mlib._decode_pmtiles_for_static(pmtiles_layer(pyramid))
     assert decoded.kind == "raster"
     assert decoded.data[..., :3].max() > 150
+
+
+def test_an_explicit_zero_embed_budget_is_quiet(returns_html, capsys):
+    archive = _build_archive([(0, 0, 0, _real_png_tile())], TileType.PNG)
+    with warnings.catch_warnings(record=True) as ws:
+        warnings.simplefilter("always")
+        p.plot_pmtiles(archive, max_embed_mb=0)
+    assert not _warned_about_the_budget(ws), [str(w.message)[:80] for w in ws]
+    # The one-line audit stays: it states the verdict, it does not scold the choice.
+    assert "static fallback" in capsys.readouterr().out
+
+
+def test_a_default_budget_that_drops_the_map_to_static_still_warns(
+    monkeypatch, returns_html
+):
+    # Nobody asked for static here: the default silently dropped interactivity.
+    monkeypatch.setattr(mlib, "MAX_EMBED_MB_CAP_RAISED", 1e-9)
+    archive = _build_archive([(0, 0, 0, _real_png_tile())], TileType.PNG)
+    with warnings.catch_warnings(record=True) as ws:
+        warnings.simplefilter("always")
+        p.plot_pmtiles(archive)
+    assert _warned_about_the_budget(ws)
+
+
+def test_prepare_layers_zero_budget_is_quiet_but_a_positive_one_warns():
+    archive = _build_archive([(0, 0, 0, _real_png_tile())], TileType.PNG)
+    with warnings.catch_warnings(record=True) as ws:
+        warnings.simplefilter("always")
+        out = mlib.prepare_layers([pmtiles_layer(archive)], max_embed_mb=0)
+    assert out["mode"] == "static"
+    assert not _warned_about_the_budget(ws)
+    assert out["warnings"] == []
+    with warnings.catch_warnings(record=True) as ws:
+        warnings.simplefilter("always")
+        out = mlib.prepare_layers([pmtiles_layer(archive)], max_embed_mb=1e-9)
+    assert out["mode"] == "static" and _warned_about_the_budget(ws)

@@ -959,6 +959,19 @@ def _autofit_pmtiles_layer(layer, per_pmtiles_mb: float):
     return _pml(reduced, label=getattr(layer, "label", None)), True
 
 
+def _warn_static_fallback(max_embed_mb, text, warn_msgs) -> None:
+    """Warn that an over-budget embed fell back to static, unless that was asked for.
+
+    An explicit ``max_embed_mb=0`` is the caller choosing the static render (every
+    default budget is > 0), so nothing was silently dropped: the one-line audit already
+    states the verdict, and a warning would scold a deliberate choice.
+    """
+    if max_embed_mb == 0:
+        return
+    warn_msgs.append(text)
+    _warnings.warn(text, stacklevel=3)
+
+
 def prepare_layers(
     layers,
     *,
@@ -1172,13 +1185,13 @@ def prepare_layers(
             f"prepare_layers: assembled HTML exceeds budget ({size_desc} > "
             f"{max_embed_mb} MB). {remedy_msg}"
         )
-    warn_text = (
+    _warn_static_fallback(
+        max_embed_mb,
         f"prepare_layers: embedded HTML ({size_desc}) exceeds "
         f"max_embed_mb={max_embed_mb}; falling back to static render. "
-        f"Offending layer(s): {', '.join(oversize_labels)}. {remedy_msg}"
+        f"Offending layer(s): {', '.join(oversize_labels)}. {remedy_msg}",
+        warn_msgs,
     )
-    warn_msgs.append(warn_text)
-    _warnings.warn(warn_text, stacklevel=2)
 
     # Build static-path layer list: decode pmtiles -> raster/vector for plot_static.
     static_layers = []

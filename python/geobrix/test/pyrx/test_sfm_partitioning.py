@@ -1,5 +1,6 @@
-"""run_sfm sizes its work by partition: one image per extraction partition, a keyed matching fan-out, and no
-session conf (a Serverless session refuses one, and the lightweight package sets none).
+"""run_sfm sizes its work by partition: a keyed extraction fan-out (one partition count per image), a
+keyed matching fan-out, and no session conf (a Serverless session refuses one, and the lightweight
+package sets none).
 """
 
 import inspect
@@ -34,21 +35,26 @@ def _rows_per_partition(df):
 
 
 @pytest.mark.parametrize("n", [1, 2, 7, 25, 100, 333])
-def test_extraction_has_exactly_one_image_per_partition(spark, n):
+def test_extraction_fan_out_is_keyed_on_source_and_honours_the_count(spark, n):
     # an input spread over a few partitions, as a real df_qc is
     df = spark.createDataFrame([(f"/v/img_{i:05d}.jpg",) for i in range(n)], ["source"])
     out = sfm._one_image_per_partition(df.repartition(5), n)
-    counts = _rows_per_partition(out)
-    assert len(counts) == n and set(counts) == {1}
+    plan = out._jdf.queryExecution().executedPlan().toString()
+    # one partition is Spark's SinglePartition exchange; more are hash-partitioned on the source
+    expected = "SinglePartition" if n == 1 else "hashpartitioning(source#"
+    assert expected in plan and (n == 1 or f", {n})" in plan)
+    assert out.rdd.getNumPartitions() == n
     assert sorted(r.source for r in out.collect()) == sorted(
         r.source for r in df.collect()
     )
     assert out.columns == ["source"]
 
 
-def test_extraction_is_one_image_per_partition_even_for_duplicate_sources(spark):
-    df = spark.createDataFrame([("/v/a.jpg",)] * 6, ["source"])
-    assert set(_rows_per_partition(sfm._one_image_per_partition(df, 6))) == {1}
+def test_extraction_fan_out_spreads_images_over_many_partitions(spark):
+    n = 64
+    df = spark.createDataFrame([(f"/v/img_{i:05d}.jpg",) for i in range(n)], ["source"])
+    counts = _rows_per_partition(sfm._one_image_per_partition(df, n))
+    assert sum(counts) == n and len(counts) > n // 3
 
 
 def test_matching_fan_out_is_keyed_on_the_pair_and_honours_the_count(spark):
@@ -70,7 +76,7 @@ def test_no_session_conf_machinery_is_left():
     assert "conf.set" not in inspect.getsource(sfm)
 
 
-def test_run_sfm_sets_no_spark_conf_and_fans_out_one_image_per_partition(
+def test_run_sfm_sets_no_spark_conf_and_fans_out_by_image_count(
     spark, tmp_path, monkeypatch
 ):
     sets, fanned = [], []

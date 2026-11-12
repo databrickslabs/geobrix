@@ -660,25 +660,18 @@ def _gps_from_master(db):
     return _o
 
 
-_ROW_INDEX = "_gbx_row_idx"
-
-
 def _one_image_per_partition(df, num_partitions, col="source"):
-    """``df``'s ``col`` as exactly one row per partition (``num_partitions`` = its row count).
+    """``df``'s ``col`` hashed over ``num_partitions`` partitions (``num_partitions`` = its row count).
 
     Spark hands a ``mapInPandas`` function the rows of ONE partition, and an Arrow batch never spans
-    partitions, so one row per partition is one image per batch with no session setting involved
-    (a Serverless session may set only a handful of Spark properties, and the lightweight package
-    sets none). ``repartition(N, col)`` would hash the keys, and a hash collision puts two or three
-    images in one partition. A dense row index (0..N-1) ranged over N partitions puts one in each: the
-    range bounds are the sampled index values themselves, so they are exact for a unique index.
+    partitions, so a partition per image keeps a batch to a few images with no session setting
+    involved (a Serverless session may set only a handful of Spark properties, and the lightweight
+    package sets none). ``repartition(N, col)`` is the form AQE keeps (a bare ``repartition(N)`` is
+    coalesced), and the image path is unique, so the hash spreads the work. It does not guarantee one
+    image per partition: a hash collision puts two or three in one, about four at most. Memory stays
+    bounded because each image runs in its own subprocess.
     """
-    from pyspark.sql import Window
-
-    indexed = df.select(col).withColumn(
-        _ROW_INDEX, F.row_number().over(Window.orderBy(col)) - 1
-    )
-    return indexed.repartitionByRange(num_partitions, _ROW_INDEX).select(col)
+    return df.select(col).repartition(num_partitions, col)
 
 
 def _fan_out_pairs(df, num_partitions):
@@ -798,9 +791,9 @@ def run_sfm(  # noqa: C901
             # fallback after worker OOMs; slower but memory-bounded. SIFT quality
             # unchanged. AQE does NOT reliably honor a bare repartition(N) /
             # repartition(1); the respected idioms are repartition(N, col) for
-            # fan-out (one task per image: `_one_image_per_partition`) and
+            # fan-out (a partition count per image: `_one_image_per_partition`) and
             # coalesce(1) to force a single partition for the serialized fallback.
-            # Memory per task: one image per partition, the per-image subprocess and the
+            # Memory per task: a few images per partition at most, the per-image subprocess and the
             # per-image yield in `_extract_features_to_df` bound a Python worker to a single
             # image's pycolmap working set; no Arrow batch-size setting is needed.
             if serialize_extract:

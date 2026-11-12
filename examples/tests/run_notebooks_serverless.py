@@ -515,10 +515,11 @@ def _terminal_states():
 # Core: import + submit one notebook
 # ---------------------------------------------------------------------------
 
-def _select_piece(nb_bytes: bytes, cells: str, prelude: Optional[str]) -> bytes:
+def _select_piece(nb_bytes: bytes, cells: str, prelude: Optional[str],
+                  base_dir: Optional[pathlib.Path] = None) -> bytes:
     """The notebook with only the piece ``cells`` (``A:B``) and its prelude (see _cell_range.py)."""
     nb = json.loads(nb_bytes)
-    out, rng, pre = _cell_range.select_cells(nb, cells, prelude)
+    out, rng, pre = _cell_range.select_cells(nb, cells, prelude, base_dir)
     print(f"    piece: cells {_cell_range.range_label(rng)}; prelude cells "
           f"{', '.join(str(i + 1) for i in pre) or 'none'}", flush=True)
     return json.dumps(out).encode()
@@ -540,7 +541,7 @@ def _import_notebook(
 
     nb_bytes = local_path.read_bytes()
     if cells:
-        nb_bytes = _select_piece(nb_bytes, cells, prelude)
+        nb_bytes = _select_piece(nb_bytes, cells, prelude, local_path.parent)
     if strip_pip:
         nb_bytes = _strip_pip_cells(nb_bytes)
     elif PIP_WHEEL:
@@ -1500,7 +1501,7 @@ def main() -> int:
     for nb_path in notebooks if args.cells else []:  # every piece must fit, and need no skipped cell, before any run
         for spec in args.cells:
             try:
-                _select_piece(nb_path.read_bytes(), spec, args.prelude)
+                _select_piece(nb_path.read_bytes(), spec, args.prelude, nb_path.parent)
             except ValueError as exc:
                 parser.error(f"{nb_path.name}: {exc}")
             except json.JSONDecodeError as exc:

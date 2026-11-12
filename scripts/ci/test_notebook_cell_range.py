@@ -142,3 +142,103 @@ def test_a_cell_after_the_piece_is_never_a_source(cr):
                     _code("from x import functions as rx")]}
     out, _, _ = cr.select_cells(nb, "1:2")
     assert [cr.cell_source(c) for c in out["cells"]] == ["%run ./config_nb", "print(rx, df)"]
+
+
+# --- params cells with a print; names read through globals(); names a %run notebook defines or reads -------------
+
+FIXTURES = REPO_ROOT / "examples" / "tests" / "fixtures"
+PIECES = json.loads((FIXTURES / "cell_range_pieces.ipynb").read_text())
+# cells: 1 md, 2 params + print, 3 %run ./cell_range_pieces_config, 4 compute (rows), 5 reads via globals(), 6 reads rows
+
+
+def test_a_params_cell_with_a_print_is_setup_but_a_cell_that_works_is_not(cr):
+    assert cr.is_setup_cell(_code('DEMO = True\nTABLE_PREFIX = "x_"\nprint(f"DEMO={DEMO}")'))
+    assert cr.is_setup_cell(_code('import logging\nlogger = logging.getLogger("x")\nN = int(os.environ.get("N", 3))\n'
+                                  'if N > 2:\n    MODE = "big"\nelse:\n    MODE = "small"\nlogger.info("mode %s", MODE)'))
+    assert cr.is_setup_cell(_code('print("{} rows".format(len(NAMES)), sep="")\nT = globals().get("T", "t")'))
+    for src in ("df = spark.table('x')\nprint(df.count())",       # a Spark action
+                "print(spark.range(3).count())",                   # a print that works
+                "DEMO = True\nspark.range(3).write.saveAsTable('t')",  # a write
+                "DEMO = True\nprint(do_work())",                   # an unknown call
+                "DEMO = True\nT = make_table()",                   # an assignment of a call
+                "if DEMO:\n    spark.sql('DROP TABLE t')"):         # an if over work
+        assert not cr.is_setup_cell(_code(src)), src
+
+
+def test_the_params_cell_with_a_print_reaches_the_piece(cr):
+    out, _, pre = cr.select_cells(PIECES, "5:5", base_dir=FIXTURES)
+    assert pre == [1, 2]  # the params cell (2) and the %run (3); not the compute (4)
+    srcs = [cr.cell_source(c) for c in out["cells"]]
+    assert srcs[0].startswith("DEMO = True") and "print(f\"DEMO={DEMO}\")" in srcs[0]
+    assert srcs[1] == "%run ./cell_range_pieces_config" and "rows = " not in "".join(srcs)
+
+
+def test_a_setup_cell_reading_a_name_only_a_skipped_cell_defines_is_not_kept(cr):
+    # cell 2 would raise NameError on `rows` in the piece: it is skipped, and only its FLAG line is carried
+    nb = {"cells": [_code("rows = spark.range(3).count()"), _code('print(f"n={rows}")\nFLAG = True'), _code("print(FLAG)")]}
+    assert cr.auto_prelude(nb["cells"], cr.parse_range("3:3", 3)) == []
+    out, _, pre = cr.select_cells(nb, "3:3")
+    carried = cr.cell_source(out["cells"][0])
+    assert pre == [] and "FLAG = True" in carried and "print(f" not in carried
+
+
+def test_a_globals_read_of_a_name_only_a_skipped_cell_defines_is_refused_naming_the_cell(cr):
+    with pytest.raises(ValueError, match=r"rows \(cell 4\).*--prelude 4"):
+        cr.select_cells(PIECES, "6:6", base_dir=FIXTURES)
+    nb = {"cells": [_code("X = make()"), _code('print(globals()["X"])')]}
+    with pytest.raises(ValueError, match=r"X \(cell 1\)"):
+        cr.select_cells(nb, "2:2")
+    nb = {"cells": [_code("X = make()"), _code('print("X" in globals())')]}
+    with pytest.raises(ValueError, match=r"X \(cell 1\)"):
+        cr.select_cells(nb, "2:2")
+    nb = {"cells": [_code("X = make()"), _code('print(globals().get("Y", 1))')]}  # not defined by a skipped cell: fine
+    assert len(cr.select_cells(nb, "2:2")[0]["cells"]) == 1
+
+
+def test_a_skipped_cells_setup_statements_are_carried_when_the_piece_reads_them_through_globals(cr):
+    nb = {"cells": [_code('TABLE_PREFIX = "demo_"\nrows = spark.range(3).count()'),
+                    _code('print(globals().get("TABLE_PREFIX", ""))')]}
+    out, _, _ = cr.select_cells(nb, "2:2")
+    carried = cr.cell_source(out["cells"][0])
+    assert carried.startswith(cr.CARRIED_PREFIX) and 'TABLE_PREFIX = "demo_"' in carried and "rows" not in carried
+
+
+def test_a_name_a_run_notebook_reads_is_used_by_the_piece(cr):
+    # cell_range_pieces_config reads TABLE_PREFIX through globals().get: a skipped cell before the %run that computes it
+    # is refused; one that only assigns it is carried; one after the %run never ran before it.
+    cfg = {"cells": [_code("TABLE_PREFIX = make_prefix()"), _code("%run ./cell_range_pieces_config"), _code("print(1)")]}
+    with pytest.raises(ValueError, match=r"TABLE_PREFIX \(cell 1\).*--prelude 1"):
+        cr.select_cells(cfg, "3:3", base_dir=FIXTURES)
+    assert len(cr.select_cells(cfg, "3:3")[0]["cells"]) == 2  # no base_dir: the notebook cannot be read
+    carry = {"cells": [_code('TABLE_PREFIX = "p_"\nrows = spark.range(3).count()'), _code("%run ./cell_range_pieces_config"),
+                       _code("print(1)")]}
+    out, _, pre = cr.select_cells(carry, "3:3", base_dir=FIXTURES)
+    assert 'TABLE_PREFIX = "p_"' in cr.cell_source(out["cells"][0]) and pre == [1]
+    after = {"cells": [_code("%run ./cell_range_pieces_config"), _code("TABLE_PREFIX = make_prefix()"), _code("print(1)")]}
+    assert len(cr.select_cells(after, "3:3", base_dir=FIXTURES)[0]["cells"]) == 2
+
+
+def test_a_name_a_run_notebook_defines_is_defined_for_the_cells_before_it_only(cr):
+    # the config defines CONFIG_VALUE and TABLE_NAME; a skipped cell before the %run is overwritten by it, one after overrides it
+    before = {"cells": [_code("TABLE_NAME = make()"), _code("%run ./cell_range_pieces_config"), _code("print(TABLE_NAME)")]}
+    out, _, _ = cr.select_cells(before, "3:3", base_dir=FIXTURES)
+    assert [cr.cell_source(c) for c in out["cells"]] == ["%run ./cell_range_pieces_config", "print(TABLE_NAME)"]
+    with pytest.raises(ValueError, match=r"TABLE_NAME \(cell 1\)"):  # without the notebook the name is the skipped cell's
+        cr.select_cells(before, "3:3")
+    after = {"cells": [_code("%run ./cell_range_pieces_config"), _code("TABLE_NAME = make()"), _code("print(TABLE_NAME)")]}
+    with pytest.raises(ValueError, match=r"TABLE_NAME \(cell 2\)"):
+        cr.select_cells(after, "3:3", base_dir=FIXTURES)
+
+
+def test_prelude_stays_the_manual_override(cr):
+    out, _, pre = cr.select_cells(PIECES, "6:6", prelude="4", base_dir=FIXTURES)
+    assert 3 in pre and "rows = spark.range(3).count()" in [cr.cell_source(c) for c in out["cells"]]
+
+
+def test_the_runner_passes_the_notebooks_folder_so_run_notebooks_resolve(cr, monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    rns = importlib.import_module("run_notebooks_serverless")
+    raw = (FIXTURES / "cell_range_pieces.ipynb").read_bytes()
+    with pytest.raises(ValueError, match=r"rows \(cell 4\)"):
+        rns._select_piece(raw, "6:6", None, FIXTURES)
+    assert "DEMO = True" in rns._select_piece(raw, "5:5", None, FIXTURES).decode()

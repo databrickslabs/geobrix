@@ -8,10 +8,14 @@ notebooks already carry it between sessions: their outputs are persisted tables 
 never the earlier piece's compute.
 
 The automatic prelude is every code cell before A that is setup: a ``%pip``, ``%restart_python`` or ``%run`` cell, or
-a cell of definitions only (imports, ``def``/``class``, and assignments with no call in them, such as
-``CATALOG = "main"`` or ``FORCE_RELOAD = False``). A cell that computes (a call, a read) is not setup. When the
-piece then uses a name that only a skipped cell defines, the piece is refused before anything is submitted, with the
-cell to add through ``--prelude``.
+a cell of side-effect-free statements only: imports, ``def``/``class``, assignments of literals or simple expressions
+(``CATALOG = "main"``, ``FORCE_RELOAD = False``, ``N = int(os.environ.get("N", 3))``), an ``if`` over those, and
+``print``/logging calls of them (``print(f"DEMO={DEMO}")``). A cell that computes (a Spark action, a read, a write, any
+other call) is not setup, and neither is a setup cell that reads a name only a skipped cell defines. When the piece then
+uses a name that only a skipped cell defines, the piece is refused before anything is submitted, with the cell to add
+through ``--prelude`` (``--prelude`` stays the manual override), unless the cell's setup statements bind it: those are
+carried. A name counts as used when read as a variable, through ``globals().get("X")`` / ``globals()["X"]``, or by a
+``%run`` notebook (parsed next to the notebook); the names a ``%run`` notebook defines count as defined.
 
 Stdlib only.
 """
@@ -20,7 +24,9 @@ from __future__ import annotations
 
 import ast
 import builtins
+import json
 import re
+from pathlib import Path
 from typing import Iterable, Optional
 
 _MAGIC_SETUP = re.compile(r"^\s*(%pip|%restart_python|%run)\b", re.M)
@@ -73,21 +79,78 @@ def _parse(src: str) -> Optional[ast.Module]:
         return None
 
 
-def _no_call(node) -> bool:
-    return not any(isinstance(n, (ast.Call, ast.Await, ast.Yield, ast.YieldFrom)) for n in ast.walk(node))
+_PURE_CALLS = frozenset({
+    "str", "repr", "int", "float", "bool", "len", "dict", "list", "tuple", "set", "frozenset", "range", "sorted",
+    "min", "max", "abs", "round", "Path", "PurePath", "os.getenv", "os.environ.get", "os.path.join",
+    "logging.getLogger", "os.path.basename", "os.path.dirname", "os.path.abspath", "os.path.splitext", "globals", "globals().get",
+    "dbutils.widgets.get", "dbutils.widgets.text", "dbutils.widgets.dropdown", "dbutils.widgets.combobox",
+    "dbutils.widgets.multiselect"})  # reads and flag definitions: no Spark job, no write
+_STR_METHODS = frozenset({"format", "join", "upper", "lower", "strip", "replace", "split", "title"})
+_LOG_ROOTS = frozenset({"logging", "logger", "log", "LOG", "LOGGER"})
+_LOG_METHODS = frozenset({"debug", "info", "warning", "warn", "error", "critical", "exception"})
+
+
+def _dotted(func) -> Optional[str]:
+    """``os.path.join`` for a Name/Attribute chain; ``globals().get`` for that call form; else None."""
+    parts: list[str] = []
+    while isinstance(func, ast.Attribute):
+        parts.append(func.attr)
+        func = func.value
+    if isinstance(func, ast.Name):
+        parts.append(func.id)
+    elif (isinstance(func, ast.Call) and isinstance(func.func, ast.Name) and func.func.id == "globals"
+          and not func.args and parts):
+        parts.append("globals()")
+    else:
+        return None
+    return ".".join(reversed(parts))
+
+
+def _pure_call(call: ast.Call) -> bool:
+    name = _dotted(call.func)
+    if name in _PURE_CALLS:
+        return True
+    f = call.func  # "...{}".format(x), ", ".join(names)
+    return (isinstance(f, ast.Attribute) and f.attr in _STR_METHODS
+            and (isinstance(f.value, ast.JoinedStr) or (isinstance(f.value, ast.Constant) and isinstance(f.value.value, str))))
+
+
+def _pure(node) -> bool:
+    """No side effect: no call but the reads and conversions in ``_PURE_CALLS``, no await or yield."""
+    for n in ast.walk(node):
+        if isinstance(n, (ast.Await, ast.Yield, ast.YieldFrom)):
+            return False
+        if isinstance(n, ast.Call) and not _pure_call(n):
+            return False
+    return True
+
+
+def _log_stmt(stmt) -> bool:
+    """``print(...)`` / ``logger.info(...)`` / ``warnings.warn(...)`` of side-effect-free arguments."""
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+        return False
+    call = stmt.value
+    name = _dotted(call.func) or ""
+    root, _, attr = name.rpartition(".")
+    if name != "print" and name != "warnings.warn" and not (root in _LOG_ROOTS and attr in _LOG_METHODS):
+        return False
+    return all(_pure(a) for a in call.args) and all(_pure(k.value) for k in call.keywords)
 
 
 def _setup_stmt(stmt) -> bool:
-    """A statement a later piece may re-run: an import, a ``def``/``class``, an assignment with no call, a string."""
-    if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+    """A statement a later piece may re-run: an import, a ``def``/``class``, an assignment of a side-effect-free value,
+    a string, a ``print``/logging call of those, or an ``if`` over those."""
+    if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Pass)):
         return True
-    if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None and _no_call(stmt.value):
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None and _pure(stmt.value):
         return True
-    return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant)
+    if isinstance(stmt, ast.If):
+        return _pure(stmt.test) and all(_setup_stmt(s) for s in stmt.body + stmt.orelse)
+    return _log_stmt(stmt) or (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant))
 
 
 def is_setup_cell(cell) -> bool:
-    """True for a cell a later piece re-runs: an install, restart or ``%run`` cell, or definitions only."""
+    """True for a cell a later piece re-runs: an install, restart or ``%run`` cell, or side-effect-free statements only."""
     if cell.get("cell_type") != "code":
         return False
     src = cell_source(cell)
@@ -101,9 +164,53 @@ def is_setup_cell(cell) -> bool:
     return all(_setup_stmt(stmt) for stmt in tree.body)
 
 
-def auto_prelude(cells: list, rng: range) -> list[int]:
-    """The setup cells before the range (0-based indices)."""
-    return [i for i in range(rng.start) if is_setup_cell(cells[i])]
+def auto_prelude(cells: list, rng: range, base_dir: Optional[Path] = None) -> list[int]:
+    """The setup cells before the range (0-based indices). A setup cell that reads a name only a skipped cell defines
+    is not kept (it would raise NameError in the piece): its names are then carried or refused like any skipped cell's."""
+    avail = set(_SESSION_GLOBALS)
+    skipped: set[str] = set()
+    out: list[int] = []
+    for i in range(rng.start):
+        cell = cells[i]
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell_source(cell)
+        tree = _parse(src)
+        bound = _session_defined(tree) if tree is not None else set()
+        if not is_setup_cell(cell):
+            skipped |= bound
+            continue
+        if _MAGIC_SETUP.search(src) or _RESTART.search(src):
+            out.append(i)
+            avail |= bound | _run_notebooks(src, base_dir)[0]
+            continue
+        if tree is not None and ((_eager_loads(tree) - bound) & skipped) - avail:
+            skipped |= bound
+            continue
+        out.append(i)
+        avail |= bound
+    return out
+
+
+def _is_globals_call(n) -> bool:
+    return isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "globals" and not n.args
+
+
+def _const_str(n) -> Optional[str]:
+    return n.value if isinstance(n, ast.Constant) and isinstance(n.value, str) else None
+
+
+def _globals_key(n) -> Optional[str]:
+    """``X`` for ``globals().get("X", ...)``, ``globals()["X"]``, ``"X" in globals()``; else None."""
+    if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute) and n.func.attr in ("get", "pop", "setdefault") \
+            and _is_globals_call(n.func.value) and n.args:
+        return _const_str(n.args[0])
+    if isinstance(n, ast.Subscript) and _is_globals_call(n.value):
+        return _const_str(n.slice)
+    if isinstance(n, ast.Compare) and len(n.ops) == 1 and isinstance(n.ops[0], (ast.In, ast.NotIn)) \
+            and _is_globals_call(n.comparators[0]):
+        return _const_str(n.left)
+    return None
 
 
 def _bound(nodes) -> set[str]:
@@ -111,6 +218,8 @@ def _bound(nodes) -> set[str]:
     for n in nodes:
         if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del)):
             names.add(n.id)
+        elif isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store) and _globals_key(n) is not None:
+            names.add(_globals_key(n))  # globals()["X"] = ...
         elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             names.add(n.name)
         elif isinstance(n, (ast.Import, ast.ImportFrom)):
@@ -145,19 +254,99 @@ def _session_defined(tree: ast.AST) -> set[str]:
 
 
 def _loaded(tree: ast.AST) -> set[str]:
-    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    """The names read as variables or through ``globals().get("X")`` / ``globals()["X"]`` / ``"X" in globals()``."""
+    out = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)}
+    for n in ast.walk(tree):
+        if not (isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)) and _globals_key(n) is not None:
+            out.add(_globals_key(n))
+    return out
 
 
-def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, list[int]]:
+def _eager_loads(tree: ast.AST) -> set[str]:
+    """The names read when the cell runs: ``def``/``class``/lambda bodies left out (read later, if called)."""
+    out: set[str] = set()
+    stack = [tree]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            stack.extend(n.decorator_list)
+            stack.extend(d for d in n.args.defaults + n.args.kw_defaults if d is not None)
+            continue
+        if isinstance(n, (ast.ClassDef, ast.Lambda)):
+            continue
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+            out.add(n.id)
+        elif not (isinstance(n, ast.Subscript) and isinstance(n.ctx, ast.Store)) and _globals_key(n) is not None:
+            out.add(_globals_key(n))
+        stack.extend(ast.iter_child_nodes(n))
+    return out
+
+
+_RUN_LINE = re.compile(r"^\s*%run\s+(\S+)", re.M)
+
+
+def _run_notebooks(src: str, base_dir: Optional[Path], _seen: Optional[set] = None) -> tuple[set[str], set[str]]:
+    """(names defined, names read) by the notebooks a cell ``%run``s, parsed relative to ``base_dir`` (the parent
+    notebook's folder). A notebook that cannot be found or parsed adds nothing."""
+    defined: set[str] = set()
+    read: set[str] = set()
+    if base_dir is None:
+        return defined, read
+    seen = _seen if _seen is not None else set()
+    for target in _RUN_LINE.findall(src):
+        ref = Path(target.strip("\"'"))
+        names = [ref.name] if ref.is_absolute() else [str(ref)]
+        found = next((c for n in names for c in (base_dir / n, base_dir / (n + ".ipynb"), base_dir / (n + ".py"))
+                      if c.is_file()), None)
+        if found is None or found in seen:
+            continue
+        seen.add(found)
+        try:
+            if found.suffix == ".ipynb":
+                srcs = [cell_source(c) for c in json.loads(found.read_text()).get("cells", []) if c.get("cell_type") == "code"]
+            else:
+                srcs = [found.read_text()]
+        except (OSError, ValueError):
+            continue
+        nb_def: set[str] = set()
+        nb_read: set[str] = set()
+        for text in srcs:
+            tree = _parse(text)
+            if tree is not None:
+                nb_def |= _session_defined(tree)
+                nb_read |= _loaded(tree) - _defined(tree)
+            d, r = _run_notebooks(text, found.parent, seen)  # a %run inside the %run notebook
+            nb_def |= d
+            nb_read |= r
+        defined |= nb_def
+        read |= nb_read - nb_def
+    return defined, read
+
+
+def missing_names(cells: list, kept: Iterable[int], rng: range,
+                  base_dir: Optional[Path] = None) -> dict[str, list[int]]:
     """Names the kept cells use that only a skipped code cell defines: {name: [0-based indices of the cells defining it]}.
 
     The piece's cells and the prelude cells outside the automatic setup (``--prelude``) count: both re-run in the
-    piece. A setup cell's reads are left out (its names usually come from a ``%run`` notebook)."""
+    piece. A setup cell's reads are left out (its names usually come from a ``%run`` notebook). A kept ``%run``
+    notebook (found under ``base_dir``) counts both ways, for the skipped cells BEFORE it only: the names it reads
+    (``globals().get("X")`` included) are used by the piece, and the names it defines are defined (it runs after
+    them). A skipped cell AFTER the ``%run`` overrides what it defined, so that cell still counts."""
     kept = set(kept)
     defined_kept: set[str] = set()
     used: set[str] = set()
+    run_reads: list[tuple[int, set[str]]] = []  # (the %run cell, names its notebooks read)
+    run_defs: list[tuple[int, set[str]]] = []  # (the %run cell, names its notebooks define)
     for i in sorted(kept):
-        tree = _parse(cell_source(cells[i])) if cells[i].get("cell_type") == "code" else None
+        if cells[i].get("cell_type") != "code":
+            continue
+        src = cell_source(cells[i])
+        run_def, run_read = _run_notebooks(src, base_dir)
+        if run_def:
+            run_defs.append((i, run_def))
+        if run_read:
+            run_reads.append((i, run_read))
+        tree = _parse(src)
         if tree is not None:
             defined_kept |= _defined(tree)
             if i in rng or not is_setup_cell(cells[i]):
@@ -169,7 +358,9 @@ def missing_names(cells: list, kept: Iterable[int], rng: range) -> dict[str, lis
         tree = _parse(cell_source(cell))
         if tree is None:
             continue
-        for name in (_session_defined(tree) & used) - defined_kept:
+        used_here = used | {n for run_i, names in run_reads if i < run_i for n in names}
+        run_defined = {n for run_i, names in run_defs if i < run_i for n in names}
+        for name in (_session_defined(tree) & used_here) - defined_kept - run_defined:
             out.setdefault(name, []).append(i)
     return out
 
@@ -178,11 +369,15 @@ CARRIED_PREFIX = "# --- piece setup carried from skipped cells"
 
 
 def _inputs(stmt) -> set[str]:
-    """The names a call-free assignment reads from the session (its own lambda arguments and comprehension targets
-    left out). Imports and ``def``/``class`` read nothing when they run."""
-    if not isinstance(stmt, (ast.Assign, ast.AnnAssign)) or stmt.value is None:
+    """The names a side-effect-free assignment or ``if`` reads from the session (its own lambda arguments, comprehension
+    targets and names it assigns left out). Imports and ``def``/``class`` read nothing when they run."""
+    if isinstance(stmt, (ast.Assign, ast.AnnAssign)) and stmt.value is not None:
+        node = stmt.value
+    elif isinstance(stmt, ast.If):
+        node = stmt
+    else:
         return set()
-    return _loaded(stmt.value) - _defined(stmt.value)
+    return _loaded(node) - _defined(node)
 
 
 def carried_statements(cells: list, missing: dict[str, list[int]],
@@ -232,7 +427,8 @@ def carried_statements(cells: list, missing: dict[str, list[int]],
             for i, lines in by_cell.items()}, covered
 
 
-def select_cells(nb: dict, spec: str, prelude: Optional[str] = None) -> tuple[dict, range, list[int]]:
+def select_cells(nb: dict, spec: str, prelude: Optional[str] = None,
+                 base_dir: Optional[Path] = None) -> tuple[dict, range, list[int]]:
     """The notebook with only the piece ``spec`` and its prelude; returns (notebook, range, prelude indices).
 
     ``prelude``: the ``--prelude`` cells (1-based list) added to the automatic ones. A name the piece needs from a
@@ -240,10 +436,10 @@ def select_cells(nb: dict, spec: str, prelude: Optional[str] = None) -> tuple[di
     the skipped cell's compute binds it."""
     cells = nb.get("cells", [])
     rng = parse_range(spec, len(cells))
-    pre = sorted(set(auto_prelude(cells, rng)) | set(parse_cell_list(prelude, len(cells)) if prelude else []))
+    pre = sorted(set(auto_prelude(cells, rng, base_dir)) | set(parse_cell_list(prelude, len(cells)) if prelude else []))
     pre = [i for i in pre if i not in rng]
     kept = sorted(set(pre) | set(rng))
-    missing = missing_names(cells, kept, rng)
+    missing = missing_names(cells, kept, rng, base_dir)
     available = set().union(*(_defined(t) for i in kept if cells[i].get("cell_type") == "code"
                               for t in [_parse(cell_source(cells[i]))] if t is not None))
     carried, covered = carried_statements(cells, missing, available) if missing else (None, set())

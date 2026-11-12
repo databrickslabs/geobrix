@@ -54,7 +54,7 @@ shared canvas, cumulative tier overlays, and a final coverage-depth composite.
 ## Prerequisites
 
 - **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Python 3.12). The
-  lightweight default runs on Serverless. Step 4 persists the
+  default runs at the Python level on Serverless. Step 4 persists the
   per-tier tiles to a **permanent table** you own (`CATALOG.SCHEMA.wc_dem_tier_tiles`); set a
   catalog/schema you can write to.
 - **GeoBrix 0.6.0.** Update the `%pip install` cell to point at your staged

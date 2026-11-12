@@ -34,7 +34,7 @@ struct<
 >
 ```
 
-A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the heavyweight implementation consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a lightweight capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
+A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the JVM level consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a Python-level capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
 
 ### Field Descriptions
 
@@ -42,13 +42,13 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 |-------|------|----------|-------------|
 | `cellid` | `bigint` (Long) | No | Grid cell identifier for tessellated rasters. `-1` for a tile that was not tessellated. The field is never `null`. |
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
-| `path` | `string` | Yes | Set on a virtual tile, where it is the source the pixels are read from. On a materialized tile it is provenance of where the bytes came from (a reader's tile, a `materialize=True` output, a lightweight retile-family output); the bytes in `raster` are the data and are always read in preference to `path`. `null` when the tile has no single source file. |
+| `path` | `string` | Yes | Set on a virtual tile, where it is the source the pixels are read from. On a materialized tile it is provenance of where the bytes came from (a reader's tile, a `materialize=True` output, a retile-family output); the bytes in `raster` are the data and are always read in preference to `path`. `null` when the tile has no single source file. |
 | `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
-| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window relative to their immediate **input** tile, so windows from different parents can repeat; one output that covers its whole input keeps the input's own window instead. The heavyweight versions leave it null. |
+| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The Python `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window relative to their immediate **input** tile, so windows from different parents can repeat; one output that covers its whole input keeps the input's own window instead. The JVM versions leave it null. |
 | `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
 | `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
 | `crs` | `string` | Yes | Working/target CRS. |
-| `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. The lightweight `rst_separatebands` also sets `band` (1-based) on each output. A tile read from a Zarr store carries the keys listed in [Zarr tile metadata](#zarr-tile-metadata). |
+| `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. The Python `rst_separatebands` also sets `band` (1-based) on each output. A tile read from a Zarr store carries the keys listed in [Zarr tile metadata](#zarr-tile-metadata). |
 
 :::note Reference vs. instruction
 On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).

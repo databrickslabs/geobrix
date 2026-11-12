@@ -60,7 +60,7 @@ The notebooks follow a solar site-selection narrative: identify candidate roofto
 
 ## Prerequisites
 
-- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless (set Environment to version 6). The heavyweight option needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
+- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The default runs at the Python level on Serverless (set Environment to version 6). The JVM level needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
 - **GeoBrix 0.6.0.** `config_nb.ipynb` `%pip`-installs `geobrix[stac,vizx]` (the env6 wheel, with the Overture CLI as a separate step) from a staged Volume wheel using the 2-step pattern (force-reinstall `--no-deps` first, then with the extra to pick up dependencies). To use the JVM engine too, run on a dedicated cluster with the JAR installed (see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path)).
 - **Unity Catalog.** Edit `config_nb.ipynb` to set `catalog_name` and `schema_name`. A Volume named `data` must already exist under `<catalog>/<schema>` — the notebooks create sub-directories inside it but will not create the Volume itself.
 - **Network access.** NB01 reads Overture Maps via `OvertureClient`; NB02 fetches NAIP via `NaipDownloader` and NB03 fetches 3DEP via `DemDownloader`, both from Planetary Computer STAC (online-only — no offline fallback). Classic cluster outbound internet is sufficient; Serverless has it by default.

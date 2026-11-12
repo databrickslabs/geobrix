@@ -122,7 +122,7 @@ The decisive factor for virtual-tile read performance is **open amortization**. 
 
 ## Reader selection surface
 
-The lightweight readers expose the windowing surface as read options:
+The raster readers expose the windowing surface as read options:
 
 - **`virtualTiles`** — emit bytes-free virtual tiles (`true`, the default) or
   materialized tiles (`false`).
@@ -156,7 +156,7 @@ selected latitude-longitude plane of a variable into windows (one inner chunk ea
 position along the other dimensions makes its own tile. The tile names that position in its `sliceDims` metadata, as the
 NetCDF reader names it. `band_dim` stacks one dimension as the bands of a tile instead. By default the tiles
 are virtual: `raster` is `NULL`, `path` is the store and `window` is the cells of the plane. Every
-lightweight `rst_*` function opens such a tile on demand and reads only the chunks its window touches. A
+Python `rst_*` function opens such a tile on demand and reads only the chunks its window touches. A
 header function such as `rst_crs` or `rst_width` reads no chunk at all.
 
 - **A Zarr tile is self-contained.** The tile's `metadata` carries what a task needs to read the window.
@@ -179,23 +179,23 @@ header function such as `rst_crs` or `rst_width` reads no chunk at all.
   without the credentials of the call that made it. Therefore `gbx_zarr_read` refuses `access="direct"` with
   virtual tiles and raises `ZarrAccessUnavailable`. Read the tiles now with `virtual_tiles=False` to use
   direct access, or leave `access` at `"auto"` or `"fuse"`. See [Access](../readers/zarr#access).
-- **The heavyweight tier reads materialized tiles only.** In SQL, GeoBrix sends a virtual Zarr tile to the
-  lightweight tier, like any other virtual tile. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
+- **The JVM level reads materialized tiles only.** In SQL, GeoBrix sends a virtual Zarr tile to the
+  Python level, like any other virtual tile. `virtual_tiles=False` reads each tile as the read runs and holds its pixels as GeoTIFF bytes (its
   `driver` and `format` are then `GTiff`) that both tiers accept. Keep the windows small, because it costs the
   read up front and the memory of the pixels. See
-  [Materialize for the heavyweight tier](../readers/zarr#materialize-for-the-heavyweight-tier).
+  [Materialize for the JVM level](../readers/zarr#materialize-for-the-jvm-level).
 
-Zarr tiles are a lightweight-tier capability of Databricks Runtime 19 and Serverless environment 6, installed
+Zarr tiles are a Python-level capability of Databricks Runtime 19 and Serverless environment 6, installed
 with the env6 wheel's `[zarr]` extra. The [Zarr Reader](../readers/zarr#virtual-tiles-and-the-rst_-functions)
 shows them in use, and [Zarr Stores](./zarr-stores) and its topic pages explain versions, tags and retention.
 
 ## Operating on tiles: your choice of output
 
-Every lightweight tile-returning `rst_*` function takes three optional
+Every Python tile-returning `rst_*` function takes three optional
 force-output parameters:
 
 - **`virtualize_dir`** — write the produced tile to a durable path and hand back a
-  **virtual** row (bytes-free), so a chain stays light after a pixel-producing op.
+  **virtual** row (bytes-free), so a chain stays bytes-free after a pixel-producing op.
   The row's `window` is the full extent of the file written, so it reads back the
   pixels that were produced.
 - **`virtualize_prefix`** — an optional filename prefix to deconflict outputs.

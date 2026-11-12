@@ -20,10 +20,10 @@ Both implementations pair their default codec with a **dtype-matched predictor**
 
 | Implementation | Default codec | Why |
 |---|---|---|
-| Lightweight | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
-| Heavyweight | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
+| Python level | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
+| JVM level | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
 
-On the heavyweight implementation, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` runs on the lightweight implementation only and keeps ZSTD as its default (the size-adaptive `auto` level).
+At the JVM level, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` runs at the Python level only and keeps ZSTD as its default (the size-adaptive `auto` level).
 
 The predictor rules are the same in both implementations:
 
@@ -31,9 +31,9 @@ The predictor rules are the same in both implementations:
 - **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
 - **uint8 / int8**: predictor 1 (byte data; predictor adds negligible benefit)
 
-All lightweight raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply to every writer. No writer skips the predictor or applies a dtype-mismatched value.
+All raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply to every writer. No writer skips the predictor or applies a dtype-mismatched value.
 
-The lightweight `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**. Levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit. L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
+The Python level's `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**. Levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit. L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
 
 | Decoded tile size | ZSTD level | Why |
 |---|---|---|
@@ -62,10 +62,10 @@ Set `GBX_ZSTD_LEVEL` in the executor environment to override the size-adaptive l
 |---|---|
 | unset or `default` | Size-adaptive ladder above (the default) |
 | `fast` | L1 everywhere — highest encode throughput, output ~0.3–2.5% larger than L6 |
-| `max` | L9 everywhere — the level a heavyweight tile gets when its metadata names ZSTD; no smaller output than L6 on GeoBrix tiles |
+| `max` | L9 everywhere — the level a JVM-level tile gets when its metadata names ZSTD; no smaller output than L6 on GeoBrix tiles |
 | `1`–`22` | Explicit fixed level applied to all tile sizes, size-independent |
 
-Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable. `max` (L9) matches the old ladder's ceiling. It is also the default level of an explicit heavyweight ZSTD tile (`zstd_level` is 9). The heavyweight implementation defaults to DEFLATE, so that match applies only to heavyweight tiles whose metadata sets `compression` to `ZSTD`.
+Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable. `max` (L9) matches the old ladder's ceiling. It is also the default level of an explicit ZSTD tile at the JVM level (`zstd_level` is 9). The JVM level defaults to DEFLATE, so that match applies only to JVM-level tiles whose metadata sets `compression` to `ZSTD`.
 
 ## When to reach for other codecs
 

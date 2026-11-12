@@ -56,7 +56,7 @@ minimum, so an older Maven stops at the first build step with a message that
 names `./mvnw`.
 
 The one Maven fetch outside the project build is for the open-source Delta Lake
-jars (`delta-spark` and `delta-storage`). The lightweight CI job and the
+jars (`delta-spark` and `delta-storage`). The Python CI job and the
 development container use them to test the Zarr manifest locally. They are test-only
 and are never part of a shipped artifact. The PGP step runs inside the
 project build, so it does not cover them. Instead,
@@ -80,13 +80,13 @@ serving a same-version-but-different-bytes wheel therefore fails closed.
 | Path | Lockfile |
 |---|---|
 | CI (Scala + Python build) | [`python/geobrix/requirements-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-ci.txt) |
-| CI (lightweight build) | [`python/geobrix/requirements-light-env6-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-light-env6-ci.txt) |
+| CI (Python build) | [`python/geobrix/requirements-light-env6-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-light-env6-ci.txt) |
 | Dev container (x86_64 and arm64) | [`python/geobrix/requirements-dev-container.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-dev-container.txt), [`python/geobrix/requirements-dev-container-aarch64.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-dev-container-aarch64.txt) |
 | Notebook test harness | [`examples/tests/requirements.txt`](https://github.com/databrickslabs/geobrix/blob/main/examples/tests/requirements.txt) |
 
 The native GDAL stack is the documented exception: it is not a Python package. It is built
 from pinned sources and shipped inside the env wheel, as the next section describes. The
-lightweight `pyrx` build path in CI uses the env wheel's rasterio, which is hash-pinned in
+Python build path in CI uses the env wheel's rasterio, which is hash-pinned in
 `requirements-light-env6-ci.txt` like every other dependency.
 
 ### Controlled dependency updates
@@ -274,7 +274,7 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   with the allowed drivers, and opened with the driver identified.
 - **Tile bytes that hold a VRT, or another format that names other files, are refused.** A tile's
   bytes are data, and the remote-path check below never sees what a VRT's sources name. The
-  lightweight tier names the driver from a tile's bytes first and refuses these before it opens
+  Python level names the driver from a tile's bytes first and refuses these before it opens
   them:
   - `VRT` and `DERIVED`, and the formats that name other datasets: `DIMAP`, `SAFE`, `PDS4`, `ECRGTOC`,
     `RPFTOC`, `TIL`, `MEM` and `NUMPY`.
@@ -287,14 +287,14 @@ applies a driver policy to each process, on both tiers, before any raster is ope
   virtual tile (a path). A format that finds its header in a separate file is named only if the
   tile's own bytes identify it. The data file of an `ENVI` or `EHdr` raster has no signature
   without its `.hdr`, so it is not named. It is not opened either, and fails with the reader's
-  own "not recognized" error. netCDF, HDF5, HFA, JP2 and GPKG bytes still open. On the heavyweight tier,
+  own "not recognized" error. netCDF, HDF5, HFA, JP2 and GPKG bytes still open. At the JVM level,
   `gbx_rst_transformcrs`, `gbx_rst_slope` and `gbx_rst_mapalgebra` open a tile's non-TIFF bytes only
   with a short list of single-file drivers. They therefore refuse the same formats and more.
 
 **`gbx_rst_gdal` runs only listed GDAL steps.** The command takes no file, format, option or `/vsi` name. GeoBrix writes the read and write steps itself. The input is the tile and the output is a tile.
 Each step and argument must be on the allowlist. Each value must have the grammar of its argument. Each CRS goes through the CRS resolver.
 
-**Remote paths that come from data.** On the lightweight tier, a path from data is
+**Remote paths that come from data.** At the Python level, a path from data is
 opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
 store, or `/vsimem/`. The cloud object store forms are
 `s3://`, `s3a://`, `abfss://`, `abfs://`, `az://`, `gs://`, `wasbs://`, or `/vsis3/`,
@@ -339,7 +339,7 @@ DNS answer that changes after the check is therefore never used. Each redirect h
 
 **Spark's GDAL settings on the JVM.** A `spark.gdal.*` or `spark.databricks.labs.gbx.gdal.*` setting applies to the
 whole executor JVM. On dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
-The heavyweight tier runs on dedicated compute only, and is refused on standard access mode.
+The JVM level runs on dedicated compute only, and is refused on standard access mode.
 
 GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
 its drivers. It completes the policy at its first GDAL use. With the policy on, importing GeoBrix

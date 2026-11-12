@@ -56,7 +56,7 @@ v0.6.0 is under development and not yet released.
 ## v0.5.0
 
 - **Breaking:** [`[light]` and `[light_all]` are removed](./release-notes-0-5-and-earlier#whats-new-in-v050). Install a runtime-pinned extra. `[earthdata]` and `[overture]` are opt-in extras.
-- **Breaking:** lightweight raster readers default to virtual tiles. The tile struct widens to eight fields.
+- **Breaking:** the raster readers default to virtual tiles. The tile struct widens to eight fields.
 - **New:** the COG preparation lane (`file_gbx`, `cog_gbx`) with VRT mosaics for large rasters.
 - **New:** CRS-string functions (`gbx_st_crs`, `gbx_rst_crs` and others) and `gbx.register_proj_grids`.
 - **New:** VectorX validity, cleaning, antimeridian and coverage functions.

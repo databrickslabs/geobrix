@@ -35,7 +35,7 @@ You need a free account at [challenge.xviewdataset.org](https://challenge.xviewd
 
 ## Prerequisites
 
-- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless. The heavyweight tweak needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
+- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The default runs at the Python level on Serverless. The JVM level needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
 - **GeoBrix** (version 0.6.0). The setup cell `%pip`-installs the `geobrix` env6 wheel, which brings the Python API (`databricks.labs.gbx.rasterx`) and its dependencies (including `rasterio`, used for the in-notebook previews). To use the JVM engine too, run on a dedicated cluster with the JAR installed (see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path)).
 - **Unity Catalog**: set `catalog_name` / `schema_name` at the top of the notebook. A Volume named `data` must already exist under `<catalog>/<schema>`; the notebook will create the schema but not the Volume.
 - **Compute sizing**: xView training tiles are ~3000×3000 RGB GeoTIFFs. On a dedicated cluster, memory/disk-optimized variants (e.g. `r6id.*`, `m5d.*`) are recommended for the raster-processing step.

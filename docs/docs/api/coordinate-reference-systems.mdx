@@ -8,7 +8,7 @@ import crsGridCode from '!!raw-loader!../../tests/python/api/crs_grid_registrati
 
 # Coordinate Reference Systems
 
-A **coordinate reference system (CRS)** ties a raster's or geometry's coordinates to a place on Earth. GeoBrix supports CRS handling **across all three packages** — RasterX, GridX, and VectorX — and across **both implementations** (lightweight and heavyweight `rasterx`). This page explains the two ways GeoBrix names a CRS: the integer **SRID** and the **CRS string**. It says when to use each. It also shows how a non-EPSG CRS (an ESRI code, WKT, or PROJ4 definition) survives a full read → operate → write round trip.
+A **coordinate reference system (CRS)** ties a raster's or geometry's coordinates to a place on Earth. GeoBrix supports CRS handling **across all three packages** — RasterX, GridX, and VectorX — and at **both levels** (Python and JVM). This page explains the two ways GeoBrix names a CRS: the integer **SRID** and the **CRS string**. It says when to use each. It also shows how a non-EPSG CRS (an ESRI code, WKT, or PROJ4 definition) survives a full read → operate → write round trip.
 
 ## Canonical CRS helpers
 
@@ -52,7 +52,7 @@ GeoBrix names a CRS two ways, and both are first-class:
 | Type | `INT` | `STRING` |
 | Example | `4326`, `54008` | `"EPSG:4326"`, `"ESRI:54008"`, WKT, PROJ4 |
 | Can represent | an EPSG **or** ESRI code | **any** CRS — EPSG, ESRI, WKT, PROJ4 |
-| No-code value | `NULL` (lightweight) / `0` (heavyweight) | always a value |
+| No-code value | `NULL` (Python level) / `0` (JVM level) | always a value |
 | Use for | the native ST bridge, authority-code workflows | authority-less CRSes, lossless round trips |
 
 The integer SRID is compact and maps directly onto Databricks' native ST functions (`ST_GeomFromWKB(wkb, srid)`). It can **only** name a CRS that carries an authority code, EPSG or ESRI (see [the resolution rule](#how-an-integer-srid-becomes-a-crs) below). A great many real datasets carry an ESRI code (MODIS products use ESRI:54008, World Sinusoidal). Some imagery carries only an embedded WKT with no authority code at all. For an authority-less CRS the SRID is `NULL`/`0` and the CRS string is the only lossless representation.
@@ -101,7 +101,7 @@ WKT and PROJ4 are how a CRS **without** an authority code (so no SRID) is named 
 
 ### The int-cast rule
 
-Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is read. One shared helper holds the rule in each implementation: one in the lightweight Python code, one in the heavyweight JVM code.
+Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is read. One shared helper holds the rule at each level: one in the Python code, one in the JVM code.
 
 - A string that **casts cleanly to an integer** — `"4326"`, `" 32633 "` — is treated as an **EPSG SRID**. So `rst_setcrs(tile, '4326')` behaves exactly like `rst_setsrid(tile, 4326)`.
 - **Otherwise** the string is parsed as a universal CRS definition — an authority code (`EPSG:4326`, `ESRI:54008`, `OGC:CRS84`), WKT, or PROJ4 (`+proj=longlat +datum=WGS84 +no_defs`).
@@ -124,10 +124,10 @@ A few codes exist in **both** registries. GeoBrix resolves such a code as **EPSG
 
 ### Canonical form
 
-When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` field, or in a NetCDF `crs_wkt` attribute — it uses a canonical form. That form is the **authority string** (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS carries one, otherwise the full **WKT**. Authority-else-WKT is more readable than PROJ4 and round-trips cleanly through both GDAL (heavyweight) and rasterio/pyproj (lightweight).
+When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` field, or in a NetCDF `crs_wkt` attribute — it uses a canonical form. That form is the **authority string** (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`) when the CRS carries one, otherwise the full **WKT**. Authority-else-WKT is more readable than PROJ4 and round-trips cleanly through both GDAL (JVM level) and rasterio/pyproj (Python level).
 
 :::note Compare CRS meaning, not the exact string
-For a CRS that has an authority code (e.g. `ESRI:54008`), both implementations emit the identical authority string. An **authority-less** CRS carries only embedded WKT with no code. The two implementations can emit **different but equivalent** WKT for it: GDAL's flavor on the heavyweight one, pyproj's on the lightweight one. They describe the **same** CRS and compare equal as CRS objects. Only the text differs. Compare CRS **meaning** (reproject, round-trip, or `SpatialReference.IsSame` or a pyproj CRS-equality check), not raw string equality. To pin a stable, identical string across implementations, stamp the CRS explicitly with `rst_setcrs` (e.g. `rst_setcrs(tile, 'ESRI:54008')`).
+For a CRS that has an authority code (e.g. `ESRI:54008`), both levels emit the identical authority string. An **authority-less** CRS carries only embedded WKT with no code. The two levels can emit **different but equivalent** WKT for it: GDAL's flavor at the JVM level, pyproj's at the Python level. They describe the **same** CRS and compare equal as CRS objects. Only the text differs. Compare CRS **meaning** (reproject, round-trip, or `SpatialReference.IsSame` or a pyproj CRS-equality check), not raw string equality. To pin a stable, identical string across levels, stamp the CRS explicitly with `rst_setcrs` (e.g. `rst_setcrs(tile, 'ESRI:54008')`).
 :::
 
 :::tip ESRI and OGC authority is preserved on round-trips
@@ -201,7 +201,7 @@ With OSTN15, EPSG:27700 to ETRS89 matches Ordnance Survey's published test point
 
 ## Registering custom grid files
 
-Some workflows depend on a datum-grid transform. Examples are OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file. Stage the grid files to a Unity Catalog Volume, and register the directory with GeoBrix once at session start. After that, every CRS-handling function across all packages finds the files automatically on the PROJ search path. Volume-hosted grids are a lightweight capability; the heavyweight implementation reads grids from a cluster-local path instead — see [Level support](#level-support) below.
+Some workflows depend on a datum-grid transform. Examples are OSGB36↔ETRS89 via OSTN15, NAD27↔NAD83 via NADCON, a national geoid grid, or any CRS whose WKT or PROJ4 string references a grid file. Stage the grid files to a Unity Catalog Volume, and register the directory with GeoBrix once at session start. After that, every CRS-handling function across all packages finds the files automatically on the PROJ search path. Volume-hosted grids are a Python-level capability; the JVM level reads grids from a cluster-local path instead — see [Level support](#level-support) below.
 
 ### Stage your grid files to a Volume
 
@@ -237,7 +237,7 @@ gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids")
 gbx.register(spark)
 ```
 
-After this call, every lightweight CRS-handling function — `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection, and all raster-reader clipping — finds your grid files on its PROJ search path, on every worker. The heavyweight implementation cannot read a Volume path; see [Level support](#level-support).
+After this call, every CRS-handling function at the Python level finds your grid files on its PROJ search path, on every worker. These include `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection and all raster-reader clipping. The JVM level cannot read a Volume path; see [Level support](#level-support).
 
 You can also pass a list of directories, or accumulate directories across multiple calls:
 
@@ -264,11 +264,11 @@ If a grid file is not found, PROJ falls back to a lower-accuracy transform and c
 
 ### Level support
 
-Volume-hosted grid files are a **lightweight** capability. Every lightweight worker reads a Unity Catalog Volume through Databricks' credentialed connector. A grid staged to a Volume is therefore available everywhere the analysis runs, including Serverless.
+Volume-hosted grid files are a **Python-level** capability. Every Python worker reads a Unity Catalog Volume through Databricks' credentialed connector. A grid staged to a Volume is therefore available everywhere the analysis runs, including Serverless.
 
-The **heavyweight implementation reads grid files directly from each worker's local filesystem and cannot read them from a Unity Catalog Volume.** To use custom grids on the heavyweight implementation, copy the files to a cluster-local path on every node. Register that local path, not a Volume path. `register_proj_grids` warns if you register a Volume path while the heavyweight implementation is active. The mismatch then surfaces at registration, not as `NULL` results at transform time. This is the same limitation that makes `rst_fromfile` lightweight-only.
+The **JVM level reads grid files directly from each worker's local filesystem and cannot read them from a Unity Catalog Volume.** To use custom grids at the JVM level, copy the files to a cluster-local path on every node. Register that local path, not a Volume path. `register_proj_grids` warns if you register a Volume path while the JVM level is active. The mismatch then surfaces at registration, not as `NULL` results at transform time. This is the same limitation that makes `rst_fromfile` Python-only.
 
-`register_proj_grids` is quiet on a cluster that has no JVM access, such as DBR 19 in standard access mode and Serverless. It prints no message there, and the lightweight implementation uses your grids. On a cluster whose access mode refuses calls to GeoBrix's JVM classes, it logs one INFO line.
+`register_proj_grids` is quiet on a cluster that has no JVM access, such as DBR 19 in standard access mode and Serverless. It prints no message there, and the Python level uses your grids. On a cluster whose access mode refuses calls to GeoBrix's JVM classes, it logs one INFO line.
 
 ### Example
 
@@ -334,7 +334,7 @@ A non-EPSG CRS survives the full pipeline — **read → operate → write** —
 
 ### Cross-level CRS parity
 
-The lightweight and heavyweight implementations describe the **same** CRS for the same raster. For a CRS with an EPSG code both emit the identical authority string (e.g. `EPSG:4326`). Take a raw file whose embedded WKT carries **no** authority node. The two underlying libraries can produce *different but equivalent* canonical strings. rasterio and pyproj may identify the ESRI authority and emit `ESRI:54008`. GDAL emits the equivalent WKT verbatim. These name the **same CRS** (they compare equal as CRS objects). The decoded pixels and georeference are identical across implementations. Explicitly tagging a raster (`rst_setcrs(tile, 'ESRI:54008')`) yields the `ESRI:54008` authority string on both tiers.
+The Python and JVM levels describe the **same** CRS for the same raster. For a CRS with an EPSG code both emit the identical authority string (e.g. `EPSG:4326`). Take a raw file whose embedded WKT carries **no** authority node. The two underlying libraries can produce *different but equivalent* canonical strings. rasterio and pyproj may identify the ESRI authority and emit `ESRI:54008`. GDAL emits the equivalent WKT verbatim. These name the **same CRS** (they compare equal as CRS objects). The decoded pixels and georeference are identical across levels. Explicitly tagging a raster (`rst_setcrs(tile, 'ESRI:54008')`) yields the `ESRI:54008` authority string at both levels.
 
 ## GridX
 
@@ -381,7 +381,7 @@ Three behaviors are worth knowing before you use them:
 
 - **SQL output is always `BINARY`.** `gbx_st_setcrs` and `gbx_st_transformcrs` return WKB/EWKB even when the geometry argument was a WKT or EWKT string. This gives one function one declared return type, so the result can be used in a view or any fixed schema. `gbx_st_crs` returns `STRING`.
 - **A geometry can only carry an integer SRID.** A target CRS can have no integer authority code. Examples are a raw `PROJCS[...]` WKT, a PROJ4 string like `+proj=utm +zone=33 +datum=WGS84`, or a non-numeric code such as `OGC:CRS84`. The two operations then differ. `st_transformcrs` reprojects the coordinates and **clears** the stale SRID, because leaving it would label the geometry with a CRS it is no longer in. `st_setcrs` **raises**, because there is no integer for it to stamp. Both implementations treat a PROJ4 string as authority-less, even though PROJ's fuzzy matcher could pair it with a nearby EPSG code. A geometry SRID is an exact identity claim. GeoBrix never writes a partial-confidence guess into one.
-- **Z coordinates.** A geometry whose vertices all carry a finite Z keeps its Z; a 2D geometry stays 2D. Where only *some* vertices carry a Z (for example `LINESTRING Z (15 51 5, 16 52)`), both functions keep the Z values that exist and mark the missing ones `NaN`. `st_transformcrs` reprojects X and Y of every vertex and carries the Z through for the vertices that have one. `st_setcrs` keeps the Z as it is, because stamping an SRID never moves coordinates. A missing Z is never filled in with a substitute value, and a Z that exists is never dropped. So a `st_setcrs` → `st_transformcrs` chain on a partial-Z geometry keeps its elevations, in every encoding and on both implementations. See [Known limitations](./vectorx-functions#crs) for the other edge cases. Reprojection is not bit-exact. A mislabelled CRS or an out-of-domain coordinate yields `Infinity` on the lightweight implementation and a projection error on the heavyweight one. M values are dropped.
+- **Z coordinates.** A geometry whose vertices all carry a finite Z keeps its Z; a 2D geometry stays 2D. Where only *some* vertices carry a Z (for example `LINESTRING Z (15 51 5, 16 52)`), both functions keep the Z values that exist and mark the missing ones `NaN`. `st_transformcrs` reprojects X and Y of every vertex and carries the Z through for the vertices that have one. `st_setcrs` keeps the Z as it is, because stamping an SRID never moves coordinates. A missing Z is never filled in with a substitute value, and a Z that exists is never dropped. So a `st_setcrs` → `st_transformcrs` chain on a partial-Z geometry keeps its elevations, in every encoding and on both implementations. See [Known limitations](./vectorx-functions#crs) for the other edge cases. Reprojection is not bit-exact. A mislabelled CRS or an out-of-domain coordinate yields `Infinity` at the Python level and a projection error at the JVM level. M values are dropped.
 
 Beyond the CRS family, `st_crs` also reads the SRID that a reader or a `gbx_st_*` generator embedded. The same accessor therefore works on geometries you produced elsewhere in GeoBrix.
 
@@ -408,13 +408,13 @@ Every CRS-touching function across GeoBrix, with its CRS parameter(s) and role. 
 | RasterX | `rst_{h3,quadbin,bng}_rasterize_agg` | both | `out_srid` / `out_crs` | output | output raster CRS (bng always 27700; a non-NULL `out_crs` is refused on both levels) |
 | RasterX | `rst_{h3,quadbin}_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 4326 |
 | RasterX | `rst_bng_rastertogrid*` | both | `crs` | source | raster auto-reprojected to grid-native 27700 |
-| RasterX | `rst_h3_gridspec` | light | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
+| RasterX | `rst_h3_gridspec` | Python | `out_srid` / `out_crs` | output | grid-spec output CRS (DataFrame helper) |
 | GridX | `gbx_h3_cell_bbox` | both | `srid` / `out_crs` | output | cell bbox in the output CRS |
 | VectorX | [`st_crs`](./vectorx-functions#st_crs) | both | — | accessor | returns the geometry's CRS string, or NULL when it carries no SRID |
 | VectorX | [`st_setcrs`](./vectorx-functions#st_setcrs) | both | `crs` | source | relabel from a CRS string; raises when the CRS has no integer authority code |
 | VectorX | [`st_transformcrs`](./vectorx-functions#st_transformcrs) | both | `target_crs`, `source_crs` | output (+ source) | reproject to a CRS string; `source_crs` names the input CRS for a plain SRID-less geometry |
 | RasterX | GDAL/GTiff reader `clipCrs` option | both | `clipCrs` | source | stamps the v2 tile `clip_crs` field |
-| VizX | [`plot_tile`](./vizx-raster) / [`plot_cog`](./vizx-raster) | light | `crs` | source | basemap CRS; override for a CRS-less raster |
+| VizX | [`plot_tile`](./vizx-raster) / [`plot_cog`](./vizx-raster) | Python | `crs` | source | basemap CRS; override for a CRS-less raster |
 
 :::note Geometry SRIDs are integers
 The three VectorX rows take a CRS **string**, but a geometry can only *carry* an integer SRID. So a target CRS with no integer authority code (raw WKT, PROJ4, or a non-numeric code such as `OGC:CRS84`) makes `st_transformcrs` clear the stale SRID while `st_setcrs` raises. Their SQL forms always return `BINARY`. See [the geometry CRS-string family](#vectorx) for the full rules.

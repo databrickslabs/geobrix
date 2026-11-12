@@ -9,7 +9,7 @@ import ZarrNav from '@site/src/components/ZarrNav';
 
 <ZarrNav current="performance" />
 
-_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+_Since:_ **v0.6.0** · _(Python level; no JAR needed)_
 
 **Use this page to size a Zarr workload and to check what is not supported.** The performance section
 shows what reads and writes cost on Databricks and why. The limits section lists the runtimes, data types
@@ -122,8 +122,8 @@ Details behind the table:
 
 ### Runtimes and data
 
-- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), lightweight tier only.
-  The heavyweight tier reads Zarr data only as materialized GeoBrix tiles.
+- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), at the Python level only.
+  The JVM level reads Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported. An array GeoBrix
   cannot decode is left out of reads and registered without being readable.
 - **Complex arrays.** A complex array can only be read as blocks. Tables have no complex column, and

@@ -46,7 +46,7 @@ their own PROJ runtime. They coexist on the cluster but are not the
 same library, and the two PROJ versions can diverge slightly:
 
 - **GeoBrix's GDAL** comes from the env wheel: GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0, in the
-  wheel's own directory. The lightweight and the heavyweight tier both use that PROJ and its data.
+  wheel's own directory. The Python and JVM levels both use that PROJ and its data.
 - **DBR 17.3 LTS's built-in `ST_*` functions** link to PROJ 9.7.1,
   bundled with the runtime under `/databricks/native/` (with
   `PROJ_DATA=/databricks/native/proj-data`). Not registered with
@@ -75,11 +75,11 @@ decide whether GeoBrix should follow DBR's PROJ version.
 
 ## Compute Requirements
 
-The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
+The compute requirements below apply to the **JVM level** (heavyweight: the GeoBrix JAR + native GDAL). The **Python level** (lightweight: the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Surfaces and levels](./api/execution-tiers#the-levels).
 
-The heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
-- **Not** compatible with Serverless compute (use the lightweight tier there)
-- Not available on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
+The JVM level runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
+- **Not** compatible with Serverless compute (GeoBrix uses the Python level there)
+- Not available on standard (shared) access mode, with or without a DCS image (GeoBrix uses the Python level there)
 - Requires native GDAL libraries, which the env wheel carries (and the DCS image, from the same wheel)
 - Runs on x86 for DBR 17.3 / 18 / 19, and on Graviton (arm64) for DBR 19
 
@@ -103,8 +103,8 @@ full allowlist.
 GeoBrix reads, registers and writes [Zarr stores](./api/zarr-stores) within these limits. The
 [Zarr performance and limits](./api/zarr-performance#limits) page repeats them beside the measured read and write times.
 
-- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), in the lightweight tier only.
-  Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The heavyweight tier reads
+- **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), at the Python level only.
+  Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The JVM level reads
   Zarr data only as materialized GeoBrix tiles.
 - **Data types.** Numeric types and CF times. Strings and objects are not supported. An array GeoBrix cannot
   decode is left out of reads. A complex array cannot be read as a table, because a table has no column for

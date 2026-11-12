@@ -68,7 +68,7 @@ df = (spark.read.format("vector_gbx")
 
 Use pushdown whenever you only need a geographic or attribute subset of a large file — it keeps per-task memory well within the Serverless limit.
 
-**2. Staging for random-access formats.** GeoPackage (`.gpkg`) and FileGDB (`.gdb`) rely on seeked I/O. The reader stages these formats to worker-local temp via a sequential copy before opening them. This keeps FUSE reads sequential and lets GDAL seek freely on local disk. The staged copy is cached per (worker process, source path), so multiple partitions of the same file share one copy. The lightweight raster readers stage sources the same way when they decode windows.
+**2. Staging for random-access formats.** GeoPackage (`.gpkg`) and FileGDB (`.gdb`) rely on seeked I/O. The reader stages these formats to worker-local temp via a sequential copy before opening them. This keeps FUSE reads sequential and lets GDAL seek freely on local disk. The staged copy is cached per (worker process, source path), so multiple partitions of the same file share one copy. The raster readers stage sources the same way when they decode windows.
 
 The staging cache is bounded so it cannot fill a worker's local disk. When a new copy would exceed the cap, the least recently used copies that no task is reading are removed first. A single source larger than the cap is still staged on its own. The cap defaults to half of the local disk space available to the cache; set `GBX_STAGE_CACHE_MB` in the executor environment to fix it instead. Staged copies left behind by worker processes that have exited are removed the next time a worker stages a file.
 
@@ -182,7 +182,7 @@ See [Error handling](./api/error-handling#functions-that-run-gdals-own-algorithm
 
 ### Tile tables with large row groups {#tile-table-row-groups}
 
-On every DBR 19 and Serverless compute, the lightweight tile functions move their rows to Python in Arrow batches. The executor heap does not hold the tiles. GeoBrix turns a batch into Python values a slice of rows at a time. DBR 17.3 and 18 send the rows as pickles.
+On every DBR 19 and Serverless compute, the tile functions at the Python level move their rows to Python in Arrow batches. The executor heap does not hold the tiles. GeoBrix turns a batch into Python values a slice of rows at a time. DBR 17.3 and 18 send the rows as pickles.
 
 A tile table written in very large Parquet row groups, about 128 MB each, costs memory in every batch. Spark reads a row group as one batch, so a task holds all of its tiles at once. On dedicated DBR 19, 64 tiles of 2.3 MB per file spent up to 45% of each task in garbage collection.
 

@@ -29,7 +29,7 @@ start for understanding the GeoBrix functions involved in the detection cascade.
 
 **Requires GeoBrix 0.6.0 or newer.**
 
-A standalone Permian Basin methane-monitoring pipeline. It is a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/). It packages as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and runs on the GeoBrix lightweight tier over Serverless compute.
+A standalone Permian Basin methane-monitoring pipeline. It is a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/). It packages as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and runs at the GeoBrix Python level over Serverless compute.
 
 This is the production counterpart to the notebook series (see the other tab). It uses the same Permian AOI and satellite sources. It runs on a schedule with incremental medallion tables instead of one-off notebook outputs. A fifth data source makes it a *current* (through 2026) monitoring view rather than a single historical case study.
 
@@ -87,7 +87,7 @@ The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial 
 
 EMIT is a science mission on the ISS with sparse revisit and roughly a 10-month lag before plume products publish. It therefore validates historical detections rather than driving current status. Carbon Mapper is what keeps the pipeline current. It's the only source here with a wind-corrected emission rate. The headline leaderboard and monitoring-status panels are built on it.
 
-Two small **context geometries** ride alongside: EIA shale plays and Census TIGER counties. The GeoBrix lightweight vector reader reads them straight from source. They give the detections a "where in the basin" home.
+Two small **context geometries** ride alongside: EIA shale plays and Census TIGER counties. The GeoBrix vector reader reads them straight from source. They give the detections a "where in the basin" home.
 
 ## The leaderboard, done defensibly
 
@@ -119,7 +119,7 @@ The wide-area CH4 hotspot choropleth and the persistence choropleth.
 
 ### Regional Context
 
-This page rolls up Carbon Mapper detections to the Permian's named shale plays (EIA) and its TX/NM counties (Census TIGER). The GeoBrix lightweight vector reader reads the plays and counties straight from source. Two choropleths show where detections concentrate.
+This page rolls up Carbon Mapper detections to the Permian's named shale plays (EIA) and its TX/NM counties (Census TIGER). The GeoBrix vector reader reads the plays and counties straight from source. Two choropleths show where detections concentrate.
 
 ![Regional Context — Carbon Mapper detections rolled up to Permian shale plays and TX/NM counties as two choropleths](../../../resources/images/diagrams/vapor-eyes/lakeflow-dashboard-regional-context.png)
 

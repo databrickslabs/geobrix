@@ -37,7 +37,7 @@ For **true 1 m** (or finer, e.g. to match H3 resolution 13–15), the raster cat
 
 2. **`download(bbox, out_dir, resolution="finest", ...)`** — selects a gsd tier, then fans out the per-tile downloads as parallel Spark tasks via `StacClient.download()`. Each tile is **windowed to the AOI on read** (`bbox` + `bbox_crs`) so only the relevant pixels are stored, with correct georeferencing handled in-product. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
 
-3. **`read(out_dir)`** — loads the staged GeoTIFFs from `out_dir` into a Spark tile DataFrame using the `raster_gbx` data source (the light-tier pyrx raster reader). Returns a DataFrame with a `tile` struct column ready for GeoBrix RasterX functions.
+3. **`read(out_dir)`** — loads the staged GeoTIFFs from `out_dir` into a Spark tile DataFrame using the `raster_gbx` data source (the GeoBrix raster reader). Returns a DataFrame with a `tile` struct column ready for GeoBrix RasterX functions.
 
 Serverless-safe: no `spark.conf.set`, `_jvm`, `.rdd`, `cache`, or `persist` — parallelism comes from `StacClient.download()`'s Spark fan-out.
 

@@ -10,7 +10,7 @@ import sdpExamples from '!!raw-loader!../../tests/python/ingestion/lakeflow_sdp_
 
 [Lakeflow Spark Declarative Pipelines](https://docs.databricks.com/aws/en/dlt/) (SDP) run tables
 as a pipeline. You declare each table and what it reads, and every update brings them up to date
-in order. The GeoBrix lightweight tier runs inside a pipeline, and both pipeline routes,
+in order. GeoBrix runs inside a pipeline at the Python level, and both pipeline routes,
 [Auto Loader ingestion](./auto-loader) (`declare_ingest`) and the
 [Lakeflow connector](./lakeflow-connector), are pipeline source files. This page covers what they
 share: the pipeline environment, Serverless notes, the SDP building blocks GeoBrix uses, and
@@ -85,7 +85,7 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
   `%pip install`, and extras split across lines can force pip to rebuild packages it already
   installed and fail the install.
 - **Volume or GitHub.** A Volume wheel works in every workspace; workspaces that restrict outbound
-  network access can block GitHub. See [WHL-only (Lightweight)](../installation#whl-only) for
+  network access can block GitHub. See [Env wheel](../installation#env-wheel) for
   downloading and staging the wheel.
 
 ## Register GeoBrix in each dataset function
@@ -112,15 +112,15 @@ Both example bundles register in every dataset function that uses GeoBrix.
 
 ## Serverless pipelines
 
-- **Lightweight tier only.** A Serverless pipeline can't load a JAR, so it
+- **Python level only.** A Serverless pipeline can't load a JAR, so it
   installs the GeoBrix wheel and nothing else. `read_paths`, `declare_ingest` and the connector
-  are lightweight-tier, so they run on Serverless and classic pipelines alike.
+  run at the Python level, so they run on Serverless and classic pipelines alike.
 - **Fan out by repartitioning on a column.** On Serverless, work spreads across tasks through
   `repartition(N, column)`. `read_paths` and `declare_ingest` do this for you when you set
   `num_partitions`; without it a large raster is read by one task. See
   [Parallelism](./read-paths#parallelism).
 - **Materialized views recompute.** A materialized view whose query calls Python UDFs, as the
-  GeoBrix lightweight functions are, is recomputed in full at each update. A streaming table
+  GeoBrix functions at the Python level are, is recomputed in full at each update. A streaming table
   over Auto Loader, by contrast, processes only the new files. To re-run only some tables, refresh them
   selectively, for example `databricks bundle run <pipeline> --refresh <table>,<table>`.
 - **Check product `st_*` functions against the channel's runtime.** Databricks `st_*` functions

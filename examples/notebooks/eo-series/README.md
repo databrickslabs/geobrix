@@ -32,7 +32,7 @@ The four main notebooks move from vector area-of-interest → STAC discovery →
 
 ![Notebook 03 — Sentinel-2 scene → typed tile struct → H3 res-7 tessellation → per-cell timeseries](../../../resources/images/diagrams/eo-series/eo-series-03.png)
 
-- **Virtual-tile ingestion — bytes-free.** The `gtiff_gbx` reader loads each Sentinel-2 scene as [virtual tiles](https://databrickslabs.github.io/geobrix/docs/api/virtual-tiles): with `.option("tileSize", "2048,2048")` a 5490×5490 scene fans into ~9 windows, and each tile row carries a source `path` + pixel `window` **instead of raster bytes** — so `band_b0X_tile` is a table of lightweight references (`tile.raster` null; `tile.path`/`tile.window` set), no pixels in Delta. `rst_initnodata` records a pending nodata instruction and `rst_srid`/`rst_boundingbox` read the header, all without materializing.
+- **Virtual-tile ingestion — bytes-free.** The `gtiff_gbx` reader loads each Sentinel-2 scene as [virtual tiles](https://databrickslabs.github.io/geobrix/docs/api/virtual-tiles): with `.option("tileSize", "2048,2048")` a 5490×5490 scene fans into ~9 windows, and each tile row carries a source `path` + pixel `window` **instead of raster bytes** — so `band_b0X_tile` is a table of bytes-free references (`tile.raster` null; `tile.path`/`tile.window` set), no pixels in Delta. `rst_initnodata` records a pending nodata instruction and `rst_srid`/`rst_boundingbox` read the header, all without materializing.
 - **Spatial-indexed raster tables (the materialization cut-over)** — `rst_h3_tessellate` shreds each scene into H3 resolution-7 cells, producing `band_b0X_h3` Delta tables that join cleanly across bands and dates — and this is where the virtual tiles **materialize** (each window's pixels are read once).
 - **Raster analytics from SQL/PySpark** — `rst_summary` for per-tile stats, `h3_kring` + `rst_merge_agg` for spatial neighborhoods, and the `rst_apply` escape-hatch for raster-to-timeseries projection — no driver-side rasterio loops.
 
@@ -60,10 +60,10 @@ The four main notebooks move from vector area-of-interest → STAC discovery →
 
 ## Prerequisites
 
-- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless. The heavyweight tweak needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
+- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The default runs at the Python level on Serverless. The JVM level needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
 - **GeoBrix** (version 0.6.0). `config_nb.ipynb` `%pip`-installs the `geobrix[stac,vizx]` env6 wheel — the Python API + rasterio + the STAC client dependencies (`pystac-client`, `planetary-computer`, `tenacity`, `requests`) + the visualization extras (`matplotlib`, `geopandas`, `mapclassify`) — nothing is assumed pre-staged. To use the JVM engine too, run on a dedicated cluster with the JAR installed (see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path)).
 - **Unity Catalog**: edit `config_nb.ipynb` to set `catalog_name` and `schema_name` to your own locations. A Volume named `data` must already exist under `<catalog>/<schema>`. The notebooks create a schema if missing but will not create the Volume for you.
-- **Compute sizing**: the lightweight default runs on Serverless. On classic clusters, the captured heavyweight runs used AWS `m5d.xlarge` (2–16 workers) for search/download and `r6id.2xlarge` (20 workers) for raster processing. For a single county a much smaller cluster is sufficient.
+- **Compute sizing**: the Python-level default runs on Serverless. On classic clusters, the captured JVM-level runs used AWS `m5d.xlarge` (2–16 workers) for search/download and `r6id.2xlarge` (20 workers) for raster processing. For a single county a much smaller cluster is sufficient.
 
 ---
 

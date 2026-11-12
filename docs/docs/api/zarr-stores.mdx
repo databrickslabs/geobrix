@@ -11,7 +11,7 @@ import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.
 
 <ZarrNav current="stores" />
 
-_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+_Since:_ **v0.6.0** · _(Python level; no JAR needed)_
 
 [Zarr](https://zarr.dev) stores N-dimensional arrays as many small objects in object storage. That makes it
 the format of choice for large weather, climate and earth-observation cubes. Plain Zarr has no
@@ -80,7 +80,7 @@ A store then gets the guarantees of the last column without turning an array int
 ## What you need
 
 Install the env6 wheel with its `[zarr]` extra. Zarr runs on Databricks Runtime 19 and Serverless
-environment 6, in the lightweight tier, so there is no JAR to install.
+environment 6, at the Python level, so there is no JAR to install.
 
 ```python
 %pip install "geobrix[zarr] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"

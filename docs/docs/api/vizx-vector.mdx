@@ -132,7 +132,7 @@ cell ids instead:
 | `'bng'` | British National Grid cell ids (string, e.g. `"TQ38"`) → cell polygons in EPSG:27700. |
 | `'custom'` | Custom-grid cell ids → cell polygons; **requires `grid_conf=`** (the grid spec that defines the grid). CRS comes from the grid's `srid`. |
 
-Cell boundaries reuse the lightweight GridX cell→geometry implementations, so
+Cell boundaries reuse the Python GridX cell→geometry implementations, so
 they match `gbx_h3_*` / `gbx_quadbin_aswkb` / `gbx_bng_aswkb` / `gbx_custom_cellaswkb`
 exactly. Each grid's native CRS is honoured (BNG is metres in EPSG:27700) and
 reprojected to Web Mercator for the basemap. A custom grid whose `srid` is `<= 0`

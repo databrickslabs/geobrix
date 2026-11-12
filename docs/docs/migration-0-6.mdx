@@ -20,7 +20,7 @@ A 0.5.x call that no longer exists raises an error. The message gives a `Fix:` w
 | `geobrix[light_dbr19] @ …` | `geobrix @ …+env6…` | |
 | Init script and a cluster-library wheel | The env wheel, and the JAR from `gbx.stage_jar` | Remove the init script and the GDAL bundle. |
 | GeoBrix JAR downloaded from the release page | `gbx.stage_jar("/Volumes/<cat>/<sch>/<vol>/geobrix/0.6.0/jar")` | The env wheel carries the JAR. |
-| 0.5.x heavyweight on DBR 17.3 or 18 | The env5 wheel and the JAR, or stay on 0.5.2 | DBR 17.3, 18 and 19 are all supported. |
+| 0.5.x with the JAR (heavyweight) on DBR 17.3 or 18 | The env5 wheel and the JAR, or stay on 0.5.2 | DBR 17.3, 18 and 19 are all supported. |
 
 Pick the wheel by runtime, not by extra: `+env6` for Serverless environment 6 and DBR 19, `+env5` for Serverless environment 5, DBR 17.3 and DBR 18. Install the exact file. An old extra such as `light_env6` fails at resolution and names the wheel to install. See [Installation](./installation).
 

@@ -20,7 +20,7 @@ The single notebook moves from raw xView TGZ archives → a raster table loaded 
 
 ## Prerequisites
 
-- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The lightweight default runs on Serverless. The heavyweight tweak needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
+- **Databricks Runtime 17.3 LTS / 18 LTS, or Serverless** (Scala 2.13 / Spark 4 / Python 3.12). The default runs at the Python level on Serverless. The JVM level needs a dedicated cluster. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix DCS image on DBR 19.
 - **GeoBrix** (version 0.6.0). The setup cell `%pip`-installs the `geobrix[vizx]` env6 wheel: the wheel brings the Python API (`databricks.labs.gbx.rasterx`) and its dependencies, and `[vizx]` brings the [VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx) preview helpers (`plot_raster` / `plot_file`) used for the in-notebook previews. To use the JVM engine too, run on a dedicated cluster with the JAR installed (see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path)).
 - **Unity Catalog**: set `catalog_name` / `schema_name` at the top of the notebook. A Volume named `data` must already exist under `<catalog>/<schema>`; the notebook will create the schema but not the Volume.
 - **xView account**: you need a free account at [challenge.xviewdataset.org](https://challenge.xviewdataset.org/) to obtain session-based download links for `xView_train.tgz` (training imagery) and the labels archive. Paste those URLs into the `train_url` / `labels_url` cells before running the download step.

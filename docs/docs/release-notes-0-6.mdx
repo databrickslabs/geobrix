@@ -73,7 +73,7 @@ New:
   - `databricks.labs.gbx.gridx.helpers`: `h3_los_visible` and `h3_viewshed_towers`.
 - **Python-only modules moved.** `pyrx.checkpoint`, `mvs`, `ortho`, `sfm`, `imagery` and `file_table` are now `rasterx.<same name>`. `pyvx.file_read` and `pyvx.file_write` are now `vectorx.<same name>`. `Manifest`, `checkpoint_skip` and `input_signature` live in `rasterx.checkpoint`. The `dense_*` functions, `gpu_infra` and `recommend_dense_allocation` live in `rasterx.mvs`.
 - **`gridx.h3.functions.h3_geomkring` and `h3_geomkloop` replace `geomkring` and `geomkloop`.** They take an optional `coverage` argument. `mode` stays.
-- **`gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)` replaces `gbx_h3_cell_bbox` in the old modules.** The lightweight function called its `srid` argument `out_srid`. The v0.5.2 Scala function had no `out_crs`.
+- **`gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)` replaces `gbx_h3_cell_bbox` in the old modules.** The Python-level function called its `srid` argument `out_srid`. The v0.5.2 Scala function had no `out_crs`.
 - **`vectorx.functions.st_setcrs` and `st_transformcrs` read a bare string as a CRS.** `vectorx.jts.legacy.functions.st_legacyaswkb` is gone. Use `vectorx.functions.st_legacyaswkb`.
 
 See the [migration guide](./migration-0-6) for the old and new import for each entry point.
@@ -98,26 +98,26 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - Vector: `st_asmvt`, `st_asmvt_pyramid`.
   - Grid: `bng_eastnorthasbng`.
   - The `com.databricks.labs.gbx.gridx.quadbin` package. Call `call_function("gbx_quadbin_<name>", ...)`.
-  - The expression classes behind these functions, and `BNG_CellUnionAgg`, `BNG_CellIntersectionAgg`, `RST_MergeAgg`, `RST_DTMFromGeoms`, `RST_DTMFromGeomsAgg` and `RST_GridFromPointsAgg`. The SQL names run on the lightweight level.
-- **The JAR no longer holds the Scala expressions `RST_AlignTo`, `RST_CogConvert`, `RST_TransformCrs` and `ST_AsMvt`, or the `RstTransformCrsBytesUdf` Java UDF.** Their JVM forms measured slower than the lightweight forms at every scale tried on a dedicated cluster. GeoBrix keeps JVM code only where it is faster. `gbx_rst_binpoints` and `gbx_rst_cog_convert` ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call these functions with `call_function("gbx_<name>", ...)`.
-- **16 more functions run the JVM form by default with the JAR.** On a dedicated cluster, each JVM form was at least 1.2x faster than the best lightweight form at 4x rows. The decoded output is the same. Without the JAR they run the lightweight form, as before.
+  - The expression classes behind these functions, and `BNG_CellUnionAgg`, `BNG_CellIntersectionAgg`, `RST_MergeAgg`, `RST_DTMFromGeoms`, `RST_DTMFromGeomsAgg` and `RST_GridFromPointsAgg`. The SQL names run at the Python level.
+- **The JAR no longer holds the Scala expressions `RST_AlignTo`, `RST_CogConvert`, `RST_TransformCrs` and `ST_AsMvt`, or the `RstTransformCrsBytesUdf` Java UDF.** Their JVM forms measured slower than the Python forms at every scale tried on a dedicated cluster. GeoBrix keeps JVM code only where it is faster. `gbx_rst_binpoints` and `gbx_rst_cog_convert` ran the JVM form by default with the JAR. They now run the Python form. From Scala, call these functions with `call_function("gbx_<name>", ...)`.
+- **16 more functions run the JVM form by default with the JAR.** On a dedicated cluster, each JVM form was at least 1.2x faster than the best Python form at 4x rows. The decoded output is the same. Without the JAR they run the Python form, as before.
   - The BNG `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_kloop` and `gbx_bng_polyfill`.
   - The custom-grid `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_polyfill`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode` and `gbx_custom_cellfill`.
   - The cell rasterizers `gbx_rst_custom_rasterize_agg`, `gbx_rst_quadbin_rasterize_agg` and `gbx_rst_h3_rasterize_agg`.
   - `gbx_st_legacyaswkb`.
   - The gains ran from 1.7x (`gbx_bng_kloop`) to 9.8x (`gbx_custom_polyfill`) at 4x rows. See [Performance](./api/performance).
-- **`gbx_rst_tilexyz` runs the JVM form by default with the JAR.** On a dedicated cluster the JVM form was 1.25x faster at 4x tiles and 1.22x faster at 16x tiles. The lightweight form it was timed against moves tiles in Arrow batches. The decoded output is the same. A virtual, NULL or error tile goes to the lightweight form.
-- **`gbx_bng_kring`, `gbx_bng_cellfill` and `gbx_rst_bng_rasterize_agg` run the JVM form by default with the JAR.** On a dedicated cluster the JVM form was 1.2x to 2.5x faster than the lightweight form at 4x or 16x rows. The decoded output is the same. Without the JAR they run the lightweight form, as before.
-- **Two raster accessors that return one value run the JVM form first with the JAR.** They are `gbx_rst_boundingbox` and `gbx_rst_worldtorastercoordy`. On a dedicated cluster they were timed against the lightweight form that moves tiles in Arrow batches. The JVM `gbx_rst_boundingbox` was 1.27x faster at 4x rows, and `gbx_rst_worldtorastercoordy` 1.22x faster at 16x rows. The decoded output is the same. A virtual tile goes to the lightweight form and a materialized tile to the JVM form, through a SQL function that routes the two. The accessors that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` stay on the lightweight form, because that routing function cannot sit under `explode` or `inline`.
-- **The JAR no longer holds the 12 accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>`.** They are `RST_Avg`, `RST_Min`, `RST_Max`, `RST_PixelCount`, `RST_Sample`, `RST_GetNoData`, `RST_Type`, `RST_GeoReference`, `RST_BandMetaData`, `RST_Subdatasets`, `RST_RasterToWorldCoord` and `RST_WorldToRasterCoord`. Such a function can sit under `explode` or `inline`. There, Spark refuses the SQL function that routes a virtual tile to the lightweight form. So the JVM form could not be the default. On a dedicated cluster, `gbx_rst_avg` took 0.59x and 0.65x the lightweight time at 4x and 16x rows. That did not justify keeping it. These functions ran the lightweight form by default and still do. From Scala, call them with `call_function("gbx_<name>", ...)`.
-- **The JAR no longer holds `RST_GridFromPoints`.** On a dedicated cluster the JVM form took 1.78x and 1.91x the time of the lightweight form at 4x and 16x rows. The decoded output was the same. `gbx_rst_gridfrompoints` ran the JVM form by default with the JAR. It now runs the lightweight form. From Scala, call it with `call_function("gbx_rst_gridfrompoints", ...)`.
-- **The JAR no longer holds `RST_Slope`.** On a dedicated cluster, the JVM form took 0.97x and 1.05x the time of the lightweight form at 4x and 16x rows. So it is no faster. `gbx_rst_slope` runs the lightweight form, which runs GDAL's own slope algorithm. From Scala, call it with `call_function("gbx_rst_slope", ...)`. `gbx_rst_mapalgebra` and `gbx_rst_transformcrs` have no JVM form either. The JVM form of map algebra took 1.05x and 1.15x the time. The JVM form of `gbx_rst_transformcrs` returned NULL tiles for some of 4000 tiles under load. The lightweight forms returned none.
-- **The JAR no longer holds `RST_Aspect`, `RST_TPI`, `RST_Roughness` or `RST_ColorRelief`.** On a dedicated cluster at 16x rows, the JVM forms of aspect, TPI and roughness were 1.17x, 1.14x and 1.05x faster. The comparison is the best lightweight form. That is under the 1.2x bar to keep a JVM form. The JVM color relief could not read a color table on a Volume. From Scala, call the four culled functions with `call_function("gbx_rst_<x>", ...)`.
-- **The JAR no longer holds `RST_Transform`, `RST_Resample`, `RST_ResampleToRes`, `RST_ResampleToSize`, `RST_ToWebMercator`, `RST_FillNodata`, `RST_Proximity` or `RST_Summary`.** On a dedicated cluster, none of the JVM forms ran 1.2x faster than the best lightweight form. `gbx_rst_transform` ran at 0.71x the speed at 4x rows. `gbx_rst_resample` ran at 1.18x and 0.84x, and `gbx_rst_resample_to_res` at 1.10x and 1.01x, at 4x and 16x rows. `gbx_rst_to_webmercator` and `gbx_rst_resample_to_size` ran at 0.98x at 4x rows. `gbx_rst_fillnodata` ran at 0.32x and 0.18x. `gbx_rst_proximity` ran at 1.0x and 1.16x. The JVM summary wrote no band statistics, so its output differed from the lightweight one. These eight functions ran the lightweight form by default and still do. The JAR also no longer holds the JVM forms of 15 more raster functions. They are the aggregates `gbx_rst_binpoints_agg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband_agg`, `gbx_rst_frombands_agg` and `gbx_rst_rasterize_agg`. They are the table functions `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_custom_tessellate`, `gbx_rst_maketiles`, `gbx_rst_separatebands` and `gbx_rst_tooverlappingtiles`. They are also `gbx_rst_isempty`, `gbx_rst_tryopen`, `gbx_rst_isoband` and `gbx_rst_merge`. These functions run on the Python level, as before. From Scala, call them all with `call_function("gbx_rst_<x>", ...)`. The JAR also no longer holds the JVM forms of `gbx_rst_xyzpyramid` and `gbx_rst_derivedband`. The JVM table function of `gbx_rst_xyzpyramid` returned one `tile` column. That column held `z`, `x`, `y` and `bytes`, where the session function returns four columns. The JVM form of `gbx_rst_derivedband` kept the data type of the source, where the session function returns `Float64`. Both functions run on the Python level, as before. From Scala, call them with `call_function("gbx_rst_<x>", ...)`.
-- **The JAR no longer holds the JVM forms of nine more functions.** They are `gbx_st_crs`, `gbx_st_setcrs`, `gbx_h3_cell_bbox`, `gbx_rst_frombands`, `gbx_rst_asformat`, `gbx_rst_convolve`, `gbx_rst_initnodata`, `gbx_rst_updatetype` and `gbx_pmtiles_agg`. On a dedicated cluster, none ran 1.2x faster than the best lightweight form at 4x or 16x rows. The decoded output was the same. The JVM `gbx_st_crs` ran at 0.59x the speed at 4x rows, and `gbx_rst_convolve` at 0.34x and 0.52x at 4x and 16x rows. `gbx_st_setcrs`, `gbx_st_crs`, `gbx_h3_cell_bbox` and `gbx_rst_frombands` ran the JVM form by default with the JAR. All nine now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`. The `com.databricks.labs.gbx.pmtiles` package is gone with `gbx_pmtiles_agg`.
-- **The JAR no longer holds the JVM forms of five more functions.** They are `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. On a dedicated cluster, none ran 1.2x faster than the best lightweight form at 4x or 16x rows. The decoded output was the same. The JVM `gbx_rst_setsrid` ran at 0.39x and 0.28x the speed at 4x and 16x rows, and `gbx_rst_setcrs` at 0.38x and 0.37x. The JVM `gbx_rst_band` ran at 0.43x and 0.46x, and `gbx_rst_getsubdataset` at 0.53x and 0.45x. `gbx_rst_tri` ran at 1.10x and 1.16x, and ran the JVM form by default with the JAR. All five now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`.
-- **The JAR no longer holds the JVM forms of 19 raster accessors.** They are `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_numbands`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_width`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy` and `gbx_rst_worldtorastercoordx`. They were timed on a dedicated cluster against the lightweight form that moves tiles in Arrow batches. Both forms spend most of the time reading the tile. Each JVM form was between 1.05x and 1.2x faster at 4x and 16x rows, under the 1.2x bar. The decoded output was the same. All 19 ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`.
-- **The JAR no longer holds `RST_Clip`.** It was never registered, so `gbx_rst_clip` always ran the lightweight form and no call changes. That form stays on rasterio, because GDAL's `raster clip` has no all-touched option. From Scala, call it with `call_function("gbx_rst_clip", ...)`.
+- **`gbx_rst_tilexyz` runs the JVM form by default with the JAR.** On a dedicated cluster the JVM form was 1.25x faster at 4x tiles and 1.22x faster at 16x tiles. The Python form it was timed against moves tiles in Arrow batches. The decoded output is the same. A virtual, NULL or error tile goes to the Python form.
+- **`gbx_bng_kring`, `gbx_bng_cellfill` and `gbx_rst_bng_rasterize_agg` run the JVM form by default with the JAR.** On a dedicated cluster the JVM form was 1.2x to 2.5x faster than the Python form at 4x or 16x rows. The decoded output is the same. Without the JAR they run the Python form, as before.
+- **Two raster accessors that return one value run the JVM form first with the JAR.** They are `gbx_rst_boundingbox` and `gbx_rst_worldtorastercoordy`. On a dedicated cluster they were timed against the Python form that moves tiles in Arrow batches. The JVM `gbx_rst_boundingbox` was 1.27x faster at 4x rows, and `gbx_rst_worldtorastercoordy` 1.22x faster at 16x rows. The decoded output is the same. A virtual tile goes to the Python form and a materialized tile to the JVM form, through a SQL function that routes the two. The accessors that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` stay on the Python form, because that routing function cannot sit under `explode` or `inline`.
+- **The JAR no longer holds the 12 accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>`.** They are `RST_Avg`, `RST_Min`, `RST_Max`, `RST_PixelCount`, `RST_Sample`, `RST_GetNoData`, `RST_Type`, `RST_GeoReference`, `RST_BandMetaData`, `RST_Subdatasets`, `RST_RasterToWorldCoord` and `RST_WorldToRasterCoord`. Such a function can sit under `explode` or `inline`. There, Spark refuses the SQL function that routes a virtual tile to the Python form. So the JVM form could not be the default. On a dedicated cluster, `gbx_rst_avg` took 0.59x and 0.65x the Python time at 4x and 16x rows. That did not justify keeping it. These functions ran the Python form by default and still do. From Scala, call them with `call_function("gbx_<name>", ...)`.
+- **The JAR no longer holds `RST_GridFromPoints`.** On a dedicated cluster the JVM form took 1.78x and 1.91x the time of the Python form at 4x and 16x rows. The decoded output was the same. `gbx_rst_gridfrompoints` ran the JVM form by default with the JAR. It now runs the Python form. From Scala, call it with `call_function("gbx_rst_gridfrompoints", ...)`.
+- **The JAR no longer holds `RST_Slope`.** On a dedicated cluster, the JVM form took 0.97x and 1.05x the time of the Python form at 4x and 16x rows. So it is no faster. `gbx_rst_slope` runs the Python form, which runs GDAL's own slope algorithm. From Scala, call it with `call_function("gbx_rst_slope", ...)`. `gbx_rst_mapalgebra` and `gbx_rst_transformcrs` have no JVM form either. The JVM form of map algebra took 1.05x and 1.15x the time. The JVM form of `gbx_rst_transformcrs` returned NULL tiles for some of 4000 tiles under load. The Python forms returned none.
+- **The JAR no longer holds `RST_Aspect`, `RST_TPI`, `RST_Roughness` or `RST_ColorRelief`.** On a dedicated cluster at 16x rows, the JVM forms of aspect, TPI and roughness were 1.17x, 1.14x and 1.05x faster. The comparison is the best Python form. That is under the 1.2x bar to keep a JVM form. The JVM color relief could not read a color table on a Volume. From Scala, call the four culled functions with `call_function("gbx_rst_<x>", ...)`.
+- **The JAR no longer holds `RST_Transform`, `RST_Resample`, `RST_ResampleToRes`, `RST_ResampleToSize`, `RST_ToWebMercator`, `RST_FillNodata`, `RST_Proximity` or `RST_Summary`.** On a dedicated cluster, none of the JVM forms ran 1.2x faster than the best Python form. `gbx_rst_transform` ran at 0.71x the speed at 4x rows. `gbx_rst_resample` ran at 1.18x and 0.84x, and `gbx_rst_resample_to_res` at 1.10x and 1.01x, at 4x and 16x rows. `gbx_rst_to_webmercator` and `gbx_rst_resample_to_size` ran at 0.98x at 4x rows. `gbx_rst_fillnodata` ran at 0.32x and 0.18x. `gbx_rst_proximity` ran at 1.0x and 1.16x. The JVM summary wrote no band statistics, so its output differed from the Python one. These eight functions ran the Python form by default and still do. The JAR also no longer holds the JVM forms of 15 more raster functions. They are the aggregates `gbx_rst_binpoints_agg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband_agg`, `gbx_rst_frombands_agg` and `gbx_rst_rasterize_agg`. They are the table functions `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_custom_tessellate`, `gbx_rst_maketiles`, `gbx_rst_separatebands` and `gbx_rst_tooverlappingtiles`. They are also `gbx_rst_isempty`, `gbx_rst_tryopen`, `gbx_rst_isoband` and `gbx_rst_merge`. These functions run at the Python level, as before. From Scala, call them all with `call_function("gbx_rst_<x>", ...)`. The JAR also no longer holds the JVM forms of `gbx_rst_xyzpyramid` and `gbx_rst_derivedband`. The JVM table function of `gbx_rst_xyzpyramid` returned one `tile` column. That column held `z`, `x`, `y` and `bytes`, where the session function returns four columns. The JVM form of `gbx_rst_derivedband` kept the data type of the source, where the session function returns `Float64`. Both functions run at the Python level, as before. From Scala, call them with `call_function("gbx_rst_<x>", ...)`.
+- **The JAR no longer holds the JVM forms of nine more functions.** They are `gbx_st_crs`, `gbx_st_setcrs`, `gbx_h3_cell_bbox`, `gbx_rst_frombands`, `gbx_rst_asformat`, `gbx_rst_convolve`, `gbx_rst_initnodata`, `gbx_rst_updatetype` and `gbx_pmtiles_agg`. On a dedicated cluster, none ran 1.2x faster than the best Python form at 4x or 16x rows. The decoded output was the same. The JVM `gbx_st_crs` ran at 0.59x the speed at 4x rows, and `gbx_rst_convolve` at 0.34x and 0.52x at 4x and 16x rows. `gbx_st_setcrs`, `gbx_st_crs`, `gbx_h3_cell_bbox` and `gbx_rst_frombands` ran the JVM form by default with the JAR. All nine now run the Python form. From Scala, call them with `call_function("gbx_<name>", ...)`. The `com.databricks.labs.gbx.pmtiles` package is gone with `gbx_pmtiles_agg`.
+- **The JAR no longer holds the JVM forms of five more functions.** They are `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. On a dedicated cluster, none ran 1.2x faster than the best Python form at 4x or 16x rows. The decoded output was the same. The JVM `gbx_rst_setsrid` ran at 0.39x and 0.28x the speed at 4x and 16x rows, and `gbx_rst_setcrs` at 0.38x and 0.37x. The JVM `gbx_rst_band` ran at 0.43x and 0.46x, and `gbx_rst_getsubdataset` at 0.53x and 0.45x. `gbx_rst_tri` ran at 1.10x and 1.16x, and ran the JVM form by default with the JAR. All five now run the Python form. From Scala, call them with `call_function("gbx_<name>", ...)`.
+- **The JAR no longer holds the JVM forms of 19 raster accessors.** They are `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_height`, `gbx_rst_memsize`, `gbx_rst_numbands`, `gbx_rst_pixelheight`, `gbx_rst_pixelwidth`, `gbx_rst_rotation`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_srid`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_width`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy` and `gbx_rst_worldtorastercoordx`. They were timed on a dedicated cluster against the Python form that moves tiles in Arrow batches. Both forms spend most of the time reading the tile. Each JVM form was between 1.05x and 1.2x faster at 4x and 16x rows, under the 1.2x bar. The decoded output was the same. All 19 ran the JVM form by default with the JAR. They now run the Python form. From Scala, call them with `call_function("gbx_<name>", ...)`.
+- **The JAR no longer holds `RST_Clip`.** It was never registered, so `gbx_rst_clip` always ran the Python form and no call changes. That form stays on rasterio, because GDAL's `raster clip` has no all-touched option. From Scala, call it with `call_function("gbx_rst_clip", ...)`.
 - **The spectral indices, `rst_index` and `rst_threshold` run GDAL's `raster calc`.** The pixels equal the earlier results, with a few differences.
   - A pixel is NoData where an input band is NoData, a value is NaN or infinite, or a denominator is 0.
   - A source with no declared NoData value now treats the pixels equal to -9999 as NoData.
@@ -151,19 +151,19 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - A NULL number gives NULL. A tile that declares no NoData value and has no mask band comes back as it is.
   - A tile whose validity is its own mask band keeps it. One example is a reprojection of a tile with no NoData value. The filled pixels become valid, and the pixels the search did not reach stay masked. Before, the mask was dropped and every pixel read as valid.
 - **A virtual tile whose file is missing is retried, then raises with a `Fix:`. It is never a silent NULL.** This holds for every function that runs GDAL's own algorithm, such as slope, aspect, color relief, `raster calc` and contour. A Volume path can lag a write, so the read retries about 10 times. If the file is still missing, the error names the path. Check that it exists and is readable from the workers. A corrupt file still gives an error tile or NULL.
-- **The JAR no longer holds the seven `RST_Combine*` expressions or `RST_BNG_Tessellate`.** On a dedicated cluster, the JVM `gbx_rst_combineavg` took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows. The times were 131.56 s against 122.16 s, and 576.44 s against 387.95 s. The DataFrame helper `combine_by_key` took 261.07 s at 16x rows. The raster `gbx_rst_bng_tessellate` took 0.97x and 1.03x the time of the lightweight form, a tie. These eight functions ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`. The grid `gbx_bng_tessellate` keeps its JVM form.
-- **The JAR no longer holds `RST_BuildOverviews`.** On a dedicated cluster the lightweight `gbx_rst_buildoverviews` was 2.2x faster than the JVM form. The function already ran the lightweight form by default and still does. The JVM form wrote the overviews in a sidecar file that the tile bytes did not carry. From Scala, call it with `call_function("gbx_rst_buildoverviews", ...)`.
-- **The JAR no longer holds `RST_PercentileStretch`.** Its JVM form took the nearest-rank percentile and rounded the rescale, where the lightweight `gbx_rst_percentile_stretch` interpolates the percentile and truncates. On an 8-bit test tile the two differed by up to 1.24 levels. The function already ran the lightweight form by default and still does. From Scala, call it with `call_function("gbx_rst_percentile_stretch", ...)`.
-- **The JAR no longer holds `RST_Filter`.** Its JVM mean filter of a gray + alpha tile left a different NoData mask than the lightweight `gbx_rst_filter` at a window with no valid pixel. The JVM form was never timed against it. The function already ran the lightweight form by default and still does. From Scala, call it with `call_function("gbx_rst_filter", ...)`.
-- **The JAR no longer holds the band-math, canopy-height and contour expressions.** They are `RST_NDVI`, `RST_NDWI`, `RST_NBR`, `RST_EVI`, `RST_SAVI`, `RST_Index`, `RST_Threshold`, `RST_MapAlgebra`, `RST_Chm` and `RST_Contour`. The band-math and canopy-height functions run GDAL's `raster calc` in the worker. The JVM form ran `gdal_calc.py` for each row and is not needed. `gbx_rst_contour` returns an array. Spark refuses the SQL function that routes a virtual tile to the lightweight form under `explode`, so the JVM form could not be the default. From Scala, call them with `call_function("gbx_rst_<name>", ...)`. The Scala `rst_mapalgebra` and `rst_contour` Column functions are gone.
-- **The JAR no longer holds `BNG_EastNorthAsBNG` or its Java UDFs `BngEastNorthAsBngUdf` and `BngEastNorthAsBngConnectUdf`.** On a dedicated cluster the JVM form took 1.17x and 1.35x the time of the lightweight batch form at 4 and 16 million rows. On a standard cluster the Java UDF was also slower (3.24 s against 1.70 s at 4 million rows). `gbx_bng_eastnorthasbng` now runs as a SQL function that needs no JAR, and falls back to the lightweight form.
+- **The JAR no longer holds the seven `RST_Combine*` expressions or `RST_BNG_Tessellate`.** On a dedicated cluster, the JVM `gbx_rst_combineavg` took 1.08x and 1.49x the time of the best Python form at 4x and 16x rows. The times were 131.56 s against 122.16 s, and 576.44 s against 387.95 s. The DataFrame helper `combine_by_key` took 261.07 s at 16x rows. The raster `gbx_rst_bng_tessellate` took 0.97x and 1.03x the time of the Python form, a tie. These eight functions ran the JVM form by default with the JAR. They now run the Python form. From Scala, call them with `call_function("gbx_<name>", ...)`. The grid `gbx_bng_tessellate` keeps its JVM form.
+- **The JAR no longer holds `RST_BuildOverviews`.** On a dedicated cluster the Python-level `gbx_rst_buildoverviews` was 2.2x faster than the JVM form. The function already ran the Python form by default and still does. The JVM form wrote the overviews in a sidecar file that the tile bytes did not carry. From Scala, call it with `call_function("gbx_rst_buildoverviews", ...)`.
+- **The JAR no longer holds `RST_PercentileStretch`.** Its JVM form took the nearest-rank percentile and rounded the rescale, where the Python-level `gbx_rst_percentile_stretch` interpolates the percentile and truncates. On an 8-bit test tile the two differed by up to 1.24 levels. The function already ran the Python form by default and still does. From Scala, call it with `call_function("gbx_rst_percentile_stretch", ...)`.
+- **The JAR no longer holds `RST_Filter`.** Its JVM mean filter of a gray + alpha tile left a different NoData mask than the Python-level `gbx_rst_filter` at a window with no valid pixel. The JVM form was never timed against it. The function already ran the Python form by default and still does. From Scala, call it with `call_function("gbx_rst_filter", ...)`.
+- **The JAR no longer holds the band-math, canopy-height and contour expressions.** They are `RST_NDVI`, `RST_NDWI`, `RST_NBR`, `RST_EVI`, `RST_SAVI`, `RST_Index`, `RST_Threshold`, `RST_MapAlgebra`, `RST_Chm` and `RST_Contour`. The band-math and canopy-height functions run GDAL's `raster calc` in the worker. The JVM form ran `gdal_calc.py` for each row and is not needed. `gbx_rst_contour` returns an array. Spark refuses the SQL function that routes a virtual tile to the Python form under `explode`, so the JVM form could not be the default. From Scala, call them with `call_function("gbx_rst_<name>", ...)`. The Scala `rst_mapalgebra` and `rst_contour` Column functions are gone.
+- **The JAR no longer holds `BNG_EastNorthAsBNG` or its Java UDFs `BngEastNorthAsBngUdf` and `BngEastNorthAsBngConnectUdf`.** On a dedicated cluster the JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows. On a standard cluster the Java UDF was also slower (3.24 s against 1.70 s at 4 million rows). `gbx_bng_eastnorthasbng` now runs as a SQL function that needs no JAR, and falls back to the Python form.
 - **Scala wrappers gained or renamed arguments.**
   - `rst_transform` takes `srid`, not `targetSrid`.
   - `rst_rastertoworldcoord*` and `rst_worldtorastercoord*` take `x` and `y`.
   - `rst_derivedband` names its second argument `pythonFunc`. `rst_maketiles` names its size `sizeInMb`.
   - `bng_kringexplode` and `bng_kloopexplode` name their parameter `cellid`. `quadbin_distance(cellid1, cellid2)` and `custom_distance(cellid1, grid, cellid2)` take the new names.
   - `st_triangulate` and `st_interpolateelevationbbox` gain Column wrappers. `st_legacyaswkb` gains a Scala wrapper.
-- **`rst_viewshed` is lightweight only.** Its Scala wrappers and the Scala tab of its example are gone.
+- **`rst_viewshed` runs at the Python level only.** Its Scala wrappers and the Scala tab of its example are gone.
 
 ### Renamed and reordered arguments (breaking) {#signature-changes}
 
@@ -203,10 +203,10 @@ These changes affect callers that pass keywords or named arguments.
 - **The `rst_*_rastertogrid*` reducers return rows.** In SQL, write `FROM t, LATERAL gbx_rst_h3_rastertogridavg(tile, 5) t`. The old `posexplode(...)` and `LATERAL VIEW inline(...)` forms on the `ARRAY` no longer apply.
 - **Aggregates return `BINARY` everywhere.** `rst_combineavg_agg`, `rst_frombands_agg`, `rst_derivedband_agg`, `rst_rasterize_agg`, `rst_gridfrompoints_agg`, `rst_binpoints_agg`, `rst_dtmfromgeoms_agg`, the cell rasterize aggregates, `rst_merge_agg` and `rst_bng_rasterize_agg` return GeoTIFF bytes.
   - This holds in SQL on every compute and in the Python call. Wrap the result with `rst_fromcontent(col, "GTiff")` for a tile.
-  - Heavyweight SQL callers that read tile fields from a rasterize aggregate must wrap it.
+  - SQL callers at the JVM level that read tile fields from a rasterize aggregate must wrap it.
   - Their optional arguments are positional. The rasterize aggregates take 12 or 13 arguments.
   - `rst_rasterize_agg` takes WKB only.
-- **`gbx_rst_summary` returns GDAL's own JSON.** The function runs GDAL's `raster info` with statistics, in the worker. It returns the text of `gdalinfo -json`. The earlier lightweight shape is gone, so a query that reads its keys must change.
+- **`gbx_rst_summary` returns GDAL's own JSON.** The function runs GDAL's `raster info` with statistics, in the worker. It returns the text of `gdalinfo -json`. The earlier Python-level shape is gone, so a query that reads its keys must change.
   - `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`. `mean`, `stdDev`, `type` and `noDataValue` keep their names.
   - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
   - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` strings with more digits.
@@ -240,8 +240,8 @@ These changes affect callers that pass keywords or named arguments.
 - **Old install lines stop.** These 0.5.x extras fail at resolution (pip: `ResolutionImpossible`) and name the env wheel to install:
   - The light extras `light_env5`, `light_env6`, `light_dbr17`, `light_dbr18`, `light_dbr19` and their `_all` forms.
   - The GPU extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all`.
-  - See [Installation](./installation#whl-only).
-- **`[models]`, `[photogrammetry]`, `[overture]` and `[earthdata]` are not extras in 0.6.0.** Install their packages as a separate step after the env wheel. See [Installation](./installation#whl-only).
+  - See [Installation](./installation#env-wheel).
+- **`[models]`, `[photogrammetry]`, `[overture]` and `[earthdata]` are not extras in 0.6.0.** Install their packages as a separate step after the env wheel. See [Installation](./installation#env-wheel).
   - `overturemaps` (raises `click` and `tqdm`).
   - `earthaccess` (raises `fsspec`).
   - `pycolmap`, or `pycolmap-cuda12` on the GPU runtime.
@@ -254,14 +254,14 @@ These changes affect callers that pass keywords or named arguments.
 
 ### The init-script install is removed (breaking) {#init-script}
 
-- **GeoBrix 0.6.0 has no GDAL init script.** The heavyweight tier takes its GDAL, PROJ and GEOS from the env wheel.
+- **GeoBrix 0.6.0 has no GDAL init script.** The JVM level takes its GDAL, PROJ and GEOS from the env wheel.
   - Install the env wheel for the runtime and the GeoBrix JAR as cluster libraries on a dedicated cluster. The wheel is `+env5` on DBR 17.3 and 18, and `+env6` on DBR 19.
   - GeoBrix verified this on x86 for DBR 17.3, 18 and 19, and on Graviton (arm64) for DBR 19.
-  - See [Cluster libraries](./installation#heavyweight).
+  - See [Cluster libraries](./installation#env-wheel-and-jar).
 - **Migration.** Remove the init script and the GDAL bundle from the cluster, then install the wheel and the JAR as libraries.
   - A 0.6.0 wheel beside the init script's system GDAL puts two GDAL stacks in one cluster.
 - **GeoBrix no longer publishes the init script or the GDAL bundle tarball.** The 0.6.0 release attaches neither.
-- **Heavyweight netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The lightweight tier reads these files without it.
+- **JVM-level netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The Python level reads these files without it.
   - Setting `HDF5_PLUGIN_PATH` cluster-wide breaks an h5py write with `hdf5plugin` blosc on a Databricks ML runtime.
   - See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
 - **Band math runs GDAL's `raster calc` on every compute.** `rst_mapalgebra`, the spectral indices, `rst_threshold` and `rst_chm` need no `gdal_calc.py`, which the env wheel does not carry.
@@ -275,7 +275,7 @@ These changes affect callers that pass keywords or named arguments.
   - It prints the next step: add the path as a cluster library on a dedicated cluster, and restart the cluster.
   - On standard access mode, a metastore admin must first allowlist the Volume path.
 - **`register` refuses a JAR whose version differs from the wheel's.**
-- **You no longer download the JAR from the release page.** See [Env wheel and JAR](./installation#heavyweight).
+- **You no longer download the JAR from the release page.** See [Env wheel and JAR](./installation#env-wheel-and-jar).
 
 ### A reminder prints on the first `register` (new) {#register-reminder}
 
@@ -308,19 +308,19 @@ These changes affect callers that pass keywords or named arguments.
 
   GeoBrix opens every raster with the allowed drivers only. With the env wheel, it also identifies a raster before opening it.
 - **Turn it off** with `GBX_GDAL_DRIVER_POLICY=off`, or `spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config. Set it before the first GDAL use. See [Security § 7](./security#7-raster-data-other-principals-can-write) for the install paths that get the full defence.
-- **The lightweight tier refuses tile bytes that hold a VRT or another format that names other files.** Examples are `VRT`, `DERIVED`, the label formats (`PDS`, `ISIS3`, `VICAR`, `ENVI`) and the product directories. The error gives a fix: store the tile as a GeoTIFF, or pass the VRT as a virtual tile (a path). netCDF, HDF5, HFA, JP2 and GPKG bytes still open. `rst_asformat` no longer offers these formats. See [Security § 7](./security#7-raster-data-other-principals-can-write).
+- **The Python level refuses tile bytes that hold a VRT or another format that names other files.** Examples are `VRT`, `DERIVED`, the label formats (`PDS`, `ISIS3`, `VICAR`, `ENVI`) and the product directories. The error gives a fix: store the tile as a GeoTIFF, or pass the VRT as a virtual tile (a path). netCDF, HDF5, HFA, JP2 and GPKG bytes still open. `rst_asformat` no longer offers these formats. See [Security § 7](./security#7-raster-data-other-principals-can-write).
 - **`spark.gdal.GDAL_SKIP` adds to the refused drivers** and can no longer re-enable one. `spark.gdal.*` cannot turn the VRT raw-band or Python settings back on.
 
 ### PROJ data, registered grids and OSTN15 (behavior change, fix) {#proj-data}
 
-- **Lightweight CRS lookups work on the driver of a standard-access cluster (fix).** On DBR 19, functions that resolve a CRS on the driver, such as `gbx_zarr_sample`, failed with `Cannot find proj.db`. GeoBrix now uses its bundled PROJ data when the `PROJ_DATA` that is set holds no readable `proj.db`.
+- **Python-level CRS lookups work on the driver of a standard-access cluster (fix).** On DBR 19, functions that resolve a CRS on the driver, such as `gbx_zarr_sample`, failed with `Cannot find proj.db`. GeoBrix now uses its bundled PROJ data when the `PROJ_DATA` that is set holds no readable `proj.db`.
 - **Raster CRS transforms work after `register_proj_grids` (fix).** GeoBrix points `PROJ_DATA` at one directory that combines the PROJ data and the registered grids. See [Registering custom grid files](./api/coordinate-reference-systems#registering-custom-grid-files).
 - **The JVM engine takes a `PROJ_DATA` of several directories (fix).** GDAL read a colon-separated `spark.gdal.PROJ_DATA` as one directory, so EPSG codes did not resolve. Grids registered while queries ran could also make `gbx_rst_srid` NULL on some rows.
 - **British National Grid transforms use OSTN15 (behavior change).** The env wheels ship Ordnance Survey's OSTN15 grid. Transforms between EPSG:27700 and WGS 84 or ETRS89 use it instead of PROJ's Helmert approximation.
   - Results are within millimetres of Ordnance Survey's test points.
   - Results differ from earlier values by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.
   - See [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
-- **The JVM engine loads GDAL from a node-local copy (new).** On first use, each node copies the native libraries to `/local_disk0/geobrix/native`, or to `/tmp/geobrix/native` when another user owns `/local_disk0`. The JVM then loads them from that copy, not from a notebook's Python environment. Set `spark.databricks.labs.gbx.native.copy.dir` to use one folder only, or to `off` to load from the wheel. See [Env wheel and JAR](./installation#heavyweight).
+- **The JVM engine loads GDAL from a node-local copy (new).** On first use, each node copies the native libraries to `/local_disk0/geobrix/native`, or to `/tmp/geobrix/native` when another user owns `/local_disk0`. The JVM then loads them from that copy, not from a notebook's Python environment. Set `spark.databricks.labs.gbx.native.copy.dir` to use one folder only, or to `off` to load from the wheel. See [Env wheel and JAR](./installation#env-wheel-and-jar).
 - **`projsync` needs a local target directory.** Syncing straight into a Volume leaves `cache.db` at 0 bytes with a `disk I/O error`. Sync to local disk, then copy to the Volume. See [Fetch grids with projsync](./api/coordinate-reference-systems#fetch-grids-from-the-proj-cdn-with-projsync).
 
 ## Unity Catalog {#unity-catalog}
@@ -374,7 +374,7 @@ See [Unity Catalog functions](./api/uc-functions) and [Installation](./installat
 
 ### Incremental ingestion: `read_paths` and `declare_ingest` (new) {#read-paths}
 
-- **`read_paths` reads a DataFrame of file paths with any lightweight reader.** Give it a batch listing or an Auto Loader stream, and a reader name. The readers are `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`, `lidar_gbx`, `exif_gbx`, `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx` and `pmtiles_gbx`.
+- **`read_paths` reads a DataFrame of file paths with any `*_gbx` reader.** Give it a batch listing or an Auto Loader stream, and a reader name. The readers are `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`, `lidar_gbx`, `exif_gbx`, `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx` and `pmtiles_gbx`.
   - Rows carry the reader's columns plus `_source_path` and `_source_mtime`.
   - Raster, COG and PMTiles files spread across tasks when `num_partitions` is set. One task reads a NetCDF file.
   - See [`read_paths`](./ingestion/read-paths).
@@ -452,7 +452,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ### The Scala readers and writers are retired (breaking) {#readers-retired}
 
-- **The Scala readers are retired.** The lightweight `*_gbx` readers replace them. They run on every compute, and the Scala `gdal` reader was slower than the lightweight path at 4000 and 10000 tiles on a dedicated cluster.
+- **The Scala readers are retired.** The `*_gbx` readers replace them. They run on every compute, and the Scala `gdal` reader was slower than the Python path at 4000 and 10000 tiles on a dedicated cluster.
 
 | Retired format | Reader that replaces it |
 |---|---|
@@ -492,7 +492,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ### Reader staging cache (fix) {#staging-cache}
 
-- **Lightweight readers bound their staged copies (fix).** They copy GeoPackage, FileGDB and (for windowed decodes) raster sources to worker-local disk. The copies used to fill it.
+- **The `*_gbx` readers bound their staged copies (fix).** They copy GeoPackage, FileGDB and (for windowed decodes) raster sources to worker-local disk. The copies used to fill it.
   - GeoBrix now removes the least recently used idle copies. The cap is half the available local disk, or `GBX_STAGE_CACHE_MB`.
   - GeoBrix also removes copies left by exited workers.
   - See [Serverless and Memory](./serverless-and-memory).
@@ -557,16 +557,16 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ## Vector {#vector}
 
-### Lightweight vector readers: large layers and coded-value domains {#vector-large-layers}
+### Vector readers: large layers and coded-value domains {#vector-large-layers}
 
-- **Lightweight vector readers stream large layers (fix).** `vector_gbx`, `file_gdb_gbx`, `gpkg_gbx`, `shapefile_gbx`, `geojson_gbx` and `geojsonl_gbx` read a layer in batches of `chunkSize` features. They split any batch that nears Arrow's 2 GiB per-column limit.
+- **The vector readers stream large layers (fix).** `vector_gbx`, `file_gdb_gbx`, `gpkg_gbx`, `shapefile_gbx`, `geojson_gbx` and `geojsonl_gbx` read a layer in batches of `chunkSize` features. They split any batch that nears Arrow's 2 GiB per-column limit.
   - Layers with more than 2 GiB of geometry now read. They failed with `ArrowInvalid: offset overflow while concatenating arrays`.
   - Memory per task scales with `chunkSize`.
   - One value too large for any Spark row fails with an error that names the layer, column and feature.
   - `vector_file_read` streams its sources the same way.
   - See [Vector Readers](./readers/vector#options).
 - **Coded-value domain fields read correctly (fix).** FileGDB and GeoPackage fields bound to a coded-value domain failed with `Cannot call the method "getInt"`. They now return the stored code in the field's declared type.
-  - The new lightweight-only `codedDomains` option returns the domain descriptions as strings. Its values are `"code"` (default) and `"description"`.
+  - The new `codedDomains` option returns the domain descriptions as strings. Its values are `"code"` (default) and `"description"`.
   - See [FileGDB Reader](./readers/filegdb#options) and [GeoPackage Reader](./readers/geopackage#options).
 
 ### Vector readers: `driverName` is honored (behavior change) {#driver-name}
@@ -582,7 +582,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ### Vector writers (new, behavior change, fix) {#vector-writers}
 
-- **`file_gdb_gbx` writes File Geodatabases with the lightweight tier alone (behavior change).** It no longer needs native GDAL (`osgeo`), or classic x86 clusters. It encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver. It runs on Serverless, standard and dedicated clusters, on x86 and ARM. The output layout, `zip=true`, the shared schema and the other options are unchanged.
+- **`file_gdb_gbx` writes File Geodatabases with the Python level alone (behavior change).** It no longer needs native GDAL (`osgeo`), or classic x86 clusters. It encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver. It runs on Serverless, standard and dedicated clusters, on x86 and ARM. The output layout, `zip=true`, the shared schema and the other options are unchanged.
 - **Column types follow the DataFrame types.**
   - An `int` column stays a 32-bit integer, and a `smallint` a 16-bit integer. Both were doubles.
   - A column named `shape` (any case) is refused with an error, because the layer's geometry field is `SHAPE`.
@@ -593,7 +593,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A DataFrame without such a column is written for every client. `ALL` forces that.
   - GeoBrix's readers and any reader built on GDAL 3.11 or later open a Pro 3.2 layer.
   - See [GeoDatabase Writer](./writers/filegdb).
-- **Timestamp columns work in the lightweight vector readers and writers on Serverless (fix).** They failed with `AssertionError`. Timestamps are read and written as UTC. A written timestamp is exact on a worker whose time zone is not UTC.
+- **Timestamp columns work in the vector readers and writers on Serverless (fix).** They failed with `AssertionError`. Timestamps are read and written as UTC. A written timestamp is exact on a worker whose time zone is not UTC.
 - **`netcdf_gbx` writes timestamp, date, string and boolean attributes (fix).** A vector write with such a column failed. Now:
   - A timestamp is a CF time variable: seconds since 1970-01-01 00:00:00 UTC, with `units` and `calendar` attributes. A timestamp without a time zone is read as UTC.
   - A date is a CF time variable in days.
@@ -612,14 +612,14 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 ### Vector function arguments (behavior change) {#vector-arguments}
 
 - **A negative or non-finite tolerance raises and names the value.** This covers `st_simplifypreservetopology`, `st_removerepeatedpoints` and `st_snap`, and the grid size of `st_reduceprecision`. They returned garbage or a bare GEOS error. NULL still gives NULL. A NULL `st_removerepeatedpoints` tolerance is the default 0.
-- **Geometry text that mixes 2D and 3D keeps the Z values it has, on both levels.** `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The Z that exists is kept and the missing one is `NaN`, never `0`. Before, the JVM `gbx_st_transformcrs` gave NULL. The lightweight `st_transformcrs` dropped every Z of such a geometry, and so of any geometry with a Z on some vertices only. Now `st_transformcrs` reprojects X and Y of every vertex and keeps the Z of each vertex that has one. A `st_setcrs` then `st_transformcrs` chain no longer loses its elevations. The other `gbx_st_*` functions that take geometry text read it the same way.
+- **Geometry text that mixes 2D and 3D keeps the Z values it has, on both levels.** `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The Z that exists is kept and the missing one is `NaN`, never `0`. Before, the JVM `gbx_st_transformcrs` gave NULL. The Python-level `st_transformcrs` dropped every Z of such a geometry, and so of any geometry with a Z on some vertices only. Now `st_transformcrs` reprojects X and Y of every vertex and keeps the Z of each vertex that has one. A `st_setcrs` then `st_transformcrs` chain no longer loses its elevations. The other `gbx_st_*` functions that take geometry text read it the same way.
 - **Geometry text whose dimension tag contradicts its coordinates is refused, not read as 3D.** `POINT Z (1 2)` has a Z tag and two ordinates. Both levels now raise the parse error instead of reading a `NaN` Z. Only text that mixes 2D and 3D coordinates is repaired.
 - **`st_transformcrs` takes X, Y and Z of a vertex that has a Z from the 3D transform.** A target that moves the height, such as a geocentric CRS, changes X and Y with Z. A vertex of a partial-Z geometry now gets the result the same vertex gets alone. Both levels agree.
-- **The lightweight H3 geometry functions refuse a geometry whose SRID is not 4326.** EWKT with `SRID=27700` was read as longitude and latitude. The error names the SRID and says to reproject with `st_transformcrs`. SRID 0 still reads as 4326.
+- **The Python-level H3 geometry functions refuse a geometry whose SRID is not 4326.** EWKT with `SRID=27700` was read as longitude and latitude. The error names the SRID and says to reproject with `st_transformcrs`. SRID 0 still reads as 4326.
 - **`gbx_st_legacyaswkb` returns a 2D geometry for 2D input.** The JVM function had a NaN Z.
-- **`st_transformcrs` runs on the JVM level first when the JAR is present.** `st_crs` and `st_setcrs` run on the lightweight level.
+- **`st_transformcrs` runs at the JVM level first when the JAR is present.** `st_crs` and `st_setcrs` run at the Python level.
 - **A CRS argument is judged by its kind.** A PROJJSON, with its `"$schema"` URL, and a WKT2 with an ID URI bind to their EPSG code on both levels. A URL, a file name and any grid or init file named by path stay refused. Before, a PROJJSON target was refused.
-- **Contour and isoband run on the lightweight level.**
+- **Contour and isoband run at the Python level.**
 - **`gbx_rst_isoband` raises for breaks that do not rise,** and for a NULL element in `breaks`. `gbx_rst_contour` and `gbx_rst_isoband` give NULL for an unreadable tile.
 
 ### TIN functions: snapping, and the conforming mode on every level (breaking, new, fix) {#tin}
@@ -659,7 +659,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 
 ### Raster writers (fix) {#raster-writers}
 
-- **The lightweight COG writers write `raw` and `none` uncompressed.** This covers `raster_gbx` with `cog=true`, `cog_gbx` and `rst_cog_convert`. `rst_cog_convert` now takes `'NONE'` as well as `'RAW'`. They used to get LZW from the COG driver. A COG written from a tile whose `compression` metadata says `raw` or `none` kept the source's codec.
+- **The COG writers write `raw` and `none` uncompressed.** This covers `raster_gbx` with `cog=true`, `cog_gbx` and `rst_cog_convert`. `rst_cog_convert` now takes `'NONE'` as well as `'RAW'`. They used to get LZW from the COG driver. A COG written from a tile whose `compression` metadata says `raw` or `none` kept the source's codec.
 - **`cog_gbx` writes sources with a non-byte-aligned bit depth.** A band tagged with an `NBITS` such as 15 (common for Sentinel-2 `uint16` products) failed with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer promotes such samples to the full width of the data type. This is lossless.
 - **`cog_gbx` names the parts of one source apart.** With no `nameCol`:
   - A tile that is only part of its source is written as `<source name>_<key>.tif`. This covers a window or clip, and one band from `rst_separatebands`.
@@ -673,33 +673,33 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 
 ### `rst_asformat` and `rst_cog_convert` (fix) {#asformat-cog}
 
-- **The lightweight `rst_asformat(tile, 'COG')` writes a Cloud Optimized GeoTIFF.** It failed with `driver 'COG' is not available in this GDAL build`. The tile has the COG layout, as `rst_cog_convert` writes it:
+- **The Python-level `rst_asformat(tile, 'COG')` writes a Cloud Optimized GeoTIFF.** It failed with `driver 'COG' is not available in this GDAL build`. The tile has the COG layout, as `rst_cog_convert` writes it:
   - `LAYOUT=COG` and 512-pixel blocks.
   - Size-adaptive ZSTD.
   - Overviews when the tile is larger than 512 pixels.
 
-- **The lightweight `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) are available.
+- **The Python-level `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) are available.
 - **The tile of `rst_asformat(tile, 'COG')` records `metadata['driver'] = 'GTiff'`** (it was `'COG'`). That is the driver its bytes open as, and the one `rst_cog_convert` records. A writer passes those bytes through and keeps the layout and codec you asked for.
 - **`rst_asformat(tile, 'JP2OpenJPEG')` keeps the CRS (fix).** The in-memory writer dropped it. A driver that cannot encode a tile through that writer now raises one `ValueError` that names the driver and gives a Fix. It used to raise a raw `SystemError` or `TypeError`.
 - **Other fixes.**
-  - `rst_cog_convert`, `rst_asformat(..., 'COG')` and the lightweight functions that rewrite a striped GeoTIFF no longer log a GDAL warning per tile. Those functions are `rst_asformat`, `rst_merge` and the STAC windowed download.
+  - `rst_cog_convert`, `rst_asformat(..., 'COG')` and the Python-level functions that rewrite a striped GeoTIFF no longer log a GDAL warning per tile. Those functions are `rst_asformat`, `rst_merge` and the STAC windowed download.
   - The STAC windowed download and the vizx tile-simplify raster path read a JPEG/YCbCr source. They failed on `PHOTOMETRIC=YCBCR`.
-  - The lightweight `rst_cog_convert` keeps the red, green and blue labels of RGB tiles.
+  - The Python-level `rst_cog_convert` keeps the red, green and blue labels of RGB tiles.
 
-### Heavyweight tile size (fix) {#l1-parity}
+### JVM-level tile size (fix) {#l1-parity}
 
-- **Heavyweight rasterize tiles are compressed.** They were raw bytes. They now use the heavyweight default (DEFLATE with the dtype's predictor). Pixels are unchanged.
+- **JVM-level rasterize tiles are compressed.** They were raw bytes. They now use the JVM-level default (DEFLATE with the dtype's predictor). Pixels are unchanged.
 
 ### `rst_sample` on virtual tiles (fix) {#rst-sample}
 
-- **The lightweight `rst_sample` on a virtual tile reads only the block that holds its point.** The points of one file in a task share one open. Each call used to open the file twice and decode and re-encode the tile's whole window. That took about a second of task time per point on a Volume.
+- **The Python-level `rst_sample` on a virtual tile reads only the block that holds its point.** The points of one file in a task share one open. Each call used to open the file twice and decode and re-encode the tile's whole window. That took about a second of task time per point on a Volume.
   - The values are unchanged.
   - Clipped or reprojected virtual tiles, Zarr-backed and materialized tiles, and files with their own mask band are read as before.
   - Releases v0.5.0 to v0.5.2 are affected.
 
-### Lightweight raster opens: no folder listing (behavior change) {#raster-opens}
+### Raster opens at the Python level: no folder listing (behavior change) {#raster-opens}
 
-- **The lightweight tier lists each folder once per worker, not at every open.** GDAL lists a raster's folder at every open to look for sidecar files. That took 0.3 s to 10 s per open on a Volume on Serverless. GeoBrix now lists a folder once per Python worker, when the worker opens a second, different file of it. It tells GDAL where to look.
+- **The Python level lists each folder once per worker, not at every open.** GDAL lists a raster's folder at every open to look for sidecar files. That took 0.3 s to 10 s per open on a Volume on Serverless. GeoBrix now lists a folder once per Python worker, when the worker opens a second, different file of it. It tells GDAL where to look.
   - A GeoTIFF, PNG, JPEG, JPEG 2000, netCDF, HDF or GRIB file with no sidecar opens with no sidecar look-up. It no longer pays the per-open folder listing.
   - A file with sidecars (external overviews, masks, `.aux.xml`, world files) still finds them. So do the files a VRT or another multi-file dataset opens.
   - Sidecars are checked by name before a folder is listed, and in a folder of more than 100,000 files.
@@ -715,9 +715,9 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - When the outermost `rasterio.Env` that names the option exits, rasterio keeps the value it found on entry as a GDAL option for the process. A later change of the environment variable then has no effect.
 - **A local copy of a Volume file is removed from disk as soon as it is opened (fix).** The copy that `rst_sample` keeps open for a task leaves the disk at once, even when the Python worker ends without cleanup.
 
-### Lightweight tile functions move rows in Arrow batches (fix) {#arrow-tile-rows}
+### Python-level tile functions move rows in Arrow batches (fix) {#arrow-tile-rows}
 
-- **On every DBR 19 and Serverless compute the lightweight tile functions move their rows to Python in Arrow batches.** Before, Spark pickled up to 100 tiles into one buffer on the executor heap. With large tiles, 16 times the rows spent up to half of each task in garbage collection, and executors were lost.
+- **On every DBR 19 and Serverless compute the Python-level tile functions move their rows to Python in Arrow batches.** Before, Spark pickled up to 100 tiles into one buffer on the executor heap. With large tiles, 16 times the rows spent up to half of each task in garbage collection, and executors were lost.
   - This covers the tile operations, accessors, statistics, constructors, the array and pair functions, and the rasterizers. It also covers `rst_apply`, the GDAL spec engine's row form and the vector array functions.
   - It also covers the table functions over tiles: `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the `rst_*_rastertogrid*` reducers. `st_triangulate`, `st_interpolateelevation*` and `st_asmvt_pyramid` are covered too.
   - Dedicated and standard DBR 19 clusters need no Spark config for this. Integer arguments, BIGINT cell ids and NULLs arrive exactly.
@@ -736,9 +736,9 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **Bad arguments raise their own message.**
   - An unknown `format`, `resampling` or `rescale` raises.
   - A `size` outside (0, 4096], a `max_z` above the cap, or a tile count above the limit raises.
-  - Heavyweight `rst_tilexyz` now raises for them too, as `rst_xyzpyramid` and the lightweight tier do. It returned a transparent PNG.
+  - JVM-level `rst_tilexyz` now raises for them too, as `rst_xyzpyramid` and the Python level do. It returned a transparent PNG.
   - A tile that cannot be read or rendered still returns a transparent PNG, never NULL.
-- **A tile that cannot be read gives one error row (fix).** This holds for `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four `rst_*_tessellate` functions. The row's `tile` holds the error tile (NULL raster, error in `metadata.last_error`), as [Error handling](./api/error-handling#generators) describes. The lightweight forms used to fail with `UDTF_RETURN_SCHEMA_MISMATCH`.
+- **A tile that cannot be read gives one error row (fix).** This holds for `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four `rst_*_tessellate` functions. The row's `tile` holds the error tile (NULL raster, error in `metadata.last_error`), as [Error handling](./api/error-handling#generators) describes. The Python forms used to fail with `UDTF_RETURN_SCHEMA_MISMATCH`.
   - `rst_maketiles` with a size of 0 or less returns the tile unchanged as one readable row.
 
 ### `rst_gdal` runs an allowlisted GDAL `raster` command (new) {#rst-gdal}
@@ -770,7 +770,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - An observer within half a pixel of the DEM's edge gets a viewshed, as before.
 - **A virtual tile that is a whole file is read by GDAL from the file,** block by block, as the earlier code read it. A tile with bytes, or a window of a file, is read whole under the compute's read cap. Over the cap it gives an error tile that says to retile it first.
   - A block GDAL cannot read gives an error tile that names the file. It is never a mask built on zeros.
-- **`rst_viewshed` with a `max_distance` returns the window around the observer (fix).** In v0.5.2 the lightweight tier was wrong on a DEM above its small-DEM size limit (about 366 × 366 pixels by default). The visible area came out several times too large and in the wrong place. The `rst_viewshed_towers` counts (`visible_px`, `total_px`) were inflated.
+- **`rst_viewshed` with a `max_distance` returns the window around the observer (fix).** In v0.5.2 the Python level was wrong on a DEM above its small-DEM size limit (about 366 × 366 pixels by default). The visible area came out several times too large and in the wrong place. The `rst_viewshed_towers` counts (`visible_px`, `total_px`) were inflated.
   - The result is the window: the observer's pixel plus `max_distance` each way, clipped to the DEM. It is aligned to the DEM's pixel grid.
   - Without a `max_distance` it returns the whole DEM.
   - Pixels beyond the distance but inside the window are 0, as before.
@@ -791,7 +791,7 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
 - **Covered cells follow the raster footprint.** `coverage='complete'` and `assignment='covering'` keep a cell when it overlaps the raster footprint.
   - The footprint is the raster's edges, reprojected to the grid's CRS with points along each edge. It follows the curved edges of a projected scene, for example UTM.
   - `rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when the footprint crosses the antimeridian or encloses a pole. Reproject the raster first (for example to EPSG:4326), or split it.
-- **Tiling keeps all-NoData windows.** The v0.5.2 heavyweight forms dropped them, so a retile-then-merge round trip could lose part of a scene's edge. These functions now emit every window:
+- **Tiling keeps all-NoData windows.** The v0.5.2 JVM forms dropped them, so a retile-then-merge round trip could lose part of a scene's edge. These functions now emit every window:
   - `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` (with `size_in_mb > 0`).
 
   To drop the all-NoData windows, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
@@ -815,17 +815,17 @@ GeoBrix applies one rule for which pixels are valid.
   Further changes:
   - In v0.5.2, centroid tessellation used 0 for every integer type. Real zero pixels of `uint16`, `int16`, `uint32` and `int32` sources now stay valid. Float tiles carry the type's minimum, not NaN.
   - `covering` tiles carry this NoData, so pixels outside each cell read as NoData.
-  - The lightweight `rst_initnodata` and `rst_threshold` use the same table.
-  - The lightweight `rst_filter` min, max and median of a `uint8` source blank a window with no valid pixel with 0.
+  - The Python-level `rst_initnodata` and `rst_threshold` use the same table.
+  - The Python-level `rst_filter` min, max and median of a `uint8` source blank a window with no valid pixel with 0.
   - In the [EO series](./notebooks/eo-series) notebooks 03 and 04, `uint16` bands that pass through `rst_initnodata` carry NoData 65535.
 - **A source's own mask band is kept.** This is a mask band that is not an alpha band, as JPEG-compressed aerial imagery often carries. Masked pixels used to read as valid data in these places:
   - `rst_initnodata`.
   - The warps of `rst_bng_tessellate` and the raster-to-grid reducers.
   - `assignment='covering'`.
-  - Lightweight `gbx_rst_transform` and `gbx_rst_transformcrs`.
+  - Python-level `gbx_rst_transform` and `gbx_rst_transformcrs`.
   - The `raster_gbx` encoder and re-encode.
   - `cog_gbx` mosaic windows.
-  - Lightweight virtual tiles, which `rst_fromfile` returns by default.
+  - Python-level virtual tiles, which `rst_fromfile` returns by default.
 
 - **`rst_clip` fills with NoData.** The pixels outside the cutline, and the ones the source masks, are NoData. They take the tile's own NoData, else the fallback of its type, which the output declares.
   - They were valid zeros when the source declared no NoData.
@@ -850,9 +850,9 @@ GeoBrix applies one rule for which pixels are valid.
     - The neighbours of `gbx_rst_filter` and `gbx_rst_convolve`.
     - The pixels that `gbx_rst_polygonize` and `gbx_rst_isoband` vectorise.
   - `gbx_rst_isempty` is true for a raster with no valid pixel.
-  - The lightweight `gbx_rst_summary` takes its statistics over the valid pixels.
+  - The Python-level `gbx_rst_summary` takes its statistics over the valid pixels.
   - `gbx_rst_derivedband` of one raster is invalid where its input is.
-- **Lightweight functions label a band alpha exactly where their source does.** GDAL labels band 4 of every four-band `uint8` GeoTIFF alpha when it creates one. It drops the alpha band of a 16-bit RGBA or gray-plus-alpha raster. The lightweight functions that write a raster from another one used to do the same. This covers:
+- **Python-level functions label a band alpha exactly where their source does.** GDAL labels band 4 of every four-band `uint8` GeoTIFF alpha when it creates one. It drops the alpha band of a 16-bit RGBA or gray-plus-alpha raster. The Python-level functions that write a raster from another one used to do the same. This covers:
   - `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_setsrid` and `gbx_rst_setcrs`.
   - `gbx_rst_filter`, `gbx_rst_convolve`, `gbx_rst_fillnodata` and `gbx_rst_percentile_stretch`.
   - `gbx_rst_resample` and its variants, and `gbx_rst_buildoverviews`.
@@ -864,7 +864,7 @@ GeoBrix applies one rule for which pixels are valid.
   - The tile encoders of the `raster_gbx` and `cog_gbx` writers.
 - **A band selection writes the alpha band as data, unless it is selected last with a data band.** `gbx_rst_band` and `gbx_rst_separatebands` extract a band for its values. The alpha band of an RGBA raster comes out as an ordinary band. A multi-band selection keeps the alpha label only when the source's alpha band is selected last with at least one other band.
 - **A raster with an alpha band and its own mask band keeps both.** This holds in the encoders, writers and reprojections, in the warp behind covering and in the raster-to-grid reducers. A pixel is valid when a data band is valid, its alpha is above 0 and the mask says so.
-  - The remaining lightweight writers also keep the alpha label and the mask:
+  - The remaining writers also keep the alpha label and the mask:
     - `cog_gbx` quadbin, h3 and BNG cells, and its `pruneEmpty` check. A window or cell with no valid pixel is not written.
     - The COG re-encode of the `raster_gbx` writer.
     - `gbx_rst_frombands`.
@@ -875,44 +875,44 @@ GeoBrix applies one rule for which pixels are valid.
 
 ### Raster merge, reprojection and grouped functions (fix) {#raster-merge-fixes}
 
-- **Lightweight merge and mosaic crashes are fixed.**
+- **Python-level merge and mosaic crashes are fixed.**
   - A quadbin, h3 or BNG `cog_gbx` cell that a source barely touches no longer fails with `Invalid dataset dimensions`.
   - `gbx_rst_merge` of tiles in two coordinate systems takes its size and pixel size from the reference system, whichever tile sorts first. It reprojects the other tile onto the reference tile's pixel grid, in memory and streamed alike. That tile can grow by up to a pixel on each side.
-- **A lightweight merge no longer overwrites valid pixels with zeros** when a tile is reprojected. The reprojected tile carries its warp footprint as a mask. The mosaic has a mask band, and a pixel no tile covers is invalid.
-- **A streamed lightweight merge reads each tile by its own NoData,** as the in-memory merge does. The `cog_gbx` mosaic index masks a multi-band tile only where every band is NoData. The layout still differs: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews), and the in-memory one a striped GeoTIFF.
+- **A Python-level merge no longer overwrites valid pixels with zeros** when a tile is reprojected. The reprojected tile carries its warp footprint as a mask. The mosaic has a mask band, and a pixel no tile covers is invalid.
+- **A streamed Python-level merge reads each tile by its own NoData,** as the in-memory merge does. The `cog_gbx` mosaic index masks a multi-band tile only where every band is NoData. The layout still differs: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews), and the in-memory one a striped GeoTIFF.
 - **Focal defects are fixed.**
   - `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window.
   - `gbx_rst_convolve` no longer writes each block's result shifted.
   - A focal window adds only the neighbours on the raster. v0.5.2 replicated the edge.
 - **`gbx_rst_merge_agg` refuses an oversize group on Serverless.** A Serverless task holds the whole group before any merge. A group of tiles that add up (decoded) to more than the task's memory cap used to end the query with a memory-limit error. It is now refused first, with a `Fix:` that names `merge_by_key(method="vrt")`. The SQL call raises, and the Python call returns the group's error tile.
-- **`gbx_rst_merge` runs on the lightweight level, also on a cluster with the JAR.** The merge streams a group over the memory budget and returns the mosaic. In v0.5.2 a hot key of a skewed table came back with no raster.
+- **`gbx_rst_merge` runs at the Python level, also on a cluster with the JAR.** The merge streams a group over the memory budget and returns the mosaic. In v0.5.2 a hot key of a skewed table came back with no raster.
 - **A merge of virtual tiles skips the sidecar look-up for files the reader marked sidecar-free.** Tiles from `raster_gbx` carry `path_sidecar_free`. The merge now honors it for the member headers and for the streamed read. It no longer lists a large folder once per worker for them.
-- **Grouped functions apply a virtual tile's clip.** On runtimes with the FILE type, the lightweight `*_grouped` functions skipped the `clipPolygons` polygon of a `raster_gbx` or `cog_gbx` virtual tile. These include `rst_clip_grouped`, `rst_memsize_grouped` and `rst_resample_grouped`.
+- **Grouped functions apply a virtual tile's clip.** On runtimes with the FILE type, the Python-level `*_grouped` functions skipped the `clipPolygons` polygon of a `raster_gbx` or `cog_gbx` virtual tile. These include `rst_clip_grouped`, `rst_memsize_grouped` and `rst_resample_grouped`.
   - They now read the tile clipped, and reproject a tile whose `crs` differs from its source's.
   - A tile written with `virtualize_dir` from a clipped or reprojected tile no longer applies that clip and CRS twice when read.
 - **A file written with `virtualize_dir` ends in a random id.** The name held only the cell and the size. Two results of one size in one directory wrote the same file, the second over the first. This held for a mosaic, `rst_combineavg`, `rst_frombands` and tiles of one cell.
 - **Grouped functions apply `rst_initnodata`, `rst_band`, `rst_setsrid` and `rst_setcrs` to a whole-file virtual tile.** After one of those functions, a `*_grouped` function that reads pixels returned NULL without an error on a cluster without the FILE type. Examples are `rst_resample_grouped` and `rst_slope_grouped`. On a cluster with the FILE type, it ignored the instruction.
 - **Raster output encoding.**
-  - Lightweight raster functions write ZSTD with the predictor that suits the data type, instead of the source file's codec. JPEG (YCbCr) sources no longer make writes fail.
+  - Raster functions at the Python level write ZSTD with the predictor that suits the data type, instead of the source file's codec. JPEG (YCbCr) sources no longer make writes fail.
   - An explicit JPEG request keeps YCbCr.
-  - Heavyweight tiles whose metadata names no `compression` are DEFLATE in every path, as documented. Some paths wrote ZSTD.
+  - JVM-level tiles whose metadata names no `compression` are DEFLATE in every path, as documented. Some paths wrote ZSTD.
   - `rst_cog_convert` still defaults to ZSTD.
 
 ### Grid rasterizers: repeated cell ids burn the largest value (fix) {#grid-rasterizers}
 
-- **The lightweight cell rasterizers keep the largest value when a cell repeats, like the heavyweight tier.** `rst_h3_rasterize_agg`, `rst_quadbin_rasterize_agg`, `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned the row that arrived last. The same data could give a different raster on each run.
+- **The Python-level cell rasterizers keep the largest value when a cell repeats, like the JVM level.** `rst_h3_rasterize_agg`, `rst_quadbin_rasterize_agg`, `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned the row that arrived last. The same data could give a different raster on each run.
   - A cell that appears once, or whose rows all carry the same value, burns as before.
   - Two spellings of one BNG cell, such as `TQ3080` and `TQ 3080`, are one cell.
 - **`gbx_rst_custom_rasterize_agg` and `gbx_rst_custom_rasterize` derive their canvas from the grid's cell edges.** With NULL canvas arguments, a grid whose bounds are not a multiple of the pixel size gave a tile of NoData.
   - The canvas snapped to multiples of the pixel size from 0, so every pixel centre fell on a cell edge. It now snaps from the grid's `bound_x_min` and `bound_y_min`.
   - The padding of `kring_pad` holds the cells that exist, so a canvas at the grid edge no longer grows past the grid.
-  - The JVM form gives NoData for a pixel outside the grid, as the lightweight form does. It raised an error.
+  - The JVM form gives NoData for a pixel outside the grid, as the Python form does. It raised an error.
   - The JVM and Python forms give the same canvas. A canvas in another CRS than the grid's still snaps from 0.
-- **In the lightweight rasterizers a null value never wins.** A null or `NaN` is ignored whenever the cell has a number, so values `0.5` and `NULL` burn `0.5`.
+- **In the Python-level rasterizers a null value never wins.** A null or `NaN` is ignored whenever the cell has a number, so values `0.5` and `NULL` burn `0.5`.
   - A cell whose values are all null burns `NaN`, also when the whole `value` column is null.
   - Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`.
-  - The heavyweight tier still counts a null value as `1.0`.
-- **The lightweight `*_cellfill` aggregates give the same fill whatever order rows arrive in.** `h3_cellfill`, `quadbin_cellfill`, `bng_cellfill` and `custom_cellfill` used the last row for a repeated cell id. They use the cell's largest non-null value. A cell stays `NULL` only when all its values are null. The heavyweight tier still keeps the last row it receives.
+  - The JVM level still counts a null value as `1.0`.
+- **The Python-level `*_cellfill` aggregates give the same fill whatever order rows arrive in.** `h3_cellfill`, `quadbin_cellfill`, `bng_cellfill` and `custom_cellfill` used the last row for a repeated cell id. They use the cell's largest non-null value. A cell stays `NULL` only when all its values are null. The JVM level still keeps the last row it receives.
 
 ### Cell rasterizers: scalar forms and table functions (new) {#cell-rasterizer-forms}
 
@@ -954,7 +954,7 @@ Every raster function follows the same order of checks on both implementations.
 
 ### Tile reads honor the compute's memory cap (behavior change) {#read-caps}
 
-- **A tile held in a column is refused when its decoded size passes the cap.** The cap is 64 MiB on Serverless and 1536 MiB on classic and dedicated compute. The lightweight functions used to process such a tile on Serverless. The refusal text is the same on both implementations.
+- **A tile held in a column is refused when its decoded size passes the cap.** The cap is 64 MiB on Serverless and 1536 MiB on classic and dedicated compute. The Python-level functions used to process such a tile on Serverless. The refusal text is the same on both implementations.
   - Reading a file over the cap fails the call with a retile `Fix:`. The same holds for `gbx_rst_fromfile`, `rst_fromfile(materialize=True)` and `raster_gbx` with `virtualTiles=false`.
   - `rst_align_to` reads only the header of the reference tile, so a large reference no longer turns every aligned tile into an error tile.
 - **A virtual tile is refused when the window it reads passes the cap.** Before, only a tile that carried bytes was judged, so a large window could run a Serverless task out of memory. The refusal text and `Fix:` are the same as for a tile with bytes.
@@ -964,10 +964,10 @@ Every raster function follows the same order of checks on both implementations.
   - `rst_maketiles` sizes a tile over the cap from its header, as its decoded size. A tile under the cap is split as before.
   - A reprojected piece of a huge tile may take another source pixel than the whole tile would, at a few borderline pixels.
   - Reads that decode no window are not judged: the plain-window warp, a merge by reference and the block-streaming write.
-- **Heavyweight and lightweight functions take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
+- **The JVM and Python levels take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
   - `gbx_rst_subdatasets` and `gbx_rst_getsubdataset` read a netCDF or HDF tile as its own dataset, so they keep working.
   - A netCDF or HDF container with several variables and no band answers `rst_width`, `rst_height`, `rst_numbands`, `rst_subdatasets` and `rst_metadata`. It was an error tile. `rst_metadata` includes the file's own metadata domains.
-  - Heavyweight netCDF and HDF reads run one at a time per executor. This avoids a native crash in GDAL 3.13's netCDF metadata path. Throughput of concurrent netCDF reads in one executor is lower.
+  - JVM-level netCDF and HDF reads run one at a time per executor. This avoids a native crash in GDAL 3.13's netCDF metadata path. Throughput of concurrent netCDF reads in one executor is lower.
 - **A merge or combine over the memory budget no longer fails or returns NULL.** `gbx_rst_merge_agg` and `gbx_rst_combineavg_agg` stream the work, and `gbx_rst_combinesum`, `count`, `median` and `stddev` fold in windows.
   - The streamed mosaic is a Cloud Optimized GeoTIFF with the same pixels as the in-memory one.
   - A mosaic past 10 GiB decoded raises a `Fix:`. It says to keep the tiles as files on a Volume, then build the mosaic with `databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")` or the `cog_gbx` writer with `vrtMosaic=true`, and read the VRT.
@@ -989,23 +989,23 @@ Every raster function follows the same order of checks on both implementations.
 
 ### WKB is little-endian and cell rings start south-west (behavior change) {#output-formats}
 
-- **WKB from the heavyweight functions is little-endian,** as the lightweight functions, GDAL and `st_asbinary` give. The same call returns the same bytes on every compute.
-- **A BNG or custom-grid cell polygon starts at the south-west corner and runs counter-clockwise.** An example is `POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))`. The lightweight level started at the south-east corner.
+- **WKB from the JVM-level functions is little-endian,** as the Python-level functions, GDAL and `st_asbinary` give. The same call returns the same bytes on every compute.
+- **A BNG or custom-grid cell polygon starts at the south-west corner and runs counter-clockwise.** An example is `POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))`. The Python level started at the south-east corner.
 - **`gbx_bng_aswkb` and `gbx_bng_centroid` on Unity Catalog return little-endian EWKB with SRID 27700.** The bytes are the same whether the Volume holds the JAR or not. The session functions return plain WKB without an SRID.
 
 ### Raster function results (behavior change) {#raster-results}
 
-- **Light band mean and standard deviation are exact to double.** They were off in the 7th digit for `float32` bands.
-- **Heavyweight changes.**
+- **Python-level band mean and standard deviation are exact to double.** They were off in the 7th digit for `float32` bands.
+- **JVM-level changes.**
   - `gbx_rst_srid` is NULL when the CRS has no authority code (it was 0).
-- **Changes from v0.5.2 for functions that now run on the lightweight level.**
+- **Changes from v0.5.2 for functions that now run at the Python level.**
   - `gbx_rst_getnodata` is NULL when no band declares NoData (it was NaN per band).
   - `gbx_rst_sample` raises for a non-point geometry. A longitude/latitude point (EWKT, EWKB or the `crs` argument) lands on the right pixel. It used the authority's axis order and missed the raster.
   - `gbx_rst_convolve` returns `Float64`. The median filter of an even number of valid pixels is the mean of the two middle values.
   - `gbx_rst_initnodata` keeps a NoData value every band declares, NaN included. `gbx_rst_percentile_stretch` declares NoData 0.
   - `gbx_rst_gridfrompoints` with `max_pts` below the number of points weights the nearest `max_pts` points.
   - `gbx_rst_merge` mosaics tiles in different CRSs. The reference CRS is the smallest EPSG code present. GeoBrix reprojects a tile in another CRS onto the pixel size and grid of the first tile in it. That tile can grow by up to a pixel on each side.
-- **Lightweight changes.**
+- **Python-level changes.**
   - `gbx_rst_updatetype` rounds a float to the nearest integer and clamps to the type's range. It truncated and wrapped. The type name is read in any case.
   - `gbx_rst_getsubdataset` works on a tile that points to a netCDF or HDF file, and returns a tile labelled driver `GTiff`.
   - `rst_getsubdataset` on a tile with a window, clip or pending edits gives an error tile with a `Fix:`.
@@ -1029,8 +1029,8 @@ Every raster function follows the same order of checks on both implementations.
 - **A tile's alpha band keeps its label through the band selection of `rst_band`.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
 - **The `rst_merge` overlap winner does not depend on the array order.** The bytes that sort last win. The old text said the first tile wins.
 - **`gbx_rst_asformat` takes the driver name in any case.** It resolves the name to GDAL's spelling and leaves a tile that is already in that driver unchanged. The `driver` in the result is the driver the bytes open as (`GTiff` for `COG`).
-- **The JVM cell rasterizers read `out_crs` as `EPSG:<n>` or a bare integer.** They refuse `ESRI:<n>` and WKT with a `Fix:`. The lightweight level accepts them.
-- **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
+- **The JVM cell rasterizers read `out_crs` as `EPSG:<n>` or a bare integer.** They refuse `ESRI:<n>` and WKT with a `Fix:`. The Python level accepts them.
+- **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs at the Python level only.
 - **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
 - **`SHOW USER FUNCTIONS` works on DBR 17.3 after `gbx.register`.** The SQL tile functions that mint a `FILE` argument (`gbx_rst_avg`, `gbx_rst_width` and 32 more) run a check once per session. The check asks whether the runtime can list a function with `FILE` in its body. Where it cannot, they pass NULL and read the tile by its path.
 
@@ -1042,12 +1042,12 @@ Every grid function follows one contract for its resolution and its input.
 
 - **A BNG resolution is an index or a digit string.** `'3'` works, and so does `'1km'` for a BNG size. A resolution outside the INT range raises and names the value. Before, the JVM narrowed it to INT and could wrap to a valid index.
 - **A fractional resolution such as 3.5 raises and names the value** in the quadbin, custom-grid and H3 functions. A whole number written as text (`'3'`) is accepted.
-- **A NULL cell gives NULL** in the quadbin and custom-grid cell functions. Before, the lightweight functions raised or gave resolution 0.
+- **A NULL cell gives NULL** in the quadbin and custom-grid cell functions. Before, the Python-level functions raised or gave resolution 0.
 - **A non-finite coordinate gives NULL.** An infinite longitude or latitude in `quadbin_pointascell` was a made-up cell. An infinite geometry gives NULL in `geomkring` and `geomkloop` of all three grids. An unreadable geometry gives NULL in `quadbin_polyfill` and `quadbin_tessellate`.
 - **The custom-grid functions treat NULL, text and bad modes alike.** A NULL resolution or `k` gives NULL. A text resolution works. An unknown dilation mode raises.
 - **The geometry explodes follow the rules of their array functions.** An unknown mode or an undefined resolution raises. A non-finite point or unreadable geometry gives no rows. The BNG and custom explodes raise for an unknown `coverage` before they run, and read a `BIGINT` `k`. A `k` past INT raises.
 - **`gbx_rst_bng_tessellate` raises for a resolution BNG does not define.**
-- **A bad `coverage` and a negative `k` now raise on the JAR level too.** `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_custom_geomkring` and `gbx_custom_geomkloop` raise for an unknown `coverage`, and `gbx_custom_kring`, `gbx_custom_kloop` raise for a `k` below 0, each naming the value. Before, the JAR level returned NULL where the lightweight level raised. `gbx_bng_tessellate` also raises for an integer resolution BNG does not define.
+- **A bad `coverage` and a negative `k` now raise on the JVM level too.** `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_custom_geomkring` and `gbx_custom_geomkloop` raise for an unknown `coverage`, and `gbx_custom_kring`, `gbx_custom_kloop` raise for a `k` below 0, each naming the value. Before, the JVM level returned NULL where the Python level raised. `gbx_bng_tessellate` also raises for an integer resolution BNG does not define.
 - **A bad argument raises in more raster functions.** v0.5.2 returned an error tile, a NULL or a tile that could not be opened.
   - `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate` and `gbx_rst_custom_tessellate` raise for an `assignment` or `coverage` they do not know, naming the value. A NULL `resolution` gives the row's error tile, not a tessellation at resolution 0.
   - `gbx_rst_tooverlappingtiles` raises for a window below 1 pixel and for an overlap outside 0 to below 100 percent. A NULL window or overlap gives the row's error tile. A NULL size in `gbx_rst_maketiles` does the same.
@@ -1062,15 +1062,15 @@ Every grid function follows one contract for its resolution and its input.
 - **A BNG chip with NULL bytes is an empty geometry** in `gbx_bng_cellunion`, `gbx_bng_cellintersection` and their aggregates, on both levels. The union is the other chip, and the intersection is empty. `gbx_bng_cellintersection` leaves NULL bytes for an empty intersection.
 - **A BIGINT resolution in the custom-grid functions raises an `IllegalArgumentException` that names the value,** where `ArithmeticException: integer overflow` was raised.
 - **`gbx_custom_kring` and `gbx_custom_kloop` at the grid edge no longer include cells outside the grid.** A ring at the east edge held a cell of the next row. A ring at the north edge held a cell past the last row. The geometry-aware rings, their explodes and `gbx_custom_cellfill` walk the same neighbours, so they keep to the grid as well. This holds on every level.
-- **The JAR level of the custom-grid cell functions takes a cell id given as INT,** such as the literal `180530`. `gbx_custom_kring`, `kloop`, `cellaswkb`, `cellaswkt`, `centroid` and `distance` returned NULL or raised for it, where the lightweight level answered.
-- **`gbx_custom_cellfill` and `gbx_rst_custom_rasterize_agg` read the grid from the rows of each group on the JAR level.** A grid held in a table column, not a constant, failed with an internal error. Each group now uses its own grid, as the lightweight level does, and the options of the rasterize aggregate may be columns too.
+- **The JAR level of the custom-grid cell functions takes a cell id given as INT,** such as the literal `180530`. `gbx_custom_kring`, `kloop`, `cellaswkb`, `cellaswkt`, `centroid` and `distance` returned NULL or raised for it, where the Python level answered.
+- **`gbx_custom_cellfill` and `gbx_rst_custom_rasterize_agg` read the grid from the rows of each group on the JVM level.** A grid held in a table column, not a constant, failed with an internal error. Each group now uses its own grid, as the Python level does, and the options of the rasterize aggregate may be columns too.
 - **The raster-to-grid functions give no rows for an unreadable tile** and no rows for a NULL resolution or custom grid. A bad resolution, coverage or assignment raises and names the value before the tile is opened. A custom resolution above the grid's maximum raises before the tile is opened.
 - **`gbx_rst_*_rastertogrid*` cell functions treat a transparent pixel as no data.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
 
 
 ### `bng_tessellateexplode` columns (behavior change) {#bng-explode}
 
-- **Heavyweight `bng_tessellateexplode` returns `core` and `chip`, like the lightweight tier.** It declared one column and dropped the `core` flag and chip geometry. It now returns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB). This holds for a WKB or WKT geometry alike, as in the lightweight tier and `bng_tessellate`.
+- **JVM-level `bng_tessellateexplode` returns `core` and `chip`, like the Python level.** It declared one column and dropped the `core` flag and chip geometry. It now returns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB). This holds for a WKB or WKT geometry alike, as at the Python level and `bng_tessellate`.
   - A query that named the whole generator output with one alias (`.as("chip")`) needs one name per column, or none.
 - **`keep_core_geom` is an optional third argument that defaults to false in every API.** The SQL function takes two or three arguments.
   - The Python wrapper's default changes from true to false.
@@ -1081,7 +1081,7 @@ Every grid function follows one contract for its resolution and its input.
 ### `bng_tessellate` core geometry off by default (behavior change) {#bng-tessellate-default}
 
 - **`bng_tessellate` defaults `keep_core_geom` to false in every API,** as `bng_tessellateexplode` does.
-  - The two-argument SQL form returned a NULL core chip in the heavyweight tier but the cell geometry in the lightweight tier.
+  - The two-argument SQL form returned a NULL core chip at the JVM level but the cell geometry at the Python level.
   - The Scala and Python wrappers of both tiers defaulted to true.
   - A core cell's `chip` is NULL unless you pass `keep_core_geom` as true.
   - The Scala wrapper gains overloads that take it. Pass true to keep the old wrapper result.
@@ -1089,18 +1089,18 @@ Every grid function follows one contract for its resolution and its input.
 ### `bng_tessellate` keeps cells that clip to a MultiPolygon or a mixed collection (fix) {#bng-tessellate-fix}
 
 - **A polygon no longer loses cells when its clip is a MultiPolygon or a mixed collection.** A valid polygon can clip to a cell as a MultiPolygon. It can also clip as a GeometryCollection that holds polygons plus a point or line along the cell edge.
-  - The heavyweight `bng_tessellate` returned NULL for the whole polygon. `bng_tessellateexplode` returned no rows.
-  - The lightweight tier returned fewer cells than the polygon covers.
-  - Both tiers now keep the polygonal part of every clip and return the same cells and chips.
+  - The JVM-level `bng_tessellate` returned NULL for the whole polygon. `bng_tessellateexplode` returned no rows.
+  - The Python level returned fewer cells than the polygon covers.
+  - Both levels now keep the polygonal part of every clip and return the same cells and chips.
 - **Chip shapes.**
   - A MultiPolygon input returns its Polygon chips, and a polygon's chip can be a MultiPolygon.
   - Points and lines that only touch a cell edge are dropped.
   - Results for polygons that clip to plain Polygon chips do not change.
-- **A GeometryCollection that holds a large polygon is tessellated.** It returned NULL in the heavyweight tier and raised an error in the lightweight tier. Both tiers now tessellate the union of the collection's polygons, at any nesting depth. A line or point in the collection can remain in the chip of a cell the polygons also touch. It never yields a cell of its own.
+- **A GeometryCollection that holds a large polygon is tessellated.** It returned NULL at the JVM level and raised an error at the Python level. Both levels now tessellate the union of the collection's polygons, at any nesting depth. A line or point in the collection can remain in the chip of a cell the polygons also touch. It never yields a cell of its own.
 
 ### A NULL resolution in a batch (fix) {#null-resolution}
 
-- **`bng_pointascell` and `bng_eastnorthasbng` answer the rows beside a NULL.** In the lightweight tier, a NULL `resolution` made `bng_pointascell` fail the whole batch (`BNG resolution not supported; found nan`). A NULL resolution, easting or northing now gives a NULL cell, and the other rows are answered.
+- **`bng_pointascell` and `bng_eastnorthasbng` answer the rows beside a NULL.** In the Python level, a NULL `resolution` made `bng_pointascell` fail the whole batch (`BNG resolution not supported; found nan`). A NULL resolution, easting or northing now gives a NULL cell, and the other rows are answered.
 - **`quadbin_pointascell` and `custom_pointascell` answer the rows beside a NULL too.**
   - `quadbin_pointascell` also answered a NULL longitude or latitude with a made-up cell.
   - A resolution that is not a whole number (3.5) is refused instead of cut to 3.
@@ -1108,13 +1108,13 @@ Every grid function follows one contract for its resolution and its input.
 
 ### Other grid changes (behavior change, new) {#grid-other}
 
-- **`out_crs` on `gbx_rst_bng_rasterize_agg` is refused on both tiers when it is not NULL (behavior change).** BNG output is always EPSG:27700. Both tiers used to accept and ignore the argument. Pass NULL, and reproject the tile with `gbx_rst_transformcrs` for another CRS.
+- **`out_crs` on `gbx_rst_bng_rasterize_agg` is refused on both tiers when it is not NULL (behavior change).** BNG output is always EPSG:27700. Both levels used to accept and ignore the argument. Pass NULL, and reproject the tile with `gbx_rst_transformcrs` for another CRS.
 
 ## Zarr {#zarr}
 
 ### Transactional, versioned stores (new) {#zarr-stores}
 
-- **The lightweight tier registers, reads and writes Zarr stores transactionally.** [Zarr](https://zarr.dev) keeps N-dimensional arrays as many small objects in object storage, with no commit. Two jobs writing one store can lose each other's updates, and a reader can see a half-written store.
+- **The Python level registers, reads and writes Zarr stores transactionally.** [Zarr](https://zarr.dev) keeps N-dimensional arrays as many small objects in object storage, with no commit. Two jobs writing one store can lose each other's updates, and a reader can see a half-written store.
   - In GeoBrix, a store's manifest is a Delta table.
   - A version of the store is a version of that table.
   - One Delta transaction is one store transaction.
@@ -1199,7 +1199,7 @@ Every grid function follows one contract for its resolution and its input.
 - **Contents.** The images are built on the DCS vNext environment 6 images. They carry:
   - The env6 wheel, installed with `[vizx]`. Its GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 serve both tiers, with GDAL's Java (JNI) bindings.
   - The GeoBrix JAR in `/databricks/jars`.
-  - A link from `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. By design, the heavyweight tier then reads zstd, blosc and bzip2 netCDF-4 with no setting. This is untested on a cluster.
+  - A link from `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. By design, the JVM level then reads zstd, blosc and bzip2 netCDF-4 with no setting. This is untested on a cluster.
 
   Each release attaches `geobrix-<version>-dcs.Dockerfile` to the GitHub release. The build installs wheels from a hashed lock and compiles no GDAL. See [Build your own image](./installation/dcs#build-your-own-image).
 - **Use.**
@@ -1222,11 +1222,11 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
   - None is preinstalled on those runtimes. Installing the extra changes no package they provide.
   - GeoBrix reads cloud storage with `obstore` and adds no `fsspec`, `s3fs` or `gcsfs`.
   - See [Zarr Stores](./api/zarr-stores#what-you-need).
-- **LiDAR stack.** The lightweight tier takes `laspy` 2.7 with `lazrs` 0.8 (bumped together).
+- **LiDAR stack.** The Python level takes `laspy` 2.7 with `lazrs` 0.8 (bumped together).
 - **Fewer dependencies.** GeoBrix no longer installs `scikit-image` or `lazy_loader`. The functions that used `scikit-image` run GDAL now, and `rst_land_cover` builds its footprint with NumPy. On DBR 19 ML and Serverless environment 6 ML the install no longer upgrades `lazy_loader`.
 - **Newer minimums.** `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and and `overturemaps` 1.0.2 or later (a separate install). None is preinstalled on a supported runtime. `overturemaps` still raises `click` and `tqdm` on install.
 - **`rio-tiler` imports on Serverless environment 5 and DBR 17.3 / 18 (fix).** `rio-tiler` 9.x needs `typing_extensions` 4.13 or later. Those runtimes ship 4.12.2, so `import rio_tiler` failed with a `TypeError`.
-  - The lightweight `rst_tilexyz` and `rst_xyzpyramid` fell back to the rasterio renderer.
+  - The Python-level `rst_tilexyz` and `rst_xyzpyramid` fell back to the rasterio renderer.
   - `pmtiles_gbx` with `source="raster"` could not render tiles.
   - GeoBrix now requires `typing_extensions` 4.13 or later, so installing it on those runtimes upgrades `typing_extensions`. Environment 6, DBR 19 and DBR 19 ML ship 4.15.
   - `rio-tiler` is no longer held below 9.3, and the env wheels carry 9.4.

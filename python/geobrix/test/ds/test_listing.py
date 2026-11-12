@@ -173,6 +173,48 @@ def test_a_missing_virtual_tile_file_pays_one_budget_through_probe_and_staging(
     assert sum(sleeps) == pytest.approx(22.5)
 
 
+def test_a_retried_spark_task_tries_a_missing_file_once(monkeypatch, tmp_path):
+    """Spark runs a failed task again (4 attempts on Serverless, each in a fresh Python worker, so no record carries
+    over: 2026-11-12, a probe's attempts 0-3 waited 23 s each, 104 s in all). The first attempt waits the budget; a later
+    attempt tries a missing file once. Another I/O error keeps its retries there."""
+    from databricks.labs.gbx.core import _retry
+
+    sleeps = []
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: sleeps.append(s))
+    gone = str(tmp_path / "gbx_missing_tile.tif")
+    calls = []
+
+    def _open():
+        calls.append(1)
+        with open(gone, "rb"):
+            pass
+
+    monkeypatch.setattr(_retry, "_task_attempt", lambda: 1)
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_open)
+    assert calls == [1] and sleeps == []
+    with pytest.raises(OSError):
+        _listing._retry_transient(
+            lambda: (_ for _ in ()).throw(OSError(5, "Input/output error", gone)),
+            attempts=3,
+        )
+    assert len(sleeps) == 2
+    monkeypatch.setattr(_retry, "_task_attempt", lambda: 0)
+    _retry._MISSING.clear()
+    sleeps.clear()
+    with pytest.raises(FileNotFoundError):
+        _listing._retry_transient(_open)
+    assert sum(sleeps) == pytest.approx(
+        22.5
+    ), "the first attempt waits the whole budget"
+
+
+def test_outside_a_spark_task_the_attempt_is_0():
+    from databricks.labs.gbx.core import _retry
+
+    assert _retry._task_attempt() == 0
+
+
 def test_another_failure_on_a_recorded_path_still_retries(monkeypatch, tmp_path):
     """Only a missing file is recorded: an I/O error that is not ENOENT (a FUSE hiccup) keeps its retries."""
     from databricks.labs.gbx.core import _retry

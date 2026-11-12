@@ -31,11 +31,26 @@ _T = TypeVar("_T")
 #
 # A path whose retries ran out on a missing file is recorded for MISSING_HOLD_S: the next retry loop for that path (a
 # read retries in several layers: the open probe, the staging copy, the read) tries it once. A missing path then pays
-# one budget, not one per layer (2026-11-12: 45 s per task for a virtual tile's missing /Volumes file).
+# one budget, not one per layer (2026-11-12: 45 s per task for a virtual tile's missing /Volumes file). A retried Spark
+# task (``_task_attempt`` > 0) tries a missing file once: its first attempt waited the budget, and Spark's 4 attempts
+# each waited it again (104 s on Serverless, where each attempt is a fresh process).
 MISSING_HOLD_S = 60.0
 _MISSING: Dict[str, float] = (
     {}
 )  # path -> _monotonic() when its retries ran out on a missing file
+
+
+def _task_attempt() -> int:
+    """The attempt number of the Spark task this runs in (0 outside a task, or without PySpark). Spark runs a failed
+    task again, 4 attempts by default and on Serverless, each there in a fresh Python worker (a probe, 2026-11-12), so a
+    record in ``_MISSING`` does not reach the next attempt; the attempt number does. PySpark is imported here, after a
+    miss, so the module stays light."""
+    try:
+        from pyspark import TaskContext
+    except ImportError:
+        return 0
+    tc = TaskContext.get()
+    return int(tc.attemptNumber()) if tc is not None else 0
 
 
 def _key(path) -> Optional[str]:
@@ -77,7 +92,8 @@ def _retry_transient(
 
     A path that a retry loop found missing to its last attempt is tried once by the next loops for it, for
     ``MISSING_HOLD_S`` (see ``_MISSING``). The path is *path*, else the ``filename`` of the error (``open`` and
-    ``os.stat`` set it; a GDAL open does not, so its caller passes *path*).
+    ``os.stat`` set it; a GDAL open does not, so its caller passes *path*). In a Spark task's second or later attempt a
+    missing file is tried once (``_task_attempt``).
 
     Args:
         fn:       Zero-argument callable to call and return the result of.
@@ -102,8 +118,8 @@ def _retry_transient(
         except (FileNotFoundError, OSError) as exc:
             last_exc = exc
             key = key or _key(exc.filename)
-            if _is_missing(exc) and _recently_missing(key):
-                break  # another loop just waited its whole budget for this path
+            if _is_missing(exc) and (_recently_missing(key) or _task_attempt() > 0):
+                break  # another loop, or the task's earlier attempt, waited its whole budget for this path
             if attempt < attempts:
                 time.sleep(backoff * attempt)
     if key and last_exc is not None and _is_missing(last_exc):

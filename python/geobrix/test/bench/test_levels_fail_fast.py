@@ -363,6 +363,16 @@ def test_a_first_iteration_inside_its_share_runs_them_all(env):
     assert rows[0].measured_iters == 5 and "early exit" not in rows[0].note
 
 
+def test_an_ok_row_notes_every_measured_iteration_in_seconds(env):
+    """The row keeps the samples (median, min and p90 alone cannot be pooled across runs)."""
+    PLAN["f"] = lambda sp, src: None
+    rows, _ = env.run([form("f")], scales=(1,), warmup=1, measured=4)
+    got = [p for p in rows[0].note.split("; ") if p.startswith("iters_s=")]
+    assert len(got) == 1
+    samples = [float(x) for x in got[0][len("iters_s=") :].split(",")]
+    assert len(samples) == 4 and all(x >= 0 for x in samples)
+
+
 # ---- setup ------------------------------------------------------------------------------------------------------
 
 

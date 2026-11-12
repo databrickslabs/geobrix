@@ -83,6 +83,8 @@ def time_iters(
         samples.append((time.perf_counter() - t0) * 1000.0)
         if stop is not None and stop(samples[-1] / 1000.0):
             break
+    # each measured iteration, in the order it ran (pooling across runs needs them all)
+    in_order = list(samples)
     samples.sort()
     p90_idx = p90_index(len(samples))
     total = sum(samples)
@@ -96,6 +98,7 @@ def time_iters(
         # total wall clock across the measured iterations + its mean (avg per iter).
         "iter_total_wall_clock_ms": total,
         "avg_wall_clock_ms": (total / len(samples)) if samples else 0.0,
+        "iter_samples_ms": in_order,
     }
 
 

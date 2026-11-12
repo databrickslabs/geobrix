@@ -1097,3 +1097,18 @@ def test_process_kb_uses_the_resident_set_when_smaps_rollup_cannot_say(
 
     monkeypatch.setattr(rn.WorkerRssSampler, "_kb_fields", staticmethod(fields))
     assert rn.WorkerRssSampler()._process_kb(1234) == want
+
+
+def test_time_iters_keeps_each_measured_sample_in_run_order():
+    """Pooling iterations across runs needs every sample, not only the median, min and p90."""
+    waits = iter([0.004, 0.0, 0.002])
+
+    def fn():
+        time.sleep(next(waits))
+
+    stats = rn.time_iters(fn, warmup=0, measured=3)
+    s = stats["iter_samples_ms"]
+    assert len(s) == 3 and s[0] > s[2] > s[1]
+    assert min(s) == stats["iter_min_ms"] and sum(s) == pytest.approx(
+        stats["iter_total_wall_clock_ms"]
+    )

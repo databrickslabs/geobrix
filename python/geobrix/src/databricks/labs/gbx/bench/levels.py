@@ -101,9 +101,15 @@ _TILE_UDF_FNS = (
         )
     ),
 )  # fmt: skip
+# The JVM defaults whose verdict was timed against a light form that pickled its rows, re-timed on today's transport:
+# two accessors and the byte constructor (`SessionTileUdf`), and two table functions whose manifest row has the `arrow`
+# flag (the registrar makes them a `SessionTileUdtf`, the session's `tile_udtf` choice).
+_RETIMED_TILE_UDF_FNS = ("gbx_rst_width", "gbx_rst_boundingbox", "gbx_rst_fromcontent")
+_TILE_UDTF_FNS = ("gbx_st_triangulate", "gbx_st_interpolateelevationbbox")
 PATH_OPS = {
     ("gbx_rst_merge_agg", "L3"): "merge_agg",
-    **{(fn, "L3"): "tile_udf" for fn in _TILE_UDF_FNS},
+    **{(fn, "L3"): "tile_udf" for fn in _TILE_UDF_FNS + _RETIMED_TILE_UDF_FNS},
+    **{(fn, "L3"): "tile_udtf" for fn in _TILE_UDTF_FNS},
 }
 
 
@@ -1375,6 +1381,12 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         note.append("input reused")
     if rung is not None and rung.cold_note:
         note.append(rung.cold_note)
+    # every measured iteration (s): a median and a p90 cannot be pooled across runs
+    if timing.get("iter_samples_ms"):
+        note.append(
+            "iters_s="
+            + ",".join(f"{x / 1000.0:.3f}" for x in timing["iter_samples_ms"])
+        )
     if timing["measured_iters"] < ctx.measured:
         note.append(
             f"early exit: {timing['measured_iters']} of {ctx.measured} measured iterations ({rung.early_why})"

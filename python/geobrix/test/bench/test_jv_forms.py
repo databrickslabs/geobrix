@@ -248,3 +248,47 @@ def test_a_floor_form_records_no_transport(monkeypatch):
     ):
         floor = [f for f in lf.FORMS[mvp] if f.fn == fn and "floor" in f.variant]
         assert floor and all(bl._path_of(object(), f) == "" for f in floor)
+
+
+# --- the proven JVM defaults re-timed against today's light transport: their rows say which one they took ---------------
+# (fn, the set that times it, the capability op that picks its light transport)
+RETIMED = (
+    ("gbx_rst_width", "raster-accessor", "tile_udf"),
+    ("gbx_rst_boundingbox", "raster-accessor", "tile_udf"),
+    ("gbx_rst_fromcontent", "raster-constructor", "tile_udf"),
+    ("gbx_st_triangulate", "vector-generator", "tile_udtf"),
+    ("gbx_st_interpolateelevationbbox", jv.MVP, "tile_udtf"),
+)
+
+
+@pytest.mark.parametrize("fn,mvp,op", RETIMED)
+def test_a_retimed_light_form_records_the_transport_the_session_chose(
+    fn, mvp, op, monkeypatch
+):
+    from databricks.labs.gbx.bench import levels as bl
+    from databricks.labs.gbx.manager import capabilities
+
+    assert bl.PATH_OPS[(fn, "L3")] == op
+    monkeypatch.setattr(capabilities, "path", lambda spark, o: f"{o}:arrow")
+    light = [
+        f
+        for f in lf.FORMS[mvp]
+        if f.fn == fn and f.level == "L3" and "floor" not in f.variant
+    ]
+    assert light and all(bl._path_of(object(), f) == f"{op}:arrow" for f in light)
+
+
+@pytest.mark.parametrize("fn", [fn for fn, _, op in RETIMED if op == "tile_udf"])
+def test_a_retimed_tile_udf_is_a_session_tile_udf(fn):
+    from databricks.labs.gbx._transport import SessionTileUdf
+    from databricks.labs.gbx.manifest import resolve_ref
+
+    for ref in manifest.load().functions[fn].levels["L3"]["variants"].values():
+        obj = resolve_ref(ref)
+        assert isinstance(getattr(obj, "_f", obj), SessionTileUdf), (fn, ref)
+
+
+@pytest.mark.parametrize("fn", [fn for fn, _, op in RETIMED if op == "tile_udtf"])
+def test_a_retimed_table_function_takes_the_session_udtf_transport(fn):
+    """The manifest's `arrow` flag is what makes the registrar wrap the UDTF in the session's transport."""
+    assert manifest.load().functions[fn].levels["L3"].get("arrow") is True

@@ -127,15 +127,6 @@ gate = "guarded"
 gate_detail = "getattr(spark, '_jvm', None) is None on a Connect session (it raises AttributeError there) and the function returns; a JVM without the JAR, or a cluster whose access mode refuses the py4j call, keeps the light registration"
 why = "Pushes the registered PROJ grid directories to the JVM's grid registry when the session has a JVM with the JAR"
 
-[[site]]
-path = "rasterx/sfm.py"
-symbol = "_batch_of_one"
-api = ["conf.set", "conf.unset"]
-computes = ["dedicated", "standard", "serverless"]
-gate = "guarded"
-gate_detail = "try/except around the set: a session that refuses the conf (Serverless) goes on with its default batch size and prints one line saying so; on a session that takes it, the previous value is put back in finally"
-why = "Asks for one image per Arrow batch while the structure-from-motion pipeline runs, then restores the session's setting"
-
 # --- Unity Catalog functions on the JAR --------------------------------------------------------------------------
 
 [[site]]

@@ -5,8 +5,6 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
-import contextlib
-import functools
 import json
 import shutil
 import sqlite3 as _sq
@@ -662,46 +660,37 @@ def _gps_from_master(db):
     return _o
 
 
-_ARROW_BATCH_KEY = "spark.sql.execution.arrow.maxRecordsPerBatch"
+_ROW_INDEX = "_gbx_row_idx"
 
 
-@contextlib.contextmanager
-def _batch_of_one(spark):
-    """One image per `mapInPandas` Arrow batch while the body runs, so a Python worker holds at most a single
-    image's pycolmap working set (per-task RAM ~1-2 GB). The session's own setting is put back afterwards,
-    also when the body raises. A session that refuses the setting (Spark Connect / Serverless) goes on with its
-    default batch size, and says so."""
-    try:
-        old = spark.conf.get(_ARROW_BATCH_KEY, None)
-        spark.conf.set(_ARROW_BATCH_KEY, "1")
-    except Exception:  # noqa: BLE001 - Connect refuses a runtime conf set
-        print(
-            f"[sfm] could not set {_ARROW_BATCH_KEY}=1 on this session; extraction uses the default batch size "
-            "(more images per batch, so more memory per task)"
-        )
-        yield
-        return
-    try:
-        yield
-    finally:
-        if old is None:
-            spark.conf.unset(_ARROW_BATCH_KEY)
-        else:
-            spark.conf.set(_ARROW_BATCH_KEY, old)
+def _one_image_per_partition(df, num_partitions, col="source"):
+    """``df``'s ``col`` as exactly one row per partition (``num_partitions`` = its row count).
+
+    Spark hands a ``mapInPandas`` function the rows of ONE partition, and an Arrow batch never spans
+    partitions, so one row per partition is one image per batch with no session setting involved
+    (a Serverless session may set only a handful of Spark properties, and the lightweight package
+    sets none). ``repartition(N, col)`` would hash the keys, and a hash collision puts two or three
+    images in one partition. A dense row index (0..N-1) ranged over N partitions puts one in each: the
+    range bounds are the sampled index values themselves, so they are exact for a unique index.
+    """
+    from pyspark.sql import Window
+
+    indexed = df.select(col).withColumn(
+        _ROW_INDEX, F.row_number().over(Window.orderBy(col)) - 1
+    )
+    return indexed.repartitionByRange(num_partitions, _ROW_INDEX).select(col)
 
 
-def _one_image_per_batch(fn):
-    """Run ``fn(spark, ...)`` inside `_batch_of_one`."""
+def _fan_out_pairs(df, num_partitions):
+    """``df`` (one row per image pair, ``src1`` / ``src2``) over ``num_partitions`` partitions, keyed on the pair.
 
-    @functools.wraps(fn)
-    def wrapper(spark, *args, **kwargs):
-        with _batch_of_one(spark):
-            return fn(spark, *args, **kwargs)
+    AQE does not reliably honour a bare ``repartition(N)``; ``repartition(N, cols)`` is the form it keeps.
+    The pair is unique, so the hash spreads the work, without a global sort of the rows (which carry the
+    keypoints and descriptors).
+    """
+    return df.repartition(num_partitions, "src1", "src2")
 
-    return wrapper
 
-
-@_one_image_per_batch
 def run_sfm(  # noqa: C901
     spark,
     df_qc,
@@ -809,8 +798,11 @@ def run_sfm(  # noqa: C901
             # fallback after worker OOMs; slower but memory-bounded. SIFT quality
             # unchanged. AQE does NOT reliably honor a bare repartition(N) /
             # repartition(1); the respected idioms are repartition(N, col) for
-            # fan-out (one task per image, keyed on the unique source path) and
+            # fan-out (one task per image: `_one_image_per_partition`) and
             # coalesce(1) to force a single partition for the serialized fallback.
+            # Memory per task: one image per partition, the per-image subprocess and the
+            # per-image yield in `_extract_features_to_df` bound a Python worker to a single
+            # image's pycolmap working set; no Arrow batch-size setting is needed.
             if serialize_extract:
                 print(
                     "[Stage 1] serialized extraction (coalesce 1) - memory-bounded OOM fallback"
@@ -818,7 +810,7 @@ def run_sfm(  # noqa: C901
             _extract_df = (
                 df_qc.select("source").coalesce(1)
                 if serialize_extract
-                else df_qc.select("source").repartition(num_partitions, "source")
+                else _one_image_per_partition(df_qc, num_partitions)
             )
             (
                 _extract_df.mapInPandas(
@@ -872,7 +864,7 @@ def run_sfm(  # noqa: C901
                     F.col("f1.cam_h").alias("cam_h"),
                     F.col("f1.cam_params").alias("cam_params"),
                 )
-                .repartition(num_partitions)
+                .transform(lambda d: _fan_out_pairs(d, num_partitions))
                 .mapInPandas(
                     lambda it: _match_pairs_dist(it, verbose=verbose),
                     schema="src1 string, src2 string, matches binary, match_config int",

@@ -396,3 +396,58 @@ def test_prepare_layers_zero_budget_is_quiet_but_a_positive_one_warns():
         warnings.simplefilter("always")
         out = mlib.prepare_layers([pmtiles_layer(archive)], max_embed_mb=1e-9)
     assert out["mode"] == "static" and _warned_about_the_budget(ws)
+
+
+_WORLD_M = 40075016.68557849  # Web Mercator world width in metres
+
+
+def _high_zoom_raster_archive(z=20, x0=600000, y0=400000):
+    """A small high-zoom orthomosaic: z17 overview plus two side-by-side z20 tiles."""
+    return _build_archive(
+        [
+            (17, x0 >> 3, y0 >> 3, _solid_png(8, 90)),
+            (z, x0, y0, _solid_png(8, 120)),
+            (z, x0 + 1, y0, _solid_png(8, 180)),
+        ],
+        TileType.PNG,
+    )
+
+
+def test_a_decoded_raster_archive_carries_its_web_mercator_extent():
+    z, x0, y0 = 20, 600000, 400000
+    decoded = mlib._decode_pmtiles_for_static(
+        pmtiles_layer(_high_zoom_raster_archive(z, x0, y0))
+    )
+    tile = _WORLD_M / 2**z
+    left = -_WORLD_M / 2 + x0 * tile
+    top = _WORLD_M / 2 - y0 * tile
+    assert decoded.extent == pytest.approx(
+        (left, left + 2 * tile, top - tile, top), rel=1e-9
+    )
+
+
+def test_static_pmtiles_basemap_gets_a_georeferenced_extent_not_pixel_space(
+    monkeypatch, returns_html
+):
+    # The static overview was imshow'd in pixel space (y inverted, near 0,0), which
+    # contextily read as Web Mercator metres: its tile list came up empty and it died with
+    # "zero-size array to reduction operation minimum". The axes must frame the real
+    # location, south below north, before the basemap is added.
+    import contextily
+
+    seen = {}
+
+    def _capture(ax, **kw):
+        seen["axis"] = ax.axis()
+
+    monkeypatch.setattr(contextily, "add_basemap", _capture)
+    z, x0, y0 = 20, 600000, 400000
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        p.plot_pmtiles(_high_zoom_raster_archive(z, x0, y0), max_embed_mb=0)
+    xmin, xmax, ymin, ymax = seen["axis"]
+    tile = _WORLD_M / 2**z
+    assert xmin == pytest.approx(-_WORLD_M / 2 + x0 * tile, rel=1e-9)
+    assert xmax == pytest.approx(xmin + 2 * tile, rel=1e-9)
+    assert ymin < ymax
+    assert ymax == pytest.approx(_WORLD_M / 2 - y0 * tile, rel=1e-9)

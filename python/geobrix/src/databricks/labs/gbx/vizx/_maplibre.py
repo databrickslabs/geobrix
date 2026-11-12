@@ -587,6 +587,10 @@ def _layer_label(layer, idx: int) -> str:
     return f"layer[{idx}] ({kind})"
 
 
+# Half the Web Mercator world width, in metres (EPSG:3857 bound).
+_WEB_MERCATOR_HALF = 20037508.342789244
+
+
 def _decode_pmtiles_for_static(layer) -> "Layer":
     """Convert a pmtiles Layer into a raster_layer or vector_layer for plot_static.
 
@@ -681,8 +685,27 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
         if rows.any() and cols.any():
             r = np.where(rows)[0][[0, -1]]
             c = np.where(cols)[0][[0, -1]]
-            canvas = canvas[r[0] : r[1] + 1, c[0] : c[1] + 1]
-        return raster_layer(canvas, opacity=layer.opacity)
+            r0, r1, c0, c1 = r[0], r[1] + 1, c[0], c[1] + 1
+            canvas = canvas[r0:r1, c0:c1]
+        else:
+            r0, r1, c0, c1 = 0, canvas.shape[0], 0, canvas.shape[1]
+        # Place the mosaic in Web Mercator metres from its tile grid. Drawn in pixel
+        # space instead, the axes sit near (0, 0) with y inverted and a contextily
+        # basemap computes an empty tile list for them ("zero-size array to reduction
+        # operation minimum"); with a real extent the basemap zoom follows the area.
+        world = 2 * _WEB_MERCATOR_HALF
+        m_per_px_x = world / (2**target_z) / tw
+        m_per_px_y = world / (2**target_z) / th
+        left = -_WEB_MERCATOR_HALF + minx * tw * m_per_px_x
+        top = _WEB_MERCATOR_HALF - miny * th * m_per_px_y
+        lyr = raster_layer(canvas, opacity=layer.opacity)
+        lyr.extent = (
+            left + c0 * m_per_px_x,
+            left + c1 * m_per_px_x,
+            top - r1 * m_per_px_y,
+            top - r0 * m_per_px_y,
+        )
+        return lyr
     else:
         # Vector (MVT): decode the COARSEST zoom that actually has features. A normal
         # pyramid (e.g. gbx_st_asmvt_pyramid) carries every feature at every zoom, so the

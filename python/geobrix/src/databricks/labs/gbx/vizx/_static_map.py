@@ -420,7 +420,13 @@ def _draw_one_layer(
             # georeferenced, so they cannot go through plot_cog/rasterio. User
             # opacity wins; else emphasis sets the raster strength.
             ras_alpha = lyr.opacity if lyr.opacity is not None else em["raster_alpha"]
-            ax.imshow(lyr.data, alpha=ras_alpha)
+            if lyr.extent is not None:
+                # Georeferenced (a decoded PMTiles overview): draw in Web Mercator
+                # metres like the vector layers so a basemap frames the real area, above
+                # the basemap's zorder (as plot_cog does).
+                ax.imshow(lyr.data, alpha=ras_alpha, extent=lyr.extent, zorder=2)
+            else:
+                ax.imshow(lyr.data, alpha=ras_alpha)
             ax.set_axis_off()
         else:
             # Detect in-memory bytes or tile Row/dict (the ``raster`` field is bytes

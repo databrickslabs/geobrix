@@ -29,6 +29,9 @@ class Layer:
     max_points: Optional[int] = None
     point_size: Optional[float] = None
     crs: Any = None
+    # (left, right, bottom, top) in EPSG:3857 metres for an ndarray raster that is
+    # georeferenced (a decoded PMTiles overview); None = pixel space, unplaceable.
+    extent: Optional[tuple] = None
 
     def __post_init__(self):
         if self.kind not in _VALID:

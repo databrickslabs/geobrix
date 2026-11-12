@@ -5825,34 +5825,35 @@ def run_rows(
             case, man.functions[case.fn]
         ):
             continue
-        try:
-            df = spark.createDataFrame(
-                [
-                    tuple(int(v) if isinstance(v, Big) else v for v in r)
-                    for r in arg_rows
-                ],
-                schema,
-            )
-            # one partition: the rows of a batch case go through ONE task, one after the other
-            df = df.coalesce(1) if window_batch else df
-            if table_of is None:
-                df.createOrReplaceTempView("_gbx_oracle")
-                rows = spark.sql(
-                    shape_sql.format(fn=name_of(case.fn), args=cols)
-                ).collect()
-            elif man.functions[case.fn].source:
-                # a table function with no input row: the Python entry takes the arguments alone
-                rows = table_of(case.fn)(*args).collect()
-            else:
-                py_args = _python_leg_args(args, man.functions[case.fn])
-                rows = table_of(case.fn)(df, *py_args).collect()
-            out.append(
-                (case, _check_rows(case, rows, arg_rows if window_batch else args))
-            )
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
-            out.append((case, check_error(case, exc)))
+        with _traced(f"{case.cid} alone"):
+            try:
+                df = spark.createDataFrame(
+                    [
+                        tuple(int(v) if isinstance(v, Big) else v for v in r)
+                        for r in arg_rows
+                    ],
+                    schema,
+                )
+                # one partition: the rows of a batch case go through ONE task, one after the other
+                df = df.coalesce(1) if window_batch else df
+                if table_of is None:
+                    df.createOrReplaceTempView("_gbx_oracle")
+                    rows = spark.sql(
+                        shape_sql.format(fn=name_of(case.fn), args=cols)
+                    ).collect()
+                elif man.functions[case.fn].source:
+                    # a table function with no input row: the Python entry takes the arguments alone
+                    rows = table_of(case.fn)(*args).collect()
+                else:
+                    py_args = _python_leg_args(args, man.functions[case.fn])
+                    rows = table_of(case.fn)(df, *py_args).collect()
+                out.append(
+                    (case, _check_rows(case, rows, arg_rows if window_batch else args))
+                )
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+                out.append((case, check_error(case, exc)))
     return out
 
 
@@ -6171,59 +6172,60 @@ def run_groups(
                     "Python leg cannot pass as a SQL literal. Fix: give the row plain constants, or leave "
                     "the Python surface out of its `surfaces`."
                 )
-        try:
-            src = spark.createDataFrame(rows, schema)
-            src.createOrReplaceTempView("_gbx_oracle")
-            if column_of is None and fn.table_input is not None:
-                df = spark.sql(
-                    (shape_sql or table_call_sql(fn, omitted)).format(
-                        fn=case.fn,
-                        src="_gbx_oracle",
-                        args="".join(f", {lit}" for lit in literals),
+        with _traced(f"{case.cid} alone"):
+            try:
+                src = spark.createDataFrame(rows, schema)
+                src.createOrReplaceTempView("_gbx_oracle")
+                if column_of is None and fn.table_input is not None:
+                    df = spark.sql(
+                        (shape_sql or table_call_sql(fn, omitted)).format(
+                            fn=case.fn,
+                            src="_gbx_oracle",
+                            args="".join(f", {lit}" for lit in literals),
+                        )
                     )
-                )
-            elif fn.table_input is not None:  # column_of given
-                # the Python API: the DataFrame-first entry, the view's `key` and members as the table's columns
-                from pyspark.sql import functions as F
+                elif fn.table_input is not None:  # column_of given
+                    # the Python API: the DataFrame-first entry, the view's `key` and members as the table's columns
+                    from pyspark.sql import functions as F
 
-                got_df = column_of(case.fn)(_table_frame(fn, src, omitted), *consts)
-                df = got_df.select(
-                    *fn.table_input.partition_by,
-                    F.col(fn.columns[-1][0]).alias("out"),
-                )
-            elif column_of is None:
-                df = spark.sql(
-                    (
-                        shape_sql
-                        or "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key"
-                    ).format(
-                        fn=case.fn,
-                        src="_gbx_oracle",
-                        args=", ".join([members] + literals),
+                    got_df = column_of(case.fn)(_table_frame(fn, src, omitted), *consts)
+                    df = got_df.select(
+                        *fn.table_input.partition_by,
+                        F.col(fn.columns[-1][0]).alias("out"),
                     )
-                )
-            else:
-                from pyspark.sql import functions as F
+                elif column_of is None:
+                    df = spark.sql(
+                        (
+                            shape_sql
+                            or "SELECT key, {fn}({args}) AS out FROM _gbx_oracle GROUP BY key"
+                        ).format(
+                            fn=case.fn,
+                            src="_gbx_oracle",
+                            args=", ".join([members] + literals),
+                        )
+                    )
+                else:
+                    from pyspark.sql import functions as F
 
-                call = column_of(case.fn)(
-                    *[None if i in omitted else F.col(f"c{i}") for i in range(n0)],
-                    *[
-                        v if params[i + first_const].str_only else F.expr(lit)
-                        for i, (v, lit) in enumerate(zip(consts, literals))
-                    ],
-                )
-                df = src.groupBy("key").agg(call.alias("out"))
-            got = df.collect()
-            value = got[0]["out"] if got else None
-            if case.kind == "error_group":
-                tile_out = isinstance(df.schema["out"].dataType, StructType)
-                out.append((case, _check_error_group(want, value, tile_out)))
-            else:
-                out.append((case, check(want, value, [group_arg, *consts])))
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
-            out.append((case, check_error(case, exc)))
+                    call = column_of(case.fn)(
+                        *[None if i in omitted else F.col(f"c{i}") for i in range(n0)],
+                        *[
+                            v if params[i + first_const].str_only else F.expr(lit)
+                            for i, (v, lit) in enumerate(zip(consts, literals))
+                        ],
+                    )
+                    df = src.groupBy("key").agg(call.alias("out"))
+                got = df.collect()
+                value = got[0]["out"] if got else None
+                if case.kind == "error_group":
+                    tile_out = isinstance(df.schema["out"].dataType, StructType)
+                    out.append((case, _check_error_group(want, value, tile_out)))
+                else:
+                    out.append((case, check(want, value, [group_arg, *consts])))
+            except (
+                Exception
+            ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+                out.append((case, check_error(case, exc)))
     return out
 
 

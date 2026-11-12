@@ -979,6 +979,35 @@ def test_gbx_oracle_trace_1_times_a_case_run_alone(spark, monkeypatch, capsys):
     assert out[1].startswith(f"oracle trace: {case.cid} alone: ")
 
 
+@pytest.mark.parametrize(
+    "name,level,runner",
+    [
+        ("gbx_bng_kringexplode", "-", "run_rows"),
+        ("gbx_st_coverageisvalid", "c0", "run_groups"),
+    ],
+)
+def test_gbx_oracle_trace_1_times_a_generator_and_an_aggregate_case_alone(
+    spark, monkeypatch, capsys, name, level, runner
+):
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    register(spark, only=[name], _levels={name: ("L3", level)})
+    case = next(
+        c
+        for c in oracles.TABLES[manifest.load().functions[name].oracle]
+        if c.fn == name and "session" in c.surfaces and c.sql is None
+    )
+    monkeypatch.setenv(oracles.TRACE_ENV, "1")
+    ran = getattr(oracles, runner)(spark, [case])
+    assert [c for c, _ in ran] == [case]
+    out = [
+        x for x in capsys.readouterr().out.splitlines() if x.startswith("oracle trace")
+    ]
+    assert out[0] == f"oracle trace: {case.cid} alone: start" and len(out) == 2
+    assert out[1].startswith(f"oracle trace: {case.cid} alone: ")
+
+
 def test_gbx_oracle_batch_0_turns_batching_off(monkeypatch):
     from databricks.labs.gbx.bench import oracles
 

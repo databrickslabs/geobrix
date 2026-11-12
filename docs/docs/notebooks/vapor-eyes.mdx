@@ -38,7 +38,7 @@ This is the production counterpart to the notebook series (see the other tab). I
 :::
 
 :::info Runs on Serverless
-The pipeline installs `geobrix[stac,vizx]` from the env5 wheel. That is the wheel for its Lakeflow runtime channel, DBR 18 as of this example. Its `land` downloader task (Serverless environment version 5) installs the same wheel. Each task takes the staged wheel as a single pip dependency entry. The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces and levels](../api/execution-tiers).
+As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the PREVIEW channel; the examples use it with the env6 wheel. The pipeline installs `geobrix[stac,vizx]` from the env6 wheel. Its `land` downloader task (Serverless environment version 6) installs the same wheel. To fall back to the CURRENT channel (DBR 18), set `pipeline_channel=CURRENT`, point `gbx_wheel` at the env5 wheel, and set the job `environment_version` to 5. Each task takes the staged wheel as a single pip dependency entry. The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces and levels](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard

@@ -222,9 +222,12 @@ These changes affect callers that pass keywords or named arguments.
 
 - **Install the env wheel for the runtime, with no light extra.**
   - `geobrix-<version>+env6-py3-none-any.whl`: Serverless environment 6, DBR 19, DBR 19 ML, SQL warehouses and UC functions.
-  - `geobrix-<version>+env5-py3-none-any.whl`: Serverless environment 5, DBR 17.3, DBR 18 and Lakeflow pipelines.
+  - `geobrix-<version>+env5-py3-none-any.whl`: Serverless environment 5, DBR 17.3, DBR 18 and Lakeflow pipelines on the `CURRENT` channel.
   - Each wheel carries its own GDAL, PROJ and GEOS. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's `osgeo`, built against them. A process runs one GDAL.
   - The wheel of the other family refuses to import and names the file to install.
+- **The Lakeflow examples run on DBR 19.**
+  - As of 0.6.0, Lakeflow Spark Declarative Pipelines run DBR 19 on the `PREVIEW` channel; the examples use it with the env6 wheel.
+  - Set the bundle variable `pipeline_channel` to `CURRENT`, with the env5 wheel, to fall back to DBR 18.
 - **Migration.** Replace `"geobrix[light_env6,<extras>] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[<extras>] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"`.
   - Use `+env5` where you used `light_env5`, `light_dbr17` or `light_dbr18`.
   - The env wheels' extras are `stac`, `vizx`, `databricks`, and `zarr` on env6.

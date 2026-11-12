@@ -47,7 +47,7 @@ The env5 wheel carries `rasterio` and the PMTiles toolchain; `pycolmap` (COLMAP)
 install after it (`pycolmap-cuda12` for the GPU pass). No JAR is needed.
 
 **`01a` runs sparse SfM on CPU.** An optional dense pass (`01b`) runs COLMAP
-`patch_match_stereo` on the **Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12),
+`patch_match_stereo` on the **Serverless GPU AI Runtime** (environment 6 and the env6 wheel; `pycolmap-cuda12`, CUDA 12),
 producing a dense orthomosaic, DSM, and LAZ point cloud. The sparse ortho alone is
 suitable for GSD estimation, visual inspection, and georeferenced tile serving; the dense
 pass adds fidelity for measurement workflows. `02_publish` uses whichever orthomosaic is
@@ -129,7 +129,7 @@ across the node's GPUs, and fuses a per-cluster `fused.ply`. A driver-side GPU-s
 `recommend_dense_allocation` places the work, and each cluster is checkpointed. The call then
 georeferences the result into a dense RGB orthomosaic, a DSM, and a LAZ point cloud (per-cluster and
 merged). See the `rasterx.ortho` module reference further down this page for its full API. The
-notebook runs on the **Serverless GPU AI Runtime** (environment 5, `pycolmap-cuda12`, CUDA 12); `01a`
+notebook runs on the **Serverless GPU AI Runtime** (environment 6, `pycolmap-cuda12`, CUDA 12); `01a`
 is the CPU peer that produces the sparse model it
 consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
@@ -185,7 +185,7 @@ It runs no new photogrammetry; it only reads `orthomosaic_cog.tif`.
    programmatic, notebook-free access.
 
 The **instance-objects** section needs a GPU cluster — GeoSAM's SAM backbone is
-CUDA-bound — so it runs on the **Serverless GPU AI Runtime** (environment 5). The
+CUDA-bound — so it runs on the **Serverless GPU AI Runtime** (environment 6). The
 **land-cover** section is CPU-only RasterX and needs no GPU. The serving section
 (registration, endpoint creation, querying) is API calls that can run from any cluster
 with `mlflow` installed.

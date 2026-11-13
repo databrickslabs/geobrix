@@ -259,7 +259,7 @@ On standard access mode, a metastore admin must first add the Volume path to the
 Then install the same env wheel on the cluster. `gbx.register(spark)` checks that the JAR and the wheel are the same version.
 
 :::warning Upgrading from GeoBrix 0.5.x
-GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Release Notes: 0.6.x](./release-notes-0-6#init-script) and the [migration guide](./migration-0-6).
+GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Breaking changes in 0.6.0](./release-notes/0-6/breaking.mdx#init-script) and the [migration guide](./migration-0-6).
 :::
 
 :::note Staying on GeoBrix 0.5.x

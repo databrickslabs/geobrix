@@ -68,15 +68,18 @@ Term list (start; extend it when you settle a term):
 ## Release notes layout
 
 - `release-notes.mdx` is the **summary** page: the current-version banner (`gbx:versions:bump`
-  edits its "Current version:" string) and, per release, a few key-feature bullets that link to
-  the detail.
-- The **detail** lives on one subpage per series: `release-notes-0-6.mdx` for 0.6.x, and
-  `release-notes-0-5-and-earlier.mdx` for v0.5.2 and every earlier release.
-- A new change goes on its series subpage. Add a bullet on the summary page only for a key
-  feature or a breaking change.
-- A new series gets a new subpage, wired into `sidebars.js` and listed in
-  `docs/scripts/check-release-notes-functions.py` and the exclusion list in
-  `scripts/commands/gbx-versions-bump.sh`.
+  edits its "Current version:" string) and, per release, three groups in this order: **New**,
+  **Changes**, **Breaking** (omit an empty one). Short user-facing bullets that link to the detail.
+- The 0.6.0 **detail** is a sidebar category with no page of its own, holding
+  `release-notes/0-6/new.mdx`, `changes.mdx` (behavior a user notices, by area) and
+  `breaking.mdx` (each item: what changed + what to do). `release-notes-0-5-and-earlier.mdx`
+  holds v0.5.2 and every earlier release.
+- Lead with capabilities; the tone is matter-of-fact, not a list of what broke. No minutiae:
+  implementation notes, bench ratios (the Performance page holds them), per-commit fixes.
+- A new change goes on the page for its group. Add a summary bullet only for a key item.
+- A new series gets its own `release-notes/<series>/` pages, wired into `sidebars.js`. The
+  release-notes function check reads every page under `docs/docs/release-notes/`, and
+  `scripts/commands/gbx-versions-bump.sh` excludes that tree.
 
 ## MDX gotchas
 

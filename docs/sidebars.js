@@ -35,7 +35,16 @@ const sidebars = {
       collapsed: true,
       link: { type: 'doc', id: 'release-notes' },
       items: [
-        'release-notes-0-6',
+        {
+          type: 'category',
+          label: '0.6.0',
+          collapsed: false,
+          items: [
+            'release-notes/0-6/new',
+            'release-notes/0-6/changes',
+            'release-notes/0-6/breaking',
+          ],
+        },
         'release-notes-0-5-and-earlier',
       ],
     },

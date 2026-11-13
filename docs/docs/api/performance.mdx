@@ -14,7 +14,7 @@ For the method behind the numbers, see [Benchmarking](./benchmarking). For where
 
 ## What 0.6.0 streamlined
 
-Each item below has the measurement behind it. The [release notes](../release-notes-0-6) list the breaking changes.
+Each item below has the measurement behind it. The [release notes](../release-notes/0-6/breaking.mdx) list the breaking changes.
 
 - **Readers and writers.** Python everywhere. The Scala readers and writers are retired because the bytes-free Python path was faster.
 - **Raster tile functions.** The Python implementation is the default. A JVM companion stays only where it measured at least 1.2x faster on a dedicated cluster. `gbx_rst_gridfrompoints` lost its JVM form, because it measured slower.
@@ -127,7 +127,7 @@ A later pass timed every other JVM form at 1x and 4x rows on the same cluster, w
 
 A virtual, NULL or error tile goes to the Python form, which returns a transparent image for it.
 
-The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. A pass against the Arrow Python form found 19 raster accessors under the line. See the [release notes](../release-notes-0-6).
+The same pass found nine JVM forms under the line, so the JAR no longer holds them. A later pass found five more: `gbx_rst_band`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_getsubdataset` and `gbx_rst_tri`. A pass against the Arrow Python form found 19 raster accessors under the line. See [Which functions run where](../release-notes/0-6/changes.mdx#jar-levels).
 
 The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the Python form:
 

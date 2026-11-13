@@ -1,0 +1,219 @@
+---
+title: New in 0.6.0
+sidebar_label: New
+description: What GeoBrix 0.6.0 adds — one install per runtime, every function on every compute, one registrar, Unity Catalog functions, Python readers and writers, incremental ingestion and transactional Zarr stores.
+---
+
+# New in 0.6.0
+
+:::note
+v0.6.0 is under development and not yet released.
+:::
+
+GeoBrix 0.6.0 restructures how you install, register and call the library. One wheel per runtime carries the whole native stack. Every function runs on every compute, and the JAR adds speed where it helps. This page lists what is new. [Changes](./changes.mdx) lists the behavior a user notices, and [Breaking changes](./breaking.mdx) lists what to update. The [migration guide](../../migration-0-6.mdx) maps each 0.5.x form to its 0.6 form.
+
+## One install per runtime {#env-wheels}
+
+- **Install one env wheel, chosen by runtime.**
+  - `geobrix-<version>+env6-py3-none-any.whl`: Serverless environment 6, DBR 19, DBR 19 ML, SQL warehouses and Unity Catalog functions.
+  - `geobrix-<version>+env5-py3-none-any.whl`: Serverless environment 5, DBR 17.3, DBR 18 and Lakeflow pipelines on the `CURRENT` channel.
+- **The wheel carries everything GeoBrix runs on.** That is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0, the GeoBrix Rust module and the GeoBrix JAR.
+  - `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo` are built against that stack. A process runs one GDAL.
+  - The wheel holds the runtime's preinstalled packages instead of replacing them.
+  - Its extras are `stac`, `vizx` and `databricks`, plus `zarr` on env6.
+- **No init script and no GDAL bundle.** The Python and JVM levels both use the wheel's stack. GeoBrix verified this on x86 for DBR 17.3, 18 and 19, and on Graviton (arm64) for DBR 19.
+- **The wheel of the other family refuses to import** and names the file to install.
+
+See [Installation](../../installation.mdx#env-wheel).
+
+### The native stack {#native-stack}
+
+The GDAL build in the env wheel adds these:
+
+- JPEG XL reads: the `JPEGXL` driver and the GeoTIFF `JXL` codec. GeoBrix's writers do not offer `JXL`.
+- The `muparser` dialect for `raster calc`, and `REGEXP` in GDAL's SQLite dialect.
+- libcurl with HTTP/2, and JPEG decoding with SIMD.
+- Three PROJ grids (OSTN15, OSGM15 and EGM96) and the `projsync` grid downloader.
+
+See [GeoBrix's GDAL build](../../readers/raster.mdx#gdal-build) and [GDAL drivers as provided](../../gdal-drivers.mdx).
+
+### Stage the JAR from the wheel: `gbx.stage_jar` {#stage-jar}
+
+- **`gbx.stage_jar(vol_dir)` copies the wheel's JAR to a Volume folder.** It writes a `.sha256` file beside it and checks the JAR against the wheel's version.
+  - It refuses a folder that already holds another GeoBrix JAR, because a cluster loads one.
+  - It prints the next step: add the path as a cluster library on a dedicated cluster, then restart the cluster.
+  - On standard access mode, a metastore admin must first allowlist the Volume path.
+- **`register` refuses a JAR whose version differs from the wheel's.**
+
+See [Env wheel and JAR](../../installation.mdx#env-wheel-and-jar).
+
+## Every function on every compute {#levels}
+
+- **Every function runs at the Python level.** It runs on Serverless, standard and dedicated clusters, Lakeflow pipelines and the Unity Catalog sandbox. No JAR is needed.
+- **The JVM level runs a function only where it measured faster.** The JAR keeps a JVM form only where it ran at least 1.2x faster than the best Python form, with the same output. It needs dedicated compute. [Which functions run where](./changes.mdx#jar-levels) lists the result.
+- **A few functions run as SQL expressions,** with no JAR and no Python. They are `gbx_bng_cellarea`, `gbx_bng_eastnorthasbng`, `gbx_quadbin_distance`, `gbx_quadbin_kring` and `gbx_quadbin_kloop`.
+- **Rust kernels run inside the Python level.** They serve BNG cell encoding and TIN triangulation. If the module cannot load, GeoBrix runs the pure-Python form.
+- **Unity Catalog functions** serve SQL warehouses, dashboards and Genie. See [Unity Catalog functions](#unity-catalog-functions).
+
+See [Surfaces & Levels](../../api/execution-tiers.mdx).
+
+## One Python API and one registrar {#one-registrar}
+
+- **`gbx.register(spark)` registers every function and every `*_gbx` data source.** Call `from databricks.labs import gbx`, then `gbx.register(spark)`.
+  - It picks the best level for each function on the compute. When a function falls back to another level, it prints the reason once.
+  - `gbx.register(spark, only=["gbx_rst_width"])` limits the functions. A name no function matches raises a `ValueError`.
+  - The Python API also registers a function on its first call. In a Lakeflow pipeline it registers on the first call in each flow. See [Lakeflow SDP](../../ingestion/lakeflow-sdp.mdx#register-geobrix-in-each-dataset-function).
+- **A notebook cell that ends in `gbx.register(spark)` shows one summary line**. The line gives the version, the count at each level and the first fallback note. The result is a `RegisterResult`, a `dict` subclass.
+- **The first `register` of a session prints a short reminder**. It names the env wheel, the registrar and the Python API, and links the [migration guide](../../migration-0-6.mdx).
+
+### One Python API {#one-python-api}
+
+- **The Python API is `rasterx`, `gridx.<grid>`, `vectorx` and `pmtiles`.** One import path serves every compute. `<grid>` is `bng`, `quadbin`, `custom` or `h3`.
+- **Every function keeps its name.** `rasterx.functions.rst_width`, `gridx.bng.functions.bng_tessellate` and `vectorx.functions.st_makevalid` are examples.
+- **Python-only helpers live in `helpers` modules.** `rasterx.helpers` holds `merge_by_key`, `combine_by_key`, `retile_virtual`, `prepare_cogs`, `mint_vrt`, `rst_viewshed_towers` and the `*_grouped` functions. `gridx.helpers` and `vectorx.helpers` hold the grid and vector helpers.
+
+The [migration guide](../../migration-0-6.mdx#entry-points) maps each old import to its new one.
+
+## Unity Catalog functions {#unity-catalog-functions}
+
+- **`gbx.uc.install(catalog, schema, volume_dir)` creates GeoBrix functions in Unity Catalog.** Run it once from a Serverless environment 6 or DBR 19 notebook. SQL warehouses, dashboards and Genie then call `<catalog>.<schema>.gbx_*`.
+- **The install covers 226 of the 258 GeoBrix functions.** The aggregates and `PARTITION BY` table functions have no Unity Catalog form. Most of them have an `_array` form or a recipe instead.
+- **A geometry goes in as a `GEOMETRY` with an integer SRID.** A CRS is an integer SRID, `EPSG:<n>` or `ESRI:<n>`. A wrong SRID is refused with a `Fix:`.
+- **`gbx.uc.install` gives every Python function one shared package list by default.** A statement that calls several GeoBrix functions then starts one sandbox. Pass `deps="per-function"` to give each function its own list.
+- **`gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid` run as Scala functions when the install folder holds the JAR.** Stage it with [`gbx.stage_jar`](#stage-jar). Without the JAR they run as Python functions, with the same answers.
+- **`stubs=True` creates a raising function for each session-only scalar.** Its error names the route on Unity Catalog. Stubs are off by default.
+- **Each function's COMMENT starts with `geobrix <version>`.** `gbx.register(spark, catalog=..., schema=...)` says once when that schema holds another version.
+
+See [Unity Catalog functions](../../api/uc-functions.mdx) and [Installation](../../installation.mdx#uc-functions).
+
+### Forms that need no session {#uc-no-session-forms}
+
+These forms answer on Unity Catalog where the session form is an aggregate or a grouped table function:
+
+- **Cell fills and BNG chip sets:** `gbx_h3_cellfill_array`, `gbx_quadbin_cellfill_array`, `gbx_bng_cellfill_array`, `gbx_custom_cellfill_array`, `gbx_bng_cellintersection_array` and `gbx_bng_cellunion_array`. Call each with `GROUP BY` and `collect_list`.
+- **Vector arrays:** `gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array` and `gbx_st_coverageinvalidedges_array` answer as their aggregates do.
+- **Two-step statistics:** `gbx_rst_binpoints_partial` with `gbx_rst_binpoints_finalize`, and `gbx_rst_stats_partial`. Merge the partial state with `GROUP BY`.
+- **Raster-to-grid state:** `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_bng_rastertogrid_partial` and `gbx_rst_custom_rastertogrid_partial` serve several statistics in one pass.
+- **Cell rasterizers:** `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize` and `gbx_rst_custom_rasterize` take `collect_list(struct(cellid, value))`.
+- **Table functions:** the tiling, tessellation, pyramid, polygonize and TIN functions run on Unity Catalog. Call each with `LATERAL`. Each takes an input and a result up to its stated size limit, and refuses a larger one with a `Fix:`.
+
+[Session functions on UC](../../api/uc-functions.mdx#session-functions-on-uc) gives the route for each session function without a Unity Catalog form, with recipes and size limits.
+
+### Unity Catalog SQL examples {#uc-sql-examples}
+
+- **Twelve SQL files of [Unity Catalog SQL examples](../../examples/uc-functions.mdx) cover every function by category.** Install the functions into a schema, then run the queries in the SQL editor.
+
+## Readers and writers in Python {#readers}
+
+- **Every reader and writer is a pure-Python data source named `<format>_gbx`.** They run on every compute and need no JAR.
+  - Raster: `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx`, `zarr_gbx` and `pmtiles_gbx`.
+  - Vector: `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx` and `file_gdb_gbx`.
+  - Other: `file_gbx`, `lidar_gbx` and `exif_gbx`.
+- **`file_gdb_gbx` writes File Geodatabases on any compute**, on x86 and ARM. Its `targetArcGisVersion` option keeps 64-bit integer, date and timestamp columns exact for ArcGIS Pro 3.2 or later. See [GeoDatabase Writer](../../writers/filegdb.mdx).
+- **`netcdf_gbx` vector mode reads CF discrete sampling geometries**. Each profile or trajectory observation is a point, with its time as a `TIMESTAMP`. Times, dates and flags read as `TIMESTAMP`, `DATE` and `BOOLEAN`.
+- **`read_tiles_table(spark, table, options)` reads a tile index**. `versionAsOf` and `timestampAsOf` read the index as it was. See [Raster Reader](../../readers/raster.mdx#read-tiles-table).
+- **The FileGDB and GeoPackage readers read coded-value domains.** The `codedDomains` option returns the stored code or the description. See [FileGDB Reader](../../readers/filegdb.mdx#options).
+
+### List the GDAL drivers: `gbx_drivers` {#gbx-drivers}
+
+- **`gbx_drivers()` lists the GDAL drivers that the current environment can run.** Pass `'raster'` or `'vector'` to keep one kind. In Python, call `drivers()` from `databricks.labs.gbx.drivers.functions`.
+- **Each row says what the driver reads and writes, and whether GeoBrix allows it.** It also says whether a raster can be held as tile bytes, and what the driver `requires`.
+- **The rows reflect the environment as it runs now.** The `shipped` column marks the drivers of the env wheel's own build.
+
+See the [General Function Reference](../../api/general-functions.mdx#drivers).
+
+## Incremental ingestion {#ingestion}
+
+### `read_paths` and `declare_ingest` {#read-paths}
+
+- **`read_paths` reads a DataFrame of file paths with any `*_gbx` reader.** Give it a batch listing or an Auto Loader stream, and a reader name. Rows carry the reader's columns plus `_source_path` and `_source_mtime`. See [`read_paths`](../../ingestion/read-paths.mdx).
+- **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline.** `on_change` sets what happens when a file is overwritten:
+  - `scd2` (default): append-only rows, with a versions table and a `_current` view.
+  - `replace`: latest content only.
+  - `append`: every delivery.
+
+  See [Auto Loader ingestion](../../ingestion/auto-loader.mdx).
+
+### Set bad records aside: `on_error` {#on-error}
+
+- **`declare_ingest(on_error="quarantine")` is the default.** What cannot be read goes to `<table>_bad_records`, and the rest goes to the table. `on_error="fail"` fails the update on the first error and names the file.
+- **A bad record is the smallest part of a file its reader can set aside.** That is a vector feature, a raster tile window, a run of LiDAR points, a PMTiles tile or a NetCDF variable. Otherwise it is the whole file.
+- **Errors of the environment fail the update.** Out of memory, a missing module and a Volume I/O error are not about the data, so they write no bad record.
+- **`read_paths(on_error="skip")` skips what cannot be read** and logs a warning. The default, `"fail"`, fails the read and names the file.
+
+See [Unreadable data](../../ingestion/auto-loader.mdx#unreadable-data) and [Unreadable files](../../ingestion/read-paths.mdx#unreadable-files).
+
+### One multi-format Lakeflow connector {#lakeflow-connector}
+
+- **The `geobrix` connector reads vector, LiDAR, EXIF, GeoTIFF, COG, NetCDF and PMTiles files** with the same code as `read_paths`.
+- **`format` takes a reader name, as `read_paths` does.** A folder that mixes file kinds needs it. Otherwise the reader follows the file extension.
+
+See the [Lakeflow connector](../../ingestion/lakeflow-connector.mdx).
+
+## Transactional, versioned Zarr stores {#zarr-stores}
+
+- **GeoBrix registers, reads and writes Zarr stores in transactions.** A store's manifest is a Delta table. A version of the store is a version of that table, and one Delta transaction is one store transaction.
+- **`gbx_zarr_register` registers an existing Zarr v2 or v3 store in place.** It does not copy or write to the store. Several tables can register one store, each as its own branch.
+- **`gbx_zarr_read`, `gbx_zarr_sample` and the `zarr_gbx` reader read stores** by label or position. A read returns blocks, a table of cells or virtual tiles, so every `rst_*` function works on a cube.
+- **`gbx_zarr_write` creates, appends to, updates and overwrites a store in one transaction.** Nothing is visible until the write commits.
+  - Writers that touch different chunks both land. Writers that meet on one chunk get a `ZarrWriteConflict` that names the keys.
+  - It takes a table of cells, one row per cell, with no packing into blocks. See [Write from a table of cells](../../writers/zarr.mdx#write-from-a-table-of-cells).
+  - `transactional=False` writes a plain Zarr store with no manifest table.
+- **Versions.** `gbx_zarr_history`, `gbx_zarr_tag`, `gbx_zarr_restore`, `gbx_zarr_optimize` and `gbx_zarr_vacuum` manage the history. Read an older version with `version_as_of` or `timestamp_as_of`.
+- **`gbx_zarr_sync` records the changes other tools made** as one new version. `gbx_zarr_export` publishes, copies or writes a reference file.
+- **Requirements.** Zarr runs on DBR 19 and Serverless environment 6, with no JAR. Install the env6 wheel with its `[zarr]` extra.
+
+See [Zarr Stores](../../api/zarr-stores.mdx), [Zarr Reader](../../readers/zarr.mdx), [Zarr Writer](../../writers/zarr.mdx) and [Known Limitations](../../limitations.mdx#zarr-stores).
+
+### Direct storage access {#zarr-direct}
+
+- **`access="direct"` reads and writes a store's files straight from the Volume's cloud storage.** It uses temporary Unity Catalog credentials. It is several times faster than the Volume mount for many small reads.
+- **`access="auto"` (default) uses direct access on dedicated compute** and the Volume mount elsewhere, Serverless included.
+- **Direct access sends credentials to the executors.** They last at most one hour and cover only the one Volume. Turn on local-disk encryption on clusters that use it, or pass `access="fuse"`.
+
+### File modes {#zarr-file-modes}
+
+- **The default `file_mode` is `"fuse"`, so a store reads from every compute.** `"auto"` and `"external"` keep FILE references where the File type preview is on.
+- **A store made in FILE mode needs FILE-enabled compute.** To move it elsewhere, copy it with `gbx_zarr_export(method="copy")` and register the copy with `file_mode="fuse"`.
+
+## New functions {#new-functions}
+
+- **`gbx_rst_gdal(tile, command)` runs an allowlisted GDAL `raster` step or pipeline on a tile**. An example command is `'reproject --output-crs=EPSG:3857 ! slope ! hillshade --zfactor=2'`.
+  - Only listed steps and arguments run. A value is never a file, a URL or a `/vsi` name.
+  - It runs in session SQL and Python on every compute.
+- **Cell rasterizers without a `GROUP BY`**. `gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize` and `gbx_rst_custom_rasterize` burn an array of cells into one GeoTIFF.
+- **Table functions for large groups.** `gbx_rst_merge_tvf` merges each key's tiles into one raster. `gbx_rst_bng_rasterize_tvf` burns each key's BNG cells into one raster. Both read a row at a time. Call them as `TABLE(...) PARTITION BY (key)`.
+- **`gbx_drivers()`** lists the GDAL drivers. See [above](#gbx-drivers).
+- **The Unity Catalog forms** listed under [Forms that need no session](#uc-no-session-forms).
+- **`segment_raster(..., weights=)` loads a GeoSAM checkpoint from a Volume**. A workspace that blocks internet egress then needs no download. See [GeoSAM](../../models/geosam.mdx).
+- **`run_sfm(..., prior_sigma_m=)` sets the accuracy of GPS pose priors** when EXIF gives none. See [Orthomosaic](../../notebooks/orthomosaic.mdx).
+
+## A Databricks Container Service image {#dcs-image}
+
+- **A GeoBrix image runs every function, and the JVM level, on a dedicated DBR 19 cluster.** There is no cluster library to attach.
+  - Graviton (arm64): `mjohns797/geobrix:<version>-env6-arm`, or `mjohns797/geobrix:env6-arm` for the newest release.
+  - x86 (amd64): `mjohns797/geobrix:<version>-env6-x86`, or `mjohns797/geobrix:env6-x86`.
+- **The image carries the env6 wheel with `[vizx]` and the GeoBrix JAR.** Each release attaches a Dockerfile to build your own.
+- **Limits.** The images passed their in-image checks but have not yet run on a cluster. There is no DBR 17.3 or 18 image.
+
+See [Databricks Container Service](../../installation/dcs.mdx).
+
+## Performance {#performance}
+
+- **TIN functions run up to 80x faster at the Python level.** The env wheel triangulates with a Rust port of JTS and gives the JVM level's triangles. A 250,000-point grid takes about 2 seconds, down from about 150. See [the Rust kernel for TIN](../../api/performance.mdx#the-rust-kernel-for-tin-triangulation).
+- **Raster tessellation scales to scene-sized tiles.** Each tile is built from its own window, so large scenes no longer time out. See [Raster tessellation](./changes.mdx#tessellation-parity).
+- **The vector readers stream large layers**. Layers with more than 2 GiB of geometry now read, and memory per task follows `chunkSize`. See [Vector Readers](../../readers/vector.mdx#options).
+- **Merges and combines over the memory budget stream** and return the mosaic. A group of virtual tiles merges in the same memory at any size. See [Tile reads and the memory cap](./changes.mdx#read-caps).
+- **Tile functions move rows to Python in Arrow batches on DBR 19 and Serverless**. Large tiles no longer spend half of each task in garbage collection.
+- **Raster opens list each folder once per worker, not at every open**. On a Volume, each open used to take 0.3 s to 10 s. See [Sidecar files and folder listings](../../api/performance.mdx#sidecar-files-and-folder-listings).
+- **`rst_sample` on a virtual tile reads only the block that holds its point.**
+- **Zarr reads spread over the session's cores** in tasks of about 16 MiB decoded.
+
+[Performance](../../api/performance.mdx) has the measurements.
+
+## Examples {#examples}
+
+- **[Weather Features with Zarr](../../notebooks/zarr-weather-features.mdx)** registers, samples, writes back and versions a weather cube.
+- **[Zarr at Scale](../../notebooks/zarr-size-ladder.mdx)** reads and writes Zarr stores from 10 MB to 10 GB.
+- **[Unity Catalog SQL examples](../../examples/uc-functions.mdx)** run every Unity Catalog function from the SQL editor.
+- **The Lakeflow examples run on DBR 19** on the `PREVIEW` channel, with the env6 wheel. Set the bundle variable `pipeline_channel` to `CURRENT`, with the env5 wheel, for DBR 18.

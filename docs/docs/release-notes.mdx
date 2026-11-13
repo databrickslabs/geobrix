@@ -8,9 +8,9 @@ title: Release Notes
 :::info Current version: 0.6.0
 :::
 
-This page lists the key features of each release. Each series has a subpage with the full detail: [0.6.x](./release-notes-0-6) and [0.5.x and earlier](./release-notes-0-5-and-earlier).
+This page lists the key items of each release, in three groups: new, changed and breaking. The detail for 0.6.0 is on three pages: [New](./release-notes/0-6/new.mdx), [Changes](./release-notes/0-6/changes.mdx) and [Breaking](./release-notes/0-6/breaking.mdx). [Release Notes: 0.5.x and earlier](./release-notes-0-5-and-earlier.mdx) holds the detail for every earlier release.
 
-To migrate old code, search for the baseline name in the [rename tables](./release-notes-0-5-and-earlier#general) for the 0.2 and 0.3 renames. Breaking changes are marked in each release below.
+To migrate from 0.5.x, see the [migration guide](./migration-0-6.mdx). For the 0.2 and 0.3 renames, search for the baseline name in the [rename tables](./release-notes-0-5-and-earlier.mdx#general).
 
 ---
 
@@ -20,60 +20,108 @@ To migrate old code, search for the baseline name in the [rename tables](./relea
 v0.6.0 is under development and not yet released.
 :::
 
-- **Breaking:** install one [env wheel per runtime family](./release-notes-0-6#env-wheels) (`+env5` or `+env6`). The 0.5.x light extras are gone, and [GeoBrix no longer installs PySpark](./release-notes-0-6#pyspark).
-- **Breaking:** the [init-script install is removed](./release-notes-0-6#init-script). Install the env wheel and the JAR as cluster libraries, or use the DCS image.
-- **Breaking:** one [Python API](./release-notes-0-6#one-python-api) (`rasterx`, `gridx.<grid>`, `vectorx`) and one registrar, [`gbx.register(spark)`](./release-notes-0-6#one-registrar). Scala [registers no SQL](./release-notes-0-6#scala-registration). The [migration guide](./migration-0-6) maps each old call to its new one.
-- **Breaking:** [`rst_color_relief` takes the color table as text](./release-notes-0-6#signature-changes) (`color_table`), not a file path.
-- **Breaking:** [`rst_summary` returns GDAL's own JSON](./release-notes-0-6#shape-changes): `bands[].min` and `max` are now `minimum` and `maximum`, and the CRS is `coordinateSystem.wkt`.
-- **Breaking:** [`rst_mapalgebra` reads GDAL's `muparser` grammar](./release-notes-0-6#signature-changes), not NumExpr. [`rst_contour` runs GDAL's `raster contour`](./release-notes-0-6#scala-registration), so its lines reach the tile's edge.
-- **Breaking:** in Python, [generators are DataFrame calls and aggregates return `BINARY`](./release-notes-0-6#shape-changes). In SQL, call a generator with `LATERAL`.
-- **Breaking:** [TIN `snap_tolerance` and `merge_tolerance` can change the triangles](./release-notes-0-6#tin), and the `conforming` mode runs on every level.
-- **Breaking:** [`rst_clip` leaves NoData](./release-notes-0-6#nodata-alpha-mask), not valid zeros, outside the cutline.
-- **Breaking:** the [Scala readers and writers are retired](./release-notes-0-6#readers-retired). The `*_gbx` readers replace them. [`gbx_file_write` defaults to `file_mode="fuse"`](./release-notes-0-6#file-write).
-- **New:** [Unity Catalog functions](./release-notes-0-6#unity-catalog-functions) for SQL warehouses, installed with `gbx.uc.install`, and [`gbx.stage_jar`](./release-notes-0-6#stage-jar) to stage the JAR the env wheel carries.
-- **New:** [Unity Catalog SQL examples](./examples/uc-functions): twelve files of ready-made queries, one per category, to try the Unity Catalog functions in the SQL editor.
-- **New:** incremental ingestion with [`read_paths` and `declare_ingest`](./release-notes-0-6#read-paths), [bad records set aside with `on_error`](./release-notes-0-6#on-error), and a [multi-format Lakeflow connector](./release-notes-0-6#lakeflow-connector).
-- **New:** [`gbx_drivers()`](./release-notes-0-6#gbx-drivers) lists the GDAL drivers of the current environment, raster and vector, with what each reads, writes and needs.
-- **New:** [transactional, versioned Zarr stores](./release-notes-0-6#zarr-stores) with [direct storage access](./release-notes-0-6#zarr-direct).
-- **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) for dedicated clusters, and [GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](./release-notes-0-6#native-stack) in the env wheel.
-- **Changed:** [raster tessellation](./release-notes-0-6#tessellation-parity) scales to scene-sized tiles, with one rule for [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask).
-- **Changed:** [large vector layers stream](./release-notes-0-6#vector-large-layers), [`file_gdb_gbx` writes on any compute](./release-notes-0-6#vector-writers), and [British National Grid transforms use OSTN15](./release-notes-0-6#proj-data).
+### New {#v060-new}
+
+- **[One install per runtime](./release-notes/0-6/new.mdx#env-wheels).** An env wheel (`+env5` or `+env6`) carries GDAL 3.13.3, PROJ 9.9.0, GEOS 3.15.0, the Rust module and the JAR.
+- **[Every function on every compute](./release-notes/0-6/new.mdx#levels).** Every function runs at the Python level. The JVM level runs only where it measured faster.
+- **[One registrar](./release-notes/0-6/new.mdx#one-registrar).** `gbx.register(spark)` registers every function and reader, and says why a function falls back.
+- **[Unity Catalog functions](./release-notes/0-6/new.mdx#unity-catalog-functions)** for SQL warehouses, dashboards and Genie, with [SQL examples](./examples/uc-functions.mdx).
+- **[Readers and writers in Python](./release-notes/0-6/new.mdx#readers).** The `*_gbx` data sources run on every compute. [`gbx_drivers()`](./release-notes/0-6/new.mdx#gbx-drivers) lists the GDAL drivers.
+- **[Incremental ingestion](./release-notes/0-6/new.mdx#ingestion)** with `read_paths`, `declare_ingest`, bad records set aside with `on_error`, and a multi-format Lakeflow connector.
+- **[Transactional, versioned Zarr stores](./release-notes/0-6/new.mdx#zarr-stores),** with direct storage access.
+- **[A Databricks Container Service image](./release-notes/0-6/new.mdx#dcs-image)** for dedicated clusters.
+- **[Performance](./release-notes/0-6/new.mdx#performance).** TIN functions run up to 80x faster, tessellation scales to whole scenes and large vector layers stream.
+
+### Changes {#v060-changes}
+
+- **[One rule for NoData, alpha and mask bands](./release-notes/0-6/changes.mdx#nodata-alpha-mask)** on every level.
+- **[Raster functions run GDAL's own algorithms](./release-notes/0-6/changes.mdx#gdal-algorithms)** for band math, warps, contours, polygons, fills, viewsheds and summaries.
+- **[British National Grid transforms use OSTN15](./release-notes/0-6/changes.mdx#proj-data),** within millimetres of Ordnance Survey's test points.
+- **[Tile reads honor the compute's memory cap](./release-notes/0-6/changes.mdx#read-caps),** and merges over it stream.
+- **[Errors, NULLs and wrong arguments follow one contract](./release-notes/0-6/changes.mdx#error-contract)** at the JVM and Python levels.
+- **[The JAR keeps a JVM form only where it is faster](./release-notes/0-6/changes.mdx#jar-levels).**
+
+### Breaking {#v060-breaking}
+
+- **[Install the env wheel](./release-notes/0-6/breaking.mdx#light-extras),** not a light extra. [The init-script install is removed](./release-notes/0-6/breaking.mdx#init-script).
+- **[`rasterx`, `gridx.<grid>` and `vectorx` are the Python API](./release-notes/0-6/breaking.mdx#old-modules),** and [`gbx.register(spark)` is the only registrar](./release-notes/0-6/breaking.mdx#one-registrar). [Scala registers no SQL](./release-notes/0-6/breaking.mdx#scala-registration).
+- **[The Scala readers and writers are retired](./release-notes/0-6/breaking.mdx#readers-retired)** in favour of the `*_gbx` data sources.
+- **[Some arguments are renamed or reordered](./release-notes/0-6/breaking.mdx#signature-changes),** such as `rst_mapalgebra` and `rst_color_relief`.
+- **[Generators are DataFrame calls and aggregates return `BINARY`](./release-notes/0-6/breaking.mdx#shape-changes).** `rst_summary` returns GDAL's own JSON.
+- **[Some defaults and results change](./release-notes/0-6/breaking.mdx#results):** `rst_clip` fills with NoData, `bng_tessellate` drops the core geometry and `gbx_file_write` writes `fuse`.
+
+The [migration guide](./migration-0-6.mdx) maps each 0.5.x form to its 0.6 form.
 
 ## v0.5.2
 
-- **New:** [`lidar_gbx` reader and writer](./release-notes-0-5-and-earlier#whats-new-in-v052) for LAS and LAZ point clouds, and DSM and CHM surface functions.
-- **New:** `exif_gbx` reader for drone and camera EXIF and GPS data.
-- **New:** `gbx.models` package with GeoSAM object segmentation on GPUs.
-- **New:** `rst_viewshed_towers`, `h3_viewshed_towers`, `rst_land_cover` and `gbx_rst_percentile_stretch`, plus the Wireless Coverage example.
-- **Changed:** ESRI and OGC coordinate-system authorities are preserved, and geometry-aware grid functions accept GeometryCollection inputs.
+### New {#v052-new}
+
+- **[`lidar_gbx` reader and writer](./release-notes-0-5-and-earlier.mdx#whats-new-in-v052)** for LAS and LAZ point clouds, with DSM and CHM surface functions.
+- **`exif_gbx` reader** for drone and camera EXIF and GPS data.
+- **`gbx.models` package** with GeoSAM object segmentation on GPUs.
+- **`rst_viewshed_towers`, `h3_viewshed_towers`, `rst_land_cover` and `gbx_rst_percentile_stretch`,** plus the Wireless Coverage example.
+
+### Changes {#v052-changes}
+
+- **ESRI and OGC coordinate-system authorities are preserved.**
+- **Geometry-aware grid functions accept GeometryCollection inputs.**
 
 ## v0.5.1
 
-- **Breaking:** [raster-to-grid functions default to `coverage=complete`](./release-notes-0-5-and-earlier#whats-new-in-v051) and gain an `assignment` parameter. The `gbx_rst_*_rastertogridcount` functions return `DOUBLE`.
-- **Breaking:** in the raster tessellate functions, `mode` is renamed `assignment`, a `coverage` parameter is added, and the two-argument default changes.
-- **Changed:** a raster with no CRS is no longer warped to EPSG:27700 by the BNG raster-to-grid functions.
-- **New:** raster-to-grid support for custom grids, `gbx_rst_combine*` and `gbx_rst_align_to`, and NetCDF multi-dimension options (`dimIndex`, `fanout`, `bandDim`).
-- **New:** geometry-aware k-ring and k-loop functions across all grid families.
+### New {#v051-new}
+
+- **[Raster-to-grid for custom grids](./release-notes-0-5-and-earlier.mdx#whats-new-in-v051),** `gbx_rst_combine*` and `gbx_rst_align_to`.
+- **NetCDF multi-dimension options:** `dimIndex`, `fanout` and `bandDim`.
+- **Geometry-aware k-ring and k-loop functions** across all grid families.
+
+### Changes {#v051-changes}
+
+- **A raster with no CRS is no longer warped to EPSG:27700** by the BNG raster-to-grid functions.
+
+### Breaking {#v051-breaking}
+
+- **[Raster-to-grid functions default to `coverage=complete`](./release-notes-0-5-and-earlier.mdx#whats-new-in-v051)** and gain an `assignment` parameter. The `gbx_rst_*_rastertogridcount` functions return `DOUBLE`.
+- **In the raster tessellate functions, `mode` is renamed `assignment`.** A `coverage` parameter is added, and the two-argument default changes.
 
 ## v0.5.0
 
-- **Breaking:** [`[light]` and `[light_all]` are removed](./release-notes-0-5-and-earlier#whats-new-in-v050). Install a runtime-pinned extra. `[earthdata]` and `[overture]` are opt-in extras.
-- **Breaking:** the raster readers default to virtual tiles. The tile struct widens to eight fields.
-- **New:** the COG preparation lane (`file_gbx`, `cog_gbx`) with VRT mosaics for large rasters.
-- **New:** CRS-string functions (`gbx_st_crs`, `gbx_rst_crs` and others) and `gbx.register_proj_grids`.
-- **New:** VectorX validity, cleaning, antimeridian and coverage functions.
+### New {#v050-new}
+
+- **[The COG preparation lane](./release-notes-0-5-and-earlier.mdx#whats-new-in-v050)** (`file_gbx`, `cog_gbx`), with VRT mosaics for large rasters.
+- **CRS-string functions** (`gbx_st_crs`, `gbx_rst_crs` and others) and `gbx.register_proj_grids`.
+- **VectorX validity, cleaning, antimeridian and coverage functions.**
+
+### Breaking {#v050-breaking}
+
+- **`[light]` and `[light_all]` are removed.** Install a runtime-pinned extra. `[earthdata]` and `[overture]` are opt-in extras.
+- **The raster readers default to virtual tiles.** The tile struct widens to eight fields.
 
 ## v0.4.x
 
-- **New in 0.4.0:** the [Python-level functions](./release-notes-0-5-and-earlier#whats-new-in-v040) (`pyrx`, `pygx`, `pyvx`), which need no JAR and run on Serverless.
-- **New in 0.4.0:** vector tiles (`gbx_st_asmvt`), PMTiles output, quadbin and custom grids, terrain and spectral-index functions, TIN surface modelling, and STAC and visualization helpers.
-- **Breaking in 0.4.0:** the grid explode functions return a lowercase `cellid` field, and slope and hillshade scale from the raster CRS by default.
-- **New in 0.4.1:** the [`netcdf_gbx` reader](./release-notes-0-5-and-earlier#whats-new-in-v041) and methane-source downloaders for the Vapor-Eyes example.
-- **Changed in 0.4.2:** [raster value reducers return `NULL`](./release-notes-0-5-and-earlier#whats-new-in-v042) for all-NoData bands.
-- **New in 0.4.3:** [raster-grid parity between the JVM and Python levels](./release-notes-0-5-and-earlier#whats-new-in-v043), NetCDF readers and writer.
+### New {#v04-new}
+
+- **0.4.0: [functions at the Python level](./release-notes-0-5-and-earlier.mdx#whats-new-in-v040)** (`pyrx`, `pygx`, `pyvx`), which need no JAR and run on Serverless.
+- **0.4.0:** vector tiles (`gbx_st_asmvt`), PMTiles output, quadbin and custom grids, terrain and spectral-index functions, TIN surface modelling, and STAC and visualization helpers.
+- **0.4.1: the [`netcdf_gbx` reader](./release-notes-0-5-and-earlier.mdx#whats-new-in-v041)** and methane-source downloaders for the Vapor-Eyes example.
+- **0.4.2:** the Genie Map example app.
+- **0.4.3: [raster-grid parity between the JVM and Python levels](./release-notes-0-5-and-earlier.mdx#whats-new-in-v043),** and NetCDF readers and writer.
+
+### Changes {#v04-changes}
+
+- **0.4.2: [raster value reducers return `NULL`](./release-notes-0-5-and-earlier.mdx#whats-new-in-v042)** for all-NoData bands.
+
+### Breaking {#v04-breaking}
+
+- **0.4.0:** the grid explode functions return a lowercase `cellid` field.
+- **0.4.0:** slope and hillshade scale from the raster CRS by default.
 
 ## v0.3.0
 
-- **Fixed:** [`rst_clip` axis order](./release-notes-0-5-and-earlier#whats-new-in-v030) and `combineavg` / `derivedband` pixel functions.
-- **Changed:** `tile.raster` bytes are always self-contained, and scalar arguments need no `f.lit(...)`.
-- **New:** pre-built, hash-verified GDAL bundle.
+### New {#v030-new}
+
+- **A pre-built, hash-verified GDAL bundle.**
+
+### Changes {#v030-changes}
+
+- **[`rst_clip` axis order is fixed](./release-notes-0-5-and-earlier.mdx#whats-new-in-v030),** and so are the `combineavg` and `derivedband` pixel functions.
+- **`tile.raster` bytes are always self-contained,** and scalar arguments need no `f.lit(...)`.

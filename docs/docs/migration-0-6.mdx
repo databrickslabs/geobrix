@@ -6,7 +6,7 @@ description: Move code and installs from GeoBrix 0.5.x to 0.6. Each old install 
 
 # Migrate to 0.6
 
-GeoBrix 0.6 has one install per runtime, one Python API and one registrar. This page maps each 0.5.x form to its 0.6 form. [Release Notes: 0.6.x](./release-notes-0-6) lists every change in full.
+GeoBrix 0.6 has one install per runtime, one Python API and one registrar. This page maps each 0.5.x form to its 0.6 form. The 0.6.0 release notes list what is [new](./release-notes/0-6/new.mdx), what [changes](./release-notes/0-6/changes.mdx) and what [breaks](./release-notes/0-6/breaking.mdx).
 
 A 0.5.x call that no longer exists raises an error. The message gives a `Fix:` with the new form.
 
@@ -74,7 +74,7 @@ Function names do not change. Only these arguments and shapes do:
 | `rst_h3_rastertogridavg` and the other 31 reducers | They return rows. Use `LATERAL` in SQL, or the DataFrame call in Python. |
 | `rst_fromfile` | The Python default is a virtual tile. Pass `materialize=True` for pixels. |
 
-A string argument that used to name a column can now be a literal. See [Renamed and reordered arguments](./release-notes-0-6#signature-changes) for the list.
+A string argument that used to name a column can now be a literal. See [Renamed and reordered arguments](./release-notes/0-6/breaking.mdx#signature-changes) for the list.
 
 ## Readers and writers
 
@@ -96,18 +96,18 @@ A Python data source cannot be queried by path in SQL. Create a view instead: `C
 
 ## Scala
 
-Scala registers no SQL. Register from Python or SQL, then call the SQL names or the Scala wrappers that remain. For a function without a wrapper, use `call_function("gbx_<name>", …)`. [Scala no longer registers SQL](./release-notes-0-6#scala-registration) lists the removed wrappers. To call GeoBrix from a Scala or Java job, see [SQL from a JVM job](./installation#jvm-sql).
+Scala registers no SQL. Register from Python or SQL, then call the SQL names or the Scala wrappers that remain. For a function without a wrapper, use `call_function("gbx_<name>", …)`. [Scala no longer registers SQL](./release-notes/0-6/breaking.mdx#scala-registration) lists the removed wrappers. To call GeoBrix from a Scala or Java job, see [SQL from a JVM job](./installation#jvm-sql).
 
 ## Results that changed
 
 These changes can alter your results. Read each entry before you upgrade:
 
-- [Errors, NULLs and wrong arguments follow one contract](./release-notes-0-6#error-contract)
-- [Tile reads honor the compute's memory cap](./release-notes-0-6#read-caps)
-- [WKB is little-endian and cell rings start south-west](./release-notes-0-6#output-formats)
-- [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask)
-- [British National Grid transforms use OSTN15](./release-notes-0-6#proj-data)
-- [TIN `snap_tolerance` places points on break lines before triangulating](./release-notes-0-6#tin)
+- [Errors, NULLs and wrong arguments follow one contract](./release-notes/0-6/changes.mdx#error-contract)
+- [Tile reads honor the compute's memory cap](./release-notes/0-6/changes.mdx#read-caps)
+- [WKB is little-endian and cell rings start south-west](./release-notes/0-6/changes.mdx#output-formats)
+- [NoData, alpha and mask bands](./release-notes/0-6/changes.mdx#nodata-alpha-mask)
+- [British National Grid transforms use OSTN15](./release-notes/0-6/changes.mdx#proj-data)
+- [TIN `snap_tolerance` places points on break lines before triangulating](./release-notes/0-6/changes.mdx#tin)
 
 ## Unity Catalog
 

@@ -82,6 +82,8 @@ const config = {
           { from: '/docs/formats/zarr', to: '/docs/api/zarr-stores' },
           // The format selection guide moved under Readers & Writers.
           { from: '/docs/formats/overview', to: '/docs/choosing-a-format' },
+          // The 0.6.0 release notes split into New, Changes and Breaking pages.
+          { from: '/docs/release-notes-0-6', to: '/docs/release-notes/0-6/new' },
         ],
       },
     ],

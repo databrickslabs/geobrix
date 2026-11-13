@@ -1,0 +1,225 @@
+---
+title: Changes in 0.6.0
+sidebar_label: Changes
+description: Behavior in GeoBrix 0.6.0 that differs from 0.5.x — which level runs each function, the NoData rule, GDAL's own algorithms, OSTN15, memory caps and the result changes by area.
+---
+
+# Changes in 0.6.0
+
+:::note
+v0.6.0 is under development and not yet released.
+:::
+
+This page lists the behavior that differs from 0.5.x, grouped by area. Most items change a result or a refusal, not a call. [New in 0.6.0](./new.mdx) lists the new capabilities, and [Breaking changes](./breaking.mdx) lists the calls and installs to update.
+
+## Install and runtime {#install}
+
+### Which functions run where {#jar-levels}
+
+The JAR keeps a JVM form only where it measured at least 1.2x faster than the best Python form, with the same decoded output. The registrar picks the level below. [Performance](../../api/performance.mdx) has the measurements.
+
+| Functions | Runs at | From Scala |
+|---|---|---|
+| `gbx_bng_kring`, `gbx_bng_kloop`, `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_polyfill`, `gbx_bng_cellfill`, the `gbx_custom_*` functions of the same names, `gbx_custom_geomkringexplode` and `gbx_custom_geomkloopexplode` | JVM with the JAR (new), else Python | The wrapper of the same name in `gridx.bng.functions` or `gridx.custom.functions` |
+| `gbx_rst_h3_rasterize_agg`, `gbx_rst_quadbin_rasterize_agg`, `gbx_rst_bng_rasterize_agg`, `gbx_rst_custom_rasterize_agg` | JVM with the JAR (new), else Python | The wrapper of the same name in `rasterx.functions` |
+| `gbx_st_legacyaswkb`, `gbx_rst_tilexyz`, `gbx_rst_boundingbox`, `gbx_rst_worldtorastercoordy` | JVM with the JAR (new), else Python. A virtual tile runs in Python. | The wrapper of the same name |
+| `gbx_bng_tessellate` | JVM with the JAR, else Python, as before | `bng_tessellate(...)` in `gridx.bng.functions` |
+| `gbx_bng_eastnorthasbng` | SQL expression (new), else Python | `call_function("gbx_bng_eastnorthasbng", ...)` |
+| Every other function | Python. Many had a JVM form in 0.5.x, such as the terrain, band math, warp, clip, combine and raster accessor functions. | `call_function("gbx_<name>", ...)` |
+
+- **With the JAR, a JVM tile function sends a virtual tile to the Python level.** A tile function that returns an `ARRAY`, `MAP` or `STRUCT` runs at the Python level only.
+- **JVM-level netCDF-4 with zstd, blosc or bzip2 filters returns NULL unless `HDF5_PLUGIN_PATH` is set.** The Python level reads these files without it. See [Compressed netCDF-4 variables](../../readers/netcdf.mdx#compressed-netcdf-4-variables-zstd-blosc-bzip2).
+
+### GDAL driver policy {#driver-policy}
+
+- **The raster driver policy is on for the whole process.** From GeoBrix's import, the drivers that run stored pipelines, index other rasters, reach a network API or act on what a file names are unavailable.
+- **The Python level refuses tile bytes that hold a VRT or another format that names other files.** Store the tile as a GeoTIFF, or pass the VRT as a virtual tile (a path).
+- **`spark.gdal.GDAL_SKIP` adds to the refused drivers.** It can no longer re-enable one.
+- **To turn the policy off,** set `GBX_GDAL_DRIVER_POLICY=off` before the first GDAL use. See [Security § 7](../../security.mdx#7-raster-data-other-principals-can-write).
+- **Importing GeoBrix sets `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` for the Python process,** unless it is set already. Your own rasterio or GDAL code then checks sidecar files by name. Set it to `NO` in the workers' environment to keep GDAL's folder listing. See [Sidecar files and folder listings](../../api/performance.mdx#sidecar-files-and-folder-listings).
+
+### PROJ data and OSTN15 {#proj-data}
+
+- **British National Grid transforms use OSTN15.** Transforms between EPSG:27700 and WGS 84 or ETRS89 use Ordnance Survey's grid instead of a Helmert approximation.
+  - Results are within millimetres of Ordnance Survey's test points.
+  - They differ from 0.5.x by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.
+  - See [Grids that ship with GeoBrix](../../api/coordinate-reference-systems.mdx#grids-that-ship-with-geobrix).
+- **CRS lookups work on the driver of a standard-access cluster,** and raster transforms work after `register_proj_grids`.
+- **The JVM level loads GDAL from a node-local copy.** Set `spark.databricks.labs.gbx.native.copy.dir` to choose the folder, or `off` to load from the wheel. See [Env wheel and JAR](../../installation.mdx#env-wheel-and-jar).
+- **Run `projsync` into a local directory,** then copy to the Volume. Syncing straight into a Volume fails. See [Fetch grids with projsync](../../api/coordinate-reference-systems.mdx#fetch-grids-from-the-proj-cdn-with-projsync).
+
+### Tile reads and the memory cap {#read-caps}
+
+- **A tile held in a column is refused when its decoded size passes the read cap.** The refusal text is the same at the JVM and Python levels.
+  - On Serverless the cap is 15% of the task's memory limit, at least 32 MiB. Where that limit cannot be read, it is 64 MiB.
+  - On classic compute, dedicated and standard access mode alike, it is 1536 MiB.
+- **A file read into a tile is refused when it passes the file read cap,** with a retile `Fix:`. The cap is 64 MiB on Serverless and 256 MiB on classic compute. `GBX_STREAM_MAX_BYTES` overrides both.
+  - It covers `gbx_rst_fromfile`, `rst_fromfile(materialize=True)` and `raster_gbx` with `virtualTiles=false`.
+- **A virtual tile is judged by the window it reads.** A small window of a large file is read. `rst_maketiles`, `rst_retile` and `rst_tooverlappingtiles` cut a huge virtual tile window by window.
+- **A warp or resample over the memory budget runs streamed,** with the same pixels. Only a result over the read cap gives an error tile with a `Fix:`.
+- **A merge or combine over the memory budget streams.** `gbx_rst_merge_agg` and `gbx_rst_combineavg_agg` return a Cloud Optimized GeoTIFF with the same pixels.
+  - A mosaic over 10 GiB decoded raises a `Fix:`. Keep the tiles as files and read them as one VRT, built with `rasterx.helpers.mint_vrt`.
+  - On Serverless, `gbx_rst_merge_agg` refuses a group over the task's memory with a `Fix:` that names `merge_by_key(method="vrt")`.
+- **Standard access mode uses the classic caps.** GeoBrix took a standard-access session for Serverless.
+
+See [Serverless and Memory](../../serverless-and-memory.mdx) and [Error handling](../../api/error-handling.mdx).
+
+### Missing files {#missing-file}
+
+- **A virtual tile whose file is missing is retried, then raises with a `Fix:` that names the path.** It is never a silent NULL. A Volume path can lag a write, so the read retries about 10 times.
+- **A truly missing path fails after one retry budget,** not about 45 seconds at each read step.
+
+### Dependencies {#dependencies}
+
+- **GeoBrix installs fewer packages.** `scikit-image`, `lazy_loader`, `xarray-spatial`, `numba` and `rio-cogeo` are gone. GDAL's own algorithms replace them.
+- **On Serverless environment 5 and DBR 17.3 and 18, installing GeoBrix upgrades a few runtime packages.** These are `requests` (with `[stac]` or `[vizx]`, for CVE-2024-47081), `typing_extensions`, `idna` and `anyio`. Databricks may show its one-time "a core package changed" notice.
+- **`[vizx]` no longer installs a second GDAL.**
+- **The LiDAR stack is `laspy` 2.7 with `lazrs` 0.8.2 or later.** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
+
+See [Installation](../../installation.mdx).
+
+## Raster {#raster}
+
+### NoData, alpha and mask bands {#nodata-alpha-mask}
+
+GeoBrix applies one rule for which pixels are valid, on every level.
+
+- **A source without NoData takes one fallback by type.** Source pixels equal to it become NoData.
+  - `uint8`: 0. `uint16`: 65535. `int16`: −32768. `uint32`: 4294967294. `int32`: −2147483648.
+  - `float32` and `float64`: the type's minimum.
+  - In 0.5.2, centroid tessellation used 0 for every integer type. Real zero pixels of wider integer types now stay valid.
+- **A source's own mask band is kept,** as JPEG-compressed aerial imagery often carries. Masked pixels used to read as valid in `rst_initnodata`, the warps, covering tessellation and the writers.
+- **`rst_clip` fills with NoData outside the cutline.** It takes the tile's own NoData, else the fallback of its type. These pixels were valid zeros when the source declared no NoData.
+- **The warp fill is NoData.** Edge-cell tiles of a reprojected source no longer carry valid zeros, so the raster-to-grid reducers no longer count them.
+- **An alpha band is kept when it is the last band.** A pixel with alpha 0 is NoData at every band count. GDAL used to derive a mask from alpha only for two- and four-band rasters.
+  - The reducers, `gbx_rst_pixelcount`, `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max`, the histogram and the focal filters judge each pixel this way.
+  - `gbx_rst_isempty` is true for a raster with no valid pixel.
+- **Functions label a band alpha exactly where their source does.** `gbx_rst_band` and `gbx_rst_separatebands` write an extracted alpha band as data.
+
+### GDAL's own algorithms {#gdal-algorithms}
+
+These functions now run GDAL's own algorithm in the worker. The pixels equal the 0.5.x results, except as listed.
+
+- **Band math runs GDAL's `raster calc`.** This covers the spectral indices, `rst_index`, `rst_threshold`, `rst_mapalgebra` and `rst_chm`.
+  - A pixel is NoData where an input is NoData, a value is not finite, or a denominator is 0.
+  - A source with no declared NoData treats pixels equal to -9999 as NoData.
+- **The warp functions run GDAL's `raster reproject`.** They are `rst_transform`, `rst_transformcrs`, `rst_to_webmercator` and the three `rst_resample*` functions.
+  - `rst_resample_to_res` gives pixels of exactly the resolution you ask for. The extent can change by less than one pixel.
+  - `bilinear` and `cubic` can differ beside NoData. A size that ends in .5 pixels rounds to the even size.
+  - A reprojection of a tile with no NoData masks the pixels outside its footprint, with a mask band.
+- **`rst_contour` runs GDAL's `raster contour`.** Each level's lines lie within one pixel of the 0.5.x lines, and a line now runs to the tile's edge.
+- **`rst_polygonize` runs GDAL's `raster polygonize`.** A float band is grouped by its exact value. It used to round each pixel to a whole number first.
+- **`rst_fillnodata` runs GDAL's `raster fill-nodata`.** `max_search_dist` and `smoothing_iter` must be whole numbers from 0 to 2147483647.
+- **`rst_color_relief` runs GDAL's color-map algorithm** on a color table passed as text. NoData pixels take the `nv` color, else they are transparent.
+- **`rst_summary` returns GDAL's own `gdalinfo -json`.** See [Breaking changes](./breaking.mdx#shape-changes) for the renamed keys.
+
+#### Viewshed {#viewshed}
+
+- **`rst_viewshed` runs GDAL's `raster viewshed`,** with a curvature coefficient of 0.85714. A mask changes by a fraction of a percent on smooth terrain, and by a few percent on rough terrain.
+- **One rule places the observer.** A POINT is moved into the DEM's CRS. `observer_height` defaults to 0, and a NULL `target_height` gives NULL.
+- **With a `max_distance`, the result is the window around the observer.** In 0.5.2 the Python level placed the visible area wrongly on a DEM above about 366 × 366 pixels.
+- **`rst_viewshed_towers` counts `total_px` over the whole square window.** So `frac` (`visible_px / total_px`) stays below about 0.79 even on open ground. A tower whose DSM tile cannot be read fails the query.
+
+### Raster tessellation and tiling {#tessellation-parity}
+
+- **Centroid tiles are cropped to their cell.** With `assignment='centroid'` (default), each tile covers only the pixels of its cell. Pixel values and positions are unchanged.
+  - A tile's width, height and geotransform are its own, not the source's. Code that stacks tiles as same-shape arrays must change.
+  - With `coverage='complete'`, a cell with no pixel is a 1×1 all-NoData tile.
+- **Scene-sized tiles no longer time out.** For very large scenes, run `gbx_rst_retile` first to spread the work. See [Grid Raster Tessellation](../../api/grid-raster-tessellation.mdx#large-rasters).
+- **Covered cells follow the raster footprint,** including the curved edges of a projected scene. `rst_h3_tessellate` and `rst_quadbin_tessellate` raise when the footprint crosses the antimeridian or encloses a pole.
+- **Tiling keeps all-NoData windows.** `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` emit every window. Filter with `WHERE NOT gbx_rst_isempty(tile)` to drop them.
+- **Retile tiles carry the parent's `cellid`,** not 0, 1, 2 and so on.
+- **A tile that cannot be read gives one error row** in the tiling and tessellation functions. See [Error handling](../../api/error-handling.mdx#generators).
+
+### Errors, NULLs and wrong arguments {#error-contract}
+
+Every raster function follows the same order of checks at the JVM and Python levels.
+
+- **A NULL tile or a NULL required argument gives NULL.** An error tile in comes out as itself.
+- **A tile that cannot be read gives an error tile.** Its raster is NULL and its reason is in `metadata.last_error`. A file that cannot be reached fails the task, so Spark retries it.
+- **A wrong argument raises and names the value.** Examples are a size of 0, an unknown resampling word, a band past the last band, or a bad `out_srid`. A function that gave an error tile for a wrong argument now fails the call.
+- **An aggregate skips NULL and error tiles,** and gives the first error tile when no other tile remains. Tiles of different shape raise.
+- **`out_srid` and `out_crs` together raise** in every rasterizer that takes `out_crs`.
+- **Remote paths need a switch.** `gbx_rst_fromfile('https://...')` reads a URL only when `GBX_ALLOW_REMOTE_PATHS=true` is set before `register()`.
+
+### Raster function results {#raster-results}
+
+- **Repeated cells burn their largest value** in the cell rasterizers and the `*_cellfill` aggregates, on every level. A NULL or NaN never beats a number. The result no longer depends on row order.
+- **`gbx_rst_merge` mosaics tiles in different CRSs.** The reference CRS is the smallest EPSG code present. A merge no longer overwrites valid pixels with zeros.
+- **`gbx_rst_srid` is NULL when the CRS has no authority code,** and `gbx_rst_getnodata` is NULL when no band declares NoData.
+- **`gbx_rst_updatetype` rounds and clamps** to the type's range. It truncated and wrapped.
+- **`gbx_rst_sample` lands a longitude/latitude point on the right pixel,** and raises for a non-point geometry.
+- **`gbx_rst_convolve` returns `Float64`,** and `gbx_rst_filter` adds only the neighbours on the raster.
+- **Resampling words match in every function,** in any case: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` and `q3`.
+- **`gbx_rst_custom_rasterize_agg` snaps its canvas to the grid's cell edges,** so a grid not aligned to the pixel size no longer gives NoData.
+
+### Raster output and writers {#raster-writers}
+
+- **Python-level raster functions write ZSTD** with the predictor that suits the data type. JVM-level tiles with no `compression` metadata are DEFLATE.
+- **The COG writers write `raw` and `none` uncompressed,** and `cog_gbx` writes sources with a non-byte-aligned bit depth, such as Sentinel-2.
+- **`cog_gbx` names the parts of one source apart.** A window, clip or single band is written as `<source name>_<key>.tif`, with a key that a re-run repeats.
+- **`rst_asformat(tile, 'COG')` writes a Cloud Optimized GeoTIFF** at the Python level, and takes a driver name in any case.
+
+## Grid {#grid}
+
+### Resolutions, NULLs and non-finite input {#grid-contract}
+
+- **A BNG resolution is an index or a digit string,** such as `'3'` or `'1km'`. A resolution outside the INT range raises.
+- **A fractional resolution such as 3.5 raises** in the quadbin, custom-grid and H3 functions.
+- **A NULL cell, resolution or coordinate gives NULL,** and the other rows of the batch are answered. A non-finite coordinate gives NULL, not a made-up cell.
+- **A bad `coverage` and a negative `k` raise on the JVM level too,** as they do on the Python level.
+
+### WKB and cell rings {#output-formats}
+
+- **WKB from the JVM level is little-endian,** as the Python level, GDAL and `st_asbinary` give. The same call returns the same bytes on every compute.
+- **A BNG or custom-grid cell polygon starts at the south-west corner** and runs counter-clockwise.
+
+### Cell ids and tessellation {#exact-cell-ids}
+
+- **The BNG 500 km squares `S`, `T`, `N`, `O`, `H` and `J` are the right squares.** A one-letter name such as `N` read as `S`.
+- **Cell functions that take a `BIGINT` cell keep the exact id** when the batch holds a NULL.
+- **`gbx_custom_kring` and `gbx_custom_kloop` stay inside the grid** at its edges, on every level.
+- **`bng_tessellate` keeps every cell of a polygon whose clip is a MultiPolygon or a mixed collection.** It used to return NULL or fewer cells.
+
+## Vector {#vector}
+
+### TIN functions {#tin}
+
+These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_interpolateelevationgeom`.
+
+- **`snap_tolerance` places points onto break lines before triangulating.** A point within it moves onto the nearest break line, takes its Z there and becomes a vertex. Output can differ from 0.5.x.
+- **`merge_tolerance` merges each point into the nearest one kept before it.** Break line vertices come first and keep their Z. Output can differ from 0.5.x.
+- **The `conforming` mode runs on every level,** including Serverless, standard access mode and Unity Catalog, with the JVM level's triangles.
+- **The `constrained` mode makes every break line segment a triangle edge,** and gives the same triangles on every level.
+- **Crossing break lines raise with a `Fix:`** in both modes.
+- **A coordinate without Z has Z 0,** and each triangle ring starts at its lowest vertex on every level.
+
+### Vector function arguments {#vector-arguments}
+
+- **A negative or non-finite tolerance raises and names the value,** in `st_simplifypreservetopology`, `st_removerepeatedpoints`, `st_snap` and `st_reduceprecision`.
+- **Geometry text that mixes 2D and 3D keeps the Z values it has.** A missing Z is `NaN`, never 0. `st_transformcrs` keeps each vertex's Z.
+- **A PROJJSON or a WKT2 with an ID URI binds to its EPSG code.** A URL, a file name and a grid file named by path stay refused.
+- **The H3 geometry functions refuse a geometry whose SRID is not 4326.** Reproject with `st_transformcrs` first. SRID 0 still reads as 4326.
+
+### Vector readers and writers {#driver-name}
+
+- **`driverName` is honored and case-insensitive.** A misnamed file fails with an error that names the detected driver and the reader to use.
+- **Column types follow the DataFrame.** An `int` column stays a 32-bit integer in a File Geodatabase, not a double.
+- **A layer of mixed geometry types is written as a layer of any geometry,** and a layer whose geometries carry Z is declared 3D.
+- **KML, GML and DXF write from any number of partitions,** and timestamp columns read and write as UTC on Serverless.
+
+## Readers {#readers}
+
+- **GeoJSON is matched by its `.geojson` extension only.** For `.json` GeoJSON files, pass `glob="*.{geojson,json}"`.
+- **Raster readers with `virtualTiles=false` read several whole files per task,** in batches of at most 64 MiB. A file over the [file read cap](#read-caps) fails with a retile `Fix:`.
+- **A materialized read keeps the CRS and NoData that sidecar files hold,** such as `.aux.xml`, `.hdr` and `.prj` files.
+- **`netcdf_gbx` honors `dimIndex` and `bandDim` in `spark.read`,** and reads a variable from its `group`. In 0.5.1 and 0.5.2 the reader ignored them.
+- **A window cut around an area keeps the pixels at both edges.** On an unaligned raster it lost 2 to 3 percent of the pixels.
+- **`pmtiles_gbx` reads an archive once per worker,** not once per partition. It reads archives with uncompressed directories.
+- **The readers bound their staged copies on local disk.** The cap is half the free local disk, or `GBX_STAGE_CACHE_MB`.
+
+## Models and visualization {#models-vizx}
+
+- **`segment_raster` merges only the pieces of one object that a chip seam split.** Neighbouring objects no longer chain into large blobs, and NoData is not segmented. See [GeoSAM](../../models/geosam.mdx).
+- **`run_sfm` reads images on a Volume,** and raises when no image gives features. See [Orthomosaic](../../notebooks/orthomosaic.mdx).
+- **`plot_tile`, `plot_static` and the interactive map take virtual tiles.** `plot_static` moves a legend of more than 12 entries outside the map.

@@ -45,3 +45,10 @@ def test_a_function_that_shipped_before_the_manifest_is_not_added(monkeypatch):
         mod, "_show", _fake_show({("old", "function-info.json"): info, ("HEAD", "functions.json"): manifest})
     )
     assert mod.added_functions("old..HEAD") == ["gbx_rst_gdal"]
+
+
+def test_the_release_notes_pages_include_the_060_detail_pages():
+    pages = {p.relative_to(REPO_ROOT).as_posix() for p in mod.RELEASE_NOTES_PAGES}
+    for name in ("new", "changes", "breaking"):
+        assert f"docs/docs/release-notes/0-6/{name}.mdx" in pages
+    assert all(p.exists() for p in mod.RELEASE_NOTES_PAGES)

@@ -12,9 +12,9 @@ Algorithm:
      ``git show <rev>:<path>``).
      The end is HEAD when the range has none; the base of ``a...b`` is the merge-base of a and b.
   2. For each added name, check whether it appears (substring) anywhere in
-     ``docs/docs/release-notes.mdx``, ``docs/docs/release-notes-0-6.mdx`` or
-     ``docs/docs/release-notes-0-5-and-earlier.mdx`` (the release notes are split across
-     the summary page and the series subpages).  Also accept the bare name (strip
+     ``docs/docs/release-notes.mdx``, the pages under ``docs/docs/release-notes/`` (the 0.6.0
+     New, Changes and Breaking pages) or ``docs/docs/release-notes-0-5-and-earlier.mdx`` (the
+     release notes are split across the summary page and the series subpages).  Also accept the bare name (strip
      leading ``gbx_``) as a match -- some bullets reference the bare form.
      A match on either counts.
   3. Exit 1 listing every added function NOT mentioned in the release notes.
@@ -43,7 +43,7 @@ RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
 # mentioned on any of them counts.
 RELEASE_NOTES_PAGES = [
     RELEASE_NOTES,
-    REPO_ROOT / "docs/docs/release-notes-0-6.mdx",
+    *sorted((REPO_ROOT / "docs/docs/release-notes").rglob("*.mdx")),
     REPO_ROOT / "docs/docs/release-notes-0-5-and-earlier.mdx",
 ]
 

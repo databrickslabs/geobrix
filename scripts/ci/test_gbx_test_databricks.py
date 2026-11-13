@@ -2928,6 +2928,17 @@ def test_a_run_part_keeps_its_hash_share_of_the_tests_and_plans_that_share(shard
     assert third - ts.FIXED_MIN == pytest.approx((whole - ts.FIXED_MIN) / 3, rel=0.02)
 
 
+def test_a_share_of_a_unit_takes_that_share_of_its_parts_own_times():
+    """SPEC_ANALYSIS --run-part 0/2 was planned at 68.9 serial minutes against 63.2 for the whole table: a part key's time (from a
+    full run) was divided by the shard's share, not multiplied. A run part or a -k selection of share s takes s of each part's time."""
+    files = _ds_files(1)
+    fsec = {files[0]: 1200.0, **{f"{files[0]}#{j}/5": 240.0 for j in range(5)}, **{f"{files[0]}#{j}/3": 400.0 for j in range(3)}}
+    whole = ts.cut(ts.Shard(name="files", kind="light", paths=files), 5.0, REPO_ROOT, fsec, set())
+    half = ts.cut(ts.Shard(name="files", kind="light", paths=files, share=0.5), 5.0, REPO_ROOT, fsec, set())
+    work = lambda out: sum(c.est_min - ts.FIXED_MIN for c in out)  # noqa: E731
+    assert work(half) == pytest.approx(work(whole) / 2, rel=0.05), (work(half), work(whole))
+
+
 def test_a_serverless_plan_past_three_quarters_of_the_wall_is_refused_with_its_part_count(shards, tmp_path, capsys):
     """A plan must end well inside its wall: past 75% of --max-wall-min a Serverless launch is refused, naming the --run-part
     count that fits; --explain-only shows the same note."""

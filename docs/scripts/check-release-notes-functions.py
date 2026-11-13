@@ -36,6 +36,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+# A revision before the 0.6 manifest lists its functions here instead (the old JAR registry).
+FUNCTION_INFO_JSON = REPO_ROOT / "src/main/resources/com/databricks/labs/gbx/function-info.json"
 RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
 # The release notes are split across the summary page and the series subpages; a function
 # mentioned on any of them counts.
@@ -67,11 +69,29 @@ def _show(rev: str, path: Path) -> str | None:
     return None
 
 
+def _function_info_names(rev: str) -> set[str] | None:
+    """The function names of ``function-info.json`` at ``rev`` (its keys, minus ``_package_*`` dividers)."""
+    info = _show(rev, FUNCTION_INFO_JSON)
+    if info is None:
+        return None
+    if not info.strip():
+        return set()
+    try:
+        return {k for k in json.loads(info).get("functions", {}) if not k.startswith("_")}
+    except (ValueError, TypeError, AttributeError):
+        print(f"function-info.json at {rev} is not readable; treating as advisory skip.", file=sys.stderr)
+        return None
+
+
 def names_at(rev: str) -> set[str] | None:
-    """The registered names at ``rev``: the manifest's rows."""
+    """The registered names at ``rev``: the manifest's rows. A revision before the manifest (0.5.x, main
+    before 0.6) has its functions in ``function-info.json`` instead, so a function that shipped then is not
+    counted as added."""
     manifest = _show(rev, MANIFEST_JSON)
     if manifest is None:
         return None
+    if not manifest.strip():
+        return _function_info_names(rev)
     names: set[str] = set()
     if manifest.strip():
         try:

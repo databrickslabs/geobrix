@@ -145,16 +145,16 @@ a chip seam:
   footprint there. They are merged when, clipped to the overlap zone, their
   intersection-over-union is at least 0.5.
 - With `overlap=0`, the chips only abut. The fragments must share an edge along the seam
-  line, at least one pixel long and covering at least half of their edges on the seam. A
-  shared edge elsewhere, or a single shared corner point, is not a seam.
+  line. That edge is at least one pixel long and covers at least half of their edges on the
+  seam. A shared edge elsewhere, or a single shared corner point, is not a seam.
 
 `min_area` is judged on the merged object.
 
 ### NoData
 
 A pixel the raster marks invalid is background in every chip's mask before polygonizing:
-a NoData value, a mask band, or alpha 0. A raster that declares none of them, such as a
-3-band orthomosaic with a black border, treats a pixel that is 0 in every band as NoData.
+a NoData value, a mask band, or alpha 0. Some rasters declare none of them, such as a
+3-band orthomosaic with a black border. There, a pixel that is 0 in every band is NoData.
 The segmenter is given the color bands only; an alpha band is left out.
 
 ## Automatic-mask mode (today) vs. text-prompt mode (follow-on)

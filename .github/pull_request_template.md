@@ -13,4 +13,10 @@
   gbx:uc:tests PASS at <sha12>: scope ..., slice ..., examples ...
   ```
 
+- [ ] **Lakeflow connector on Databricks:** `bash scripts/commands/gbx-test-lakeflow-connector.sh --profile <name>` passed at the sha below. Paste the summary line from `python3 scripts/ci/check_lakeflow_connector_evidence.py`:
+
+  ```
+  gbx:test:lakeflow-connector PASS at <sha12>: checks ..., ... table(s), pipeline ..., schema ...
+  ```
+
 - [ ] No internal ids (planning labels, wave numbers, ticket keys, personal email addresses) in docs, comments or messages that users read

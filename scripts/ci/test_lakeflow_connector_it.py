@@ -333,9 +333,17 @@ def fake_run(it, monkeypatch, tmp_path):
         state = w.update_states[w.updates - 1]
         if state == "COMPLETED":
             return True, []
-        return False, [f"pipeline lfc: flow boroughs: cannot read {it.UNREADABLE[1]}"]
+        # As the poll does: 400 characters per error, so the file name in the worker's traceback is cut off.
+        return False, ["pipeline lfc: flow boroughs: [STREAM_FAILED] ... Traceback (most recent call last): ..."]
+
+    def fake_errors(w, pipeline_id, update_id, limit=200):
+        if w.update_states[w.updates - 1] == "COMPLETED":
+            return []
+        return [("source_boroughs_append_flow", "[STREAM_FAILED] ... Traceback ... DataSourceError: "
+                 f"/Volumes/x/{it.UNREADABLE[1]}: Failed to read GeoJSON data")]
 
     monkeypatch.setattr(it.run_sdp_bundle, "poll", fake_poll)
+    monkeypatch.setattr(it.run_sdp_bundle, "pipeline_errors", fake_errors)
 
     def make(**kw):
         args = it.parse_args(["--profile", "p", "--catalog", "cat", "--warehouse-id", "wh", "--data-dir", str(data)]

@@ -620,6 +620,12 @@ class Run:
                                            timeout_s=self.a.timeout_min * 60, poll_s=self.a.poll_secs,
                                            say=lambda m: say(m.strip()))
         say(f"{label}: {'COMPLETED' if ok else 'FAILED'} in {int(time.time() - t0)} s")
+        if not ok:
+            # The poll keeps 400 characters per error; the reader's message (it names the file) sits deeper in the
+            # Python worker's traceback. Read the update's ERROR events whole, and keep them with the run's logs.
+            full = [f"{where}: {msg}" for where, msg in run_sdp_bundle.pipeline_errors(w, pid, up.update_id)]
+            (self.run_dir / f"{label.replace(' ', '-')}-errors.txt").write_text("\n\n".join(full or problems) + "\n")
+            problems = list(problems) + full
         for p in problems[:5]:
             say(f"  - {p[:400]}")
         return ok, problems

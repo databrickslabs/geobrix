@@ -278,7 +278,9 @@ def test_sparse_orthomosaic_names_the_first_skip_in_name_order_whatever_finishes
         def map(self, fn, *iterables, **kw):  # run (and so append) last-to-first
             return [fn(*a) for a in reversed(list(zip(*iterables)))]
 
-    monkeypatch.setattr(cf, "ThreadPoolExecutor", _Reversed)  # ortho imports it at call time
+    monkeypatch.setattr(
+        cf, "ThreadPoolExecutor", _Reversed
+    )  # ortho imports it at call time
     with pytest.raises(RuntimeError) as ei:
         ortho.sparse_orthomosaic(
             {0: ("sparse", "gps.json")}, f"dbfs:{tmp_path}", tmp_path / "o.tif"

@@ -370,8 +370,10 @@ def table_of_case(name: str, chunk_tables: List[str], fn_table: Dict[str, str]) 
     if not m:
         return REST
     first = m.group(1).split("-")[0]
-    if first in chunk_tables or (first.isupper() and "_" in first):
+    if first in chunk_tables or (not chunk_tables and first.isupper() and "_" in first):
         return f"table:{first}"
+    if first.isupper() and "_" in first:  # a table the chunk does not run (its items skip there): the rest, never a sample of it
+        return REST
     t = fn_table.get(first)
     if not t:
         return REST

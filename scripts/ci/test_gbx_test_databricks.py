@@ -905,6 +905,20 @@ def test_a_raising_row_and_a_helper_row_of_their_own_are_timed_under_their_table
     assert got == {"table:SPEC_DEM": 36.0, "table:MVP_H": 11.0}
 
 
+def test_a_table_outside_the_chunk_gets_no_sample_from_its_skipped_rows(tmp_path):
+    """Every chunk of another table collects the MVP_H helper items and skips them ("GBX_ORACLE_TABLES leaves out MVP_H"), and
+    their ids (`MVP_H-<cid>`) named the table: 0.0-0.15 s samples of sls:table:MVP_H from runs that never ran it planned MVP_H at
+    0.7 min (tst-sls-g2-mvph: killed at 5 min, 2x that floor). A table outside the chunk's tables gets no time; it is the rest."""
+    cls = "test.manager.test_family_cross_tier"
+    fn_table = tm.table_of_function(REPO_ROOT)
+    junit = _junit(tmp_path / "junit.xml", [(cls, "test_helpers_oracle_session[MVP_H-h_retile]", 0.01),
+                                           (cls, "test_family_oracle[gbx_rst_rasterize-L3c0-sql]", 9)])
+    got = {x["key"]: x["s"] for x in tm.run_samples({"tables": ["RASTER_RASTERIZE"]}, "ok", 100, junit, REPO_ROOT, 1, fn_table)}
+    assert "table:MVP_H" not in got and got["table:RASTER_RASTERIZE"] == 9.0
+    assert tm.table_of_case("test_helpers_oracle_session[MVP_H-h_retile]", ["MVP_H"], fn_table) == "table:MVP_H"
+    assert tm.table_of_case("test_helpers_oracle_session[MVP_H-h_retile]", ["SPEC_DEM"], fn_table) == tm.REST
+
+
 def test_one_file_longer_than_the_target_gets_a_chunk_of_its_own():
     got = ts.pack({"a": 30.0, "b": 2.0, "c": 2.0, "d": 1.0, "e": 1.0}, 4.0)
     assert got[0] == ["a"] and sorted(x for g in got for x in g) == ["a", "b", "c", "d", "e"]

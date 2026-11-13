@@ -46,21 +46,23 @@ model_version = serving.register_to_unity_gateway(
 )
 ```
 
-`register_to_unity_gateway(pyfunc, name, *, profile, signature=None, pip_reqs=None)` logs
+`register_to_unity_gateway(pyfunc, name, *, profile, signature=None, wheel_path=None, pip_reqs=None)` logs
 `pyfunc` to the Unity Catalog model registry under the three-level UC name `name`
 (`catalog.schema.model`) and returns the resulting model version as a string.
 
 `profile` selects the `DATABRICKS_CONFIG_PROFILE` used for the registry call — this
 function never auto-selects a profile; the caller chooses it explicitly.
 
-The env5 wheel (`wheel_path=`, default `/Volumes/…/geobrix-0.6.0+env5-py3-none-any.whl`) is bundled
-into the model (`code_paths`). The `pip_reqs` argument defaults to that bundled copy plus the GeoSAM packages
-(`serving.MODEL_DEPS`). This is because the Model Serving build cannot reach a Volume and the env wheels have no
-models extra:
+The env wheel is bundled into the model (`code_paths`). By default (`wheel_path=None`) it is the
+staged env wheel of the environment that logs the model. On the Serverless GPU AI Runtime
+(environment 6) that is `/Volumes/…/geobrix-0.6.0+env6-py3-none-any.whl`. MLflow records that
+environment's Python and MLflow version for the endpoint, so the wheel's pins match them. The
+`pip_reqs` argument defaults to the bundled copy plus the GeoSAM packages (`serving.MODEL_DEPS`).
+The Model Serving build cannot reach a Volume, and the env wheels have no models extra:
 
 ```python
 DEFAULT_PIP_REQS = (
-    "code/geobrix-0.6.0+env5-py3-none-any.whl",
+    "code/geobrix-0.6.0+env6-py3-none-any.whl",
     "torch==2.9.0",
     "torchvision==0.24.0",
     "segment-geospatial",

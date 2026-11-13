@@ -171,13 +171,13 @@ capability, not something to invoke today.
 ## Installation
 
 ```
-%pip install "geobrix[vizx] @ file:///Volumes/.../geobrix-0.6.0+env5-py3-none-any.whl"
+%pip install "geobrix[vizx] @ file:///Volumes/.../geobrix-0.6.0+env6-py3-none-any.whl"
 %pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial" "opencv-python-headless==4.11.0.86"
 ```
 
-On Databricks the GeoSAM packages are a separate step after the env5 wheel, because the env wheels have no
-models extra. They are `torch==2.9.0` / `torchvision==0.24.0` (CUDA 12, the Serverless **GPU AI Runtime
-environment 5** base's pair), OpenCV 4.x, and `segment-geospatial`. The last one also installs PyPI's
+On the Serverless **GPU AI Runtime** (environment 6) the GeoSAM packages are a separate step after the env6
+wheel, because the env wheels have no models extra. They are `torch==2.9.0` / `torchvision==0.24.0` (the
+CUDA-12 pair), OpenCV 4.x, and `segment-geospatial`. The last one also installs PyPI's
 `rasterio` and `shapely` beside the wheel's own (a GeoBrix process uses the wheel's). See [Geospatial Models
 overview](./overview#installation).
 

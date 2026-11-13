@@ -5,7 +5,7 @@ Light-only package: importing ``databricks.labs.gbx.models`` or any of its submo
 never imports torch/segment-geospatial. Those land only when a GPU-backed model is
 actually loaded (``load_geosam``) or served, so the base light wheel stays importable
 with no GPU deps installed. Install the GPU deps (``serving.MODEL_DEPS``) as a separate step after
-the env5 wheel.
+the env wheel (the env6 wheel on the Serverless GPU AI Runtime, environment 6).
 
 PEP 562 lazy exports: ``load_geosam``/``segment`` (geosam.py), ``segment_raster``
 (runner.py), ``register_to_unity_gateway``/``create_endpoint``/``query`` (serving.py).

@@ -5,10 +5,11 @@
 returns a GeoJSON ``FeatureCollection`` string. ``register_to_unity_gateway`` logs that
 pyfunc to the Unity Catalog model registry using mlflow's private-wheel pattern: the
 geobrix wheel is bundled INTO the model via ``code_paths`` (mlflow copies it to
-``code/<basename>``) and ``pip_requirements`` installs geobrix from that bundled copy (the env5
-wheel, whose Python and CUDA-12 torch pairing match the Serverless GPU environment 5 the model
-is logged from; no extra: the env wheels define none for models) + the GeoSAM packages, pinned
-explicitly (MODEL_DEPS) -- a deliberate
+``code/<basename>``) and ``pip_requirements`` installs geobrix from that bundled copy (the env
+wheel of the environment the model is logged from -- by default the env6 wheel of the Serverless
+GPU AI Runtime, environment 6 -- so the served environment pairs the wheel's pins with the
+mlflow and cloudpickle that logged the model; no extra: the env wheels define none for models)
++ the GeoSAM packages, pinned explicitly (MODEL_DEPS) -- a deliberate
 usage-affiliation goal: the served model's environment carries geobrix. A
 ``file:///Volumes/...`` pip requirement does NOT work here: the Model Serving
 container build has no access to the workspace's UC Volumes, so geobrix must ride
@@ -48,18 +49,37 @@ import shapely.wkb
 PREDICT_INPUT_COLUMNS = [("image_b64", "string")]
 PREDICT_OUTPUT_COLUMNS = [("geojson", "string")]
 
-# Default wheel_path for register_to_unity_gateway: a BARE local/Volume path (never a
-# file:// URI -- that form is only meaningful to pip, and even then the Model Serving
-# container build cannot reach a Volume at all). Matches the sample-data Volume layout
-# used elsewhere for wheel staging; override wheel_path= with the actual staged
-# wheel's path/version at call time.
-DEFAULT_WHEEL_PATH = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl"
-)
+# The staged env wheels' path: a BARE local/Volume path (never a file:// URI -- that form is
+# only meaningful to pip, and even then the Model Serving container build cannot reach a
+# Volume at all). Matches the sample-data Volume layout used elsewhere for wheel staging;
+# override wheel_path= with the actual staged wheel's path/version at call time.
+_WHEEL_PATH_TEMPLATE = "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env{env}-py3-none-any.whl"
+
+# The wheel register_to_unity_gateway bundles when the logging process runs no env wheel (a
+# source checkout): the env6 wheel, the Serverless GPU AI Runtime's (environment 6).
+DEFAULT_WHEEL_PATH = _WHEEL_PATH_TEMPLATE.format(env=6)
+
+
+def default_wheel_path() -> str:
+    """The env wheel ``register_to_unity_gateway`` bundles by default: the one of the
+    environment the model is logged from (``_build_info.ENV`` of the running env wheel),
+    ``DEFAULT_WHEEL_PATH`` (env6) when no env wheel runs. mlflow records the logging
+    process's Python and its own version as the served environment's, and the pyfunc is
+    pickled by its cloudpickle; an env wheel's pins (numpy, protobuf, ...) are built and
+    checked against that same environment family (envs/env<N>/base.txt), so the served
+    environment pairs them with the env wheel of the same family."""
+    try:
+        from databricks.labs.gbx import _build_info
+    except ImportError:
+        return DEFAULT_WHEEL_PATH
+    env = getattr(_build_info, "ENV", None)
+    return _WHEEL_PATH_TEMPLATE.format(env=env) if env in (5, 6) else DEFAULT_WHEEL_PATH
+
 
 # The GeoSAM packages, as explicit requirement lines: the env wheels have no models extra (the same
-# separate step the notebooks take after the wheel). torch / torchvision pinned to the GPU environment
-# 5 base's CUDA-12 pair; OpenCV 4.x (5.x aborts in its FIPS self-test on the GPU node).
+# separate step the notebooks take after the wheel). torch / torchvision pinned to the CUDA-12 pair
+# both GPU environments take (the GeoSAM install on environment 6, the notebooks' step after the
+# wheel); OpenCV 4.x (5.x aborts in its FIPS self-test on the GPU node).
 MODEL_DEPS = (
     "torch==2.9.0",
     "torchvision==0.24.0",
@@ -213,7 +233,7 @@ def register_to_unity_gateway(
     *,
     profile,
     signature=None,
-    wheel_path=DEFAULT_WHEEL_PATH,
+    wheel_path=None,
     pip_reqs=None,
 ) -> str:
     """Register ``pyfunc`` to the Unity Catalog model registry ("Unity Gateway") under
@@ -222,8 +242,9 @@ def register_to_unity_gateway(
 
     Bundles the geobrix wheel WITH the model (mlflow's private-wheel pattern) rather
     than installing it from a Volume path the Model Serving container build cannot
-    reach: ``wheel_path`` (a bare local/Volume path, default ``DEFAULT_WHEEL_PATH``) is
-    always passed through as ``code_paths=[wheel_path]``, which copies it into the
+    reach: ``wheel_path`` (a bare local/Volume path; ``None``, the default, is
+    ``default_wheel_path()``: the staged env wheel of the environment the model is logged
+    from) is always passed through as ``code_paths=[wheel_path]``, which copies it into the
     model at ``code/<basename>``. ``pip_reqs`` defaults to ``_bundled_pip_reqs(
     wheel_path)`` -- installing geobrix from that BUNDLED path (plus
     segment-geospatial) -- and is computed fresh from ``wheel_path`` so an overridden
@@ -234,6 +255,8 @@ def register_to_unity_gateway(
     ``geosam_signature()`` when ``None``) happens inside ``_mlflow_log_and_register``,
     which real callers exercise for real and tests monkeypatch.
     """
+    if wheel_path is None:
+        wheel_path = default_wheel_path()
     pip_reqs = list(pip_reqs) if pip_reqs is not None else _bundled_pip_reqs(wheel_path)
     return _mlflow_log_and_register(
         pyfunc=pyfunc,

@@ -71,7 +71,7 @@ import uuid
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 try:  # the junit files are our own, but a parser that refuses entities costs nothing
     from defusedxml import ElementTree as ET
@@ -135,6 +135,8 @@ def parse(argv):
     p.add_argument("--stall-min", type=float, default=10.0)
     p.add_argument("--start-cap-min", type=float, default=25.0)
     p.add_argument("--pool-wait-min", type=float, default=30.0)
+    p.add_argument("--serverless-cap", type=int, default=SERVERLESS_WORKSPACE_CAP,
+                   help="runner tasks of gbx Serverless test runs at once in the workspace; a launch waits for room (0: no gate)")
     p.add_argument("--pip-extra", default="")
     p.add_argument("--env", action="append", default=[], metavar="KEY=VAL", help="an environment variable every shard sets (repeatable)")
     p.add_argument("--spark-conf", action="append", default=[], metavar="KEY=VAL", help="a Spark conf every shard's session sets (repeatable)")
@@ -205,6 +207,9 @@ def problems(a) -> list:
            a.overrun_x, a.max_wall_min) < 0:
         out.append("--first-failed, --max-failed-chunks, --max-failures, --maxfail, --start-chunks, --test-timeout, --overrun-x and --max-wall-min "
                    "must not be negative (0 turns one off)")
+    if a.serverless and a.serverless_cap and a.max_parallel > a.serverless_cap:
+        out.append(f"--max-parallel {a.max_parallel} is over --serverless-cap {a.serverless_cap}: the runner tasks of a Serverless job "
+                   "share its 4-core driver hosts (tst-sls-p1-dem); lower it, or pass --serverless-cap 0 to lift the gate")
     if a.serverless and a.start_chunks == 0:
         out.append("--start-chunks 0 is refused with --serverless: every runner starting at once lost 5 of 8 to "
                    "ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (2026-11-12); keep the default ramp, or give a positive n")
@@ -355,9 +360,12 @@ def smoke_chunk(items: List[ts.Shard], kind: str, sha: str, root: Path, a, pool:
 
 
 SRC_MARK = {"history": "h", "partial": "p", "lower bound": "lb", "ci": "ci"}
-# Serverless: runners side by side by default. Each runner task has its own compute (no shared driver JVM, unlike a pool node's
-# slots), so the count is a cost and quota choice, not a contention one.
-SERVERLESS_SLOTS = 8
+# Serverless: runners side by side by default. The runner tasks of one job share its driver hosts: tst-sls-p1-dem (run alone, 8
+# runners) put every chunk's driver on one of 2 hosts with 4 cores, load1 median 15.9 (max 35), 165-1248 MB free, and raising rows
+# took 15 s (median) with 3 or fewer chunks active against 28 s with 9-12. So a job runs 4 by default, and the launch waits until the
+# workspace's gbx Serverless test runs leave room under SERVERLESS_WORKSPACE_CAP runner tasks (--serverless-cap).
+SERVERLESS_SLOTS = 4
+SERVERLESS_WORKSPACE_CAP = 8
 SERVERLESS_TARGET = (3.0, 5.0)  # the chunk length a Serverless cut aims at, in minutes: a few minutes, so failures show early
 POOL_TARGET = (3.0, 5.0)  # the same on a pool cluster; either is a hard cap: no chunk is planned over it
 
@@ -1755,11 +1763,11 @@ def main(argv=None) -> int:
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
-    # Serverless reads its own samples (``sls:<key>``), else the pool's solo times: a runner there has compute of its own, so it is
-    # timed as a chunk alone (slots 1) and carries no contention factor
+    # Serverless reads its own samples (``sls:<key>``) and their contention factors (the runners of a job share its driver hosts),
+    # else the pool's solo times; a runner task there is timed at slots 1
     hist = tm.view(history_for(REPO_ROOT / a.timings), serverless=a.serverless)
     time_slots = 1 if a.serverless else plan_slots(a)
-    fsec = tm.seconds(hist, time_slots, adjust=not a.serverless)  # per file / per oracle table, at this run's slots, times its contention factor
+    fsec = tm.seconds(hist, time_slots)  # per file / per oracle table, at this run's slots, times its contention factor
     fsolo = tm.seconds(hist, time_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
     hot = set() if a.serverless else tm.contended(hist)  # contention-heavy units: they join the heavy gate
     lower = tm.lower_bounds(hist, time_slots)
@@ -1979,6 +1987,40 @@ def lease_pool(w, a, plan: dict, pool_name: str, *, jar: Optional[dict], volroot
                 print(f"WARNING: could not delete {name}: {exc}", file=sys.stderr)
 
 
+_TASK_ENDED = {"TERMINATED", "SKIPPED", "INTERNAL_ERROR"}
+
+
+def active_serverless_runners(w) -> int:
+    """Runner tasks (``r_<i>``) not ended in the workspace's active gbx Serverless test runs (run name ``gbx-tests-<id> | serverless |``)."""
+    n = 0
+    for r in w.jobs.list_runs(active_only=True, expand_tasks=True):
+        if not (r.run_name or "").startswith("gbx-tests-") or "| serverless |" not in (r.run_name or ""):
+            continue
+        for t in r.tasks or []:
+            state = getattr(getattr(getattr(t, "state", None), "life_cycle_state", None), "value", "")
+            if (t.task_key or "").startswith("r_") and state not in _TASK_ENDED:
+                n += 1
+    return n
+
+
+def wait_for_serverless_room(count: Callable[[], int], want: int, cap: int, wait_min: float, *, sleep=time.sleep,
+                             clock=time.monotonic, every_s: float = 60.0) -> Optional[int]:
+    """Wait until ``want`` more runner tasks fit under ``cap`` across the workspace (``count()`` the ones running); the count it
+    found then, or None when ``wait_min`` passed first. ``cap`` 0 is no gate (0 returned at once)."""
+    if not cap:
+        return 0
+    t0 = clock()
+    while True:
+        busy = count()
+        if busy + want <= cap:
+            return busy
+        if clock() - t0 > wait_min * 60:
+            return None
+        print(f"  waiting for Serverless room: {busy} runner task(s) of gbx test runs active, {want} more would pass --serverless-cap {cap}",
+              flush=True)
+        sleep(every_s)
+
+
 def job_tasks(plan: dict, pool: str, nb_paths: dict, cluster_ids: List[str]) -> List[dict]:
     """The pool job's tasks, as plain dicts: a seed task that fills the queue table, then one runner task per slot, each depending
     on the seed only (a runner never waits for another). Runner i runs on cluster i % len(cluster_ids), so each cluster carries
@@ -2049,6 +2091,12 @@ def start_pool(w, a, plan: dict, pool: str, stack, *, volroot: str, me: str, bas
         cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
         relane(plan, pool, a, len(pool_leases), cores)
         pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
+    if pool == "serverless":  # the workspace gate: the runner tasks of every gbx Serverless test run share a cap
+        busy = wait_for_serverless_room(lambda: active_serverless_runners(w), plan["pools"][pool]["runners"], a.serverless_cap,
+                                        a.pool_wait_min)
+        if busy is None:
+            raise RuntimeError(f"no Serverless room in {a.pool_wait_min:g} min: other gbx test runs hold the --serverless-cap of "
+                               f"{a.serverless_cap} runner tasks; wait for them, or lower --max-parallel")
     budget = float((plan.get("fail_fast") or {}).get("max_wall_min") or 0)
     if budget:
         plan["pools"][pool]["deadline"] = time.time() + budget * 60
@@ -2171,8 +2219,8 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
     fn_table = tm.table_of_function(REPO_ROOT)
     sls = bool(plan.get("serverless"))
     stop = plan.get("stopped_early") or ""
-    # on Serverless each runner task has compute of its own: no chunk has neighbours (one "cluster" per runner)
-    per, peaks = tm.neighbours(records or {}, {pool: (max(1, len(recs)) if sls else plan["pools"].get(pool, {}).get("clusters", 1))
+    # on Serverless the runner tasks of one job share its driver hosts (tst-sls-p1-dem): its chunks are neighbours, one "cluster"
+    per, peaks = tm.neighbours(records or {}, {pool: (1 if sls else plan["pools"].get(pool, {}).get("clusters", 1))
                                                for pool, recs in (records or {}).items()})
     samples, cont = [], []
     # the first chunk of each runner started cold (its runner's compute fresh; on Serverless few task slots): its samples say so
@@ -2196,11 +2244,11 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         samples += got_s
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
-        # no contention on Serverless (a runner has compute of its own): actual over expected is the row's error %, not a factor
-        r.update(x=round(act / (solo * 60), 2) if act and solo and not sls else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
-        if verdict in ("ok", "FAILED", "INCOMPLETE") and not sls and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k"):
-            cont += tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
-                                          incomplete=verdict == "INCOMPLETE")
+        r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
+        if verdict in ("ok", "FAILED", "INCOMPLETE") and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k"):
+            recs = tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
+                                         incomplete=verdict == "INCOMPLETE")
+            cont += [dict(c, key=tm.SLS + c["key"]) for c in recs] if sls else recs  # a Serverless record under its own key
     run = {"run": plan["run_id"], "sha": plan["sha"][:10], "slots": max((p.get("slots", 1) for p in plan["pools"].values()), default=1)}
     if sls:
         run["serverless"] = True
@@ -2736,7 +2784,7 @@ def collect(w, plan: dict, runs: Dict[str, int], local_out: Path, records: Optio
             "actual_s": int(mine[-1]["end"] - mine[-1]["start"]) if mine and mine[-1].get("end") is not None else None,
             "isolation": (res or {}).get("isolation"), "maxfail_hit": bool((res or {}).get("maxfail_hit")), "smoke": slug in smokes,
             "failures": (junit or {}).get("failures", []), "skip_reasons": (junit or {}).get("skip_reasons", Counter()),
-            "phases": (res or {}).get("phases"),
+            "phases": (res or {}).get("phases"), "compute": (res or {}).get("compute"),
         })
         print(f"  downloaded {len(got)} file(s) for {s['name']}", flush=True)
     return rows

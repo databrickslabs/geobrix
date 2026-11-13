@@ -23,7 +23,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel, or a folder that holds it (the newest `geobrix-*+env6-py3-none-any.whl` there by mtime, then by version, as `--jar-path` takes a JAR from a folder). Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.
 - `--jar-path <path>` - the JAR of the heavy shards, or the folder that holds it. Default: `python/geobrix/lib/`.
-- `--max-parallel <n>` - runners per cluster, so shards side by side. Default: the node's cores / 8 (4 on 32 vCPU); 8 runner tasks on Serverless.
+- `--max-parallel <n>` - runners per cluster, so shards side by side. Default: the node's cores / 8 (4 on 32 vCPU); 4 runner tasks on Serverless.
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards. The cut sets the queue's order and grain, not which slot runs a part.
 - `--target-min <n>` - the most minutes a chunk is planned at: a hard cap. Default: chosen from the history for about 3.5 chunks per slot, between 3 and 5 min. A file or table longer than it alone is cut into test parts.
@@ -163,9 +163,15 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## Serverless
 
-- `--serverless` runs one runner task per slot, 8 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
-- Each runner task has compute of its own, so no chunk slows a neighbour. There is no heavy gate and no contention factor.
-  - So a Serverless plan marks no chunk `xN`, and its summary has no contention cell. A test part's own time is its estimate, not a factor.
+- `--serverless` runs one runner task per slot, 4 by default (`--max-parallel`). Each takes chunks from the same queue as the pools do.
+- The runner tasks of one job share its driver hosts. `tst-sls-p1-dem` (run alone, 8 runners) put 22 chunks on 2 hosts of 4 cores.
+  - Their load1 median was 15.9 (max 35), with 165-1248 MB free at a chunk's start.
+  - Raising rows took 15 s (median) with 3 or fewer chunks active, and 28 s with 9-12.
+  - So a job's chunks are neighbours, as on a pool node. Their contention factors are recorded and planned (`xN`). There is no heavy gate.
+- `--serverless-cap <n>` - runner tasks of gbx Serverless test runs at once in the workspace. Default: 8. 0 turns the gate off.
+  - A launch waits up to `--pool-wait-min` for room, then fails. `--max-parallel` over the cap is refused.
+- Each chunk records its compute: the driver's host, cores, cgroup `cpu.max` and `memory.max`, and load at start, end and every 30 s.
+  - It also records the hosts of its Python workers, and each runner records its own host. The summary's `compute:` line counts them.
 - `--start-chunks 0` is refused with `--serverless`. On 2026-11-12 every runner started at once, and 5 of 8 died to `ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND`.
   - Keep the default ramp, or give a positive n.
 - On Serverless the runners the ramp releases start 20 s apart, in their order. Chunks that started in one window failed together with that error.

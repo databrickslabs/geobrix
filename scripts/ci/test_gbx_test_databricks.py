@@ -2377,6 +2377,38 @@ def test_the_ramp_holds_the_later_runners_until_two_chunks_passed(tmp_path):
     assert stopped["stopped"] == "the smoke chunk s failed" and not stopped["shards"], "a held runner that sees a stop never claims"
 
 
+def test_serverless_runners_are_gated_per_job_and_across_the_workspace(monkeypatch):
+    """tst-sls-p1-dem (run alone, 8 runners): every chunk's driver was on one of 2 hosts with 4 cores, load1 median 15.9 (max 35),
+    185-1248 MB free; raising rows took 15 s (median) with 3 or fewer chunks active and 28 s with 9-12. A job runs SERVERLESS_SLOTS
+    runners by default, and a launch waits until the gbx Serverless test runs of the workspace leave room under --serverless-cap."""
+    assert launcher.SERVERLESS_SLOTS == 4 and launcher.plan_slots(_args("--serverless")) == 4
+    assert launcher.parse(["--serverless"]).serverless_cap == launcher.SERVERLESS_WORKSPACE_CAP == 8
+    assert any("--serverless-cap" in e for e in launcher.problems(_args("--explain-only", "--serverless", "--max-parallel", "12")))
+    assert not launcher.problems(_args("--explain-only", "--serverless", "--max-parallel", "12", "--serverless-cap", "0"))
+
+    class Task:
+        def __init__(self, key, state):
+            self.task_key, self.state = key, type("S", (), {"life_cycle_state": type("L", (), {"value": state})()})()
+
+    class Run:
+        def __init__(self, name, tasks):
+            self.run_name, self.tasks = name, tasks
+
+    runs = [Run("gbx-tests-a | serverless | x | 1234567890", [Task("q_seed", "TERMINATED"), Task("smoke", "TERMINATED")]
+                + [Task(f"r_{i}", "RUNNING") for i in range(3)] + [Task("r_3", "TERMINATED")]),
+            Run("gbx-tests-b | gbx-test-1n | x | 1234567890", [Task("r_0", "RUNNING")]),  # a pool run is not Serverless
+            Run("someone else", [Task("r_0", "RUNNING")])]
+    w = type("W", (), {"jobs": type("J", (), {"list_runs": staticmethod(lambda **kw: iter(runs))})()})()
+    assert launcher.active_serverless_runners(w) == 3
+    waits, counts = [], iter([7, 6, 3])
+    assert launcher.wait_for_serverless_room(lambda: next(counts), 4, 8, 10.0, sleep=waits.append, clock=lambda: 0.0) == 3
+    assert len(waits) == 2, "it waits while the room is short, then goes"
+    late = iter([7, 7, 7, 7])
+    t = iter([0.0, 0.0, 400.0, 700.0])
+    assert launcher.wait_for_serverless_room(lambda: next(late), 4, 8, 10.0, sleep=lambda s: None, clock=lambda: next(t)) is None
+    assert launcher.wait_for_serverless_room(lambda: 99, 4, 0, 10.0) == 0, "cap 0: no gate"
+
+
 def test_runners_the_ramp_releases_start_one_at_a_time_on_serverless(tmp_path):
     """On Serverless the chunks the ramp released together started their sessions in one 30 s window, and each failure of
     ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND was one of them (tst-sls-s1-rz: 4 of 6, -s2-rz: 6 of 6, all after a 400 s
@@ -2409,6 +2441,7 @@ def test_each_chunk_records_the_compute_it_ran_on_and_the_summary_says_how_many(
     line = launcher.compute_line(rows)
     assert "2 driver host(s) for 2 chunk(s)" in line and "2 worker host(s)" in line and "load1 at start median 2.2, at end median 4.5" in line
     assert launcher.compute_line([{}]) == ""
+    assert '"compute": (res or {}).get("compute")' in Path(launcher.__file__).read_text(), "the summary's rows carry it"
 
 
 def test_the_plan_starts_two_runners_and_waits_for_them_in_its_wall(shards):
@@ -2666,7 +2699,7 @@ def test_serverless_cuts_small_chunks_from_its_own_history_without_the_pools_con
     assert files[0] in tm.contended(pv) and not any(k.startswith(tm.SLS) for k in pv["keys"]), "a pool plan never reads Serverless keys"
     assert launcher.main(["--explain-only", "--serverless", "--shards", "ds", "--timings", str(hist)]) == 0
     out = capsys.readouterr().out
-    assert "x 8 slots" in out and ", heavy" not in out and "smoke (serverless," in out, "8 runners by default, no heavy gate"
+    assert "x 4 slots" in out and ", heavy" not in out and "smoke (serverless," in out, "4 runners by default, no heavy gate"
     m = __import__("re").search(r"cut to about ([\d.]+) min", out)
     assert m and launcher.SERVERLESS_TARGET[0] <= float(m.group(1)) <= launcher.SERVERLESS_TARGET[1], out
     plan = _plan(_args("--serverless"), ts.select(shards, "ds"))
@@ -2675,7 +2708,7 @@ def test_serverless_cuts_small_chunks_from_its_own_history_without_the_pools_con
 
 
 def test_a_serverless_test_part_timed_by_its_own_key_carries_no_contention_factor(shards, tmp_path, capsys):
-    """A Serverless plan printed `x1.29` .. `x9.17` on test parts (2026-11-12, tst-sls-d12 to -d15), though Serverless has no
+    """A Serverless plan printed `x1.29` .. `x9.17` on test parts (2026-11-12, tst-sls-d12 to -d15) whose history held no
     contention factor: a part's estimate came from its own key, its "solo" time from its unit's share. The factor is now the
     estimate with the factors over the one without, on one path, so only a unit's contention factor makes it."""
     files = ts.files_of(next(s for s in shards if s.name == "ds"), REPO_ROOT)
@@ -2798,9 +2831,10 @@ def test_a_serverless_run_records_its_own_keys_and_a_stopped_run_flags_its_lower
                                                                              ("ds [2/2]", "ds-2-2", "FAILED", 100, True))]
     got = launcher.record_timings(tmp_path / "h.json", plan, rows, out, records)
     h = tm.load(tmp_path / "h.json")
-    assert got["contention"] == 0 and rows[0]["nb"] == 0, "Serverless runners have no neighbours"
-    # nor a contention cell: actual over expected is the error % there, never "3.3x (heavy)" (tst-sls-d15's summary)
-    assert rows[0]["x"] is None and launcher.contention_cell(rows[0]) == "-"
+    # the runner tasks of one Serverless job share its driver hosts (tst-sls-p1-dem: 22 chunks on 2 hosts of 4 cores, load1 median
+    # 15.9): its chunks are neighbours, as a pool node's are, and their contention is recorded
+    assert rows[0]["nb"] == 1 and rows[1]["nb"] == 1 and got["contention"] >= 1
+    assert rows[0]["x"] == round(260 / (3.0 * 60), 2) and launcher.contention_cell(rows[0]) == "1.44x"
     assert set(h["keys"]) == {tm.SLS + files[0], tm.SLS + files[1]}, "Serverless samples under their own keys"
     assert h["keys"][tm.SLS + files[0]]["samples"][0] == {"s": 200.0, "run": "t1", "slots": 1, "lb": False, "first": True}, \
         "a failed chunk that ran out is a full sample (its runner's first: a cold start)"

@@ -199,15 +199,14 @@ def whole_units(samples: Iterable[dict]) -> List[dict]:
 
 def view(h: dict, serverless: bool = False) -> dict:
     """The history a plan reads. A pool plan: every key but the ``sls:`` ones. A Serverless plan: per key, its ``sls:`` entry where
-    there is one, else its pool entry, read with ``adjust=False`` and no contended keys (a Serverless runner has no neighbours on its
-    compute): the pool's contention records then only deflate their samples to the solo time."""
+    there is one (with its own contention records: the runner tasks of a job share its driver hosts), else its pool entry."""
     keys = h.get("keys", {})
     if not serverless:
         return dict(h, keys={k: v for k, v in keys.items() if not k.startswith(SLS)})
     out = {k: dict(v) for k, v in keys.items() if not k.startswith(SLS)}
     for k, v in keys.items():
-        if k.startswith(SLS) and v.get("samples"):
-            out[k[len(SLS):]] = {"samples": list(v["samples"])}
+        if k.startswith(SLS) and v.get("samples"):  # its own contention too: a job's runners share its driver hosts (tst-sls-p1-dem)
+            out[k[len(SLS):]] = {"samples": list(v["samples"]), "contention": list(v.get("contention") or [])}
     return dict(h, keys=out)
 
 

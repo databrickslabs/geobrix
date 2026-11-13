@@ -829,8 +829,8 @@ class Run:
             "update_ids": self.update_ids, "cleanup": cleanup, "result": decide(self.checks),
             "ws_dir": self.ws_dir,
         })
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        EVIDENCE.write_text(json.dumps(self.ev, indent=2, sort_keys=True) + "\n")
+        if not gate.publish_evidence(self.ev, EVIDENCE.parent, EVIDENCE.stem):
+            say(f"{EVIDENCE.name} keeps the earlier pass at the same sources: this run is in {EVIDENCE.stem}.<profile>.json")
         say("checks:")
         for c in self.checks:
             say(f"  {'PASS' if c['ok'] else 'FAIL'} {c['name']}: {c['detail'][:300]}")

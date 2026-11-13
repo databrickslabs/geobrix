@@ -100,6 +100,9 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 ## Evidence
 
 - File: `test-logs/uc-integration/evidence.json` (the logs of the run are in `test-logs/uc-integration/<sha12>/`).
+- A run writes the file when it ends, pass or fail. A starting run never deletes it.
+- Each run also writes `evidence.<profile>.json` (the profile name with `-` as `_`).
+- A run that does not pass never replaces a pass at the same `sources_hash` in `evidence.json`.
 - Fields: `head_sha`, `sources_hash`, `scope`, `started`, `finished`, `profile`, `warehouse_id`, `schema`, `job_run_ids`, `slice`, `examples`, `result`.
 - `result` is `pass` when the slice has no failure outside the known-failures file and every example statement succeeded.
 - Known failures: `scripts/ci/uc_integration_known_failures.txt`, one `<case id>: <reason>` per line. It is empty.

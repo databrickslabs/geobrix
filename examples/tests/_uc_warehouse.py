@@ -17,6 +17,7 @@ wheel, stages it and installs the functions before the first statement fails. On
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -143,3 +144,27 @@ def catalog_problem(w, catalog: str, config: Optional[Path] = None, profile: str
         f"(list the catalogs with `databricks catalogs list --profile {profile or '<profile>'}`)"
     )
     return f"the catalog {catalog} ({where}) {why} in the workspace of profile {profile or '<profile>'} [{reason}].\nFix: {fix}."
+
+
+def publish_evidence(ev: dict, out_dir: Path, name: str = "evidence") -> bool:
+    """Write the evidence of a finished gated run. True when the shared file `<name>.json` now holds this run.
+
+    The run is always kept in `<name>.<profile>.json`. The shared file is what the QC check reads. A run that did not
+    pass never replaces a pass of the same sources (`sources_hash`): that pass still describes the committed code,
+    and a later failure (another workspace, a harness or network error) does not change it.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    text = json.dumps(ev, indent=2, sort_keys=True) + "\n"
+    if ev.get("profile"):
+        (out_dir / f"{name}.{re.sub(r'[^A-Za-z0-9]', '_', ev['profile'])}.json").write_text(text)
+    shared = out_dir / f"{name}.json"
+    if ev.get("result") != "pass" and shared.is_file():
+        try:
+            old = json.loads(shared.read_text())
+        except ValueError:
+            old = {}
+        if old.get("result") == "pass" and old.get("sources_hash") == ev.get("sources_hash"):
+            return False
+    shared.write_text(text)
+    return True

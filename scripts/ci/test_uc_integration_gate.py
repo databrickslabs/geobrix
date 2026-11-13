@@ -968,3 +968,36 @@ def test_a_catalog_the_workspace_lacks_stops_the_run_before_any_step(driver, mon
     assert driver.main(["--profile", "p", "--scope", "core", "--warehouse-id", "w", "--catalog", "c"]) == 1
     err = capsys.readouterr().err
     assert "refused" in err and "Fix:" in err
+
+
+# ---- the evidence of an earlier pass survives the start and the failure of a later run -----------------------------
+
+
+def _gated_main_setup(driver, monkeypatch, tmp_path):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+
+
+def test_a_gated_run_that_stops_at_the_refusal_leaves_the_earlier_pass_in_place(driver, monkeypatch, tmp_path):
+    _gated_main_setup(driver, monkeypatch, tmp_path)
+    (tmp_path / "evidence.json").write_text(json.dumps({"result": "pass", "sources_hash": "s"}))
+    monkeypatch.setattr(driver, "warehouse_problem", lambda *a, **k: "the SQL warehouse w was deleted.\nFix: pass --warehouse-id.")
+    assert driver.main(["--profile", "p", "--scope", "core", "--warehouse-id", "w"]) == 1
+    assert json.loads((tmp_path / "evidence.json").read_text())["result"] == "pass"
+
+
+def test_the_gate_writes_its_evidence_through_the_shared_publisher(driver, monkeypatch, tmp_path):
+    _gated_main_setup(driver, monkeypatch, tmp_path)
+    g = driver.Gate(driver.parse_args(["--profile", "hub-ws", "--warehouse-id", "w"]))
+    g.ev = {"result": "pass", "sources_hash": "s", "profile": "hub-ws"}
+    g.write_evidence()
+    g.ev = {"result": "fail", "sources_hash": "s", "profile": "hub-ws"}
+    g.write_evidence()
+    assert json.loads((tmp_path / "evidence.json").read_text())["result"] == "pass"
+    assert json.loads((tmp_path / "evidence.hub_ws.json").read_text())["result"] == "fail"
+    g.a.against = "sch"
+    g.write_evidence()
+    assert (tmp_path / "evidence-adhoc.json").is_file()

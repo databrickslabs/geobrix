@@ -197,3 +197,56 @@ def test_a_catalog_that_the_workspace_lacks_is_refused_with_its_key_and_a_fix(uw
 def test_other_catalog_lookup_errors_are_reported_not_hidden(uw):
     msg = uw.catalog_problem(Cats(RuntimeError("boom")), "c", None, "p")
     assert "could not look up" in msg and "RuntimeError" in msg
+
+
+# ---- the evidence of a finished run: a failed run never replaces a pass of the same sources ----------------------------
+
+
+def ev(result, sources="s1", profile="hub-ws", **kw):
+    return {"result": result, "sources_hash": sources, "profile": profile, **kw}
+
+
+def read(path):
+    import json
+
+    return json.loads(path.read_text())
+
+
+def test_a_finished_run_writes_the_shared_file_and_a_copy_for_its_profile(uw, tmp_path):
+    kept = uw.publish_evidence(ev("pass"), tmp_path)
+    assert kept is True
+    assert read(tmp_path / "evidence.json")["result"] == "pass"
+    assert read(tmp_path / "evidence.hub_ws.json")["result"] == "pass"
+
+
+def test_a_failed_run_at_the_same_sources_keeps_the_pass_and_records_itself_per_profile(uw, tmp_path):
+    uw.publish_evidence(ev("pass", profile="e2-demo"), tmp_path)
+    kept = uw.publish_evidence(ev("fail", profile="hub-ws"), tmp_path)
+    assert kept is False
+    assert read(tmp_path / "evidence.json")["profile"] == "e2-demo" and read(tmp_path / "evidence.json")["result"] == "pass"
+    assert read(tmp_path / "evidence.hub_ws.json")["result"] == "fail"
+
+
+def test_a_failed_run_replaces_a_pass_of_other_sources_and_a_fail(uw, tmp_path):
+    uw.publish_evidence(ev("pass", sources="old"), tmp_path)
+    assert uw.publish_evidence(ev("fail", sources="new"), tmp_path) is True
+    assert read(tmp_path / "evidence.json")["sources_hash"] == "new"
+    assert uw.publish_evidence(ev("fail", sources="new", note="again"), tmp_path) is True
+    assert read(tmp_path / "evidence.json")["note"] == "again"
+
+
+def test_a_pass_always_replaces_the_shared_file(uw, tmp_path):
+    uw.publish_evidence(ev("pass", profile="e2-demo", n=1), tmp_path)
+    assert uw.publish_evidence(ev("pass", profile="hub-ws", n=2), tmp_path) is True
+    assert read(tmp_path / "evidence.json")["n"] == 2
+
+
+def test_an_unreadable_shared_file_is_replaced(uw, tmp_path):
+    (tmp_path / "evidence.json").write_text("{not json")
+    assert uw.publish_evidence(ev("fail"), tmp_path) is True
+    assert read(tmp_path / "evidence.json")["result"] == "fail"
+
+
+def test_the_evidence_name_and_a_missing_profile_are_handled(uw, tmp_path):
+    uw.publish_evidence({"result": "pass", "sources_hash": "x"}, tmp_path, name="evidence-x")
+    assert (tmp_path / "evidence-x.json").is_file() and not (tmp_path / "evidence.json").exists()

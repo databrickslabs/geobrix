@@ -53,7 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "python" / "geobrix" / "src"))  # databricks.
 import check_uc_integration_evidence as gate  # noqa: E402
 from _cluster_config import cluster_config_file  # noqa: E402
 from _job_submit import jobs_root  # noqa: E402
-from _uc_warehouse import apply_gate_target, catalog_problem, gate_warehouse, target_line, warehouse_problem  # noqa: E402
+from _uc_warehouse import apply_gate_target, catalog_problem, gate_warehouse, publish_evidence, target_line, warehouse_problem  # noqa: E402
 import uc_sources_hash  # noqa: E402
 
 CMD = REPO_ROOT / "scripts" / "commands"
@@ -763,9 +763,11 @@ class Gate:
 
     # -- the run --
     def write_evidence(self) -> None:
-        OUT_DIR.mkdir(parents=True, exist_ok=True)
-        path = ADHOC_EVIDENCE if self.a.against else EVIDENCE
-        path.write_text(json.dumps(self.ev, indent=2, sort_keys=True) + "\n")
+        if self.a.against:
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            ADHOC_EVIDENCE.write_text(json.dumps(self.ev, indent=2, sort_keys=True) + "\n")
+        elif not publish_evidence(self.ev, EVIDENCE.parent, EVIDENCE.stem):
+            say(f"{EVIDENCE.name} keeps the earlier pass at the same sources: this run is in {EVIDENCE.stem}.<profile>.json")
 
 
 # ---- a gated run in parts ---------------------------------------------------------------------------------------------
@@ -1048,8 +1050,6 @@ def main(argv=None) -> int:
     }
     if a.against:
         g.ev["adhoc"] = True  # not evidence: the installed code may not match HEAD
-    elif EVIDENCE.exists():
-        EVIDENCE.unlink()  # a run that stops early must not leave the last run's pass behind
     if not g.warehouse:
         print("--warehouse-id required (or GBX_UC_GATE_WAREHOUSE_ID / GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
         return 2

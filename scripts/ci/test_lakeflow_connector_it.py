@@ -1014,3 +1014,21 @@ def test_a_catalog_the_workspace_lacks_stops_the_lakeflow_run_before_staging(fak
     ev = json.loads(ev_path.read_text())
     bad = [c for c in ev["checks"] if not c["ok"]]
     assert ev["result"] == "fail" and bad and "Fix:" in bad[0]["detail"] and "catalog" in bad[0]["detail"]
+
+
+def test_a_failed_lakeflow_run_keeps_a_pass_of_the_same_sources(fake_run):
+    make, ev_path = fake_run
+    ev_path.parent.mkdir(parents=True, exist_ok=True)
+    ev_path.write_text(json.dumps({"result": "pass", "sources_hash": "h" * 64, "profile": "other"}))
+    assert make(update_states=("FAILED",)).run() == 1
+    kept = json.loads(ev_path.read_text())
+    assert kept["result"] == "pass" and kept["profile"] == "other"
+    assert json.loads((ev_path.parent / "evidence.p.json").read_text())["result"] == "fail"
+
+
+def test_a_failed_lakeflow_run_replaces_a_pass_of_other_sources(fake_run):
+    make, ev_path = fake_run
+    ev_path.parent.mkdir(parents=True, exist_ok=True)
+    ev_path.write_text(json.dumps({"result": "pass", "sources_hash": "old", "profile": "other"}))
+    assert make(update_states=("FAILED",)).run() == 1
+    assert json.loads(ev_path.read_text())["result"] == "fail"

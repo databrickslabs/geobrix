@@ -67,18 +67,20 @@ RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Pytho
   sources={{ light: rasterxCategoriesLight, dark: rasterxCategoriesDark }}
 />
 
-- **Accessor Functions**: Read raster properties and metadata (bounds, dimensions, CRS, bands, pixel size, georeference, format, type, NoData, subdatasets, summary, etc.)
-- **Aggregator Functions**: Combine or merge rasters in group-by (combineavg_agg, derivedband_agg, merge_agg, h3_rasterize_agg)
-- **Constructor Functions**: Create or load rasters from paths, binary content, or bands
-- **Generator Functions**: Produce multiple tiles or bands (h3_tessellate, maketiles, retile, separatebands, tooverlappingtiles)
-- **Grid Functions (H3)**: Aggregate raster values to H3 cells (rastertogrid avg/count/max/min/median/sum/variance/stddev)
-- **Grid Functions (quadbin)**: Aggregate raster values to CARTO quadbin v0 cells (rastertogrid avg/count/max/min/median/sum/variance/stddev; tessellate; rasterize_agg)
-- **Grid Functions (BNG)**: Aggregate raster values to British National Grid cells (rastertogrid avg/count/max/min/median/sum/variance/stddev; tessellate; rasterize_agg)
-- **Operations**: Transform and analyze rasters (clip, transform, merge, asformat, ndvi, filter, convolve, map algebra, coordinate conversion, isEmpty, tryOpen, initNoData, updateType, combineavg, derivedband)
-- **Web-Mercator Tile Output**: Reproject to EPSG:3857 and emit slippy-map XYZ tiles (to_webmercator, tilexyz, xyzpyramid)
-- **Vector-raster bridge**: Burn polygons into rasters and trace contiguous regions back to polygons (rasterize, polygonize)
-- **Terrain Analysis**: DEM-derived surfaces from GDAL's `raster` algorithms (slope, aspect, hillshade, TRI, TPI, roughness, color relief)
-- **Spectral Indices**: Multi-band satellite math (EVI, SAVI, NDWI, NBR, plus the generic `rst_index` dispatcher)
+Each card links to a section below:
+
+- [Accessors](#accessor-functions): size, georeference, CRS, bands and statistics.
+- [Constructors](#constructor-functions): tiles from files, bytes, bands, points or shapes.
+- [Aggregators](#aggregator-functions): merge, combine and rasterize tiles in `GROUP BY`.
+- [Generators](#generator-functions): split a tile into tiles, bands or grid cells.
+- Grid cells: raster values to [H3](#h3-grid), [quadbin](#grid-functions-quadbin), [British National Grid](#bng-grid) or [custom grid](#custom-grid) cells.
+- [LiDAR and point clouds](#lidar-dsm): bin points into surface and canopy-height models.
+- [Terrain analysis](#terrain): slope, aspect, hillshade and relief from a DEM.
+- [Spectral indices](#spectral-indices): vegetation, water, burn and land-cover indices.
+- [Operations](#operations): clip, resample, reproject, combine, map algebra, coordinates and XYZ tiles.
+- [Vector and raster](#vector-bridge): geometries to tiles and tiles to polygons.
+- [Pixel ops and extraction](#pixel-ops--extraction): bands, NoData fill, thresholds, samples, histograms and overviews.
+- [Analysis](#analysis): contours, proximity, viewshed, COG output and GDAL commands.
 
 ## Tile payload
 

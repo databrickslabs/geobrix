@@ -1001,3 +1001,113 @@ def test_the_gate_writes_its_evidence_through_the_shared_publisher(driver, monke
     g.a.against = "sch"
     g.write_evidence()
     assert (tmp_path / "evidence-adhoc.json").is_file()
+
+
+# ---- --republish: the evidence of a finished parted run, rebuilt from its record ---------------------------------------
+
+SHA12 = "48b4ed90c9d7"
+
+
+def _part(i, n, cids, ok=True, wh="w"):
+    sl = {"total": len(cids), "passed": len(cids) if ok else len(cids) - 1, "failed": 0 if ok else 1,
+          "failed_ids": [] if ok else [cids[0]], "tolerated_ids": [], "harness_errors": 0, "harness_error_ids": []}
+    ex = {"statements_ok": 4, "total": 4, "failures": [], "harness_errors": 0} if i == n else None
+    return {"started": f"2026-11-13T1{i}:00:00Z", "finished": f"2026-11-13T1{i}:10:00Z", "warehouse_id": wh,
+            "head_sha": "a" * 40, "slice": sl, "examples": ex, "cids": cids}
+
+
+def _record(n=3, **over):
+    done = {str(i): _part(i, n, [f"c{i}a", f"c{i}b"] if i < n else []) for i in range(1, n + 1)}
+    state = {"catalog": "cat", "done": done, "dropped": "dropped", "expected": [c for i in range(1, n) for c in (f"c{i}a", f"c{i}b")],
+             "head_sha": "a" * 40, "install": {"wheel": {"name": "w.whl"}, "job_run_ids": ["1"], "finished": "x"},
+             "merged": "2026-11-13T20:57:30Z", "parts": n, "schema": f"geobrix_uc_it_{SHA12}", "scope": "full",
+             "sources_hash": "s" * 64, "volume_dir": "/Volumes/c/s/v/uc-it/x"}
+    state.update(over)
+    return state
+
+
+@pytest.fixture
+def republish(driver, monkeypatch, tmp_path):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root, **k: "s" * 64)
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "b" * 40)
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+
+    def put(state, sha12=SHA12):
+        d = tmp_path / sha12
+        d.mkdir(exist_ok=True)
+        (d / "parts-full-of-3.json").write_text(json.dumps(state))
+
+    def run(*extra):
+        return driver.main(["--profile", "p", "--scope", "full", "--catalog", "cat", "--warehouse-id", "w", "--republish", SHA12, *extra])
+
+    return put, run, tmp_path
+
+
+def test_a_good_record_is_republished_as_evidence_with_the_original_finish_time(republish, capsys):
+    put, run, out = republish
+    put(_record())
+    assert run() == 0
+    ev = json.loads((out / "evidence.json").read_text())
+    assert ev["result"] == "pass" and ev["republished_from"] == SHA12 and ev["finished"] == "2026-11-13T20:57:30Z"
+    assert ev["head_sha"] == "b" * 40 and ev["sources_hash"] == "s" * 64 and ev["scope"] == "full" and ev["parts"] == 3
+    assert ev["slice"]["total"] == 4 and ev["slice"]["failed"] == 0 and ev["examples"]["statements_ok"] == 4
+    assert ev["install_head_sha"] == "a" * 40 and ev["profile"] == "p" and ev["started"] == "2026-11-13T11:00:00Z"
+    assert (out / "evidence.p.json").is_file()
+    assert "republished" in capsys.readouterr().out
+
+
+def test_a_missing_part_is_refused_and_writes_nothing(republish, capsys):
+    put, run, out = republish
+    state = _record()
+    del state["done"]["2"]
+    put(state)
+    assert run() == 1
+    err = capsys.readouterr().err
+    assert "refused" in err and "part 2" in err and "Fix:" in err
+    assert not (out / "evidence.json").exists()
+
+
+def test_a_failed_part_is_refused(republish, capsys):
+    put, run, out = republish
+    state = _record()
+    state["done"]["1"] = _part(1, 3, ["c1a", "c1b"], ok=False)
+    put(state)
+    assert run() == 1
+    assert "part 1" in capsys.readouterr().err and not (out / "evidence.json").exists()
+
+
+def test_a_record_of_other_sources_is_refused(republish, capsys):
+    put, run, out = republish
+    put(_record(sources_hash="old" + "0" * 61))
+    assert run() == 1
+    err = capsys.readouterr().err
+    assert "sources" in err and "old000000000" in err and "Fix:" in err and not (out / "evidence.json").exists()
+
+
+def test_a_case_that_no_part_ran_is_refused(republish, capsys):
+    put, run, out = republish
+    put(_record(expected=["c1a", "c1b", "c2a", "c2b", "never_ran"]))
+    assert run() == 1 and not (out / "evidence.json").exists()
+
+
+def test_a_record_of_another_catalog_or_warehouse_is_refused(republish, capsys):
+    put, run, out = republish
+    put(_record(catalog="other_cat"))
+    assert run() == 1
+    assert "other_cat" in capsys.readouterr().err and not (out / "evidence.json").exists()
+    state = _record()
+    state["done"]["2"]["warehouse_id"] = "other_wh"
+    put(state)
+    assert run() == 1
+    assert "other_wh" in capsys.readouterr().err and not (out / "evidence.json").exists()
+
+
+def test_an_unknown_install_and_dirty_sources_are_refused(republish, driver, monkeypatch, capsys):
+    put, run, out = republish
+    assert run() == 1 and "no parted run" in capsys.readouterr().err
+    put(_record())
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: ["python/geobrix/src/x.py"])
+    assert run() == 1 and "uncommitted" in capsys.readouterr().err and not (out / "evidence.json").exists()

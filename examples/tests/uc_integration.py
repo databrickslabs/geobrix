@@ -501,6 +501,7 @@ def parse_args(argv=None):
     p.add_argument("--against", metavar="SCHEMA", default=None, help="run the scope against the existing install in SCHEMA: no build, stage, install or cleanup; writes evidence-adhoc.json, never evidence.json")
     p.add_argument("--run-part", metavar="I/N", type=parse_run_part, default=None, help="run part I of a gated run cut into N parts (N >= 2): parts 1 to N-1 deal the slice, part N runs the example files; evidence.json comes with the last part to finish")
     p.add_argument("--drop-parts", metavar="SHA12", default=None, help="drop the schema and the Volume and workspace folders of the unfinished parted run of commit SHA12, then stop")
+    p.add_argument("--republish", metavar="SHA12", default=None, help="write evidence.json again from the record of a finished parted run of this install commit (and --scope): every part must have passed, and the record must cover the sources of HEAD. No workspace call")
     p.add_argument("--judge-uc", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: judge these results (run in the dev container, where osgeo exists)
     p.add_argument("--judge-out", metavar="FILE", default=None, help=argparse.SUPPRESS)
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
@@ -792,6 +793,73 @@ def part_ok(rec: dict) -> bool:
     return "error" not in rec and rec["slice"]["failed"] == 0 and rec["slice"].get("harness_errors", 0) == 0 and (ex is None or (ex["total"] > 0 and ex["statements_ok"] == ex["total"]))
 
 
+def parted_evidence(state: dict, sl: dict, ex: dict, base: dict, tables) -> dict:
+    """The evidence of a run in parts: `base` (head, sources, target, finish time) and what the record of the parts adds."""
+    done, n = state["done"], state["parts"]
+    return {
+        **base, "started": min(r["started"] for r in done.values()), "parts": n, "install_head_sha": state["head_sha"],
+        "part_runs": {i: {k: done[i].get(k) for k in ("started", "finished", "warehouse_id", "head_sha")} for i in sorted(done, key=int)},
+        "wheel": state["install"]["wheel"], "job_run_ids": list(state["install"]["job_run_ids"]),
+        "slice": {**sl, "scope": base["scope"], "tables": list(tables)},
+        "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40], "harness_errors": ex.get("harness_errors", 0)},
+        "result": decide(sl, ex),
+    }
+
+
+def republish(a, sha12: str) -> int:
+    """Write evidence.json from the record of a finished parted run of the same sources: no workspace call, no run.
+
+    The record is judged again with `merge_parts` and `decide`. It is refused when a part is missing or failed, when the
+    record names other sources than HEAD, or when it ran in another catalog or warehouse than this profile's.
+    """
+    def refuse(why: str, fix: str) -> int:
+        print(f"refused: {why}.\nFix: {fix}.", file=sys.stderr)
+        return 1
+
+    found = [(q, _load_json(q)) for q in sorted((OUT_DIR / sha12).glob("parts-*.json"))]
+    found = [(q, s) for q, s in found if s.get("scope") == a.scope and s.get("parts")]
+    if not found:
+        return refuse(f"no parted run of scope {a.scope} is recorded under {OUT_DIR / sha12}",
+                      "pass the 12-character install commit of a finished run, and --scope as that run had it")
+    if len(found) > 1:
+        return refuse(f"{len(found)} records of scope {a.scope} under {OUT_DIR / sha12}: {', '.join(q.name for q, _ in found)}",
+                      "remove the records that are not the run you mean")
+    state = found[0][1]
+    n, done = state["parts"], state["done"]
+    src = uc_sources_hash.sources_hash(REPO_ROOT)
+    if state.get("sources_hash") != src:
+        return refuse(f"the record covers sources {str(state.get('sources_hash'))[:12]}, HEAD has {src[:12]}",
+                      "run the gate again at HEAD: evidence must describe the committed code")
+    dirty = uc_sources_hash.dirty_files(REPO_ROOT)
+    if dirty:
+        return refuse("uncommitted changes under the UC sources: " + ", ".join(dirty[:8]), "commit them first")
+    bad = [i for i in range(1, n + 1) if str(i) not in done or not part_ok(done[str(i)])]
+    if bad:
+        return refuse(f"part {', '.join(map(str, bad))} of {n} is missing or failed in the record",
+                      "run the missing or failed parts again with --run-part")
+    if state.get("catalog") != a.catalog:
+        return refuse(f"the record ran in the catalog {state.get('catalog')}, this profile's target is {a.catalog}",
+                      "pass the profile of that run, or --catalog as recorded")
+    other = sorted({r.get("warehouse_id") for r in done.values()} - {a.warehouse_id})
+    if other:
+        return refuse(f"the record ran on the warehouse {', '.join(map(str, other))}, this profile's target is {a.warehouse_id}",
+                      "pass the profile of that run, or --warehouse-id as recorded")
+    sl, ex = merge_parts(done, state.get("expected", []), n)
+    base = {"head_sha": uc_sources_hash.head_sha(REPO_ROOT), "sources_hash": src, "profile": a.profile, "warehouse_id": a.warehouse_id,
+            "catalog": a.catalog, "schema": state["schema"], "volume_dir": state["volume_dir"], "scope": a.scope,
+            "finished": state.get("merged") or max(r["finished"] for r in done.values())}
+    ev = parted_evidence(state, sl, ex, base, slice_tables(a.scope))
+    ev.update({"republished_from": sha12, "republished": now(), "cleanup": state.get("dropped", "kept")})
+    if ev["result"] != "pass":
+        return refuse(f"the record judges as {ev['result']}: slice {sl['passed']}/{sl['total']} passed, {sl['failed']} failed",
+                      "run the failed cases again; a failing record is never evidence")
+    if not publish_evidence(ev, EVIDENCE.parent, EVIDENCE.stem):
+        say(f"{EVIDENCE.name} keeps the earlier pass at the same sources")
+    say(gate.summary_line(ev) + f"; republished from the record of {sha12} ({n} parts)")
+    say(f"evidence: {EVIDENCE}")
+    return 0
+
+
 def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
     """Part I of N of a gated run: install unless an earlier part did, run the part's share, merge after the last part."""
     part, n = a.run_part
@@ -862,17 +930,9 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
             f"The schema stays until then (drop an abandoned run with --drop-parts {g.sha12})")
         return 0 if ok else 1
     sl, ex = merge_parts(state["done"], state.get("expected", []), n)
-    done = state["done"]
-    g.ev = {
-        "head_sha": g.head, "sources_hash": src, "started": min(r["started"] for r in done.values()), "profile": a.profile,
-        "warehouse_id": g.warehouse, "catalog": a.catalog, "schema": g.schema, "volume_dir": g.folder, "scope": a.scope,
-        "parts": n, "install_head_sha": state["head_sha"],
-        "part_runs": {i: {k: done[i].get(k) for k in ("started", "finished", "warehouse_id", "head_sha")} for i in sorted(done, key=int)},
-        "wheel": state["install"]["wheel"], "job_run_ids": list(state["install"]["job_run_ids"]),
-        "slice": {**sl, "scope": a.scope, "tables": list(tables)},
-        "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40], "harness_errors": ex.get("harness_errors", 0)},
-        "result": decide(sl, ex), "finished": now(),
-    }
+    base = {"head_sha": g.head, "sources_hash": src, "profile": a.profile, "warehouse_id": g.warehouse, "catalog": a.catalog,
+            "schema": g.schema, "volume_dir": g.folder, "scope": a.scope, "finished": now()}
+    g.ev = parted_evidence(state, sl, ex, base, tables)
     g.write_evidence()
     state["merged"] = g.ev["finished"]  # merged: a later part starts a new run
     _save_json(path, state)
@@ -980,6 +1040,9 @@ def main(argv=None) -> int:
     if a.run_part and a.scope == "smoke":
         print("--run-part cuts a core or full run into parts: it takes no smoke scope", file=sys.stderr)
         return 2
+    if a.republish:
+        say(target_line(a, a.profile))
+        return republish(a, a.republish)
     g = Gate(a)
     say(target_line(a, a.profile))
     if a.drop_parts:

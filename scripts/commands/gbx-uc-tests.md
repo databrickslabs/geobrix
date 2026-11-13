@@ -25,6 +25,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `--example-files-parallel N` - example files run side by side. Default `6`. File `00` (the setup that creates the tables the others read) runs first, alone. The statements of one file stay in order, and the files' text is not batched.
 - `--rebuild` - build the wheel even when `dist/env6` holds one that fits HEAD.
 - `--run-part I/N` - run part I of a gated run cut into N parts (N at least 2). See "Gated run in parts".
+- `--republish SHA12` - write `evidence.json` again from the record of a finished parted run. See "Republish from a record".
 - `--drop-parts SHA12` - drop the schema and the folders that an unfinished parted run of commit SHA12 kept. Then stop.
 - `--keep` - keep the schema and the Volume folder (gated run).
 - `--install-into SCHEMA` - install into `SCHEMA` and keep it, for a demo. See "Install that stays".
@@ -82,6 +83,18 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - The last part to finish judges all parts as one run. Each case is judged on its own, so the verdict equals an unsplit run's. A case that no part ran fails.
 - It writes `evidence.json` with `parts` and `part_runs`, then drops the schema and the folders, unless `--keep`.
 - To abandon an unfinished parted run, run `--drop-parts <sha12>`. It drops only `geobrix_uc_it_<sha12>`.
+
+## Republish from a record
+
+- Use it when a finished run's `evidence.json` is gone, for example after a later run overwrote it.
+- Run `--republish <install_sha12> --scope full --profile <name>`. The install sha12 names the folder `test-logs/uc-integration/<sha12>/`.
+- It makes no workspace call and no run. It reads `parts-<scope>-of-<N>.json` and judges the parts again with the same code as a parted run.
+- It refuses, with a Fix, in these cases:
+  - a part is missing or failed in the record;
+  - the record's `sources_hash` is not HEAD's;
+  - a tracked UC source differs from HEAD;
+  - the record ran in another catalog or warehouse than the profile's target.
+- The evidence it writes has `republished_from`, `republished`, and the original `finished` time.
 
 ## Transient API errors
 

@@ -51,6 +51,11 @@ Options:
                           to N-1 deal the slice; part N runs the example files. The first part to run installs,
                           the others reuse it. A failed part can be run again. The last part to finish writes
                           evidence.json (scope, parts N) and drops the schema. Record: <run dir>/parts-*.json
+  --republish SHA12       Write evidence.json again from the record of a finished parted run (SHA12 = its install
+                          commit; give its --scope). It judges the recorded parts again, with no workspace call and
+                          no run. It refuses when a part is missing or failed, when the record covers other
+                          sources than HEAD, or when it ran in another catalog or warehouse than the profile's.
+                          The evidence has republished_from and the original finish time
   --drop-parts SHA12      Drop the schema and the folders kept by an unfinished parted run of commit SHA12
   --keep                  Keep the schema and the Volume folder (gated run)
   --install-into SCHEMA   Install into SCHEMA and keep it, for demos: stage the dist/env6 wheel (any clean build)
@@ -93,7 +98,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts)
+    --profile|--catalog|--volroot|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts|--republish)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

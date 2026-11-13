@@ -323,6 +323,26 @@ def test_a_uc_gate_folder_follows_the_hold_on_its_notebook(sw):
     assert w.deleted == []
 
 
+def test_a_lakeflow_connector_test_folder_is_removed_whole_after_its_window(sw):
+    # Fail on revert: without the lfc rule, gbx:test:lakeflow-connector's pipeline-source folders stay forever.
+    w = FakeW()
+    folder = f"{ROOT}/lfc-it-0123456789ab"
+    w.add(f"{folder}/ingest.py", age_min=120)
+    young = f"{ROOT}/lfc-it-ba9876543210"
+    w.add(f"{young}/ingest.py", age_min=10)
+    _sweep(sw, w)
+    assert w.deleted == [folder] and young in w.objects
+
+
+def test_a_failed_lakeflow_connector_test_folder_is_held_24_h(sw):
+    w = FakeW()
+    folder = f"{ROOT}/lfc-it-0123456789ab"
+    w.add(f"{folder}/ingest.py", age_min=120)
+    sw.release(w, [folder], scope="lfc", succeeded=False, now=NOW - 120 * MIN, out=lambda s: None)
+    _sweep(sw, w)
+    assert w.deleted == [] and folder in w.objects
+
+
 def test_a_failed_mutation_stage_on_the_volume_is_held_then_swept(sw):
     w = FakeW()
     stage = "/Volumes/c/s/v/mutation-runs/mut-r1"

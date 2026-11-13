@@ -15,7 +15,7 @@ folders and folders the sweep emptied (it holds your own trees).
 Usage: bash scripts/commands/gbx-workspace-sweep.sh --profile <name> [options]
   --profile <name>      Databricks profile (required)
   --older-than <age>    Remove items older than this, by modified time (default 60m; also 90s, 2h, 1d)
-  --scope <s[,s]>       bench, runners, uc, notebooks; repeat or comma-separate (default all)
+  --scope <s[,s]>       bench, runners, uc, lfc, notebooks; repeat or comma-separate (default all)
   --dry-run             Print what would be removed; remove nothing
   --report-file <path>  Full report file (default test-logs/workspace-sweep-<profile>-<UTC timestamp>.log)
   --log <path>          Write output to a log file

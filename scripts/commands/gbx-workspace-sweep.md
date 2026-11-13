@@ -8,7 +8,7 @@ Remove the runner notebooks and folders the launchers keep at run end, once they
 
 - `--profile <name>`: the Databricks profile. Required.
 - `--older-than <age>`: remove items older than this, by modified time. Default `60m`; also `90s`, `2h`, `1d`, or bare minutes.
-- `--scope <s[,s]>`: `bench`, `runners`, `uc`, `notebooks`. Repeat or comma-separate. Default all four.
+- `--scope <s[,s]>`: `bench`, `runners`, `uc`, `lfc`, `notebooks`. Repeat or comma-separate. Default all five.
 - `--dry-run`: print what would be removed; remove nothing.
 - `--report-file <path>`: write the full report there. Default `test-logs/workspace-sweep-<profile>-<UTC timestamp>.log`.
 - `--log <path>`: write output to a log file.

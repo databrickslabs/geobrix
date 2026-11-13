@@ -17,6 +17,7 @@ later.
     default ``jobs/geobrix/runners``; gbx:test:databricks, gbx:test:mutation-databricks), and a failed mutation
     run's Volume stage (``.../mutation-runs/<run>``) once recorded;
   - ``uc``: the UC gate's ``jobs/geobrix/uc-it-<sha>`` folders, whole;
+  - ``lfc``: the Lakeflow connector test's ``jobs/geobrix/lfc-it-<sha>`` folders (its pipeline source file), whole;
   - ``notebooks``: the notebooks gbx:test:notebooks-serverless imported, by the path it recorded (its
     ``--ws-dir`` folders also hold notebooks of your own, so nothing there is removed by name).
 
@@ -65,7 +66,7 @@ from _job_submit import jobs_root  # sibling module (script dir is on sys.path):
 WINDOW_S = 60 * 60
 FAILED_WINDOW_S = 24 * 60 * 60
 LAUNCH_MAX_DELETES = 25
-SCOPES = ("bench", "runners", "uc", "notebooks")
+SCOPES = ("bench", "runners", "uc", "lfc", "notebooks")
 # A recorded Volume path is removed only inside one of these stage folders.
 VOLUME_STAGE_SEGMENTS = ("/mutation-runs/",)
 
@@ -224,6 +225,7 @@ def rules(me: str, runner_dir: Optional[str] = None) -> List[Rule]:
         Rule("bench", f"{root}/bench", ("geobrix_bench_runner_*", "geobrix_gen_corpus_*")),
         Rule("runners", ws_path(runner_dir) if runner_dir else f"{root}/runners", _RUNNER_PATTERNS),
         Rule("uc", root, ("uc-it-*",), folders=True),
+        Rule("lfc", root, ("lfc-it-*",), folders=True),
     ]
     out += [
         Rule("bench", f"{legacy}/bench", ("geobrix_bench_runner_*", "geobrix_gen_corpus_*")),

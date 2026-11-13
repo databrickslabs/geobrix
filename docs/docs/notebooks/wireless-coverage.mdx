@@ -241,7 +241,7 @@ The series uses the `rasterx` Python API plus the `geobrix[vizx]` env6 wheel —
 :::
 
 :::note Big-data by default
-`DECIMATE=1` keeps **every** LiDAR return (~830 M over San Francisco) — an honest big-data run. Raise `DECIMATE` (e.g. 10) for a fast coarse pass while iterating on the visualization cells; the pipeline is identical either way.
+`DECIMATE=1` keeps **every** LiDAR return. The default Golden Gate Park demo (`DEMO=True`) downloads and bins about 2,700 LiDAR nodes (~91 M returns). The full San Francisco run (`DEMO=False`) downloads about 24,400 nodes (~4.9 GB, ~830 M returns). Raise `DECIMATE` (e.g. 10) for a fast coarse pass while iterating on the visualization cells; the pipeline is identical either way.
 :::
 
 ## The notebooks

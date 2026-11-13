@@ -58,7 +58,7 @@ installs its own dependencies: `geobrix[vizx]` on the env6 wheel, then the GeoSA
 It does not need `pycolmap`, because its **instance-objects** section needs GeoSAM's
 `torch`/`segment-geospatial`, not `pycolmap`. That section runs on the **Serverless GPU AI Runtime**
 (environment 6). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and
-needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any time after
+needs no GPU. The notebook takes the series' paths from `%run ./config_nb` and can run any time after
 `02_publish` has written `orthomosaic_cog.tif`.
 :::
 

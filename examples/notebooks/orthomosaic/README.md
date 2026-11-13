@@ -55,7 +55,7 @@ The wheel is fetched from:
 
 `01b_sfm_orthomosaic_gpu` installs the env6 wheel (with `pycolmap-cuda12`) instead, because it runs on the GPU runtime.
 
-`03_segment` is standalone (no `%run ./config_nb`) and installs its own dependencies —
+`03_segment` takes the series' catalog, schema and output paths from `%run ./config_nb`, and installs its own dependencies —
 `geobrix[vizx]` (the env6 wheel, with the GeoSAM GPU packages as a separate step) — since it needs the GeoSAM GPU model deps
 (`torch`, `segment-geospatial`), not `photogrammetry`.
 

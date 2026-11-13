@@ -2,6 +2,7 @@
 coverage, and the docs example checks."""
 
 import importlib.util
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -61,10 +62,26 @@ def test_a_manifest_absent_at_the_base_counts_all_its_rows_as_added(monkeypatch)
         monkeypatch,
         {
             ("base", "functions.json"): "",  # the revision exists; the file did not
+            ("base", "function-info.json"): "",  # nor the old registry
             ("end", "functions.json"): MANIFEST,
         },
     )
     assert mod.added_functions("base..end") == ["gbx_new_b", "gbx_old_a"]
+
+
+def test_a_base_before_the_manifest_reads_its_function_info(monkeypatch):
+    """A revision before the 0.6 manifest lists its functions in function-info.json (main before 0.6)."""
+    mod = _notes(
+        monkeypatch,
+        {
+            ("base", "functions.json"): "",
+            ("base", "function-info.json"): json.dumps(
+                {"functions": {"_package_x": "---", "gbx_old_a": {}}}
+            ),
+            ("end", "functions.json"): MANIFEST,
+        },
+    )
+    assert mod.added_functions("base..end") == ["gbx_new_b"]
 
 
 def test_an_unreadable_revision_or_manifest_is_an_advisory_skip(monkeypatch):

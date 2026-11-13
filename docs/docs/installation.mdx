@@ -110,6 +110,8 @@ wheel on Serverless environment 6 and DBR 19, and the `+env5` wheel on Serverles
 
 :::note Upgrading from GeoBrix 0.5.x?
 **GeoBrix 0.5.x** installed with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In **0.6.0** those extras are gone: install the env wheel for the runtime instead, with no light extra. Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` (`+env5` for `light_env5` and `light_dbr17` / `light_dbr18`). An `_all` form becomes `[stac,vizx]`, and `[stac,vizx,zarr]` on the env6 wheel. An old install line fails at resolution (pip: `ResolutionImpossible`), naming the env wheel to install, rather than installing something else.
+
+The 0.5.x GPU extras `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all` name the `+env6` wheel. The UDF workers of the Serverless GPU runtime run environment 6. A driver-only GPU step, such as dense MVS with `pycolmap-cuda12`, can stay on the `+env5` wheel with no extra. Install the GPU packages as a separate step after the wheel.
 :::
 
 :::tip On Serverless, use environment 6

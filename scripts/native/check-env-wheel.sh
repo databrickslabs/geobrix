@@ -83,7 +83,7 @@ print(g)' 2>&1)" && sys="$("$V/bin/python" -c 'import os, rasterio; print(os.env
     || bad "4 CA: $out $sys"
 
 V2=/tmp/fresh; $PY -m venv "$V2"
-for name in $([ "$ENV" = 6 ] && echo "light_env5 light_dbr17_all" || echo "light_env6 light_dbr19"); do
+for name in $([ "$ENV" = 6 ] && echo "light_env5 light_dbr17_all" || echo "light_env6 models_gpu_env5"); do
     out="$(pipq "$V2/bin/python" install --dry-run --no-index --find-links /dist --find-links /wheelhouse "geobrix[$name]==$VERSION+env$ENV" 2>&1)"
     if echo "$out" | grep -q ResolutionImpossible && echo "$out" | grep -q "geobrix==$VERSION+env$OTHER"; then
         ok "5 tripwire [$name]: ResolutionImpossible, $(echo "$out" | grep -m1 "depends on geobrix==" | sed 's/^ *//')"

@@ -18,6 +18,7 @@ A 0.5.x call that no longer exists raises an error. The message gives a `Fix:` w
 | `geobrix[light_env6_all]` | `geobrix[stac,vizx] @ …+env6…` | Add `zarr` on env6 if you use Zarr. |
 | `geobrix[light_dbr18] @ …` (classic, Lakeflow) | `geobrix @ …/geobrix-0.6.0+env5-py3-none-any.whl` | The same for `light_env5` and `light_dbr17`. |
 | `geobrix[light_dbr19] @ …` | `geobrix @ …+env6…` | |
+| `geobrix[models_gpu_env5] @ …` (Serverless GPU) | `geobrix @ …+env6…`, then the GPU packages | The same for `photogrammetry_gpu_env5` and `gpu_env5_all`. A driver-only step, such as dense MVS, can stay on `+env5`. |
 | Init script and a cluster-library wheel | The env wheel, and the JAR from `gbx.stage_jar` | Remove the init script and the GDAL bundle. |
 | GeoBrix JAR downloaded from the release page | `gbx.stage_jar("/Volumes/<cat>/<sch>/<vol>/geobrix/0.6.0/jar")` | The env wheel carries the JAR. |
 | 0.5.x with the JAR (heavyweight) on DBR 17.3 or 18 | The env5 wheel and the JAR, or stay on 0.5.2 | DBR 17.3, 18 and 19 are all supported. |

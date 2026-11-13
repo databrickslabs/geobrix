@@ -88,7 +88,9 @@ ARCHES = ("x86_64", "aarch64")
 PLATFORMS = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}
 # The 0.5.x runtime extras, by the env wheel that replaces them. The plain wheel (the committed pyproject) declares
 # every one as a tripwire, `geobrix==<version>+env<N>`; each env wheel declares the other family's the same way. The
-# GPU names are env5's: GPU is Serverless GPU environment 5 only (CUDA 12), its packages a separate step after the wheel.
+# GPU names go to env6: the UDF workers of the Serverless GPU runtime run environment 6 whatever the driver runs (GeoSAM
+# ran on GPU_1xA10 with the env6 wheel), and the GPU packages are a separate step after the wheel. A driver-only GPU
+# step (dense MVS with pycolmap-cuda12) can stay on the env5 wheel, installed with no extra.
 OLD_EXTRAS = {
     5: (
         "light_dbr17",
@@ -97,11 +99,16 @@ OLD_EXTRAS = {
         "light_dbr17_all",
         "light_dbr18_all",
         "light_env5_all",
+    ),
+    6: (
+        "light_dbr19",
+        "light_env6",
+        "light_dbr19_all",
+        "light_env6_all",
         "photogrammetry_gpu_env5",
         "models_gpu_env5",
         "gpu_env5_all",
     ),
-    6: ("light_dbr19", "light_env6", "light_dbr19_all", "light_env6_all"),
 }
 TRIPWIRES = {6: OLD_EXTRAS[5], 5: OLD_EXTRAS[6]}  # the other environment's old names -> geobrix==<version>+env<other>
 RELY_ON_BASE = {

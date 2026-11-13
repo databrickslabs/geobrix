@@ -28,7 +28,6 @@ const sidebars = {
     'quick-start',
     'databricks-spatial',
     'serverless-and-memory',
-    'migration-0-6',
     {
       type: 'category',
       label: 'Release Notes',
@@ -43,6 +42,7 @@ const sidebars = {
             'release-notes/0-6/new',
             'release-notes/0-6/changes',
             'release-notes/0-6/breaking',
+            'migration-0-6',
           ],
         },
         'release-notes-0-5-and-earlier',

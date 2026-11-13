@@ -7268,11 +7268,12 @@ def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
     by_id = {c.cid: c for c in cases}
     for cid, r in results.items():
         case = by_id[cid]
-        args = [resolve_arg(a, tmpdir) for a in case.args]
         fn = man.functions[case.fn]
         if isinstance(r.get("value"), (dict, list)) and fn.returns_uc:
             r = {**r, "value": coerce_uc_value(r["value"], fn.returns_uc)}
         try:
+            # inside the try: an argument this host cannot build (no osgeo) fails its own case, not the judgement
+            args = [resolve_arg(a, tmpdir) for a in case.args]
             if "error" in r:
                 msg = check_error(case, RuntimeError(r["error"]))
             elif fn.kind == "generator" and case.sql is None:

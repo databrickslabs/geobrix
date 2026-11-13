@@ -143,3 +143,32 @@ def test_a_tile_literal_types_its_null_fields_so_a_cte_column_matches_the_tile_p
         {"raster": None, "path": "/x.tif", "metadata": {}}, param, case
     )
     assert "'raster', CAST(NULL AS BINARY)" in sql and "'path', '/x.tif'" in sql
+
+
+def test_an_argument_the_judge_cannot_build_fails_that_case_only(tmp_path, monkeypatch):
+    """Fail on revert: fillnodata_masked_filled_valid builds its argument with the GDAL spec engine; on a host without
+    osgeo that raised out of check_uc_results and stopped the whole judgement of a full part.
+    """
+    from dataclasses import replace
+
+    class OsgeoUnavailable(Exception):
+        pass
+
+    unbuildable = object()
+    real = oracles.resolve_arg
+
+    def resolve(a, d):
+        if a is unbuildable:
+            raise OsgeoUnavailable("the GDAL spec engine needs osgeo")
+        return real(a, d)
+
+    monkeypatch.setattr(oracles, "resolve_arg", resolve)
+    good = next(c for c in oracles.MVP_S if c.cid == "bng_1km")
+    bad = replace(good, cid="needs_osgeo", args=(unbuildable, *good.args[1:]))
+    results = {"bng_1km": {"value": "TQ3080"}, "needs_osgeo": {"value": "TQ3080"}}
+    failures = oracles.check_uc_results([good, bad], results, str(tmp_path))
+    assert (
+        len(failures) == 1
+        and failures[0].startswith("needs_osgeo: ")
+        and "(OsgeoUnavailable:" in failures[0]
+    )

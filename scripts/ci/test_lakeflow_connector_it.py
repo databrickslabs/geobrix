@@ -324,7 +324,7 @@ def fake_run(it, monkeypatch, tmp_path):
     monkeypatch.setattr(it, "EVIDENCE", out / "evidence.json")
     monkeypatch.setattr(it.uc, "warehouse_problem", lambda *a, **k: None)
     monkeypatch.setattr(it.uc_sources_hash, "head_sha", lambda root: SHA12 + "c" * 28)
-    monkeypatch.setattr(it.lfc_check, "sources_hash", lambda root=None: "h" * 64)
+    monkeypatch.setattr(it.lfc_check, "sources_hash", lambda root=None, rev="HEAD": "h" * 64)
     monkeypatch.setattr(it.Run, "step_unit_tests", lambda self: self.checks.append(it.check("unit-tests", True, "60 passed")))
     monkeypatch.setattr(it.Run, "step_wheels", lambda self, commit: wheels)
     monkeypatch.setattr(it.Run, "step_expect", lambda self: (landing, EXPECT_RUN))

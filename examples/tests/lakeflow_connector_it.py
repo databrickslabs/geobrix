@@ -450,11 +450,11 @@ class Run:
             uc.need(rc, "the framework wheel build", out)
             fw = sorted(fw_dir.glob("lakeflow_community_connectors-*.whl"))
         wheels["framework"] = fw[-1]
-        # The connector wheel from the committed tree (git archive HEAD), never the working tree.
+        # The connector wheel from the committed tree at the run's commit (git archive), never the working tree.
         src = self.run_dir / "src"
         shutil.rmtree(src, ignore_errors=True)
         src.mkdir(parents=True)
-        arch = subprocess.run(["git", "-C", str(REPO_ROOT), "archive", "--format=tar", "HEAD", CONNECTOR_DIR],
+        arch = subprocess.run(["git", "-C", str(REPO_ROOT), "archive", "--format=tar", self.head, CONNECTOR_DIR],
                               capture_output=True, check=True).stdout
         subprocess.run(["tar", "-x", "-C", str(src)], input=arch, check=True)
         rc, out = uc.run_cmd([str(CONNECTOR_VENV_PY), "-m", "pip", "wheel", "--no-deps", "-w", str(out_dir), str(src / CONNECTOR_DIR)],
@@ -696,7 +696,7 @@ class Run:
         started, t0 = now(), time.time()
         self.run_dir.mkdir(parents=True, exist_ok=True)
         landing, expect = None, {}
-        self.ev = {"head_sha": self.head, "sources_hash": lfc_check.sources_hash(), "started": started,
+        self.ev = {"head_sha": self.head, "sources_hash": lfc_check.sources_hash(REPO_ROOT, self.head), "started": started,
                    "profile": self.a.profile, "catalog": self.a.catalog, "schema": self.n["schema"],
                    "connection": self.n["connection"], "warehouse_id": self.warehouse, "channel": CHANNEL}
         error = None

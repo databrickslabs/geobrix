@@ -8,13 +8,28 @@ vectorizes each tile's label mask into georeferenced polygons via
 seam into one polygon per real-world object before dropping anything under
 ``min_area``.
 
-Seam-merge relies on georeferencing, not bookkeeping: when ``overlap`` > 0, an object
-split by a seam is captured by two (or more) neighboring windows, and because each
-window's fragment is vectorized with its own true ``ds.window_transform``, the two
-fragments land at their real-world footprint -- which necessarily overlaps wherever the
-windows themselves overlap. Grouping fragments by plain geometric intersection and
-unioning each group is therefore sufficient; no separate "touch within overlap"
-distance heuristic is needed on top of correct per-tile georeferencing.
+Seam-merge merges only the pieces of ONE object that a chip seam cut apart. Plain
+geometric intersection is not enough: SAM's automatic masks tile nearly the whole scene, so
+neighbouring objects touch, and grouping by ``intersects`` chains them into one blob. Each
+fragment therefore carries the id of the chip it came from, and two fragments are merged
+only when (a) they come from DIFFERENT chips and (b) they agree across the seam between
+those chips:
+
+* chips that overlap (``overlap`` > 0): each window's fragment is vectorized with its own
+  true ``ds.window_transform``, so an object both windows see lands at the same real-world
+  footprint inside their overlap zone. The two fragments are merged when, clipped to that
+  zone, their intersection-over-union is at least ``_SEAM_IOU``;
+* chips that only abut (``overlap`` = 0): the fragments must share a boundary segment ALONG
+  the seam line, at least a pixel long and covering ``_SEAM_IOU`` of their seam edges. A
+  shared edge anywhere else, or a single shared point, is not a seam.
+
+Fragments of one chip are never merged with each other: within a chip the segmenter's own
+labels are the objects (the pieces of one label are one object).
+
+NoData is masked before polygonizing: a pixel the raster marks invalid (NoData, its mask
+band, or alpha 0; ``pyrx.core._nodata.valid_mask``) -- or, for a raster that declares none
+of them, a pixel that is 0 in every band -- is background in every chip's label mask, so a
+black or transparent border never becomes an object.
 
 Light-only module: torch is imported lazily, and only when ``gpus="all"`` needs to
 probe ``torch.cuda.device_count()``. Passing an int ``gpus`` value never imports torch,
@@ -31,12 +46,14 @@ import pandas as pd
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
+from shapely.geometry import Polygon
 from shapely.ops import unary_union
+from shapely.strtree import STRtree
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.core.crs import area_m2 as _area_m2
 from databricks.labs.gbx.ds._listing import to_local_path
-from databricks.labs.gbx.pyrx.core import features, tiling
+from databricks.labs.gbx.pyrx.core import _nodata, features, tiling
 from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
 
 
@@ -84,23 +101,55 @@ def _open_input(tile_or_path):
         yield ds
 
 
+def _declares_validity(ds) -> bool:
+    """True when ``ds`` says which pixels are NoData: a NoData value, a mask band or an
+    alpha band (any band whose GDAL mask is not ``all_valid``)."""
+    from rasterio.enums import MaskFlags
+
+    return _nodata.has_alpha(ds) or any(
+        MaskFlags.all_valid not in flags for flags in ds.mask_flag_enums
+    )
+
+
 def _iter_chips(ds, tile_px, overlap):
-    """Yield ``(array, transform)`` chips for the grid ``tiling.plan_grid_windows``
-    plans over ``ds``.
+    """Yield ``(image, transform, valid, footprint)`` chips for the grid
+    ``tiling.plan_grid_windows`` plans over ``ds``.
 
     This is the "thin overlapping-window adapter" R1 calls for -- ``iter_overlapping``
     does not exist on ``tiling``. ``plan_grid_windows`` (pure window planning, no
     dataset/bytes) already carries the correct overlap-PERCENTAGE contract shared with
-    heavy ``rst_tooverlappingtiles``; this just turns each planned window into the
-    (array, transform) pair a segmenter + polygonize need, mirroring the
-    Window/``ds.read``/``ds.window_transform`` idiom ``tiling._iter_window_tiles`` already
-    uses (skipping its GTiff-byte encode step, which we don't need here).
+    heavy ``rst_tooverlappingtiles``; this just turns each planned window into what a
+    segmenter + polygonize need, mirroring the Window/``ds.read``/``ds.window_transform``
+    idiom ``tiling._iter_window_tiles`` already uses (skipping its GTiff-byte encode step,
+    which we don't need here).
+
+    ``image`` is the window's data bands (the alpha band, when ``ds`` has one, is left
+    out: the segmenter takes color bands); ``valid`` is the window's HxW validity mask
+    (see the module docstring); ``footprint`` is the window's real-world polygon in
+    ``ds.crs``, which the seam merge uses to find the seam between two chips.
     """
+    declared = _declares_validity(ds)
+    alpha = _nodata.alpha_index(ds.colorinterp)
+    data_bands = [i + 1 for i in range(ds.count) if i != alpha]
     for col, row, w, h in tiling.plan_grid_windows(
         ds.width, ds.height, tile_px, tile_px, overlap
     ):
         win = Window(col, row, w, h)
-        yield ds.read(window=win), ds.window_transform(win)
+        arr = ds.read(data_bands, window=win)
+        if declared:
+            valid = _nodata.valid_mask(ds, window=win)
+        else:
+            valid = np.any(arr != 0, axis=0)
+        transform = ds.window_transform(win)
+        footprint = Polygon(
+            [
+                transform * (0, 0),
+                transform * (w, 0),
+                transform * (w, h),
+                transform * (0, h),
+            ]
+        )
+        yield arr, transform, valid, footprint
 
 
 def _polygonize_mask(mask, transform, crs):
@@ -141,31 +190,80 @@ def _polygonize_mask(mask, transform, crs):
 # metric coverage/min_area needs.
 
 
-def _merge_seams(frags, min_area, crs):
-    """Union polygon fragments that geometrically touch/overlap into one polygon per
-    connected group (see module docstring for why plain geometric intersection is a
-    sufficient seam-merge criterion here), then drop groups whose merged area (in
-    SQUARE METERS -- see ``_area_m2``; the polygons are in ``crs``) is under
+# The agreement two fragments from neighbouring chips need across their seam to be one
+# object: the intersection-over-union of the two, clipped to the chips' overlap zone (or,
+# for abutting chips, of their edges along the seam line).
+_SEAM_IOU = 0.5
+
+
+def _seam_match(a, b, zone, px) -> bool:
+    """True when fragments ``a`` and ``b`` (from two different chips whose footprints meet
+    in ``zone``) are the two sides of one object cut by the seam -- see the module
+    docstring. ``px`` is the pixel size in CRS units."""
+    # Overlapping chips: compare the two fragments inside the overlap zone.
+    if zone.area > 0:
+        za, zb = a.intersection(zone), b.intersection(zone)
+        inter = za.intersection(zb).area
+        if inter <= 0:
+            return False
+        return inter / za.union(zb).area >= _SEAM_IOU
+    if zone.length <= 0:  # chips that meet at a single corner point: no seam
+        return False
+    # Abutting chips: the seam is the line ``zone``. Each fragment's edge along it, as a
+    # thin strip (tolerant to float noise between the two window transforms).
+    tol = 0.05 * px
+    band = zone.buffer(tol, cap_style="flat")
+    sa, sb = a.buffer(tol).intersection(band), b.buffer(tol).intersection(band)
+    shared = sa.intersection(sb).area
+    # Less than a pixel of shared seam is a corner, not a seam.
+    if shared / (2 * tol) < px:
+        return False
+    return shared / sa.union(sb).area >= _SEAM_IOU
+
+
+def _merge_seams(frags, min_area, crs, footprints, px):
+    """Merge the fragments of one object that chip seams cut apart, then drop objects whose
+    merged area (in SQUARE METERS -- see ``_area_m2``; the polygons are in ``crs``) is under
     ``min_area``. Returns a list of ``{"label", "geom", "score"}`` row dicts.
+
+    ``frags`` holds ``(wkb, value, chip)`` triples: ``chip`` indexes ``footprints`` (each
+    chip's real-world polygon). The pieces of one label in one chip are one object; two
+    objects are merged only across a seam between different chips (``_seam_match``), never
+    within a chip. ``px`` is the raster's pixel size in CRS units.
     """
-    geoms = [shapely.wkb.loads(bytes(wkb)) for wkb, _ in frags]
+    # One object per (chip, label): the pieces of a label are the segmenter's own object.
+    pieces: dict = {}
+    for wkb, value, chip in frags:
+        pieces.setdefault((chip, value), []).append(shapely.wkb.loads(bytes(wkb)))
+    keys = list(pieces)
+    geoms = [g[0] if len(g) == 1 else unary_union(g) for g in pieces.values()]
+    chips = [chip for chip, _ in keys]
     n = len(geoms)
     parent = list(range(n))
 
     def find(i):
         while parent[i] != i:
+            parent[i] = parent[parent[i]]
             i = parent[i]
         return i
 
-    def union(i, j):
-        ri, rj = find(i), find(j)
-        if ri != rj:
-            parent[ri] = rj
+    zones: dict = {}
 
-    for i in range(n):
-        for j in range(i + 1, n):
-            if geoms[i].intersects(geoms[j]):
-                union(i, j)
+    def zone_of(ci, cj):
+        k = (min(ci, cj), max(ci, cj))
+        if k not in zones:
+            zones[k] = footprints[ci].intersection(footprints[cj])
+        return zones[k]
+
+    if n > 1:
+        left, right = STRtree(geoms).query(geoms, predicate="intersects")
+        for i, j in zip(left.tolist(), right.tolist()):
+            if i >= j or chips[i] == chips[j]:
+                continue
+            if find(i) == find(j):
+                continue
+            if _seam_match(geoms[i], geoms[j], zone_of(chips[i], chips[j]), px):
+                parent[find(i)] = find(j)
 
     groups: dict = {}
     for i in range(n):
@@ -330,7 +428,9 @@ def segment_raster(
 
     with _open_input(tile_or_path) as ds:
         crs = ds.crs
-        chips = list(_iter_chips(ds, tile_px, overlap))
+        t = ds.transform
+        px = min(np.hypot(t.a, t.d), np.hypot(t.b, t.e))
+        chips = [(i, *c) for i, c in enumerate(_iter_chips(ds, tile_px, overlap))]
 
     # Per-gpu_id handle cache: gpu_pool_map guarantees at most one chip runs on a given
     # device at a time, so a cached per-device handle (e.g. a stateful SamGeo predictor)
@@ -342,17 +442,19 @@ def segment_raster(
     handles_lock = Lock()
 
     def _run_one(chip, gpu_id):
-        arr, transform = chip
+        chip_id, arr, transform, valid, _ = chip
         image = np.moveaxis(arr, 0, -1)
         with handles_lock:
             fn = handles.get(gpu_id)
             if fn is None:
                 fn = factory(gpu_id)
                 handles[gpu_id] = fn
-        mask = fn(image)
-        return _polygonize_mask(mask, transform, crs)
+        # NoData is background before polygonizing: no mask over it becomes an object.
+        mask = np.where(valid, np.asarray(fn(image)), 0)
+        return [(wkb, v, chip_id) for wkb, v in _polygonize_mask(mask, transform, crs)]
 
     per_chip = gpu_pool_map(chips, _run_one, gpus=max(1, n_gpus))
     all_frags = [frag for chip_frags in per_chip for frag in chip_frags]
-    rows = _merge_seams(all_frags, min_area, crs)
+    footprints = [c[4] for c in chips]
+    rows = _merge_seams(all_frags, min_area, crs, footprints, px)
     return pd.DataFrame(rows, columns=["label", "geom", "score"])

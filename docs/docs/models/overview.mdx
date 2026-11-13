@@ -50,8 +50,8 @@ raw `ImportError` at package-import time.
 
 `segment_raster(tile_or_path, ...)` is the single call a notebook makes. It chips the
 input into an overlapping grid and runs the segmenter across one or many GPUs. It then vectorizes
-each chip's label mask into georeferenced polygons and merges fragments that straddle a
-tile seam into one polygon per real-world object. See [GeoSAM](./geosam) for the full
+each chip's label mask into georeferenced polygons, with NoData masked out, and merges the
+fragments of an object that a tile seam cut into one polygon per real-world object. See [GeoSAM](./geosam) for the full
 parameter reference.
 
 ### Serve

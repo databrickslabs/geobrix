@@ -4,7 +4,7 @@ from shapely.geometry import box
 
 from databricks.labs.gbx.models import runner
 
-from .conftest import _straddling_object, _two_color_objects
+from .conftest import GREEN, RED, _straddling_object, _two_color_objects
 
 
 def _fake_two_boxes(image):
@@ -220,3 +220,167 @@ def test_missing_weights_file_is_refused(fake_geosam, synthetic_rgb_tile, tmp_pa
         runner.segment_raster(synthetic_rgb_tile, weights=missing, gpus=1, tile_px=64)
     assert "Fix:" in str(e.value)
     assert fake_geosam == []  # refused before any model load
+
+
+# --- seam merge: only pieces of ONE object cut by a chip seam are merged ----------------
+
+
+def _seg(ds, **kw):
+    kw.setdefault("segmenter", _two_color_objects)
+    kw.setdefault("gpus", 1)
+    kw.setdefault("min_area", 1.0)
+    return runner.segment_raster(ds, **kw)
+
+
+def test_touching_objects_in_one_chip_stay_separate(painted_tile):
+    # (a) two side-by-side objects sharing an edge inside ONE chip are two objects:
+    # touching is not a seam, and one chip's fragments are never merged together.
+    ds = painted_tile(
+        100,
+        100,
+        [
+            (slice(20, 80), slice(10, 50), RED),
+            (slice(20, 80), slice(50, 90), GREEN),
+        ],
+    )
+    assert len(_seg(ds, tile_px=100, overlap=0)) == 2
+
+
+def test_object_split_by_abutting_chips_merges(painted_tile):
+    # (b) one object cut by the seam between two abutting (overlap=0) chips: the two
+    # fragments share a boundary segment along the seam line -> one object.
+    ds = painted_tile(64, 32, [(slice(8, 24), slice(20, 44), RED)])
+    df = _seg(ds, tile_px=32, overlap=0)
+    assert len(df) == 1
+    import shapely.wkb
+
+    assert shapely.wkb.loads(bytes(df["geom"][0])).area == 16 * 24
+
+
+def test_objects_touching_at_a_seam_corner_stay_separate(painted_tile):
+    # (b') two objects in abutting chips that meet only at a point on the seam are
+    # not one object cut by the seam.
+    ds = painted_tile(
+        64,
+        32,
+        [
+            (slice(8, 16), slice(24, 32), RED),
+            (slice(16, 24), slice(32, 40), GREEN),
+        ],
+    )
+    assert len(_seg(ds, tile_px=32, overlap=0)) == 2
+
+
+def test_object_split_by_overlapping_chips_merges(painted_tile):
+    # (c) tile_px=32, overlap=16% on a 48-wide raster -> chips at cols 0..32 and
+    # 26..48 (a 6px overlap zone). An object across it is seen by both chips; the
+    # fragments overlap with a positive area in the zone -> one object.
+    ds = painted_tile(48, 20, [(slice(5, 15), slice(20, 40), RED)])
+    df = _seg(ds, tile_px=32, overlap=16)
+    assert len(df) == 1
+    import shapely.wkb
+
+    assert shapely.wkb.loads(bytes(df["geom"][0])).area == 10 * 20
+
+
+def test_neighbours_in_an_overlap_zone_stay_separate(painted_tile):
+    # (c') two touching objects whose shared edge (x=29) lies inside the overlap zone:
+    # each is merged with its own copy from the other chip, never with its neighbour.
+    ds = painted_tile(
+        48,
+        20,
+        [
+            (slice(5, 15), slice(20, 29), RED),
+            (slice(5, 15), slice(29, 40), GREEN),
+        ],
+    )
+    assert len(_seg(ds, tile_px=32, overlap=16)) == 2
+
+
+def _black_and_red(image):
+    """Fake segmenter that also segments the black (all-zero) frame as an object, as
+    SAM's automatic masks do on a NoData border."""
+    m = np.zeros(image.shape[:2], np.int32)
+    m[np.all(image[..., :3] == 0, axis=-1)] = 1
+    m[np.all(image[..., :3] == [255, 0, 0], axis=-1)] = 2
+    return m
+
+
+def _border(n=64, w=8):
+    inner = np.zeros((n, n), bool)
+    inner[w:-w, w:-w] = True
+    return inner
+
+
+@pytest.mark.parametrize("nodata", [None, 0])
+def test_nodata_border_yields_no_object(painted_tile, nodata):
+    # (d) a black border (RGB all 0) is NoData -- declared (nodata=0) or not (all
+    # bands 0, no mask): a segmenter mask over it is not an object.
+    ds = painted_tile(
+        64,
+        64,
+        [
+            (slice(0, 64), slice(0, 8), (0, 0, 0)),
+            (slice(0, 64), slice(56, 64), (0, 0, 0)),
+            (slice(0, 8), slice(0, 64), (0, 0, 0)),
+            (slice(56, 64), slice(0, 64), (0, 0, 0)),
+            (slice(20, 30), slice(20, 30), RED),
+        ],
+        nodata=nodata,
+    )
+    df = _seg(ds, segmenter=_black_and_red, tile_px=64, overlap=0)
+    assert len(df) == 1
+    import shapely.wkb
+
+    assert shapely.wkb.loads(bytes(df["geom"][0])).area == 100
+
+
+def test_transparent_border_yields_no_object(painted_tile):
+    # (d') an RGBA raster: alpha 0 marks the border NoData even though its RGB is
+    # not black; the segmenter sees the three color bands only.
+    seen = []
+
+    def _seg_frame(image):
+        seen.append(image.shape[-1])
+        m = np.zeros(image.shape[:2], np.int32)
+        m[np.all(image == [7, 7, 7], axis=-1)] = 1  # the (transparent) frame
+        m[np.all(image == [255, 0, 0], axis=-1)] = 2
+        return m
+
+    frame = ~_border()
+    # the frame's RGB is a non-black marker, so only alpha can mask it
+    ds = painted_tile(
+        64,
+        64,
+        [
+            (slice(0, 64), slice(0, 8), (7, 7, 7)),
+            (slice(0, 64), slice(56, 64), (7, 7, 7)),
+            (slice(0, 8), slice(0, 64), (7, 7, 7)),
+            (slice(56, 64), slice(0, 64), (7, 7, 7)),
+            (slice(20, 30), slice(20, 30), RED),
+        ],
+        alpha=np.where(frame, 0, 255).astype("uint8"),
+    )
+    assert ds.colorinterp[-1].name == "alpha"
+    df = _seg(ds, segmenter=_seg_frame, tile_px=64, overlap=0)
+    assert seen == [3]
+    assert len(df) == 1
+
+
+def test_min_area_filters_after_the_seam_merge(painted_tile):
+    # (e) min_area is judged on the MERGED object: each half of the split red object
+    # (8x16 = 128 m^2) is under 200 m^2, the whole (256 m^2) is not; the 4 m^2 green
+    # object is dropped.
+    ds = painted_tile(
+        64,
+        32,
+        [
+            (slice(8, 24), slice(24, 40), RED),
+            (slice(2, 4), slice(2, 4), GREEN),
+        ],
+    )
+    df = _seg(ds, tile_px=32, overlap=0, min_area=200.0)
+    assert len(df) == 1
+    import shapely.wkb
+
+    assert shapely.wkb.loads(bytes(df["geom"][0])).area == 256

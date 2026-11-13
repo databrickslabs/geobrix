@@ -66,8 +66,10 @@ georeferenced object polygons — chip → infer → stitch → polygonize:
    handle. The handle is bound to that device and cached across every chip it processes. It is never shared
    with another device and never rebuilt per chip.
 3. **Stitch** — each chip's label mask is vectorized into georeferenced WKB polygons using
-   its own true per-window transform. Fragments that straddle a seam are merged by
-   geometric intersection into one polygon per real-world object.
+   its own true per-window transform. NoData pixels are background in the mask, so a black
+   or transparent border is never an object. The fragments of one object that a seam cut
+   apart are merged into one polygon per real-world object (see
+   [How seams are merged](#how-seams-are-merged)).
 4. **Polygonize / filter** — merged polygons smaller than `min_area` (in square meters)
    are dropped.
 
@@ -129,16 +131,31 @@ A `dbfs:/Volumes/...` URI works too. A missing file raises `FileNotFoundError` w
 The single-GPU and multi-GPU paths recombine every chip's polygons into the same result
 set — scheduling more chips across more devices changes throughput, not output.
 
-### Why seam-merging just works
+### How seams are merged
 
-`segment_raster` relies on real georeferencing, not bookkeeping, to merge an object split
-across a tile seam. When `overlap > 0`, two (or
-more) neighboring windows capture an object split by a seam. Each window's fragment is vectorized with its own true
-per-window transform. The fragments therefore land at their real-world footprint, which
-necessarily overlaps wherever the windows themselves overlap. Grouping fragments by plain
-geometric intersection and unioning each group is therefore enough. No separate
-distance-based "touch within overlap" heuristic is needed on top of correct per-tile
-georeferencing.
+SAM's automatic masks cover nearly the whole scene, so neighbouring objects touch. Merging
+every pair of polygons that touch would chain a whole scene into one or two blobs.
+`segment_raster` merges two fragments only when they are the two sides of one object cut by
+a chip seam:
+
+- They come from **different chips**. The polygons of one chip are never merged with each
+  other: within a chip, the segmenter's own labels are the objects.
+- With `overlap > 0`, both chips see the object in their overlap zone. Each chip's fragment
+  is vectorized with its own true per-window transform, so both land on the same real-world
+  footprint there. They are merged when, clipped to the overlap zone, their
+  intersection-over-union is at least 0.5.
+- With `overlap=0`, the chips only abut. The fragments must share an edge along the seam
+  line, at least one pixel long and covering at least half of their edges on the seam. A
+  shared edge elsewhere, or a single shared corner point, is not a seam.
+
+`min_area` is judged on the merged object.
+
+### NoData
+
+A pixel the raster marks invalid is background in every chip's mask before polygonizing:
+a NoData value, a mask band, or alpha 0. A raster that declares none of them, such as a
+3-band orthomosaic with a black border, treats a pixel that is 0 in every band as NoData.
+The segmenter is given the color bands only; an alpha band is left out.
 
 ## Automatic-mask mode (today) vs. text-prompt mode (follow-on)
 

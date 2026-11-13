@@ -470,7 +470,7 @@ def test_without_a_readable_head_params_leave_the_folder_unset_and_main_refuses(
     assert (
         t28.Params().volume_dir == ""
     )  # a caller that builds statements only needs no folder
-    assert t28.main(["--dry-run", "--ws-root", "/Users/x/GeoBrix"]) == 2
+    assert t28.main(["--dry-run", "--ws-root", "/Users/x/jobs/geobrix"]) == 2
     assert "--volume-dir" in capsys.readouterr().err
 
 

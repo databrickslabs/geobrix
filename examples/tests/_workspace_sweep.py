@@ -8,16 +8,22 @@ later.
   by its modified time) AND past its hold. A launcher sets the hold when the run ends: 60 min for a run
   that succeeded, 24 h for one that did not (a repair run re-reads the notebook, and a failure is usually
   looked at the same day or the next morning).
-* **The prefixes.** Only items under ``/Users/<you>/GeoBrix/`` are ever removed, and only these:
+* **The prefixes.** Only items under ``/Users/<you>/jobs/geobrix/`` (``jobs_root``) are ever removed, and
+  only these:
 
-  - ``bench``: ``GeoBrix/bench/geobrix_bench_runner_*`` and ``geobrix_gen_corpus_*`` (gbx:bench:cluster,
+  - ``bench``: ``jobs/geobrix/bench/geobrix_bench_runner_*`` and ``geobrix_gen_corpus_*`` (gbx:bench:cluster,
     gbx:bench:gen-data);
   - ``runners``: ``tests_*``, ``runner_*`` and ``mutation_*`` notebooks in the runner folder (``GBX_RUNNER_DIR``,
-    default ``GeoBrix/runners``; gbx:test:databricks, gbx:test:mutation-databricks), and a failed mutation
+    default ``jobs/geobrix/runners``; gbx:test:databricks, gbx:test:mutation-databricks), and a failed mutation
     run's Volume stage (``.../mutation-runs/<run>``) once recorded;
-  - ``uc``: the UC gate's ``GeoBrix/uc-it-<sha>`` folders, whole;
+  - ``uc``: the UC gate's ``jobs/geobrix/uc-it-<sha>`` folders, whole;
   - ``notebooks``: the notebooks gbx:test:notebooks-serverless imported, by the path it recorded (its
     ``--ws-dir`` folders also hold notebooks of your own, so nothing there is removed by name).
+
+* **The legacy root.** Earlier launchers used ``/Users/<you>/GeoBrix/``, which also holds your own notebooks.
+  The sweep applies the same prefixes there during the move, so old runs still go. It never removes
+  anything else in it. Empty folders under it are then removed bottom-up, and the legacy root itself only
+  when it is empty.
 
 * **Active runs.** The active runs' notebook (and Python file) paths are read first. An item an active run
   uses is kept, a folder that holds one is kept, and a recorded import beside one is kept (a ``%run``
@@ -48,6 +54,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
+from _job_submit import jobs_root  # sibling module (script dir is on sys.path): the one job root
+
 WINDOW_S = 60 * 60
 FAILED_WINDOW_S = 24 * 60 * 60
 LAUNCH_MAX_DELETES = 25
@@ -76,6 +84,12 @@ def host_of(w) -> Optional[str]:
 
 
 def root_of(me: str) -> str:
+    """The job root: ``/Users/<me>/jobs/geobrix``."""
+    return jobs_root(me)
+
+
+def legacy_root_of(me: str) -> str:
+    """The folder the launchers used before the job root moved; swept for runner items only, never whole."""
     return f"/Users/{me}/GeoBrix"
 
 
@@ -193,13 +207,24 @@ class Rule:
     folders: bool = False  # True: the matches are folders, removed whole
 
 
+_RUNNER_PATTERNS = ("tests_*.ipynb", "runner_*.ipynb", "mutation_*.ipynb")
+
+
 def rules(me: str, runner_dir: Optional[str] = None) -> List[Rule]:
-    root = root_of(me)
-    return [
+    """The prefixes of the job root, then the same runner prefixes under the legacy root. ``runner_dir`` replaces
+    the job root's default runner folder; the legacy default runner folder is always swept."""
+    root, legacy = root_of(me), legacy_root_of(me)
+    out = [
         Rule("bench", f"{root}/bench", ("geobrix_bench_runner_*", "geobrix_gen_corpus_*")),
-        Rule("runners", ws_path(runner_dir) if runner_dir else f"{root}/runners", ("tests_*.ipynb", "runner_*.ipynb", "mutation_*.ipynb")),
+        Rule("runners", ws_path(runner_dir) if runner_dir else f"{root}/runners", _RUNNER_PATTERNS),
         Rule("uc", root, ("uc-it-*",), folders=True),
     ]
+    out += [
+        Rule("bench", f"{legacy}/bench", ("geobrix_bench_runner_*", "geobrix_gen_corpus_*")),
+        Rule("runners", f"{legacy}/runners", _RUNNER_PATTERNS),
+        Rule("uc", legacy, ("uc-it-*",), folders=True),
+    ]
+    return out
 
 
 @dataclass
@@ -216,6 +241,7 @@ class Item:
 @dataclass
 class Report:
     deleted: List[str] = field(default_factory=list)
+    pruned: List[str] = field(default_factory=list)  # empty legacy folders removed (not counted as deletes)
     kept: List[str] = field(default_factory=list)
     skipped: List[str] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
@@ -253,6 +279,44 @@ def active_paths(w) -> set:
     return out
 
 
+# The folders the launchers made under the legacy root; an empty one of these may go with it.
+LEGACY_TOPIC_FOLDERS = ("bench", "runners", "serverless-run", "python-task")
+
+
+def _prune_empty(w, folder: str, allowed: set, gone: set, rep: Report, dry_run: bool, out: Callable[[str], None]) -> bool:
+    """Remove ``folder`` when nothing is left in it, children first; True when it is (or would be) gone.
+
+    ``gone`` holds the paths this sweep deleted (a dry run did not remove them, but they count as gone).
+    Only a folder in ``allowed`` is removed; any other object, or a folder not allowed (your own, even
+    empty), keeps its parents."""
+    try:
+        kids = list(w.workspace.list(folder))
+    except Exception as exc:  # noqa: BLE001
+        return _missing(exc)  # already gone counts as empty; anything else keeps the folder
+    left = False
+    for k in kids:  # every child is judged: an item of yours must not stop the empty folders beside it going
+        p = ws_path(k.path)
+        if p in gone:
+            continue
+        if _otype(k) != "DIRECTORY" or not _prune_empty(w, p, allowed, gone, rep, dry_run, out):
+            left = True
+    if left or folder not in allowed:
+        return False
+    if dry_run:
+        rep.pruned.append(folder)
+        out(f"WOULD DELETE {folder} (empty folder)")
+        return True
+    try:
+        w.workspace.delete(folder, recursive=False)
+    except Exception as exc:  # noqa: BLE001 - not empty after all (a run raced us), or no right: keep it
+        if _missing(exc):
+            return True
+        return False
+    rep.pruned.append(folder)
+    out(f"DELETED {folder} (empty folder)")
+    return True
+
+
 def _rm_volume(w, path: str) -> None:
     for e in list(w.files.list_directory_contents(path)):
         if e.is_directory:
@@ -273,6 +337,8 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
     rep = Report()
     host = host_of(w)
     root = root_of(me)
+    legacy = legacy_root_of(me)
+    roots = (root, legacy)
     say = out if verbose else (lambda s: None)
     try:
         active = active_paths(w)
@@ -285,9 +351,9 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
     for rule in rules(me, runner_dir):
         if rule.scope not in scopes:
             continue
-        if not (rule.folder == root or _under(rule.folder, root)):
+        if not any(rule.folder == r or _under(rule.folder, r) for r in roots):
             rep.skipped.append(rule.folder)
-            say(f"SKIPPED {rule.folder}/: outside the sweep's prefixes ({root}/)")
+            say(f"SKIPPED {rule.folder}/: outside the sweep's prefixes ({root}/, legacy {legacy}/)")
             continue
         for o in _list(w, rule.folder):
             name = o.path.rstrip("/").rsplit("/", 1)[-1]
@@ -309,9 +375,9 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
         if it is None:
             it = Item(path, e["scope"], kind, run_id=e.get("run_id"))
             if kind == "item":
-                if not _under(path, root):
+                if not any(_under(path, r) for r in roots):
                     rep.skipped.append(path)
-                    say(f"SKIPPED {path}: outside the sweep's prefixes ({root}/)")
+                    say(f"SKIPPED {path}: outside the sweep's prefixes ({root}/, legacy {legacy}/)")
                     continue
                 try:
                     st = w.workspace.get_status(path)
@@ -394,6 +460,16 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
         done = set(rep.deleted) | gone
         done |= {p for p in ledger if any(_under(p, d) for d in removed)}
         _forget(host, done)
+    # The legacy root: once no runner item is left there, drop its empty folders and then the root itself, only
+    # when nothing else is in it (your own notebooks keep it). Not after an error or when an active run is there.
+    if not rep.errors and not any(_under(a, legacy) for a in active):
+        gone_now = set(rep.deleted) | gone
+        allowed = {legacy} | {f"{legacy}/{t}" for t in LEGACY_TOPIC_FOLDERS}
+        for p in gone_now:  # the folders above an item this sweep removed
+            while _under(p, legacy):
+                p = p.rsplit("/", 1)[0]
+                allowed.add(p)
+        _prune_empty(w, legacy, allowed, gone_now, rep, dry_run, out)
     return rep
 
 
@@ -456,7 +532,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     w = WorkspaceClient(profile=a.profile)
     me = w.current_user.me().user_name
     rd = runner_dir(w)
-    print(f"Sweeping {', '.join(scopes)} under {root_of(me)}/ (runner folder {ws_path(rd)}): older than {_span(older)} and "
+    print(f"Sweeping {', '.join(scopes)} under {root_of(me)}/ and the legacy {legacy_root_of(me)}/ (runner folder {ws_path(rd)}): older than {_span(older)} and "
           f"past their hold{'; DRY RUN, nothing is deleted' if a.dry_run else ''}.", flush=True)
     rep = sweep(w, me=me, older_than_s=older, scopes=scopes, runner_dir=rd, dry_run=a.dry_run)
     verb = "would delete" if a.dry_run else "deleted"

@@ -193,7 +193,7 @@ def test_every_launch_gets_its_own_notebook(launch, sdk):
         assert launch("--serverless", "--zarr-only", "--no-wait") == 0
     paths = [path for path, _ in sdk.uploads]
     assert len(set(paths)) == 2
-    assert all(p.startswith("/Users/me@example.com/GeoBrix/bench/geobrix_bench_runner_cluster-") for p in paths)
+    assert all(p.startswith("/Users/me@example.com/jobs/geobrix/bench/geobrix_bench_runner_cluster-") for p in paths)
 
     sdk.uploads.clear()
     prefix = dict(GBX_BENCH_RUNNER_NOTEBOOK_PATH="/Users/me@example.com/nb.ipynb")
@@ -747,10 +747,10 @@ def test_the_launcher_reads_the_config_the_command_resolved_when_its_own_dir_has
 
 
 def test_runner_notebooks_live_in_a_bench_folder_not_the_home_root(launch, sdk):
-    """The home folder filled with ~300 runner notebooks: each launch's notebooks go to /Users/<you>/GeoBrix/bench/."""
+    """The home folder filled with ~300 runner notebooks: each launch's notebooks go to /Users/<you>/jobs/geobrix/bench/."""
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t8") == 0
     (path, _), = sdk.uploads
-    assert path == "/Users/me@example.com/GeoBrix/bench/geobrix_bench_runner_t8.ipynb"
+    assert path == "/Users/me@example.com/jobs/geobrix/bench/geobrix_bench_runner_t8.ipynb"
 
 
 def _smoke(module, monkeypatch, problems, smoke_only=False):

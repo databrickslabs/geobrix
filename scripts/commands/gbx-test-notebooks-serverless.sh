@@ -35,7 +35,7 @@ show_help() {
     echo -e "                        committed notebook skips (e.g. --set-var FORCE_REBUILD=True);"
     echo -e "                        the committed notebook keeps its defaults. Repeatable."
     echo -e "  ${GREEN}--ws-dir WSPATH${NC}       Workspace folder to import notebooks into."
-    echo -e "                        (default: /Users/<current-user>/GeoBrix/serverless-run)"
+    echo -e "                        (default: /Users/<current-user>/jobs/geobrix/serverless-run)"
     echo -e "  ${GREEN}--keep-notebooks${NC}      Do not record the imports for gbx:workspace:sweep. By default each stays 60 min"
     echo -e "                        after its run ends (24 h after a failure), then the sweep removes it."
     echo -e "  ${GREEN}--extras CSV${NC}          Geobrix extras whose deps to install (default: stac,vizx). With an"

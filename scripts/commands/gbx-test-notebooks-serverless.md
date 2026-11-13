@@ -17,7 +17,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--dep-notebook PATH` – Local `.ipynb` to import into `--ws-dir` but NOT submit (e.g. a shared `config_nb.ipynb` referenced via `%run ./config_nb`). Repeatable.
 - `--pip-wheel VOLPATH` – In the classic modes (`%pip` kept), point every `%pip install ... @ file:///Volumes/....whl` line of the uploaded copy at this wheel, for example the env6 wheel of an isolated staging folder. The committed notebook is unchanged.
 - `--set-var NAME=VALUE` – Inject a Python assignment into the **uploaded** notebook copy, right after the last cell that assigns that name (so it also wins over a series notebook's own parameter cell), else after the `%run`/config cell, so a validation run forces compute steps the committed notebook would skip. Example series notebooks gate expensive reader/`rst_*` rebuilds on `do_overwrite=FORCE_REBUILD` with `FORCE_REBUILD=False` committed — so if the output tables already exist, a default run skips the very logic under test. `--set-var FORCE_REBUILD=True` overrides that in the run only; the committed notebook keeps its safe default. `VALUE` is inlined as a Python literal. Repeatable; applies to every submitted notebook.
-- `--ws-dir WSPATH` – Workspace folder to import notebooks into (default: `/Users/<current-user>/GeoBrix/serverless-run`).
+- `--ws-dir WSPATH` – Workspace folder to import notebooks into (default: `/Users/<current-user>/jobs/geobrix/serverless-run`).
 - `--keep-notebooks` – Do not record the imports for `gbx:workspace:sweep`.
   - By default each import stays 60 min after its run ends, or 24 h after a failure. Then the sweep removes it.
   - Each launch sweeps its own old imports first. Items in `--ws-dir` that the runner did not import stay.
@@ -124,7 +124,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe \
 bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe \
   --notebook examples/tests/probe_proj_data_access.ipynb \
   --new-cluster --access-mode standard \
-  --ws-dir /Users/me@example.com/GeoBrix/probe-standard
+  --ws-dir /Users/me@example.com/jobs/geobrix/probe-standard
 
 # Run nb04 with output harvesting, forcing compute with FORCE_RELOAD=True
 bash scripts/commands/gbx-test-notebooks-serverless.sh --profile oauth-fe \

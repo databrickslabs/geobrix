@@ -210,8 +210,8 @@ def test_main_runs_the_smoke_then_the_real_run_and_verifies_the_sampled_sha256(m
     out = capsys.readouterr().out
     assert [s["run_name"] for s in sdk.submits] == ["geobrix-gen-corpus-t1-smoke", "geobrix-gen-corpus-t1"]
     assert [p for p, _ in sdk.uploads] == [
-        "/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t1_smoke.ipynb",
-        "/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t1.ipynb",
+        "/Users/me@example.com/jobs/geobrix/bench/geobrix_gen_corpus_t1_smoke.ipynb",
+        "/Users/me@example.com/jobs/geobrix/bench/geobrix_gen_corpus_t1.ipynb",
     ]
     modes = ['"mode": "smoke"' in "".join("".join(c["source"]) for c in nb["cells"]) for _, nb in sdk.uploads]
     assert all("def run_guard(" in "".join(nb["cells"][1]["source"]) for _, nb in sdk.uploads)  # the wheel guard follows the environment cell
@@ -236,7 +236,7 @@ def test_main_stops_with_exit_4_when_the_smoke_fails_and_never_submits_the_real_
     err = capsys.readouterr().err
     assert "SMOKE FAILED: nothing else is submitted" in err and "mismatch" in err
     assert [s["run_name"] for s in sdk.submits] == ["geobrix-gen-corpus-t2-smoke"]
-    assert [p for p, _ in sdk.uploads] == ["/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t2_smoke.ipynb"]
+    assert [p for p, _ in sdk.uploads] == ["/Users/me@example.com/jobs/geobrix/bench/geobrix_gen_corpus_t2_smoke.ipynb"]
 
 
 def test_main_stops_with_exit_4_when_the_smoke_run_itself_ends_failed(monkeypatch, launcher, tmp_path, sdk, wheel, capsys):

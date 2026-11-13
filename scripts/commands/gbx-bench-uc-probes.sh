@@ -25,7 +25,7 @@ show_help() {
     echo "  --volroot DIR     Volume root of the flat env wheels (default /Volumes/geospatial_docs/geobrix/sample-data)"
     echo "  --out-dir DIR     Where the files go (default .superpowers/streamline/t28)"
     echo "  --profile NAME    Profile in the printed commands (default oauth-fe)"
-    echo "  --ws-root DIR     Workspace folder in the printed commands (default /Users/<current user>/GeoBrix from --profile; required with no session)"
+    echo "  --ws-root DIR     Workspace folder in the printed commands (default /Users/<current user>/jobs/geobrix from --profile; required with no session)"
     echo "  --cluster-id ID   The running JAR-less cluster of probe P1; without it the two P1 notebooks are not written"
     echo "  --only RUNS       Only these runs (S6-0, S6-A..S6-H, W-A..W-E, D-A, D-B, STD-A, S5-A, END), any case"
     echo "  --dry-run         Build and check everything; write no file"

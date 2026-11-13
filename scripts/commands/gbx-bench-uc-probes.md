@@ -12,7 +12,7 @@ Write the notebooks and statement files of the batched workspace pass into one f
 - `--volroot DIR` - Volume root of the flat env wheels. Default `/Volumes/geospatial_docs/geobrix/sample-data`.
 - `--out-dir DIR` - where the files go. Default `.superpowers/streamline/t28`.
 - `--profile NAME` - profile in the printed commands. Default `oauth-fe`.
-- `--ws-root DIR` - workspace folder in the printed commands. Default `/Users/<current user>/GeoBrix`, resolved from `--profile` at run time; pass it when there is no session.
+- `--ws-root DIR` - workspace folder in the printed commands. Default `/Users/<current user>/jobs/geobrix`, resolved from `--profile` at run time; pass it when there is no session.
 - `--cluster-id ID` - the running JAR-less cluster of probe P1. Without it the two P1 notebooks are not written.
 - `--only RUNS` - only these runs, comma-separated, any case. Default all.
 - `--dry-run` - build and check everything. Write no file.

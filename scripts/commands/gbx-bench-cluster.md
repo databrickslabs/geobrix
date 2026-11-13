@@ -217,7 +217,7 @@ See [Hardening](#hardening) for what each stage does.
 - Without `--run-id`, a launch gets an id of its own (`cluster-<date>-<time>-<4 hex>`).
 - `--resume` needs the `--run-id` of the run it resumes.
 - `--truncate-results` needs the `--run-id` whose rows it clears. With a fresh id it has nothing to clear.
-- Each run uploads its notebook to `/Users/<you>/GeoBrix/bench/geobrix_bench_runner_<run-id>.ipynb`. `GBX_BENCH_RUNNER_NOTEBOOK_PATH` replaces the `/Users/<you>/GeoBrix/bench/geobrix_bench_runner` prefix.
+- Each run uploads its notebook to `/Users/<you>/jobs/geobrix/bench/geobrix_bench_runner_<run-id>.ipynb`. `GBX_BENCH_RUNNER_NOTEBOOK_PATH` replaces the `/Users/<you>/jobs/geobrix/bench/geobrix_bench_runner` prefix.
 - The launcher keeps each notebook at run end, so the run page still opens it. `gbx:workspace:sweep` removes it later.
   - A smoke or run that succeeded is held 60 min; one that did not, 24 h (a repair run re-runs it).
   - Each launch first sweeps old bench notebooks (`--scope bench`).

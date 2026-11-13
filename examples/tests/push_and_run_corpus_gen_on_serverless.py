@@ -33,7 +33,7 @@ import uuid
 from pathlib import Path
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
-from _job_submit import submit_once  # sibling module
+from _job_submit import jobs_root, submit_once  # sibling module
 import _preflight  # sibling module
 import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _preflight import serverless_dependencies
@@ -241,9 +241,9 @@ def main() -> int:
     print("=" * 64)
 
     me = w.current_user.me()
-    # Under GeoBrix/bench/ beside the bench runner notebooks, never the home root: gbx:workspace:sweep removes
+    # Under jobs/geobrix/bench/ beside the bench runner notebooks, never the home root: gbx:workspace:sweep removes
     # them there once their window has passed.
-    base = f"/Users/{me.user_name}/GeoBrix/bench/geobrix_gen_corpus_{run_id}"
+    base = f"{jobs_root(me.user_name)}/bench/geobrix_gen_corpus_{run_id}"
     nb_path = base + ".ipynb"
     smoke_path = base + "_smoke.ipynb"
     _workspace_sweep.sweep_at_launch(w, ("bench",), me=me.user_name)

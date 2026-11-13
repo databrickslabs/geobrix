@@ -20,13 +20,22 @@ Remove the runner notebooks and folders the launchers keep at run end, once they
 
 ## What it removes
 
-Only items under `/Users/<you>/GeoBrix/`, and only these:
+Only items under `/Users/<you>/jobs/geobrix/`, and only these:
 
-- `bench`: `GeoBrix/bench/geobrix_bench_runner_*` and `geobrix_gen_corpus_*` (`gbx:bench:cluster`, `gbx:bench:gen-data`).
-- `runners`: `tests_*`, `runner_*` and `mutation_*` notebooks in the runner folder. That folder is `GBX_RUNNER_DIR`, default `GeoBrix/runners`.
+- `bench`: `jobs/geobrix/bench/geobrix_bench_runner_*` and `geobrix_gen_corpus_*` (`gbx:bench:cluster`, `gbx:bench:gen-data`).
+- `runners`: `tests_*`, `runner_*` and `mutation_*` notebooks in the runner folder. That folder is `GBX_RUNNER_DIR`, default `jobs/geobrix/runners`.
 - `runners` also covers a failed mutation run's Volume stage (`.../mutation-runs/<run>`), which the launcher records.
-- `uc`: the UC gate's `GeoBrix/uc-it-<sha>` folders, whole.
+- `uc`: the UC gate's `jobs/geobrix/uc-it-<sha>` folders, whole.
 - `notebooks`: the notebooks `gbx:test:notebooks-serverless` imported, by the path it recorded. Other items in its `--ws-dir` folders stay.
+
+## Legacy root
+
+- Launchers used to put their notebooks under `/Users/<you>/GeoBrix/`. That folder also holds your own notebooks.
+- The sweep applies the same prefixes and windows there, so old runs still go.
+- It never removes any other item there.
+- It then removes the empty runner folders (`bench`, `runners`, `serverless-run`, `python-task`) and the folders it emptied.
+- It removes `/Users/<you>/GeoBrix/` itself only when it is empty.
+- An empty folder of your own keeps the root.
 
 ## Rules
 

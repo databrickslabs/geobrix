@@ -8,7 +8,8 @@ show_help() {
     show_banner "gbx:workspace:sweep"
     cat <<'EOT'
 Remove the runner notebooks and folders the launchers kept at run end, once they pass their window.
-Only GeoBrix runner items under /Users/<you>/GeoBrix/ are removed; an item an active run uses is kept.
+Only GeoBrix runner items under /Users/<you>/jobs/geobrix/ (and the legacy /Users/<you>/GeoBrix/) are removed;
+an item an active run uses is kept. The legacy folder is removed too, only when it is empty.
 
 Usage: bash scripts/commands/gbx-workspace-sweep.sh --profile <name> [options]
   --profile <name>      Databricks profile (required)

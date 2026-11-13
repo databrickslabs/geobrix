@@ -282,7 +282,13 @@ def test_the_runner_dir_defaults_to_the_callers_own_workspace_home(monkeypatch):
     path = _job_submit.runner_dir(_workspace_of("someone.else@example.com"))
 
     assert path.startswith("/Workspace/Users/someone.else@example.com/")
-    assert path == "/Workspace/Users/someone.else@example.com/GeoBrix/runners"
+    assert path == "/Workspace/Users/someone.else@example.com/jobs/geobrix/runners"
+
+
+def test_the_jobs_root_is_apart_from_the_demo_folder():
+    """One folder for the launchers' notebooks: jobs/geobrix, never the demo notebooks' /Users/<you>/geobrix."""
+    assert _job_submit.jobs_root("me@x.com") == "/Users/me@x.com/jobs/geobrix"
+    assert _job_submit.RUNNER_SUBDIR == "jobs/geobrix/runners"
 
 
 @pytest.mark.parametrize("override", ["/Workspace/Users/me@x.com/mine", "/Shared/runners"])

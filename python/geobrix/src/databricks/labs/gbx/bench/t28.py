@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 DEFAULT_CATALOG = "geospatial_docs"
 DEFAULT_SCHEMA = "geobrix_t28"
 DEFAULT_VOLROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
-WS_ROOT_PLACEHOLDER = "/Users/<current-user>/GeoBrix"  # what an un-resolved Params prints; main() resolves it
+WS_ROOT_PLACEHOLDER = "/Users/<current-user>/jobs/geobrix"  # what an un-resolved Params prints; main() resolves it
 DEFAULT_PROFILE = "oauth-fe"
 SCHEMA_KEYS = ("w", "s6", "s6j", "se")
 UNQUALIFIED_OK = (
@@ -987,9 +987,9 @@ def parse_locally(files: Sequence[File]) -> Dict[str, str]:
 
 
 def resolve_ws_root(profile: str) -> str:
-    """The workspace folder the runners use: /Users/<current user>/GeoBrix.
+    """The workspace folder the runners use: /Users/<current user>/jobs/geobrix.
 
-    Same rule as examples/tests/run_notebooks_serverless.py. Raises RuntimeError when the SDK or a
+    Same root as examples/tests/_job_submit.py (jobs_root); python/geobrix/src cannot import examples/tests. Raises RuntimeError when the SDK or a
     session is not available, so the caller can ask for --ws-root.
     """
     try:
@@ -1002,7 +1002,7 @@ def resolve_ws_root(profile: str) -> str:
         ) from exc
     if not me:
         raise RuntimeError("the session has no user name; pass --ws-root")
-    return f"/Users/{me}/GeoBrix"
+    return f"/Users/{me}/jobs/geobrix"
 
 
 def _ws_root_of(a: argparse.Namespace) -> str:
@@ -1054,7 +1054,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument(
         "--ws-root",
         default=None,
-        help="workspace folder in the printed commands (default /Users/<current user>/GeoBrix, resolved from --profile)",
+        help="workspace folder in the printed commands (default /Users/<current user>/jobs/geobrix, resolved from --profile)",
     )
     ap.add_argument("--cluster-id", default=None)
     ap.add_argument("--only", default="", help="comma-separated run ids, e.g. S6-C,W-A")

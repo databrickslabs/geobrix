@@ -618,7 +618,7 @@ def _parted(driver, monkeypatch, tmp_path):
     def install(self, w):
         calls.append("install")
         self.run_ids.append("111")
-        self.ws_dir = "/Users/me/GeoBrix/uc-it-x"
+        self.ws_dir = "/Users/me/jobs/geobrix/uc-it-x"
 
     monkeypatch.setattr(driver.Gate, "step_install", install)
     monkeypatch.setattr(driver.Gate, "schema_exists", lambda self: True)
@@ -650,7 +650,7 @@ def test_a_parted_run_installs_once_resumes_and_writes_evidence_after_the_last_p
     assert calls == ["warehouse 3/3", "warehouse 1/3"] and not (tmp_path / "evidence.json").exists()
     calls.clear()
     assert driver.main(base + ["2/3"]) == 0
-    assert calls[0] == "warehouse 2/3" and calls[1].startswith("cleanup geobrix_uc_it_") and calls[1].endswith("/Users/me/GeoBrix/uc-it-x")
+    assert calls[0] == "warehouse 2/3" and calls[1].startswith("cleanup geobrix_uc_it_") and calls[1].endswith("/Users/me/jobs/geobrix/uc-it-x")
     ev = json.loads((tmp_path / "evidence.json").read_text())
     assert ev["result"] == "pass" and ev["scope"] == "full" and ev["parts"] == 3 and ev["job_run_ids"] == ["111"]
     assert ev["slice"]["total"] == 3 and ev["slice"]["passed"] == 3 and ev["examples"]["total"] == 5
@@ -728,7 +728,7 @@ def test_drop_parts_cleans_up_an_unfinished_parted_run_of_another_commit(driver,
     sha12 = next(p.parent.name for p in tmp_path.glob("*/parts-*.json"))
     calls.clear()
     assert driver.main(["--profile", "p", "--warehouse-id", "w", "--drop-parts", sha12]) == 0
-    assert calls == [f"cleanup geobrix_uc_it_{sha12} /Users/me/GeoBrix/uc-it-x"]
+    assert calls == [f"cleanup geobrix_uc_it_{sha12} /Users/me/jobs/geobrix/uc-it-x"]
     state = json.loads(next(tmp_path.glob("*/parts-*.json")).read_text())
     assert state["dropped"] == "dropped"
     assert driver.main(["--profile", "p", "--warehouse-id", "w", "--drop-parts", "000000000000"]) == 1

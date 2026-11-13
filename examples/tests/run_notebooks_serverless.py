@@ -23,7 +23,7 @@ Usage examples:
   # Explicit workspace folder:
   python run_notebooks_serverless.py \\
     --notebook my_nb.ipynb \\
-    --ws-dir /Users/me@example.com/GeoBrix/serverless-run
+    --ws-dir /Users/me@example.com/jobs/geobrix/serverless-run
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ from typing import Optional
 import _cell_range  # sibling module: run a notebook in pieces (--cells)
 import _wheel_guard  # sibling module: force the staged wheel in, then fail the run if another geobrix is imported
 import _workspace_sweep  # sibling module: deferred cleanup of the imported notebooks (gbx:workspace:sweep)
-from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _job_submit import jobs_root, submit_once  # sibling module (script dir is on sys.path)
 from _snapshot import snapshot_files  # sibling module (script dir is on sys.path)
 
 # ---------------------------------------------------------------------------
@@ -1107,7 +1107,7 @@ def main() -> int:
         default=None,
         help=(
             "Workspace folder to import notebooks into. "
-            "Default: /Users/<current-user>/GeoBrix/serverless-run"
+            "Default: /Users/<current-user>/jobs/geobrix/serverless-run"
         ),
     )
     parser.add_argument(
@@ -1500,7 +1500,7 @@ def main() -> int:
         ok = run_python_task(
             w,
             snap.get(local, local),
-            args.ws_dir or f"/Users/{me}/GeoBrix/python-task",
+            args.ws_dir or f"{jobs_root(me)}/python-task",
             params,
             cluster,
             args.poll_secs,
@@ -1629,7 +1629,7 @@ def main() -> int:
     ws_dir = args.ws_dir
     if not ws_dir:
         me = w.current_user.me().user_name or "unknown"
-        ws_dir = f"/Users/{me}/GeoBrix/serverless-run"
+        ws_dir = f"{jobs_root(me)}/serverless-run"
     # Earlier runs' imports stay for their window; remove those past it (bounded, never fails the launch).
     _workspace_sweep.sweep_at_launch(w, ("notebooks",))
 

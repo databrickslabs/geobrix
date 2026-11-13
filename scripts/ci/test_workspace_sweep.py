@@ -15,7 +15,8 @@ import pytest
 from conftest import REPO_ROOT
 
 ME = "me@example.com"
-ROOT = f"/Users/{ME}/GeoBrix"
+ROOT = f"/Users/{ME}/jobs/geobrix"
+LEGACY = f"/Users/{ME}/GeoBrix"  # where the launchers put their notebooks before the job root moved
 NOW = 2_000_000_000.0
 MIN = 60.0
 HOST = "https://example.cloud.databricks.com"
@@ -159,14 +160,14 @@ def test_dry_run_deletes_nothing_and_says_what_it_would(sw):
 def test_an_item_outside_the_prefixes_is_never_deleted(sw):
     w = FakeW()
     keep = [
-        w.add(f"/Users/{ME}/geobrix_bench_runner_r1.ipynb", age_min=999),  # the home root, not GeoBrix/bench
+        w.add(f"/Users/{ME}/geobrix_bench_runner_r1.ipynb", age_min=999),  # the home root, not jobs/geobrix/bench
         w.add(f"/Users/{ME}/Other/tests_r1_serverless.ipynb", age_min=999),  # a runner name in a folder not ours
         w.add(f"{ROOT}/bench/gbx_hs_diag", age_min=999),  # a hand-made notebook in the bench folder
-        w.add(f"{ROOT}/eo-series/01_ingest", age_min=999),  # a user's own folder under GeoBrix
-        w.add("/Users/other@example.com/GeoBrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),  # another user
-        w.add("/Shared/GeoBrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),
+        w.add(f"{ROOT}/eo-series/01_ingest", age_min=999),  # a user's own folder under the job root
+        w.add("/Users/other@example.com/jobs/geobrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),  # another user
+        w.add("/Shared/jobs/geobrix/bench/geobrix_bench_runner_r1.ipynb", age_min=999),
     ]
-    # a recorded path outside GeoBrix/ is refused too (a --ws-dir somewhere else)
+    # a recorded path outside the job root is refused too (a --ws-dir somewhere else)
     sw.record(w, [keep[0], keep[1], "/Shared/x"], scope="notebooks", now=NOW - 999 * MIN)
     report, out = _sweep(sw, w)
     assert w.deleted == []
@@ -183,7 +184,7 @@ def test_the_tests_folder_from_gbx_runner_dir_is_a_prefix(sw):
     assert w.deleted == [nb] and other in w.objects
 
 
-def test_a_runner_dir_outside_geobrix_is_refused(sw):
+def test_a_runner_dir_outside_the_job_root_is_refused(sw):
     w = FakeW()
     nb = w.add(f"/Users/{ME}/elsewhere/tests_r1_serverless.ipynb", age_min=999)
     report, out = _sweep(sw, w, runner_dir=f"/Users/{ME}/elsewhere")
@@ -357,6 +358,137 @@ def test_the_launch_time_sweep_removes_old_items_of_its_scope(sw, capsys):
     old = w.add(f"{ROOT}/bench/geobrix_bench_runner_old.ipynb", age_min=3 * 60)
     sw.sweep_at_launch(w, ("bench",), now=NOW)
     assert w.deleted == [old] and old in capsys.readouterr().out
+
+
+# ---- the legacy root ----------------------------------------------------------------------------------------------
+
+
+def test_the_job_root_is_the_one_helper_and_not_the_legacy_folder(sw):
+    assert sw.root_of(ME) == ROOT == f"/Users/{ME}/jobs/geobrix"
+    assert sw.legacy_root_of(ME) == LEGACY and sw.root_of(ME) != LEGACY
+
+
+def test_runner_items_under_the_legacy_root_are_swept_too(sw):
+    w = FakeW()
+    bench = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    corpus = w.add(f"{LEGACY}/bench/geobrix_gen_corpus_r2_smoke.ipynb", age_min=120)
+    tst = w.add(f"{LEGACY}/runners/tests_r3_serverless.ipynb", age_min=120)
+    uc = f"{LEGACY}/uc-it-0123456789ab"
+    w.add(f"{uc}/uc_it_install", age_min=120)
+    new = w.add(f"{ROOT}/bench/geobrix_bench_runner_r4.ipynb", age_min=120)
+    _sweep(sw, w)
+    assert sorted(w.deleted[:5]) == sorted([bench, corpus, tst, uc, new])
+
+
+def test_a_young_or_held_legacy_item_is_kept(sw):
+    w = FakeW()
+    young = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=10)
+    held = w.add(f"{LEGACY}/runners/mutation_r2.ipynb", age_min=300)
+    sw.release(w, [held], scope="runners", succeeded=False, now=NOW, out=lambda s: None)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and young in w.objects and held in w.objects
+    assert f"KEPT {young}: younger than 60 min" in out and f"KEPT {held}: held until" in out
+
+
+def test_the_legacy_root_never_loses_a_non_runner_item(sw):
+    w = FakeW()
+    keep = [
+        w.add(f"{LEGACY}/Antimeridian", age_min=999),  # your own notebooks
+        w.add(f"{LEGACY}/DAIS-gbx-dbr-16.4", age_min=999),
+        w.add(f"{LEGACY}/bench/gbx_hs_diag", age_min=999),  # hand-made, in a runner folder
+        w.add(f"{LEGACY}/eo-series/01_ingest", age_min=999),
+        w.add(f"{LEGACY}/geobrix_bench_runner_r1.ipynb", age_min=999),  # a runner name at the root, not in bench/
+    ]
+    old = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=999)
+    report, out = _sweep(sw, w)
+    assert report.deleted == [old]
+    assert all(p in w.objects for p in keep) and LEGACY in w.objects and report.pruned == [f"{LEGACY}/runners"]
+
+
+def test_a_recorded_legacy_import_is_swept_but_its_neighbours_are_not(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/serverless-run/probe_x", age_min=120)
+    mine = w.add(f"{LEGACY}/serverless-run/hand_made", age_min=999)
+    sw.record(w, [nb], scope="notebooks", now=NOW - 120 * MIN)
+    _sweep(sw, w)
+    assert w.deleted == [nb] and mine in w.objects
+
+
+def test_a_runner_dir_under_the_legacy_root_is_a_prefix(sw):
+    w = FakeW()
+    rd = f"/Workspace{LEGACY}/gbx-beta/tests"
+    nb = w.add(f"{LEGACY}/gbx-beta/tests/tests_r1_serverless.ipynb", age_min=120)
+    other = w.add(f"{LEGACY}/gbx-beta/tests/_stage_corpus", age_min=999)
+    _sweep(sw, w, runner_dir=rd)
+    assert w.deleted == [nb] and other in w.objects
+
+
+def test_the_legacy_default_runner_folder_is_swept_when_a_runner_dir_is_set(sw):
+    w = FakeW()
+    old = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=120)
+    _sweep(sw, w, runner_dir=f"/Workspace{ROOT}/elsewhere")
+    assert w.deleted[0] == old
+
+
+def test_the_legacy_root_is_removed_when_the_sweep_empties_it(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    tst = w.add(f"{LEGACY}/runners/tests_r2_serverless.ipynb", age_min=120)
+    uc = f"{LEGACY}/uc-it-0123456789ab"
+    w.add(f"{uc}/uc_it_install", age_min=120)
+    report, out = _sweep(sw, w)
+    assert LEGACY not in w.objects and not [p for p in w.objects if p.startswith(LEGACY)]
+    assert w.deleted[-1] == LEGACY
+    assert sorted(report.pruned) == sorted([f"{LEGACY}/bench", f"{LEGACY}/runners", LEGACY])
+    assert sorted(report.deleted) == sorted([nb, tst, uc])  # the folders are not counted as deletes
+    assert f"DELETED {LEGACY} (empty folder)" in out
+
+
+def test_the_legacy_root_stays_while_a_runner_item_is_still_held(sw):
+    w = FakeW()
+    old = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    young = w.add(f"{LEGACY}/runners/tests_r2_serverless.ipynb", age_min=5)
+    report, _ = _sweep(sw, w)
+    assert report.deleted == [old] and young in w.objects and LEGACY in w.objects
+    assert f"{LEGACY}/bench" not in w.objects  # its empty runner folder goes; the root and the other folder stay
+
+
+def test_the_legacy_root_stays_for_an_empty_folder_of_your_own(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=120)
+    w.objects[f"{LEGACY}/my-empty-folder"] = ("DIRECTORY", None)
+    _sweep(sw, w)
+    assert f"{LEGACY}/my-empty-folder" in w.objects and LEGACY in w.objects
+
+
+def test_an_active_run_under_the_legacy_root_keeps_it(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=300)
+    w.active = [nb]
+    _sweep(sw, w)
+    assert w.deleted == [] and LEGACY in w.objects
+
+
+def test_a_dry_run_names_the_empty_folders_but_removes_nothing(sw):
+    w = FakeW()
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w, dry_run=True)
+    assert w.deleted == [] and nb in w.objects and LEGACY in w.objects
+    assert f"WOULD DELETE {nb}" in out and f"WOULD DELETE {LEGACY} (empty folder)" in out
+
+
+def test_no_legacy_root_means_nothing_to_prune(sw):
+    w = FakeW()
+    w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    report, out = _sweep(sw, w)
+    assert report.pruned == [] and "empty folder" not in out and ROOT in w.objects
+
+
+def test_the_job_root_and_its_folders_are_never_pruned(sw):
+    w = FakeW()
+    w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    _sweep(sw, w)
+    assert f"{ROOT}/bench" in w.objects and ROOT in w.objects
 
 
 # ---- the launchers no longer delete at run end ---------------------------------------------------------------------

@@ -52,6 +52,7 @@ sys.path.insert(0, str(REPO_ROOT / "python" / "geobrix" / "src"))  # databricks.
 
 import check_uc_integration_evidence as gate  # noqa: E402
 from _cluster_config import cluster_config_file  # noqa: E402
+from _job_submit import jobs_root  # noqa: E402
 from _uc_warehouse import warehouse_problem  # noqa: E402
 import uc_sources_hash  # noqa: E402
 
@@ -576,7 +577,7 @@ class Gate:
     def step_install(self, volume_wheel: str) -> None:
         say(f"step 4/6: install into {self.a.catalog}.{self.schema} from a Serverless env 6 job (procedures=True)")
         me = self.client().current_user.me().user_name
-        self.ws_dir = f"/Users/{me}/GeoBrix/uc-it-{self.sha12}"
+        self.ws_dir = f"{jobs_root(me)}/uc-it-{self.sha12}"
         nb_dir = self.run_dir / "nb"
         nb_dir.mkdir(parents=True, exist_ok=True)
         nb = nb_dir / "uc_it_install.ipynb"

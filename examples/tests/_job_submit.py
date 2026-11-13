@@ -62,16 +62,24 @@ _LOCAL_FILE_ERRORS = (
 )
 
 
-# Under the caller's workspace home, version-less like the other launchers' folders
-# (run_notebooks_serverless.py uses GeoBrix/serverless-run).
-RUNNER_SUBDIR = "GeoBrix/runners"
+# The one workspace folder every launcher puts its job notebooks under, apart from the demo notebooks in
+# /Users/<you>/geobrix: /Users/<you>/jobs/geobrix/<topic>/ (serverless-run, bench, runners, uc-it-<sha12>,
+# python-task). gbx:workspace:sweep reads the same root.
+JOBS_SUBDIR = "jobs/geobrix"
+# Under the caller's workspace home, version-less like the other launchers' folders.
+RUNNER_SUBDIR = f"{JOBS_SUBDIR}/runners"
+
+
+def jobs_root(me: str) -> str:
+    """``/Users/<me>/jobs/geobrix``: the folder the launchers' job notebooks go under (``<topic>`` folders below)."""
+    return f"/Users/{me}/{JOBS_SUBDIR}"
 
 
 def runner_dir(w) -> str:
     """The workspace folder a launcher uploads its runner notebook into.
 
     ``GBX_RUNNER_DIR`` when the caller set it (an empty value counts as not set); otherwise
-    ``/Workspace/Users/<you>/GeoBrix/runners`` for the user ``w`` is signed in as. The user is looked
+    ``/Workspace/Users/<you>/jobs/geobrix/runners`` for the user ``w`` is signed in as. The user is looked
     up (``w.current_user.me()``) only when there is no override, so an override makes no call.
     """
     override = os.environ.get("GBX_RUNNER_DIR")

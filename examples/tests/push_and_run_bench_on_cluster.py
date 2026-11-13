@@ -66,7 +66,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Optional
-from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _job_submit import jobs_root, submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 import _workspace_sweep  # sibling module: deferred cleanup of the run's notebooks
@@ -2013,8 +2013,8 @@ def _main(_stack) -> int:
         or None
     )
     me = w.current_user.me()
-    # Under GeoBrix/bench/, never the home root: a flat home folder filled with hundreds of runner notebooks.
-    base = notebook_path_from_env or f"/Users/{me.user_name}/GeoBrix/bench/geobrix_bench_runner"
+    # Under jobs/geobrix/bench/, never the home root: a flat home folder filled with hundreds of runner notebooks.
+    base = notebook_path_from_env or f"{jobs_root(me.user_name)}/bench/geobrix_bench_runner"
     base = base.rstrip("/").removesuffix(".ipynb")
     notebook_path = f"{base}_{run_id}.ipynb"
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.

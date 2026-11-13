@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "d647fcd9d78d05545c375c6be7ca49cb3e4727446a0dff323f78e3c08904a7ab",
-  "date": "2026-11-12",
+  "native_inputs_sha256": "fbcdc5653a9d72634cf611ce7bb40c78957e8e4b986038821477b9e15483fd5f",
+  "date": "2026-11-13",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "6b9bde1b08362690e53a90ac2f191dd741ff4e69",
+  "built_from": "d307e8a58d0c5d659be181bb7ef8f62546e0dbe1",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -45,10 +45,10 @@
     "python/geobrix/envs/env5/vendor-pure.txt": "e86f3bd58ec4a214e91ad2babeb07e22447be05ee14d6caaf15bb222e138200d",
     "python/geobrix/envs/env6/base.txt": "18c2d331c30b61055d020549af37a6b96d4637c380be924244f583aefdc2b6e7",
     "python/geobrix/envs/env6/core.txt": "f1da13529b8e0591bc9922dd029527f9e50d0adad741eeeba7cd5b93a5fea232",
-    "python/geobrix/envs/env6/dcs-aarch64.lock": "aa11e1ab006992200b277c5172d5ea2160ca79f2bb46abc89b62fe846e21e187",
-    "python/geobrix/envs/env6/dcs-base-aarch64.txt": "5b04a1487ee8bc264ae643830f3a12c0816ec6e65cd58ab6d10abcea59298956",
-    "python/geobrix/envs/env6/dcs-base-x86_64.txt": "176bbf4fba99ec5711903efe08d9a182b490a8ca9879a93e12a17d11a5b6e88b",
-    "python/geobrix/envs/env6/dcs-x86_64.lock": "dfd859215772125f384607b1c558044f3a5d75e211b9b955ba137e8c7500982b",
+    "python/geobrix/envs/env6/dcs-aarch64.lock": "f425771fd0d82fea7969d33bebf0ced48319ea888329a7b4b19f709a34711fc8",
+    "python/geobrix/envs/env6/dcs-base-aarch64.txt": "4d6ed29345ec52fa28429f1ab5b071192b3bb884b922de5846d2171ee6b62ec2",
+    "python/geobrix/envs/env6/dcs-base-x86_64.txt": "2a2117e4a8e233686db859cd8006e4ac60046addbc6281d50991646dd3ceef95",
+    "python/geobrix/envs/env6/dcs-x86_64.lock": "f44a7c6a0dfefbdfca945d80e33dfeb3e778b8dc4971f8a8d634e7fe23877ffd",
     "python/geobrix/envs/env6/dcs.in": "8c99e03c75069cc9d171a13da8f9951d799bcd5748968207f58be1df152148f4",
     "python/geobrix/envs/env6/extra-databricks.txt": "17c65b72cb5d715906c1e95487fc9aaa80301816d4f6de07c0e7b5d2dad71309",
     "python/geobrix/envs/env6/extra-stac.txt": "974cdebb039fe0a040130db4effb293fcf496b1afbf6f390ea7f2fd4b91d430a",

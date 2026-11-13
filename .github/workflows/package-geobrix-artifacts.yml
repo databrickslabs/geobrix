@@ -30,7 +30,7 @@ name: package geobrix artifacts
 # (`gh auth switch --user mjohns-databricks` first; gbx:build:native --arch both has built both architectures'
 # stage-native and bindings trees from the release commit; scripts/commands/gbx-build-wheel.md has the details):
 #   git checkout v<version>                                     # a clean tree: the wheel records GIT_SHA
-#   (a release that ships the Rust module: gbx-build-rs.sh --arch both first, and --extra-payload build/rs/payload below)
+#   bash scripts/commands/gbx-build-rs.sh --arch both            # the Rust kernels: the wheel builds below ship them
 #   gh run download <run id> -n geobrix-release-artifacts -D /tmp/gbx-release   # the JAR built by this run
 #   bash scripts/commands/gbx-build-wheel.sh --env 5 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
 #   bash scripts/commands/gbx-build-wheel.sh --env 6 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar

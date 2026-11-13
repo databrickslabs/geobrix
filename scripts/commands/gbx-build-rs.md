@@ -25,7 +25,9 @@ bash scripts/commands/gbx-build-rs.sh --check
 ## Output
 
 - `build/rs/out/<arch>/gbxrs-*.whl` and `build/rs/payload/_native/<arch>/rs/_gbxrs.abi3.so` (manylinux_2_28, no GDAL).
-- Pack it into an env wheel with `gbx:build:wheel --extra-payload <payload dir>`. Only one module per architecture may be packed.
+- `build/rs/out/<arch>/provenance.json`: the module's sha256, the sha256 of each `rust/gbxrs` file under git, and the toolchain image tag.
+- `gbx:build:wheel` ships the payload by default, and only while that stamp matches (`scripts/native/rs_payload.py check`).
+- A build first removes the old module and stamp, so a failed build leaves nothing to ship.
 
 ## Limits
 

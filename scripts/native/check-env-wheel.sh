@@ -29,6 +29,8 @@
 #     (activated at `import databricks.labs.gbx`; before it, geopandas does not import at all)
 #  10 a runtime PROJ_DATA holding another PROJ's proj.db (DBR 19's /databricks/native/proj-data on a dedicated
 #     cluster): pyproj from the payload still creates EPSG:4326, with PROJ_DATA the payload's share/proj
+#  11 the Rust kernels: _gbxrs loads from the payload's _native/<arch>/rs/ and runs (a BNG cell, a TIN triangle), so a
+#     wheel built without them (--no-rs, or a missing module for this architecture) fails here and fails the arch gate
 set -uo pipefail
 ENV="$1"; VERSION="$2"; OTHER=$((11 - ENV)); ARCH="$(uname -m)"
 PY=/opt/python/cp312-cp312/bin/python PY311=/opt/python/cp311-cp311/bin/python
@@ -209,6 +211,27 @@ PY
 case "$out" in
     *"PROJ10 4326 "*"/_native/share/proj "*"/_vendor/"*) ok "10 PROJ_DATA with another PROJ's proj.db: the payload's share/proj serves, pyproj creates EPSG:4326" ;;
     *) bad "10 PROJ_DATA with another PROJ's proj.db: $(echo "$out" | tail -2)" ;;
+esac
+
+# 11: the Rust kernels load from this architecture's payload and give the expected answers.
+out="$("$V/bin/python" - 2>&1 <<'PY'
+import platform
+import numpy as np
+import databricks.labs.gbx  # noqa: F401
+from databricks.labs.gbx import _rs
+m = _rs.load()
+assert m is not None, _rs.unavailable_reason()
+f = getattr(m, "__file__", None) or m.__spec__.origin
+assert f"/databricks/labs/gbx/_native/{platform.machine()}/rs/" in f, f
+cells = _rs.bng_cells(np.array([530000.0]), np.array([180000.0]), 1).to_pylist()
+tri = _rs.tin_delaunay(np.array([0.0, 1.0, 0.0]), np.array([0.0, 0.0, 1.0]), (0.0, 0.0, 1.0, 1.0), 1e-9).tolist()
+assert cells == ["TQ"] and tri == [[0, 1, 2]], (cells, tri)
+print("RS11", f.split("/_native/", 1)[1], cells, tri)
+PY
+)"
+case "$out" in
+    *"RS11 "*) ok "11 Rust kernels: _gbxrs from the payload ($(echo "$out" | grep '^RS11' | cut -d' ' -f2-))" ;;
+    *) bad "11 Rust kernels: $(echo "$out" | tail -2)" ;;
 esac
 
 echo "ENV_WHEEL_VERIFIED env=$ENV arch=$ARCH failures=$FAILS"

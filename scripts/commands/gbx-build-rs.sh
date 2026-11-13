@@ -20,7 +20,8 @@ usage() {
     echo "Usage: bash scripts/commands/gbx-build-rs.sh [--arch x86_64|aarch64|both] [--check] [--log <path>]"
     echo ""
     echo "  --arch      default: this machine's architecture. The other one runs under emulation and is slow."
-    echo "              The module is built in the toolchain image: build/rs/payload/_native/<arch>/rs/."
+    echo "              The module is built in the toolchain image: build/rs/payload/_native/<arch>/rs/, with its"
+    echo "              provenance in build/rs/out/<arch>/provenance.json (gbx:build:wheel ships only a current one)."
     echo "  --check     do not build: run cargo fmt --check, clippy -D warnings (all targets) and cargo test in the toolchain image,"
     echo "              then cargo deny (licenses bans sources, and advisories) in the rust-native image"
     echo "  --log       write the output to this log file"
@@ -57,12 +58,16 @@ build_arch() {
     out="$PROJECT_ROOT/build/rs/out/$a"
     docker image inspect "$tag" > /dev/null 2>&1 || { echo "PRECONDITION MISSING: image $tag (gbx:build:native --target toolchain --arch $a); the module was not built"; return 1; }
     mkdir -p "$out" "build/rs/payload/_native/$a/rs"
+    # a failed build must not leave a stamp naming the old module: gbx:build:wheel refuses an unstamped one
+    rm -f "$out/provenance.json" "$out"/gbxrs-*.whl "build/rs/payload/_native/$a/rs/"_gbxrs*.so
     echo "== build $a: $CRATE in $tag (--network none)"
     docker run --rm --network none --platform "$plat" -v "$work/crate:/src" -v "$VENDOR:/vendor:ro" -v "$out:/out" "$tag" \
         bash -lc 'cp /recipes/cargo-offline.toml $CARGO_HOME/config.toml && cd /src && \
                   maturin build --release --offline --locked --compatibility manylinux_2_28 -i /opt/python/cp312-cp312/bin/python --out /out'
     unzip -o -j "$out"/gbxrs-*-cp312-abi3-manylinux_2_28_"$a".whl '_gbxrs*.so' -d "build/rs/payload/_native/$a/rs"
     [ ! -e "$work/crate/target" ] || { echo "BUILD FAILED: the offline build left $work/crate/target (CARGO_TARGET_DIR not honoured)"; return 1; }
+    # the provenance gbx:build:wheel checks: the crate's sources, the toolchain image and the module's sha256
+    python3 scripts/native/rs_payload.py stamp "$a"
     echo "RS_BUILT arch=$a seconds=$(($(date +%s) - t0)) out=$out"
 }
 

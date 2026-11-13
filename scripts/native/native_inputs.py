@@ -23,7 +23,7 @@ The sets (only files under git count; --rev reads that commit's tree, without it
   gate   the native inputs and the env wheel's assembly inputs, what differs by architecture and is what
          gbx:native:verify-arches exists for: build, plus the env wheel's inputs as its builder lists them (GIT_INPUTS
          of scripts/native/build_env_wheel.py, read from the same tree: the envs files with pyproject.env.toml,
-         pyproject.toml, requirements-build.txt and scripts/native, the checks among them), with the package source
+         pyproject.toml, requirements-build.txt, scripts/native (the checks among them) and rust/gbxrs), with the package source
          narrowed to its native part (python/geobrix/src/databricks/labs/gbx/_native/**, _gbx_native_path.py) and
          without README.md, less the stamp itself. The rest of the package is pure Python, the same on both
          architectures, and tested by x86_64 CI; GDALManager.scala is not run by any gate check.

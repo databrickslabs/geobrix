@@ -13,10 +13,13 @@ Inputs:
   python/geobrix/envs/pyproject.env.toml              the env wheels' pyproject
   --vendor-pure <dir>  the vendor-pure.txt wheels, fetched and hash-checked on the host by the command
   --jar <path>         the GeoBrix JAR (shipped in _jar/)
-  --extra-payload <d>  a tree merged into the payload, only under _native/<arch>/ (the Rust kernels:
-                       _native/<arch>/rs/_gbxrs.abi3.so); repeatable. The licence notices of a kernel's
-                       crates go to _native/licenses/rust/<crate>/ (from its Cargo.lock; the sources are
-                       vendored to build/native/vendor/<crate> when absent)
+  build/rs/payload     the Rust kernels (_native/<arch>/rs/_gbxrs.abi3.so, gbx:build:rs --arch both), merged as an
+                       --extra-payload by default; refused when missing or stale (scripts/native/rs_payload.py:
+                       built from other rust/gbxrs sources or in another toolchain image)
+  --no-rs              a dev build without the Rust kernels (its --verify fails check 11)
+  --extra-payload <d>  a tree merged into the payload, only under _native/<arch>/; repeatable. The licence
+                       notices of a kernel's crates go to _native/licenses/rust/<crate>/ (from its Cargo.lock;
+                       the sources are vendored to build/native/vendor/<crate> when absent)
   --allow-dirty        build although the inputs have uncommitted changes (GIT_DIRTY = True)
 
 Before any step: the inputs exist, Docker runs and both toolchain images are there, and the inputs
@@ -79,6 +82,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import rs_payload  # noqa: E402
 from redact import redact  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
@@ -147,6 +151,7 @@ GIT_INPUTS = (  # what the wheel is built from, under git
     "python/geobrix/pyproject.toml",
     "python/geobrix/requirements-build.txt",
     "scripts/native",
+    "rust/gbxrs",  # the Rust kernels' crate: build/rs/payload is checked against it (rs_payload.py)
 )
 # The size budget is soft: python/geobrix/envs/size-budget.json holds it and the recorded justifications (env, ceiling,
 # reason, date) under which a wheel may be bigger; step 7 fails a wheel over the budget with none, or over its ceiling.
@@ -424,6 +429,7 @@ def check_inputs(args):
         missing(
             f"the JAR {args.jar} (build it with gbx:docker:exec 'mvn -B -q package -PskipScoverage -DskipTests', or pass --jar)"
         )
+    add_rust_payload(args)
     for d in args.extra_payload:
         if not d.is_dir():
             missing(f"--extra-payload {d} is not a directory")
@@ -709,6 +715,33 @@ def add_payload(args, tree, natives, bindings, version):
                 f"{args.jar} has no com.databricks.labs.gbx.kernels.L1Installer class: not the GeoBrix JAR"
             )
     shutil.copy2(args.jar, jar)
+
+
+def add_rust_payload(args):
+    """The Rust kernels ship by default: build/rs/payload joins args.extra_payload (once, also when given as one),
+    after rs_payload.py says both architectures' module was built from the checkout's rust/gbxrs in today's
+    toolchain image. `--no-rs` (a dev build) skips it."""
+    if args.no_rs:
+        print("    --no-rs: no Rust kernels (a dev build; its --verify fails check 11)", flush=True)
+        return
+    rs = rs_payload.payload_dir(REPO)
+    fix = f"run {rs_payload.FIX}, or pass --no-rs for a dev build without the kernels"
+    absent, stale = rs_payload.problems(REPO)
+    if absent:
+        missing(f"the Rust kernels ({'; '.join(absent)}): {fix}")
+    if stale:
+        fail(f"the Rust kernels in {rs} are stale ({'; '.join(stale)}): {fix}")
+    if rs.resolve() not in {d.resolve() for d in args.extra_payload}:
+        args.extra_payload.append(rs)
+
+
+def verify_rust_members(names, no_rs):
+    """Step 7: unless --no-rs, the wheel carries both architectures' Rust module."""
+    if no_rs:
+        return
+    absent = [a for a in ARCHES if f"{PKG}/_native/{a}/rs/{rs_payload.MODULE}.abi3.so" not in names]
+    if absent:
+        fail(f"the wheel has no Rust module for {', '.join(absent)} ({rs_payload.MODULE}.abi3.so)")
 
 
 def add_gdal_internal_note(licenses, internal):
@@ -1236,6 +1269,7 @@ def verify(args, whl, env, version, extras, epoch):
     with zipfile.ZipFile(whl) as zf:
         verify_metadata(zf, env, version, extras)
         verify_payload(zf, version, epoch)
+        verify_rust_members(set(zf.namelist()), args.no_rs)
         extract_payload(zf, args.work / "payload")
     size = whl.stat().st_size / 1e6
     size_gate(size, env, json.loads(SIZE_BUDGET.read_text()), last_size(args, env))
@@ -1383,6 +1417,7 @@ def main():
     p.add_argument("--vendor-pure", type=Path)
     p.add_argument("--extra-payload", type=Path, action="append", default=[])
     p.add_argument("--allow-dirty", action="store_true")
+    p.add_argument("--no-rs", action="store_true")
     p.add_argument("--verify", choices=ARCHES)
     p.add_argument("--host-python", default="python3")
     p.add_argument("--native-out", type=Path, default=REPO / "build" / "native" / "out")

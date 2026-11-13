@@ -1,7 +1,7 @@
 #!/bin/bash
 # gbx:build:wheel - Build geobrix-<version>+env<N>-py3-none-any.whl: both architectures' native payload
-# (gdal-native + the vendored bindings), the JAR, the tripwire extras, the runtime guard and the
-# startup activation; or, with --verify, check the built wheel's install in a toolchain image
+# (gdal-native + the vendored bindings, and the Rust kernels from build/rs/payload), the JAR, the tripwire extras,
+# the runtime guard and the startup activation; or, with --verify, check the built wheel's install in a toolchain image
 # (scripts/native/build_env_wheel.py does the work).
 set -euo pipefail
 
@@ -13,27 +13,30 @@ ENV_N=""
 JAR=""
 EXTRA=()
 ALLOW_DIRTY=()
+NO_RS=()
 VERIFY=""
 LOG_PATH=""
 
 usage() {
     show_banner "Build an env wheel with the native payload"
-    echo "Usage: bash scripts/commands/gbx-build-wheel.sh --env 5|6 [--jar <path>] [--extra-payload <dir>] [--allow-dirty] [--log <path>]"
+    echo "Usage: bash scripts/commands/gbx-build-wheel.sh --env 5|6 [--jar <path>] [--no-rs] [--extra-payload <dir>] [--allow-dirty] [--log <path>]"
     echo "       bash scripts/commands/gbx-build-wheel.sh --env 5|6 --verify x86_64|aarch64|both [--log <path>]"
     echo ""
     echo "  --env            5 (DBR 17.3, DBR 18, Serverless env 5) or 6 (DBR 19, Serverless env 6, SQL warehouses, UC)"
     echo "  --jar            the GeoBrix JAR to ship in _jar/ (default target/geobrix-<version>-jar-with-dependencies.jar)"
-    echo "  --extra-payload  a tree merged into the payload under _native/<arch>/, e.g. build/rs/payload with"
-    echo "                   _native/<arch>/rs/_gbxrs.abi3.so (the Rust kernels); repeatable"
-    echo "  --allow-dirty    build although the package source, the env files or scripts/native have uncommitted"
-    echo "                   changes (refused otherwise, so that the wheel's GIT_SHA says what it was built from)"
+    echo "  --no-rs          leave out the Rust kernels (a dev build: its --verify fails). By default build/rs/payload"
+    echo "                   ships, and a missing or stale one (scripts/native/rs_payload.py check) fails the build:"
+    echo "                   rebuild it with bash scripts/commands/gbx-build-rs.sh --arch both"
+    echo "  --extra-payload  another tree merged into the payload under _native/<arch>/; repeatable"
+    echo "  --allow-dirty    build although the package source, the env files, scripts/native or rust/gbxrs have"
+    echo "                   uncommitted changes (refused otherwise, so that the wheel's GIT_SHA says what it was built from)"
     echo "  --verify ARCH    build nothing: install dist/env<N>'s wheel in a fresh offline venv in ARCH's toolchain"
     echo "                   image and run scripts/native/check-env-wheel.sh (install, .pth and import activation, CA,"
-    echo "                   tripwire, Python 3.11, payload self-check); 'both' runs aarch64 then x86_64"
+    echo "                   tripwire, Python 3.11, payload self-check, the Rust kernels); 'both' runs aarch64 then x86_64"
     echo "  --log            Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
     echo "Inputs: build/native/out/<arch>/{stage-native,bindings}/ for x86_64 and aarch64 (gbx:build:native),"
-    echo "python/geobrix/envs/env<N>/ and envs/pyproject.env.toml. The vendor-pure.txt wheels (and, for --verify, the"
+    echo "build/rs/payload and build/rs/out/<arch>/provenance.json (gbx:build:rs --arch both), python/geobrix/envs/env<N>/ and envs/pyproject.env.toml. The vendor-pure.txt wheels (and, for --verify, the"
     echo "core.txt wheelhouse) are fetched on the host through the configured pip, every URL and host redacted."
     echo "Output: dist/env<N>/geobrix-<version>+env<N>-py3-none-any.whl (the only wheel there) and"
     echo "build/env-wheel/env<N>/payload/ (the GBX_NATIVE_ROOT layout). Needs Docker (auditwheel and the install"
@@ -48,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --jar) [[ $# -ge 2 ]] || needs_value "$1"; JAR="$2"; shift 2 ;;
         --extra-payload) [[ $# -ge 2 ]] || needs_value "$1"; EXTRA+=(--extra-payload "$2"); shift 2 ;;
         --allow-dirty) ALLOW_DIRTY=(--allow-dirty); shift ;;
+        --no-rs) NO_RS=(--no-rs); shift ;;
         --verify) [[ $# -ge 2 ]] || needs_value "$1"; VERIFY="$2"; shift 2 ;;
         --log) [[ $# -ge 2 ]] || needs_value "$1"; LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
@@ -109,5 +113,5 @@ then
         --require-hashes -r "python/geobrix/envs/env${ENV_N}/vendor-pure.txt" -d "$VENDOR_PURE" 2>&1 | redact
 fi
 
-builder --jar "$JAR" --vendor-pure "$VENDOR_PURE" ${EXTRA[@]+"${EXTRA[@]}"} ${ALLOW_DIRTY[@]+"${ALLOW_DIRTY[@]}"}
+builder --jar "$JAR" --vendor-pure "$VENDOR_PURE" ${EXTRA[@]+"${EXTRA[@]}"} ${ALLOW_DIRTY[@]+"${ALLOW_DIRTY[@]}"} ${NO_RS[@]+"${NO_RS[@]}"}
 echo "ENV_WHEEL env=${ENV_N} seconds=$(($(date +%s) - T0))"

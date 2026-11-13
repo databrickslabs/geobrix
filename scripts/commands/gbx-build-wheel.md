@@ -1,11 +1,11 @@
 # gbx:build:wheel
 
-Builds an env wheel, `geobrix-<version>+env5-py3-none-any.whl` (DBR 17.3, DBR 18, Serverless environment 5, Lakeflow CURRENT) or `geobrix-<version>+env6-py3-none-any.whl` (DBR 19, Serverless environment 6, SQL warehouses, UC functions). It also checks a built wheel's install. Each carries both architectures' native payload: `gdal-native` (GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need, the JNI). It also carries GDAL's own Python bindings from the same build (`osgeo`, `osgeo_utils`). It carries rasterio, pyogrio, pyproj, shapely and netCDF4 built against that GDAL, plus the JAR, the tripwire extras, the runtime guard and the startup activation. The env wheels require CPython 3.12 (`Requires-Python: >=3.12,<3.13`: the bindings are cp312 builds). The work is `scripts/native/build_env_wheel.py`, run inside `uv run --no-project --with-requirements python/geobrix/requirements-build.txt` (the hashed build requirements). The committed `python/geobrix/pyproject.toml` is not used: the env wheels have their own, `python/geobrix/envs/pyproject.env.toml`.
+Builds an env wheel, `geobrix-<version>+env5-py3-none-any.whl` (DBR 17.3, DBR 18, Serverless environment 5, Lakeflow CURRENT) or `geobrix-<version>+env6-py3-none-any.whl` (DBR 19, Serverless environment 6, SQL warehouses, UC functions). It also checks a built wheel's install. Each carries both architectures' native payload: `gdal-native` (GDAL, PROJ, GEOS, HDF5, netCDF and the libraries they need, the JNI). It also carries GDAL's own Python bindings from the same build (`osgeo`, `osgeo_utils`). It carries rasterio, pyogrio, pyproj, shapely and netCDF4 built against that GDAL, the Rust kernels (`_gbxrs`), the JAR, the tripwire extras, the runtime guard and the startup activation. The env wheels require CPython 3.12 (`Requires-Python: >=3.12,<3.13`: the bindings are cp312 builds). The work is `scripts/native/build_env_wheel.py`, run inside `uv run --no-project --with-requirements python/geobrix/requirements-build.txt` (the hashed build requirements). The committed `python/geobrix/pyproject.toml` is not used: the env wheels have their own, `python/geobrix/envs/pyproject.env.toml`.
 
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-build-wheel.sh --env 5|6 [--jar <path>] [--extra-payload <dir>] [--allow-dirty] [--log <path>]
+bash scripts/commands/gbx-build-wheel.sh --env 5|6 [--jar <path>] [--no-rs] [--extra-payload <dir>] [--allow-dirty] [--log <path>]
 bash scripts/commands/gbx-build-wheel.sh --env 5|6 --verify x86_64|aarch64|both [--log <path>]
 ```
 
@@ -13,8 +13,9 @@ bash scripts/commands/gbx-build-wheel.sh --env 5|6 --verify x86_64|aarch64|both 
 
 - `--env 5|6` - the environment (required).
 - `--jar <path>` - the GeoBrix JAR to ship in `_jar/` (default `target/geobrix-<version>-jar-with-dependencies.jar`). It must hold the `com.databricks.labs.gbx.kernels.L1Installer` class.
-- `--extra-payload <dir>` - a tree merged into the payload, only under `_native/<arch>/` beside `lib/` (for the Rust kernels: `<dir>/_native/<arch>/rs/_gbxrs.abi3.so`). A file that is already in the payload fails the build. Repeatable. The licence notices of each Rust kernel's crates (every package in its `Cargo.lock`, the crate found by its `[lib] name`) go to `_native/licenses/rust/<crate>/` with an `INDEX.txt`. They come from the crate's sources vendored to `build/native/vendor/<crate>` (`scripts/native/cargo-vendor.sh` runs when they are absent). For a package that ships no licence file, they come from `scripts/native/rust-licenses/<crate>/`. A crate with none fails the build, and so does a kernel built against another gdal-native (a hashed NEEDED that `lib/` lacks).
-- `--allow-dirty` - build although the inputs under git (`python/geobrix/src`, `python/geobrix/envs`, the README, the committed pyproject, `requirements-build.txt`, `scripts/native`) have uncommitted changes. Without it such a build is refused, so that the wheel's `GIT_SHA` names what it was built from; with it the wheel records `GIT_DIRTY = True`.
+- `--no-rs` - leave out the Rust kernels, for a dev build. Default: `build/rs/payload` ships (see "The Rust kernels" below). Such a wheel fails `--verify` check 11.
+- `--extra-payload <dir>` - another tree merged into the payload, only under `_native/<arch>/` beside `lib/`. A file that is already in the payload fails the build. Repeatable. The licence notices of each Rust kernel's crates (every package in its `Cargo.lock`, the crate found by its `[lib] name`) go to `_native/licenses/rust/<crate>/` with an `INDEX.txt`. They come from the crate's sources vendored to `build/native/vendor/<crate>` (`scripts/native/cargo-vendor.sh` runs when they are absent). For a package that ships no licence file, they come from `scripts/native/rust-licenses/<crate>/`. A crate with none fails the build, and so does a kernel built against another gdal-native (a hashed NEEDED that `lib/` lacks).
+- `--allow-dirty` - build although the inputs under git (`python/geobrix/src`, `python/geobrix/envs`, the README, the committed pyproject, `requirements-build.txt`, `scripts/native`, `rust/gbxrs`) have uncommitted changes. Without it such a build is refused, so that the wheel's `GIT_SHA` names what it was built from; with it the wheel records `GIT_DIRTY = True`.
 - `--verify x86_64|aarch64|both` - build nothing: check the install of `dist/env<N>/`'s wheel in that architecture's toolchain image (below). `both` runs aarch64, then x86_64 (emulated on an Apple Silicon host).
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
@@ -26,6 +27,7 @@ An option that needs a value given without one prints `<option> needs a value` a
 | Path | What |
 |---|---|
 | `build/native/out/<arch>/stage-native/gdal-native/` | `gbx:build:native --target stage-native`, both architectures: `lib/`, `share/`, `licenses/`, `python/` (`osgeo`, `osgeo_utils`), `MANIFEST.json` |
+| `build/rs/payload/_native/<arch>/rs/_gbxrs.abi3.so`, `build/rs/out/<arch>/provenance.json` | `gbx:build:rs --arch both`: the Rust kernels and what each was built from (not needed with `--no-rs`) |
 | `build/native/out/<arch>/bindings/` | `gbx:build:native --target bindings`: `vendor/` (the five bindings, no dist-info), `wheels/` (their metadata and licences), `build.txt` (which toolchain image built them) |
 | `python/geobrix/envs/env<N>/core.txt` | the wheel's default dependencies: the runtime's preinstalled ranges, the light tier, and what the vendored packages need at run time |
 | `python/geobrix/envs/env<N>/base.txt` | what the runtimes preinstall (exact versions; the oldest where they differ) of the packages core.txt bounds and the extras hold: checked against core.txt, the extras and the vendored packages' requirements, and the constraints of the `--verify` install |
@@ -43,6 +45,7 @@ Every line pip, uv and the builder print goes through `scripts/native/redact.py`
 | `databricks/labs/gbx/_native/<arch>/lib/` | `gdal-native/lib/` without `pkgconfig/` and `cmake/`: one file per hashed SONAME, and `libgdalalljni.so` |
 | `databricks/labs/gbx/_native/<arch>/hdf5-plugins/` | `gdal-native/hdf5-plugins/`: netCDF-C's HDF5 filter plugins (zstd, blosc, bzip2, ...) |
 | `databricks/labs/gbx/_native/<arch>/bin/projsync` | PROJ's grid downloader, executable (`crs_grids.projsync_path()` finds it) |
+| `databricks/labs/gbx/_native/<arch>/rs/_gbxrs.abi3.so` | the Rust kernels (BNG cells, TIN triangulation), loaded by `databricks.labs.gbx._rs` |
 | `databricks/labs/gbx/_native/<arch>/MANIFEST.json` | the native build record (versions, the original -> hashed SONAME map, the PROJ grids, the build-id of every native file). Library names come from it, never from a fixed name |
 | `databricks/labs/gbx/_native/share/{gdal,proj}` | GDAL and PROJ data, with the OSTN15, OSGM15 and EGM96 grids in `proj/` (the build fails if the architectures' differ) |
 | `databricks/labs/gbx/_native/licenses/` | every native library's licence (one directory per library `MANIFEST.json` names, checked), `gdal/INTERNAL-COPIES.txt` (the libtiff and libgeotiff compiled into libgdal, and their licence directories, checked), `proj-grids/NOTICE.txt`, the five bindings' (from their wheels' dist-info), and `osgeo/` and `osgeo_utils/` (GDAL's licence); with a Rust kernel, `rust/<crate>/` (its crates' and the Rust standard library's notices) |
@@ -70,7 +73,15 @@ The build is deterministic: setuptools and `wheel pack` run with `SOURCE_DATE_EP
 
 ## Steps and checks
 
-Each step prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a missing input `PRECONDITION MISSING: <what>`, and the command exits 1. Before step 1: the inputs, Docker and both toolchain images, and a clean tree (or `--allow-dirty`).
+Each step prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a missing input `PRECONDITION MISSING: <what>`, and the command exits 1. Before step 1: the inputs, the Rust kernels (below), Docker and both toolchain images, and a clean tree (or `--allow-dirty`).
+
+### The Rust kernels
+
+- By default the build merges `build/rs/payload` as an extra payload. Giving it as `--extra-payload` as well merges it once.
+- `scripts/native/rs_payload.py check` must pass first. Each architecture needs one `_gbxrs*.so` and its `build/rs/out/<arch>/provenance.json`.
+- The stamp must match the module's sha256, every file under git in `rust/gbxrs`, and today's toolchain image tag (`pins.py tag-hash`).
+- A missing module or stamp prints `PRECONDITION MISSING`. A stale one prints `BUILD FAILED` with the changed files. Both name the fix: `bash scripts/commands/gbx-build-rs.sh --arch both`.
+- Step 7 fails a wheel without both architectures' `_gbxrs.abi3.so`, unless `--no-rs`.
 
 1. A scratch tree in `build/env-wheel/env<N>/tree/`: the package source, `envs/pyproject.env.toml` with one `optional-dependencies.<name>` line per extra and per tripwire name, `env/`, and `__version__` stamped `<version>+env<N>` (exactly one replacement). The template's `name`, `license` and `authors` must equal the committed pyproject's, and its `requires-python` must admit only Pythons the committed range admits.
 2. `_build_info.py`; the two architectures' `MANIFEST.json` must agree on GDAL, PROJ, GEOS, the revision and `gdal_internal` (the licence note of step 3 is written from one of them).
@@ -99,6 +110,7 @@ The core.txt wheelhouse for that architecture (with `base.txt` as constraints) i
 9. `[vizx]`, in its own venv from a second wheelhouse (`build/env-wheel/wheelhouse/env<N>-vizx/<arch>/`: `core.txt` and `extra-vizx.txt`, `base.txt` as constraints but for a package the extra moves to a `SECURITY_FLOORS` fix, env5's requests). It installs offline and brings no PyPI rasterio, pyogrio, pyproj, shapely, geopandas or contextily. After a vizx plot, the process maps one libgdal, one libproj and one GEOS (`libgeos_c`), all the payload's. The plot covers a GeoDataFrame reprojected, written and read back as GPKG, contextily's warp, `gbx.vizx.plot_file` and `plot_static`. This holds both with the `.pth` and with `GBX_NATIVE_PTH=0` (activated at `import databricks.labs.gbx`). Before that, geopandas does not import at all, since no PyPI copy is installed (the line `VIZX_RESULT {...}`).
 
 10. a runtime `PROJ_DATA` holding another PROJ's `proj.db` (a copy of the payload's with another layout version and `PROJ.VERSION`, as DBR 19's `/databricks/native/proj-data` is on a dedicated cluster). In that case pyproj from the payload still creates EPSG:4326, and `PROJ_DATA` is the payload's `share/proj`.
+11. the Rust kernels: `_gbxrs` loads from the payload's `_native/<arch>/rs/` and gives one BNG cell and one TIN triangle. A wheel without them fails here, and so fails `gbx:native:verify-arches` (the line `RS11 ...`).
 
 The report is `build/env-wheel/env<N>/verify-<arch>.txt`; the last line is `ENV_WHEEL_VERIFIED env=<N> arch=<arch> ...`, and the command exits 1 on any failed check.
 
@@ -111,6 +123,7 @@ gh auth switch --user mjohns-databricks
 git checkout v<version>                                   # a clean tree: the wheel records GIT_SHA
 bash scripts/commands/gbx-build-native.sh --arch both --target stage-native
 bash scripts/commands/gbx-build-native.sh --arch both --target bindings
+bash scripts/commands/gbx-build-rs.sh --arch both              # the Rust kernels, shipped by default
 gh run download <run id> -n geobrix-release-artifacts -D /tmp/gbx-release   # the JAR the workflow built
 bash scripts/commands/gbx-build-wheel.sh --env 5 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
 bash scripts/commands/gbx-build-wheel.sh --env 6 --jar /tmp/gbx-release/target/geobrix-<version>-jar-with-dependencies.jar
@@ -121,7 +134,7 @@ gh release upload v<version> \
     dist/env6/geobrix-<version>+env6-py3-none-any.whl
 ```
 
-If the release ships the Rust module `_gbxrs`, run `bash scripts/commands/gbx-build-rs.sh --arch both` first and add `--extra-payload build/rs/payload` to both build commands (the `--verify` runs need no flag).
+The release wheels ship the Rust module `_gbxrs` by default. A missing or stale `build/rs/payload` stops the build and names `gbx:build:rs --arch both`.
 
 The two native builds are skipped when `build/native/out/<arch>/` already holds trees built from the release commit's native inputs. `python3 scripts/native/native_inputs.py check-stamp` is the quick test. `gbx:native:verify-arches` also checks that the trees and wheels are one build.
 
@@ -129,6 +142,7 @@ The two native builds are skipped when `build/native/out/<arch>/` already holds 
 
 ```bash
 bash scripts/commands/gbx-build-wheel.sh --env 6 --jar target/geobrix-0.6.0-jar-with-dependencies.jar
-bash scripts/commands/gbx-build-wheel.sh --env 5 --extra-payload build/rs/payload --log env5-wheel.log
+bash scripts/commands/gbx-build-wheel.sh --env 5 --log env5-wheel.log
+bash scripts/commands/gbx-build-wheel.sh --env 6 --no-rs --allow-dirty   # a dev build without the Rust kernels
 bash scripts/commands/gbx-build-wheel.sh --env 6 --verify aarch64
 ```

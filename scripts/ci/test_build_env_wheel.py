@@ -260,6 +260,146 @@ def test_every_rust_crate_has_a_licence_file_for_each_crate_it_locks(tmp_path, l
     assert bew.collect_rust_licences(lock.parent, vendor, tmp_path / "out") == []
 
 
+# --- the Rust kernels ship by default: build/rs/payload, stamped by gbx:build:rs with the sources it was built from ---
+
+import rs_payload  # noqa: E402
+
+RS_FIX = "bash scripts/commands/gbx-build-rs.sh --arch both"
+
+
+def _rs_checkout(root, arches=bew.ARCHES, tag="t0"):
+    """A git checkout with rust/gbxrs under git and each architecture's module built and stamped (image tag `tag`)."""
+    crate = root / "rust" / "gbxrs"
+    (crate / "src").mkdir(parents=True)
+    (crate / "Cargo.toml").write_text('[package]\nname = "gbxrs"\n\n[lib]\nname = "_gbxrs"\n')
+    (crate / "src" / "lib.rs").write_text("// v1\n")
+    (crate / "target").mkdir()
+    (crate / "target" / "junk.o").write_text("not under git")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "-C", str(root), "add", "rust/gbxrs/Cargo.toml", "rust/gbxrs/src"], check=True)
+    for a in arches:
+        so = rs_payload.payload_dir(root) / "_native" / a / "rs" / "_gbxrs.abi3.so"
+        so.parent.mkdir(parents=True)
+        so.write_bytes(b"\x7fELF " + a.encode())
+        rs_payload.stamp(root, a, tag=tag)
+    return root
+
+
+def _tags(tag="t0"):
+    return {a: tag for a in bew.ARCHES}
+
+
+def test_a_rust_payload_built_from_the_checkouts_sources_is_current(tmp_path):
+    root = _rs_checkout(tmp_path)
+    assert rs_payload.problems(root, tags=_tags()) == ([], [])
+    stamp = rs_payload.read_stamp(root, "x86_64")
+    assert set(stamp["sources"]) == {"rust/gbxrs/Cargo.toml", "rust/gbxrs/src/lib.rs"}  # git's files, not target/
+
+
+@pytest.mark.parametrize(
+    "change, kind, names",
+    [
+        ("no-payload", "missing", ["aarch64", "x86_64"]),
+        ("no-stamp", "missing", ["x86_64", "provenance"]),  # a payload from before the stamp: unverifiable
+        ("source", "stale", ["rust/gbxrs/src/lib.rs"]),
+        ("new-file", "stale", ["rust/gbxrs/src/new.rs"]),
+        ("module", "stale", ["x86_64", "_gbxrs.abi3.so"]),  # another .so put in place of the one stamped
+        ("image", "stale", ["toolchain image"]),  # pins or the toolchain moved: the module is rebuilt in the new image
+    ],
+)
+def test_a_missing_or_stale_rust_payload_names_the_rebuild(tmp_path, change, kind, names):
+    root = _rs_checkout(tmp_path)
+    tags = _tags()
+    rs = rs_payload.payload_dir(root) / "_native" / "x86_64" / "rs" / "_gbxrs.abi3.so"
+    if change == "no-payload":
+        shutil.rmtree(rs_payload.payload_dir(root))
+    elif change == "no-stamp":
+        rs_payload.stamp_path(root, "x86_64").unlink()
+    elif change == "source":
+        (root / "rust" / "gbxrs" / "src" / "lib.rs").write_text("// v2\n")
+    elif change == "new-file":
+        (root / "rust" / "gbxrs" / "src" / "new.rs").write_text("")
+        subprocess.run(["git", "-C", str(root), "add", "rust/gbxrs/src/new.rs"], check=True)
+    elif change == "module":
+        rs.write_bytes(b"\x7fELF other")
+    elif change == "image":
+        tags = {**tags, "aarch64": "t1"}
+    missing, stale = rs_payload.problems(root, tags=tags)
+    got = missing if kind == "missing" else stale
+    assert got and not (stale if kind == "missing" else missing), (missing, stale)
+    text = " ".join(got)
+    assert all(n in text for n in names), text
+
+
+def test_the_builder_ships_the_rust_payload_by_default_and_once(tmp_path, monkeypatch):
+    root = _rs_checkout(tmp_path)
+    monkeypatch.setattr(bew, "REPO", root)
+    monkeypatch.setattr(rs_payload, "tag_hash", lambda r, a: "t0")
+    payload = rs_payload.payload_dir(root)
+    for given in ([], [payload], [tmp_path / "other", payload]):
+        args = bew.argparse.Namespace(no_rs=False, extra_payload=list(given))
+        bew.add_rust_payload(args)
+        assert [p.resolve() for p in args.extra_payload].count(payload.resolve()) == 1, args.extra_payload
+    args = bew.argparse.Namespace(no_rs=True, extra_payload=[])
+    bew.add_rust_payload(args)
+    assert args.extra_payload == []  # a dev build without the kernels: --no-rs
+
+
+@pytest.mark.parametrize("broken, marker", [("missing", "PRECONDITION MISSING"), ("stale", "BUILD FAILED")])
+def test_the_builder_refuses_a_missing_or_stale_rust_payload_naming_the_fix(tmp_path, monkeypatch, capsys, broken, marker):
+    root = _rs_checkout(tmp_path)
+    monkeypatch.setattr(bew, "REPO", root)
+    monkeypatch.setattr(rs_payload, "tag_hash", lambda r, a: "t0")
+    if broken == "missing":
+        shutil.rmtree(rs_payload.payload_dir(root))
+    else:
+        (root / "rust" / "gbxrs" / "src" / "lib.rs").write_text("// v2\n")
+    with pytest.raises(SystemExit):
+        bew.add_rust_payload(bew.argparse.Namespace(no_rs=False, extra_payload=[]))
+    out = capsys.readouterr().out
+    assert marker in out and RS_FIX in out and "--no-rs" in out, out
+
+
+@pytest.mark.parametrize(
+    "arches, no_rs, refused",
+    [(bew.ARCHES, False, None), (("aarch64",), False, "x86_64"), ((), False, "aarch64"), ((), True, None)],
+)
+def test_the_built_wheel_must_carry_both_architectures_rust_module(capsys, arches, no_rs, refused):
+    names = {f"{bew.PKG}/_native/{a}/rs/_gbxrs.abi3.so" for a in arches}
+    if refused is None:
+        bew.verify_rust_members(names, no_rs)
+        return
+    with pytest.raises(SystemExit):
+        bew.verify_rust_members(names, no_rs)
+    out = capsys.readouterr().out
+    assert "BUILD FAILED" in out and refused in out, out
+
+
+def test_the_rust_crate_is_a_wheel_and_gate_input():
+    # a rust/gbxrs change makes the wheel's GIT_SHA name it (the dirty check) and the arch gate stale
+    import native_inputs
+
+    assert "rust/gbxrs" in bew.GIT_INPUTS
+    assert "rust/gbxrs/src/lib.rs" in native_inputs.files(native_inputs.Tree(bew.REPO), "gate")
+
+
+def test_the_install_check_loads_the_rust_module_from_the_payload():
+    # check 11: a wheel without the kernels (or with one that does not load on this architecture) fails --verify, so
+    # it fails the two-architecture gate too
+    text = (NATIVE / "check-env-wheel.sh").read_text()
+    assert "_rs.load()" in text and '/databricks/labs/gbx/_native/{platform.machine()}/rs/' in text
+    assert 'ok "11 ' in text and 'bad "11 ' in text
+
+
+def test_the_command_forwards_no_rs_and_documents_it():
+    sh = (NATIVE.parent / "commands" / "gbx-build-wheel.sh").read_text()
+    md = (NATIVE.parent / "commands" / "gbx-build-wheel.md").read_text()
+    assert "--no-rs) NO_RS=(--no-rs)" in sh and '${NO_RS[@]+"${NO_RS[@]}"}' in sh
+    assert "- `--no-rs`" in md and "If the release ships the Rust module" not in md
+    rs_sh = (NATIVE.parent / "commands" / "gbx-build-rs.sh").read_text()
+    assert "scripts/native/rs_payload.py stamp" in rs_sh
+
+
 def test_the_extracted_payload_keeps_executables_executable(tmp_path):
     # GBX_NATIVE_ROOT payloads (the dev container) run bin/projsync from the extracted tree, as pip's install does
     whl = tmp_path / "w.whl"

@@ -699,11 +699,11 @@ class Gate:
                 except Exception as exc:  # noqa: BLE001 - report it in the evidence, do not hide the run's result
                     if "NOT_FOUND" not in str(exc).upper() and "does not exist" not in str(exc):
                         notes.append(f"Volume folder delete failed: {str(exc)[:200]}")
+            # The workspace folder stays: the install run's page opens its notebook from it. The notebooks-serverless
+            # run recorded that notebook, and gbx:workspace:sweep removes the folder after its window (60 min, 24 h
+            # after a failed run).
             if self.ws_dir and self.created["ws"]:
-                try:
-                    w.workspace.delete(self.ws_dir, recursive=True)
-                except Exception as exc:  # noqa: BLE001
-                    notes.append(f"workspace folder delete failed: {str(exc)[:200]}")
+                say(f"kept {self.ws_dir} for the install run's page; gbx:workspace:sweep removes it after its window")
         except Exception as exc:  # noqa: BLE001
             notes.append(f"cleanup error: {str(exc)[:200]}")
         return "dropped" if not notes else "; ".join(notes)

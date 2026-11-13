@@ -447,12 +447,13 @@ def test_the_help_names_the_options_and_a_missing_profile_exits_2():
     sh = str(REPO_ROOT / "scripts" / "commands" / "gbx-uc-tests.sh")
     res = subprocess.run(["bash", sh, "--help"], capture_output=True, text=True)
     assert res.returncode == 0
-    for opt in ("--profile", "--keep", "--dry-run", "--scope", "--against", "--shards", "--warehouse-id", "--rebuild", "--run-part", "--drop-parts"):
+    for opt in ("--profile", "--keep", "--dry-run", "--scope", "--against", "--shards", "--warehouse-id", "--rebuild", "--run-part", "--drop-parts", "--install-into"):
         assert opt in res.stdout
     for gone in ("--slice", "--smoke"):
         assert gone not in res.stdout
     assert subprocess.run(["bash", sh, "--nope"], capture_output=True, text=True).returncode == 2
     assert subprocess.run(["bash", sh, "--profile"], capture_output=True, text=True).returncode == 2
+    assert subprocess.run(["bash", sh, "--install-into"], capture_output=True, text=True).returncode == 2
 
 
 def test_the_old_command_files_are_gone():
@@ -857,6 +858,28 @@ def test_install_into_reuses_any_clean_wheel_but_not_a_dirty_one(driver, monkeyp
     monkeypatch.setattr(driver, "wheel_info", lambda w: {"dirty": False, "git_sha": "c" * 40, "sha256": "ab" * 32})
     assert g.step_wheel().name == "geobrix-0.6.0+env6-py3-none-any.whl"
     monkeypatch.setattr(driver, "wheel_info", lambda w: {"dirty": True, "git_sha": "c" * 40, "sha256": "ab" * 32})
+    # A dirty wheel falls through to the gated check, which refuses it too, so the build path starts (jar_stale first).
+    monkeypatch.setattr(driver, "wheel_reusable", lambda info: (False, "the wheel is dirty"))
     monkeypatch.setattr(driver, "jar_stale", lambda jar: pytest.fail("a dirty wheel is not reused: the run builds"))
-    with pytest.raises(BaseException):
+    with pytest.raises(pytest.fail.Exception, match="a dirty wheel is not reused"):
         g.step_wheel()
+
+
+def test_install_into_dry_run_makes_no_workspace_call(driver, monkeypatch, capsys):
+    for step in ("step_wheel", "step_stage", "step_install"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("a dry run calls no step"))
+    assert driver.main(["--profile", "p", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--install-into", "demo", "--dry-run"]) == 0
+    assert "dry run: install into c.demo, staging folder /Volumes/c/s/v/uc-install/demo" in capsys.readouterr().out
+
+
+def test_install_into_reports_a_failed_step_and_exits_1(driver, monkeypatch, capsys):
+    monkeypatch.setattr(driver.Gate, "step_wheel", lambda self: Path("w.whl"))
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"name": "w.whl", "sha256": "ab" * 32, "git_sha": "c" * 40})
+
+    def boom(self, w, i):
+        raise driver.StepFailed("stage refused")
+
+    monkeypatch.setattr(driver.Gate, "step_stage", boom)
+    monkeypatch.setattr(driver.Gate, "step_install", lambda self, w: pytest.fail("no install after a failed stage"))
+    assert driver.main(["--profile", "p", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--install-into", "demo"]) == 1
+    assert "FAILED: stage refused" in capsys.readouterr().err

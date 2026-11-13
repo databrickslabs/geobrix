@@ -80,6 +80,7 @@ INGEST_TEMPLATE = REPO_ROOT / CONNECTOR_DIR / "sources" / "geobrix" / "pipeline"
 DOC_EXAMPLES = REPO_ROOT / "docs" / "tests" / "python" / "ingestion" / "lakeflow_connector_examples.py"
 UNIT_TESTS_CMD = CMD / "gbx-test-connectors.sh"
 CONNECTOR_VENV_PY = REPO_ROOT / ".venv-connectors" / "bin" / "python"
+DIST_ENV6 = REPO_ROOT / "dist" / "env6"  # where gbx:build:wheel --env 6 leaves the wheel
 FRAMEWORK_CACHE = REPO_ROOT / ".cache" / "lfcc-wheels"
 DEFAULT_CATALOG = "geospatial_docs"
 DEFAULT_DATA_DIR = untracked("sample-data/Volumes/main/default/geobrix_samples/geobrix-examples")
@@ -155,6 +156,21 @@ def names(sha12: str, catalog: str) -> dict:
         "wheels": f"{volume}/wheels",
         "ws_folder": f"lfc-it-{sha12}",
     }
+
+
+_SCRATCH = re.compile(rf"{NAME_PREFIX}[0-9a-f]{{12}}")
+
+
+def scratch_name_ok(name: str, sha12: str) -> bool:
+    """True only for the scratch name of commit ``sha12`` (``geobrix_lfc_it_<sha12>``): the one thing a drop may touch."""
+    return bool(_SCRATCH.fullmatch(name or "")) and name == f"{NAME_PREFIX}{sha12}"
+
+
+def gone(exc: BaseException) -> bool:
+    """The object is already gone: a delete that finds nothing is not a failure."""
+    text = f"{type(exc).__name__} {exc}"
+    return type(exc).__name__ in ("NotFound", "ResourceDoesNotExist") or bool(
+        re.search(r"does not exist|not found|RESOURCE_DOES_NOT_EXIST", text, re.I))
 
 
 def framework_commit(root: Path = REPO_ROOT) -> str:
@@ -434,11 +450,7 @@ class Run:
         shutil.rmtree(out_dir, ignore_errors=True)
         out_dir.mkdir(parents=True)
         wheels = {"geobrix": self.geobrix_wheel()}
-        info = uc.wheel_info(wheels["geobrix"])
-        fits, why = uc.wheel_reusable(info)
-        self.ev["geobrix_wheel"] = {"name": info["name"], "sha256": info["sha256"], "git_sha": info["git_sha"],
-                                    "dirty": info["dirty"], "fits_head": fits, "why": why}
-        say(f"  GeoBrix wheel built at {info['git_sha'][:12]}: {'fits HEAD' if fits else 'does not fit HEAD'} ({why})")
+        self.record_geobrix_wheel(wheels["geobrix"])
         # The framework wheel is built once per commit (it is pinned) and cached.
         fw_dir = FRAMEWORK_CACHE / commit
         fw = sorted(fw_dir.glob("lakeflow_community_connectors-*.whl"))
@@ -468,13 +480,25 @@ class Run:
             say(f"  {kind}: {p.name} ({p.stat().st_size} bytes, sha256 {_sha256(p)[:16]})")
         return wheels
 
+    def record_geobrix_wheel(self, wheel: Path) -> dict:
+        """The evidence of the GeoBrix wheel: its sha256, the commit it was built at, and whether it fits HEAD."""
+        info = uc.wheel_info(wheel)
+        fits, why = uc.wheel_reusable(info)
+        self.ev["geobrix_wheel"] = {"name": info["name"], "sha256": info["sha256"], "git_sha": info["git_sha"],
+                                    "dirty": info["dirty"], "fits_head": fits, "why": why}
+        say(f"  GeoBrix wheel built at {(info['git_sha'] or '?')[:12]}: {'fits HEAD' if fits else 'does not fit HEAD'} ({why})")
+        return self.ev["geobrix_wheel"]
+
     def geobrix_wheel(self) -> Path:
         """--geobrix-wheel when given; else dist/env6 when it fits HEAD (as gbx:uc:tests reuses it), else a clean
         build at HEAD. The evidence records the wheel's commit and whether it fits HEAD."""
         if self.a.geobrix_wheel:
             given = Path(self.a.geobrix_wheel)
-            if not re.fullmatch(r"geobrix-[^/]+\+env6-py3-none-any\.whl", given.name) or not given.is_file():
-                raise StepFailed(f"--geobrix-wheel {given}: not an env 6 wheel file (geobrix-<version>+env6-py3-none-any.whl)")
+            if not re.fullmatch(r"geobrix-[^/]+\+env6-py3-none-any\.whl", given.name):
+                raise StepFailed(f"--geobrix-wheel {given}: not an env 6 wheel (geobrix-<version>+env6-py3-none-any.whl); the "
+                                 "pipeline runs on the PREVIEW channel (DBR 19). Fix: pass the +env6 wheel")
+            if not given.is_file():
+                raise StepFailed(f"--geobrix-wheel {given}: no such file. Fix: pass a local path to the env 6 wheel")
             return given
         dist = sorted(untracked("dist/env6").glob("geobrix-*+env6-py3-none-any.whl"))
         if dist and not self.a.rebuild:
@@ -491,7 +515,7 @@ class Run:
         say("  building the env 6 wheel")
         rc, out = uc.run_cmd(["bash", str(CMD / "gbx-build-wheel.sh"), "--env", "6"], self.run_dir / "build-wheel.log", "wheel build")
         uc.need(rc, "the wheel build", out)
-        dist = sorted((REPO_ROOT / "dist" / "env6").glob("geobrix-*+env6-py3-none-any.whl"))
+        dist = sorted(DIST_ENV6.glob("geobrix-*+env6-py3-none-any.whl"))
         info = uc.wheel_info(dist[-1]) if dist else None
         if not info or info["dirty"] or info["git_sha"] != self.head:
             raise StepFailed(f"the wheel build left no clean env 6 wheel at {self.sha12}")
@@ -661,22 +685,28 @@ class Run:
             say(f"kept (--keep): schema {self.fqn}, connection {self.n['connection']}, pipeline {self.created['pipeline']}")
             return "kept"
         say("step 11/12: drop the pipeline, the connection and the schema (with its Volume)")
+        bad = [f"{k} {self.n[k]!r}" for k in ("schema", "connection") if not scratch_name_ok(self.n[k], self.sha12)]
+        if bad:  # never drop a name this run does not own
+            return f"refused: {', '.join(bad)} is not the scratch name {NAME_PREFIX}{self.sha12}"
         w, notes = self.client(), []
         if self.created["pipeline"]:
             try:
                 w.pipelines.delete(pipeline_id=self.created["pipeline"])
             except Exception as exc:  # noqa: BLE001
-                notes.append(f"pipeline delete failed: {str(exc)[:200]}")
+                if not gone(exc):
+                    notes.append(f"pipeline delete failed: {str(exc)[:200]}")
         if self.created["connection"]:
             try:
                 w.api_client.do("DELETE", f"/api/2.1/unity-catalog/connections/{self.n['connection']}")
             except Exception as exc:  # noqa: BLE001
-                notes.append(f"connection delete failed: {str(exc)[:200]}")
+                if not gone(exc):
+                    notes.append(f"connection delete failed: {str(exc)[:200]}")
         if self.created["schema"]:
             try:
                 w.schemas.delete(self.fqn, force=True)
             except Exception as exc:  # noqa: BLE001
-                notes.append(f"schema drop failed: {str(exc)[:200]}")
+                if not gone(exc):
+                    notes.append(f"schema drop failed: {str(exc)[:200]}")
         if self.ws_dir:
             import _workspace_sweep
 
@@ -684,19 +714,35 @@ class Run:
                                      out=lambda m: say(m))
         return "dropped" if not notes else "; ".join(notes)
 
-    def drop(self) -> int:
-        """--drop: remove what a kept or broken run of this commit left (the scratch names only)."""
-        self.created = {"schema": True, "connection": True, "pipeline": None}
+    def drop(self, dry_run: bool = False) -> int:
+        """--drop: remove what a kept or broken run of this commit left. It touches only the scratch names of
+        ``self.sha12`` (``geobrix_lfc_it_<sha12>``), refuses any other name, and takes "already gone" as done."""
+        bad = [f"{k} {self.n[k]!r}" for k in ("schema", "connection", "pipeline") if not scratch_name_ok(self.n[k], self.sha12)]
+        if bad:
+            say(f"--drop refused: {', '.join(bad)} is not the scratch name {NAME_PREFIX}{self.sha12}")
+            return 2
         found = self.leftovers()
         say(f"leftovers of {self.sha12}: {found or 'none'}")
+        if dry_run:
+            for f in found:
+                say(f"  would drop {f}")
+            return 0
+        notes = []
         for p in self.pipelines_named():
-            self.client().pipelines.delete(pipeline_id=p.pipeline_id)
-        self.created["connection"] = any(f.startswith("connection ") for f in found)
-        self.created["schema"] = any(f.startswith("schema ") for f in found)
+            try:
+                self.client().pipelines.delete(pipeline_id=p.pipeline_id)
+            except Exception as exc:  # noqa: BLE001
+                if not gone(exc):
+                    notes.append(f"pipeline {p.pipeline_id} delete failed: {str(exc)[:200]}")
+        self.created = {"pipeline": None, "connection": any(f.startswith("connection ") for f in found),
+                        "schema": any(f.startswith("schema ") for f in found)}
+        self.ws_dir = None
         self.a.keep = False
-        notes = self.cleanup()
-        say(f"--drop: {notes}")
-        return 0 if notes == "dropped" else 1
+        result = self.cleanup()
+        if result != "dropped":
+            notes.append(result)
+        say(f"--drop: {'; '.join(notes) or 'dropped'}")
+        return 0 if not notes else 1
 
     def run(self) -> int:
         started, t0 = now(), time.time()
@@ -835,7 +881,7 @@ def main(argv=None) -> int:
             return 2
         r = Run(a)
         r.sha12, r.n = a.drop, names(a.drop, a.catalog)
-        return r.drop()
+        return r.drop(dry_run=a.dry_run)
     dirty = uc_sources_hash.dirty_files(REPO_ROOT, paths=lfc_check.LFC_PATHS)
     if dirty:
         print("uncommitted changes under the connector sources (the evidence must describe committed code):", file=sys.stderr)

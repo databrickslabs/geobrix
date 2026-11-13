@@ -13,6 +13,7 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -200,6 +201,9 @@ class FakeW:
         self.connection_error = connection_error
         self.update_states = list(update_states)
         self.updates = 0
+        self.connections_ = set()  # connection names that exist
+        self.pipelines_ = []  # pipelines that exist: SimpleNamespace(name, pipeline_id)
+        self.delete_gone = False  # every delete finds nothing (already gone)
         self.config = SimpleNamespace(host="https://ws.example")
         w = self
 
@@ -217,6 +221,8 @@ class FakeW:
 
             def delete(self, full, force=False):
                 rec("schemas.delete", full=full, force=force)
+                if w.delete_gone:
+                    raise NotFound(f"Schema '{full}' does not exist.")
                 w.schemas_.discard(full)
 
         class Volumes:
@@ -236,7 +242,9 @@ class FakeW:
 
         class Api:
             def do(self, method, path, body=None):
-                rec(f"api.{method} {path.split('/')[-1] if method == 'POST' else 'connection'}", **(body or {}))
+                rec(f"api.{method} {path.split('/')[-1] if method == 'POST' else 'connection'}", **(body or {"path": path}))
+                if method == "DELETE" and w.delete_gone:
+                    raise NotFound(f"Connection '{path.rsplit('/', 1)[-1]}' does not exist.")
                 if path.endswith("/connections") and w.connection_error:
                     raise w.connection_error
                 if path == "/api/2.0/pipelines":
@@ -245,7 +253,9 @@ class FakeW:
 
         class Connections:
             def get(self, name):
-                raise NotFound(name)
+                if name not in w.connections_:
+                    raise NotFound(name)
+                return SimpleNamespace(name=name)
 
         class Workspace:
             def mkdirs(self, path):
@@ -253,7 +263,7 @@ class FakeW:
 
         class Pipelines:
             def list_pipelines(self, filter=None):
-                return []
+                return list(w.pipelines_)
 
             def start_update(self, pipeline_id):
                 w.updates += 1
@@ -261,6 +271,8 @@ class FakeW:
 
             def delete(self, pipeline_id):
                 rec("pipelines.delete", pipeline_id=pipeline_id)
+                if w.delete_gone:
+                    raise NotFound(f"The specified pipeline {pipeline_id} was not found.")
 
         class Tables:
             def get(self, full):
@@ -559,3 +571,264 @@ def test_the_hash_covers_the_documented_paths():
     assert "connectors/lakeflow" in c.LFC_PATHS and "python/geobrix/src" in c.LFC_PATHS
     assert "examples/tests/lakeflow_connector_it.py" in c.LFC_PATHS
     assert all((REPO_ROOT / p).exists() for p in c.LFC_PATHS)
+
+
+# ---- --drop: only the scratch names of one commit ------------------------------------------------------------------
+
+DROP_SHA = "fedcba987654"
+SCRATCH = f"geobrix_lfc_it_{DROP_SHA}"
+
+
+def drop_run(it, w, sha12=DROP_SHA, catalog="cat"):
+    """A Run as main() builds it for --drop SHA12, on the fake workspace ``w``."""
+    r = it.Run(it.parse_args(["--profile", "p", "--catalog", catalog, "--warehouse-id", "wh", "--drop", sha12]))
+    r.sha12, r.n, r.w = sha12, it.names(sha12, catalog), w
+    return r
+
+
+def drop_world(it, w):
+    """The commit's leftovers, next to other objects with near names that must stay."""
+    w.schemas_ |= {f"cat.{SCRATCH}", "cat.geobrix_lfc_it_000000000000", "cat.geobrix_uc_it_fedcba987654", "cat.geobrix"}
+    w.connections_ |= {SCRATCH, "geobrix_lfc_it_000000000000", "geobrix_dev"}
+    w.pipelines_ += [SimpleNamespace(name=SCRATCH, pipeline_id="p-mine"),
+                     SimpleNamespace(name=f"{SCRATCH}_copy", pipeline_id="p-near"),  # the LIKE filter can match it
+                     SimpleNamespace(name="geobrix_lfc_it_000000000000", pipeline_id="p-other")]
+
+
+def deleted(w):
+    out = []
+    for what, kw in w.calls:
+        if what == "pipelines.delete":
+            out.append(("pipeline", kw["pipeline_id"]))
+        elif what == "api.DELETE connection":
+            out.append(("connection", kw["path"].rsplit("/", 1)[-1]))
+        elif what == "schemas.delete":
+            out.append(("schema", kw["full"]))
+    return out
+
+
+def test_drop_removes_only_the_named_commits_pipeline_connection_and_schema(it):
+    w = FakeW(it)
+    drop_world(it, w)
+    assert drop_run(it, w).drop() == 0
+    assert deleted(w) == [("pipeline", "p-mine"), ("connection", SCRATCH), ("schema", f"cat.{SCRATCH}")]
+    assert dict(w.calls)["schemas.delete"]["force"] is True
+    assert w.schemas_ == {"cat.geobrix_lfc_it_000000000000", "cat.geobrix_uc_it_fedcba987654", "cat.geobrix"}
+
+
+def test_drop_refuses_a_name_outside_the_scratch_pattern(it):
+    # Fail on revert: a drop must never act on a schema or connection it does not own.
+    for n in ({"schema": "geobrix", "connection": SCRATCH, "pipeline": SCRATCH},
+              {"schema": SCRATCH, "connection": "geobrix_dev", "pipeline": SCRATCH},
+              {"schema": SCRATCH, "connection": SCRATCH, "pipeline": "geobrix_lfc_it_000000000000"}):
+        w = FakeW(it)
+        drop_world(it, w)
+        r = drop_run(it, w)
+        r.n = dict(r.n, **n)
+        assert r.drop() == 2
+        assert deleted(w) == []
+    assert it.scratch_name_ok(SCRATCH, DROP_SHA)
+    assert not it.scratch_name_ok("geobrix_lfc_it_000000000000", DROP_SHA)
+    assert not it.scratch_name_ok(f"{SCRATCH}_copy", DROP_SHA)
+    assert not it.scratch_name_ok(f"x{SCRATCH}", DROP_SHA)
+
+
+def test_cleanup_refuses_to_drop_a_foreign_schema(it):
+    w = FakeW(it)
+    drop_world(it, w)
+    r = drop_run(it, w)
+    r.n = dict(r.n, schema="geobrix")
+    r.created = {"schema": True, "connection": True, "pipeline": None}
+    assert r.cleanup().startswith("refused:")
+    assert deleted(w) == []
+
+
+def test_drop_with_nothing_left_or_already_gone_succeeds(it, capsys):
+    w = FakeW(it)
+    assert drop_run(it, w).drop() == 0 and deleted(w) == []
+    assert "leftovers of fedcba987654: none" in capsys.readouterr().out
+    w = FakeW(it)
+    drop_world(it, w)
+    w.delete_gone = True  # each object vanished between the listing and the delete
+    assert drop_run(it, w).drop() == 0
+    assert [k for k, _ in deleted(w)] == ["pipeline", "connection", "schema"]
+
+
+def test_drop_dry_run_lists_and_deletes_nothing(it, capsys):
+    w = FakeW(it)
+    drop_world(it, w)
+    assert drop_run(it, w).drop(dry_run=True) == 0
+    out = capsys.readouterr().out
+    assert deleted(w) == []
+    assert f"would drop schema cat.{SCRATCH}" in out and f"would drop connection {SCRATCH}" in out
+    assert "would drop pipeline p-mine" in out and "p-near" not in out
+
+
+def test_main_drop_validates_the_commit_and_passes_dry_run(it, monkeypatch):
+    assert it.main(["--profile", "p", "--drop", "geobrix"]) == 2
+    assert it.main(["--profile", "p", "--drop", "FEDCBA987654"]) == 2
+    seen = {}
+    monkeypatch.setattr(it.Run, "drop", lambda self, dry_run=False: seen.update(sha=self.sha12, n=self.n, dry=dry_run) or 0)
+    assert it.main(["--profile", "p", "--drop", DROP_SHA, "--dry-run"]) == 0
+    assert seen["sha"] == DROP_SHA and seen["dry"] is True and seen["n"]["schema"] == SCRATCH
+
+
+# ---- the GeoBrix wheel: given, reused or built ----------------------------------------------------------------------
+
+
+def wheel_run(it, tmp_path, *argv):
+    r = it.Run(it.parse_args(["--profile", "p", "--warehouse-id", "wh", *argv]))
+    r.run_dir = tmp_path / "run"
+    r.run_dir.mkdir(exist_ok=True)
+    return r
+
+
+def test_a_given_wheel_must_be_an_existing_env6_wheel(it, tmp_path):
+    good = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    good.write_bytes(b"w")
+    assert wheel_run(it, tmp_path, "--geobrix-wheel", str(good)).geobrix_wheel() == good
+    env5 = tmp_path / "geobrix-0.6.0+env5-py3-none-any.whl"
+    env5.write_bytes(b"w")
+    with pytest.raises(it.StepFailed, match=r"not an env 6 wheel.*Fix: pass the \+env6 wheel"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(env5)).geobrix_wheel()
+    with pytest.raises(it.StepFailed, match="not an env 6 wheel"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "geobrix-0.6.0-py3-none-any.whl")).geobrix_wheel()
+    with pytest.raises(it.StepFailed, match="no such file. Fix:"):
+        wheel_run(it, tmp_path, "--geobrix-wheel", str(tmp_path / "gone" / good.name)).geobrix_wheel()
+
+
+def test_the_wheel_record_has_its_sha_commit_and_whether_it_fits_head(it, tmp_path, monkeypatch):
+    wheel = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    info = {"name": wheel.name, "sha256": "s" * 64, "git_sha": "b" * 40, "dirty": False}
+    monkeypatch.setattr(it.uc, "wheel_info", lambda p: dict(info))
+    monkeypatch.setattr(it.uc, "wheel_reusable", lambda i: (False, "3 wheel input(s) changed since bbbbbbbbbbbb"))
+    r = wheel_run(it, tmp_path)
+    rec = r.record_geobrix_wheel(wheel)
+    assert rec == {"name": wheel.name, "sha256": "s" * 64, "git_sha": "b" * 40, "dirty": False, "fits_head": False,
+                   "why": "3 wheel input(s) changed since bbbbbbbbbbbb"}
+    assert r.ev["geobrix_wheel"] is rec
+
+
+@pytest.fixture
+def dist(it, tmp_path, monkeypatch):
+    """dist/env6 in tmp_path, and a build that records what it ran and leaves ``built`` there."""
+    d = tmp_path / "dist" / "env6"
+    d.mkdir(parents=True)
+    monkeypatch.setattr(it, "untracked", lambda rel, root=None: tmp_path / rel)
+    monkeypatch.setattr(it, "DIST_ENV6", d)
+    state = {"ran": [], "reusable": (True, "no wheel input changed"), "built_sha": SHA12 + "c" * 28, "dirty": False}
+    monkeypatch.setattr(it.uc, "wheel_info", lambda p: {"name": p.name, "sha256": "s", "git_sha": state["built_sha"],
+                                                        "dirty": state["dirty"]})
+    monkeypatch.setattr(it.uc, "wheel_reusable", lambda i: state["reusable"])
+    monkeypatch.setattr(it.uc, "jar_stale", lambda jar: False)
+    monkeypatch.setattr(it.uc_sources_hash, "head_sha", lambda root: SHA12 + "c" * 28)
+
+    def run_cmd(argv, log, label, env=None, echo=True):
+        state["ran"].append(Path(argv[1]).name)
+        (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"built")
+        return 0, "ok"
+
+    monkeypatch.setattr(it.uc, "run_cmd", run_cmd)
+    return d, state
+
+
+def test_a_dist_wheel_that_fits_head_is_reused_without_a_build(it, tmp_path, dist):
+    d, state = dist
+    (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"old")
+    assert wheel_run(it, tmp_path).geobrix_wheel() == d / "geobrix-0.6.0+env6-py3-none-any.whl"
+    assert state["ran"] == []
+
+
+def test_a_dist_wheel_that_does_not_fit_head_or_rebuild_builds_one(it, tmp_path, dist):
+    d, state = dist
+    (d / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"old")
+    state["reusable"] = (False, "1 wheel input(s) changed")
+    assert wheel_run(it, tmp_path).geobrix_wheel().read_bytes() == b"built"
+    assert state["ran"] == ["gbx-build-wheel.sh"]
+    state["ran"].clear()
+    state["reusable"] = (True, "fits")
+    assert wheel_run(it, tmp_path, "--rebuild").geobrix_wheel().read_bytes() == b"built"
+    assert state["ran"] == ["gbx-build-wheel.sh"]
+
+
+def test_a_build_that_is_dirty_or_at_another_commit_is_refused(it, tmp_path, dist):
+    d, state = dist
+    state["dirty"] = True
+    with pytest.raises(it.StepFailed, match="no clean env 6 wheel"):
+        wheel_run(it, tmp_path).geobrix_wheel()
+    state["dirty"], state["built_sha"] = False, "d" * 40
+    state["reusable"] = (False, "the wheel in dist/env6 is the dirty one")  # so the run builds again
+    with pytest.raises(it.StepFailed, match="no clean env 6 wheel"):
+        wheel_run(it, tmp_path).geobrix_wheel()
+
+
+# ---- step_expect: the local read through the connector venv --------------------------------------------------------
+
+
+def sample_tree(it, root):
+    for d in it.DATASETS:
+        for _, src in d.files:
+            (root / src).parent.mkdir(parents=True, exist_ok=True)
+            (root / src).write_bytes(src.encode())
+    (root / it.INCREMENT[2]).write_bytes(b"inc")
+    return root
+
+
+def test_step_expect_copies_the_landing_tree_and_reads_it_through_the_helper(it, tmp_path, monkeypatch):
+    data = sample_tree(it, tmp_path / "data")
+    r = wheel_run(it, tmp_path, "--data-dir", str(data))
+    seen = {}
+    helper_out = {d.table: {"columns": [["_source_path", "string"]], "format": "x", "files": {"f": 1}} for d in it.DATASETS}
+
+    def fake_run(argv, capture_output, text, env):
+        seen["argv"] = argv
+        return SimpleNamespace(returncode=0, stdout=json.dumps(helper_out), stderr="")
+
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(run=fake_run))
+    landing, expect = r.step_expect()
+    assert expect == helper_out
+    assert json.loads((r.run_dir / "expect.json").read_text()) == helper_out
+    argv = seen["argv"]
+    assert argv[0] == str(it.CONNECTOR_VENV_PY) and argv[1].endswith("_lfc_expect.py")
+    assert argv[argv.index("--root") + 1] == str(landing)
+    assert json.loads(argv[argv.index("--tables") + 1]) == [{"table": d.table, "config": d.cfg} for d in it.DATASETS]
+    # The landing copy holds every dataset file plus the update-2 file, never the unreadable one.
+    for d in it.DATASETS:
+        for rel, src in d.files:
+            assert (landing / rel).read_bytes() == src.encode()
+    assert (landing / it.INCREMENT[1]).read_bytes() == b"inc"
+    assert not (landing / it.UNREADABLE[1]).exists()
+
+
+def test_step_expect_fails_on_missing_sample_data_or_a_failed_read(it, tmp_path, monkeypatch):
+    r = wheel_run(it, tmp_path, "--data-dir", str(tmp_path / "empty"))
+    with pytest.raises(it.StepFailed, match="sample data missing.*gbx-data-download.sh --bundle essential"):
+        r.step_expect()
+    data = sample_tree(it, tmp_path / "data")
+    r = wheel_run(it, tmp_path, "--data-dir", str(data))
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(
+        run=lambda *a, **k: SimpleNamespace(returncode=1, stdout="", stderr="Traceback ...\nValueError: Table 'x' has no matching files")))
+    with pytest.raises(it.StepFailed, match=r"(?s)local connector read failed.*no matching files"):
+        r.step_expect()
+
+
+@pytest.mark.skipif(not (REPO_ROOT / ".venv-connectors" / "bin" / "python").exists(),
+                    reason="needs the connector venv (bash scripts/commands/gbx-test-connectors.sh makes it)")
+def test_the_expect_helper_reads_a_tiny_landing_folder_with_the_connector(tmp_path):
+    # The real local read: two GeoJSON files in one folder, through the connector's own code.
+    feat = '{{"type": "Feature", "properties": {{"name": "{n}"}}, "geometry": {{"type": "Point", "coordinates": [{x}, 1]}}}}'
+    folder = tmp_path / "landing" / "pts"
+    folder.mkdir(parents=True)
+    for name, xs in (("a.geojson", (1, 2)), ("b.geojson", (3,))):
+        feats = ", ".join(feat.format(n=f"p{x}", x=x) for x in xs)
+        (folder / name).write_text(f'{{"type": "FeatureCollection", "features": [{feats}]}}')
+    (folder / "_skip.geojson").write_text("not read: the name starts with _")
+    res = subprocess.run([str(REPO_ROOT / ".venv-connectors" / "bin" / "python"), str(REPO_ROOT / "examples/tests/_lfc_expect.py"),
+                          "--root", str(tmp_path / "landing"), "--tables", json.dumps([{"table": "pts", "config": {"format": "geojson"}}])],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stderr[-2000:]
+    got = json.loads(res.stdout)["pts"]
+    assert got["format"] == "geojson_gbx" and got["files"] == {"pts/a.geojson": 2, "pts/b.geojson": 1}
+    names = [c[0] for c in got["columns"]]
+    assert names[0] == "name" and names[-2:] == ["_source_path", "_source_mtime"] and "geom_0" in names

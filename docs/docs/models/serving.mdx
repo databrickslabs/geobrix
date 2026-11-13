@@ -54,25 +54,26 @@ model_version = serving.register_to_unity_gateway(
 function never auto-selects a profile; the caller chooses it explicitly.
 
 The env wheel is bundled into the model (`code_paths`). By default (`wheel_path=None`) it is the
-staged env wheel of the environment that logs the model. On the Serverless GPU AI Runtime
-(environment 6) that is `/Volumes/…/geobrix-0.6.0+env6-py3-none-any.whl`. MLflow records that
-environment's Python and MLflow version for the endpoint, so the wheel's pins match them. The
-`pip_reqs` argument defaults to the bundled copy plus the GeoSAM packages (`serving.MODEL_DEPS`).
-The Model Serving build cannot reach a Volume, and the env wheels have no models extra:
+wheel the running GeoBrix was installed from, such as the one a notebook installs from a Volume with
+`%pip`. MLflow records the logging environment's Python and MLflow version for the endpoint, so the
+wheel's pins match them. If GeoBrix was not installed from a local wheel file, pass `wheel_path=`.
+The call fails before MLflow runs if that wheel does not exist. The `pip_reqs` argument defaults
+to the bundled copy plus the GeoSAM packages (`serving.MODEL_DEPS`). The Model Serving build cannot
+reach a Volume, and the env wheels have no models extra. For an env6 wheel the defaults are:
 
 ```python
-DEFAULT_PIP_REQS = (
+pip_reqs = [
     "code/geobrix-0.6.0+env6-py3-none-any.whl",
     "torch==2.9.0",
     "torchvision==0.24.0",
     "segment-geospatial",
     "opencv-python-headless==4.11.0.86",
-)
+]
 ```
 
 This is a deliberate **usage-affiliation** choice: the served model's logged environment
 carries the GeoBrix wheel alongside `segment-geospatial`, not just the raw
-segmentation backend. Pass `wheel_path=` (or `pip_reqs=`) for the wheel your workspace stages.
+segmentation backend. Pass `pip_reqs=` to replace the defaults.
 
 The bundled wheel is about 90 MB, which the model artifact then carries. GeoBrix has not tested the served model on an endpoint.
 

@@ -28,6 +28,32 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.models import serving
 
+ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def _installed_from(monkeypatch, url):
+    """Fake the running geobrix's PEP 610 ``direct_url.json`` (``url=None``: no such file)."""
+    import importlib.metadata
+
+    class _Dist:
+        @staticmethod
+        def read_text(name):
+            assert name == "direct_url.json"
+            return None if url is None else json.dumps({"url": url, "archive_info": {}})
+
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda n: _Dist())
+
+
+@pytest.fixture
+def installed_wheel(monkeypatch, tmp_path):
+    """A real wheel file the running geobrix 'was installed from' (file:// origin)."""
+    wheel = tmp_path / "vol with space" / ENV6_WHEEL
+    wheel.parent.mkdir()
+    wheel.write_bytes(b"PK")
+    _installed_from(monkeypatch, wheel.as_uri())
+    return str(wheel)
+
+
 _FAKE_GEOM_WKB = shapely.wkb.dumps(shapely.geometry.box(0, 0, 1, 1))
 
 
@@ -148,7 +174,7 @@ def test_profile_auth_noop_when_profile_none(monkeypatch):
     assert "DATABRICKS_CONFIG_PROFILE" not in os.environ
 
 
-def test_register_uses_uc_registry(monkeypatch):
+def test_register_uses_uc_registry(monkeypatch, installed_wheel):
     calls = {}
     monkeypatch.setattr(
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
@@ -160,7 +186,7 @@ def test_register_uses_uc_registry(monkeypatch):
     assert "geobrix" in " ".join(calls["pip_reqs"])  # geobrix rides into the served env
 
 
-def test_register_bundles_wheel_via_code_paths(monkeypatch):
+def test_register_bundles_wheel_via_code_paths(monkeypatch, installed_wheel):
     """mlflow's private-wheel pattern (the fix): code_paths=[wheel_path] bundles the
     wheel INTO the model (mlflow copies it to code/<basename> -- no subdirs), and
     pip_requirements must reference that BUNDLED path, not the original
@@ -171,19 +197,18 @@ def test_register_bundles_wheel_via_code_paths(monkeypatch):
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
     )
     serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
-    assert calls["code_paths"] == [serving.default_wheel_path()]
+    assert calls["code_paths"] == [installed_wheel]
     pip_reqs_str = " ".join(calls["pip_reqs"])
-    assert calls["pip_reqs"] == [
-        "code/" + serving.default_wheel_path().rsplit("/", 1)[1],
-        *serving.MODEL_DEPS,
-    ]
+    assert calls["pip_reqs"] == ["code/" + ENV6_WHEEL, *serving.MODEL_DEPS]
     assert "segment-geospatial" in pip_reqs_str
     assert "file:///Volumes" not in pip_reqs_str
 
 
-def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
+def test_register_wheel_path_override_changes_pip_reqs(monkeypatch, tmp_path):
     """A caller-supplied wheel_path (e.g. a different staged version) must flow through
     to BOTH code_paths and the bundled-basename pip requirement -- not just one."""
+    wheel = tmp_path / "geobrix-9.9.9+env6-py3-none-any.whl"
+    wheel.write_bytes(b"PK")
     calls = {}
     monkeypatch.setattr(
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
@@ -192,13 +217,15 @@ def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
         object(),
         "cat.sch.geosam",
         profile="oauth-fe",
-        wheel_path="/Volumes/x/y/geobrix-9.9.9+env6-py3-none-any.whl",
+        wheel_path=str(wheel),
     )
-    assert calls["code_paths"] == ["/Volumes/x/y/geobrix-9.9.9+env6-py3-none-any.whl"]
+    assert calls["code_paths"] == [str(wheel)]
     assert calls["pip_reqs"][0] == "code/geobrix-9.9.9+env6-py3-none-any.whl"
 
 
-def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
+def test_register_pip_reqs_override_still_passes_code_paths(
+    monkeypatch, installed_wheel
+):
     """An explicit pip_reqs= override replaces the computed default, but code_paths
     (the wheel bundling itself) is always passed regardless."""
     calls = {}
@@ -212,39 +239,77 @@ def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
         pip_reqs=["some-other-pkg"],
     )
     assert calls["pip_reqs"] == ["some-other-pkg"]
-    assert calls["code_paths"] == [serving.default_wheel_path()]
+    assert calls["code_paths"] == [installed_wheel]
 
 
-@pytest.mark.parametrize("env", [5, 6])
-def test_served_wheel_is_the_logging_environments(monkeypatch, env):
-    """The served model bundles the env wheel of the environment that logs it: the
-    pyfunc is pickled, and mlflow records Python and its own version, there. The
-    orthomosaic notebook logs from the Serverless GPU AI Runtime (environment 6), so an
-    env5 wheel there would pair env5 pins (numpy<2.2, protobuf<6) with env6's mlflow."""
-    import sys
-    import types
+def test_default_wheel_is_the_one_the_running_geobrix_was_installed_from(
+    installed_wheel,
+):
+    """PEP 610: a ``%pip install "geobrix @ file:///Volumes/.../x.whl"`` records that URL; the
+    default is its BARE local path (unquoted), whichever workspace/Volume it sits in."""
+    assert serving.default_wheel_path() == installed_wheel
+    assert not serving.default_wheel_path().startswith("file:")
 
-    monkeypatch.setitem(
-        sys.modules,
-        "databricks.labs.gbx._build_info",
-        types.SimpleNamespace(ENV=env, VERSION="0.6.0"),
+
+def test_default_wheel_is_the_logging_environments(monkeypatch):
+    """The served model bundles the wheel of the environment that logs it (env5 or env6)."""
+    _installed_from(
+        monkeypatch, "file:///Volumes/c/s/v/geobrix-0.6.0+env5-py3-none-any.whl"
     )
+    assert (
+        serving.default_wheel_path()
+        == "/Volumes/c/s/v/geobrix-0.6.0+env5-py3-none-any.whl"
+    )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        None,  # source checkout / no direct_url.json
+        "https://example.com/geobrix-0.6.0+env6-py3-none-any.whl",  # not a local file
+        "file:///Users/me/geobrix/python/geobrix",  # a source directory, not a wheel
+    ],
+)
+def test_default_wheel_unknown_origin_raises(monkeypatch, url):
+    """No known wheel origin: never fall back to a path of some other workspace."""
+    _installed_from(monkeypatch, url)
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.default_wheel_path()
+
+
+def test_default_wheel_not_installed_raises(monkeypatch):
+    import importlib.metadata
+
+    def _missing(name):
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _missing)
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.default_wheel_path()
+
+
+def test_register_fails_early_when_the_wheel_is_missing(monkeypatch, tmp_path):
+    """mlflow's 'Failed to copy the specified code path' is an opaque way to learn the wheel
+    is not there: check first, name the path, and never reach mlflow."""
     calls = {}
     monkeypatch.setattr(
         serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
     )
-    serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
-    wheel = f"geobrix-0.6.0+env{env}-py3-none-any.whl"
-    assert calls["code_paths"][0].endswith("/" + wheel)
-    assert calls["pip_reqs"][0] == "code/" + wheel
+    missing = str(tmp_path / ENV6_WHEEL)
+    with pytest.raises(FileNotFoundError, match="geobrix-0.6.0"):
+        serving.register_to_unity_gateway(
+            object(), "cat.sch.geosam", profile="oauth-fe", wheel_path=missing
+        )
+    assert calls == {}
 
 
-def test_served_wheel_without_an_env_wheel_is_env6(monkeypatch):
-    import sys
-
-    monkeypatch.setitem(sys.modules, "databricks.labs.gbx._build_info", None)
-    assert serving.default_wheel_path() == serving.DEFAULT_WHEEL_PATH
-    assert serving.DEFAULT_WHEEL_PATH.endswith("+env6-py3-none-any.whl")
+def test_register_without_a_known_wheel_asks_for_wheel_path(monkeypatch):
+    _installed_from(monkeypatch, None)
+    monkeypatch.setattr(serving, "_mlflow_log_and_register", lambda **k: "3")
+    with pytest.raises(ValueError, match="wheel_path="):
+        serving.register_to_unity_gateway(
+            object(), "cat.sch.geosam", profile="oauth-fe"
+        )
 
 
 def test_create_endpoint_uses_serving_seam(monkeypatch):
@@ -345,12 +410,8 @@ def test_the_served_environment_names_only_extras_its_env_wheel_defines():
     import re
     from pathlib import Path
 
-    assert re.search(r"\+env6-py3-none-any\.whl$", serving.DEFAULT_WHEEL_PATH), (
-        "the served environment bundles the env6 wheel by default (the GPU AI Runtime)",
-        serving.DEFAULT_WHEEL_PATH,
-    )
     envs = Path(__file__).resolve().parents[2] / "envs"
-    for wheel in (serving.DEFAULT_WHEEL_PATH, "/V/geobrix-0.6.0+env5-py3-none-any.whl"):
+    for wheel in ("/V/" + ENV6_WHEEL, "/V/geobrix-0.6.0+env5-py3-none-any.whl"):
         env = re.search(r"\+env([56])-", wheel).group(1)
         shipped = {
             f.stem.removeprefix("extra-")

@@ -1263,7 +1263,7 @@ def test_a_lost_scratch_is_named_with_what_is_left_also_after_a_test_it_broke(sh
     assert ns["state"]["reason"].startswith("FileNotFoundError: [Errno 2] No such file or directory: '/tmp/x/repo'; the chunk's scratch ")
     assert str(lost) in ns["state"]["reason"] and "went during its run" in capsys.readouterr().out
     assert run("")["LOST"] is None and run("")["state"]["reason"] == "", "a scratch still there is no finding"
-    assert "lost=LOST)" in src
+    assert "lost=LOST," in src
 
 
 def test_a_serverless_launch_refuses_a_wheel_whose_package_code_differs_from_the_sha(monkeypatch):
@@ -2391,6 +2391,24 @@ def test_runners_the_ramp_releases_start_one_at_a_time_on_serverless(tmp_path):
     assert sr.ramp_stagger_s(5, 0, serverless=True) == 0
     src = launcher.run_source({"stage": "/x"}) + launcher.runner_source({"stage": "/x"})
     assert "stagger_s=ramp_stagger_s(INDEX, START, serverless=" in src
+
+
+def test_each_chunk_records_the_compute_it_ran_on_and_the_summary_says_how_many():
+    """Raising rows took 15 s (median) with 3 or fewer chunks active in a run and 28 s with 9-12 (tst-sls-s1..s5): the user asked
+    whether runner tasks share compute. Each chunk records its driver's host, cores, cgroup CPU and memory limits and load, at its
+    start and its end, and the hosts of the Python workers a small query reaches; the summary counts them."""
+    got = sr.compute_probe()
+    assert {"host", "cpus", "cpu_max", "mem_max", "load1", "avail_mb", "t"} <= set(got) and got["cpus"] >= 1
+    src = launcher.run_source({"stage": "/x"})
+    assert "compute_probe()" in src and "worker_probe(spark)" in src and "compute=COMPUTE" in src
+    assert 'rec["compute"] = compute_probe()' in launcher.runner_source({"stage": "/x"})
+    rows = [{"compute": {"start": {"host": "h1", "cpus": 4, "cpu_max": "400000 100000", "mem_max": "8589934592", "load1": 3.5},
+                         "end": {"host": "h1", "load1": 7.0}, "workers": [{"host": "w1"}, {"host": "w2"}]}},
+            {"compute": {"start": {"host": "h2", "cpus": 4, "cpu_max": "max", "mem_max": "max", "load1": 1.0},
+                         "end": {"host": "h2", "load1": 2.0}, "workers": [{"host": "w1"}]}}, {}]
+    line = launcher.compute_line(rows)
+    assert "2 driver host(s) for 2 chunk(s)" in line and "2 worker host(s)" in line and "load1 at start median 2.2, at end median 4.5" in line
+    assert launcher.compute_line([{}]) == ""
 
 
 def test_the_plan_starts_two_runners_and_waits_for_them_in_its_wall(shards):

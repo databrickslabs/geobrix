@@ -230,6 +230,31 @@ def node_checkout(base: str, key: str, want: dict, unpack: Callable[[str], None]
     return "unpacked", repo, why
 
 
+def compute_probe() -> dict:
+    """What this process runs on: its host, cores, cgroup CPU quota and memory limit (``cpu.max`` / ``memory.max``, v2, else
+    "-"), 1- and 5-minute load and available memory, and when. Whether runner tasks share a node shows in their hosts."""
+    import socket
+
+    def read(path):
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except OSError:
+            return "-"
+
+    try:
+        load1, load5, _ = os.getloadavg()
+    except OSError:
+        load1 = load5 = -1.0
+    try:
+        avail = os.sysconf("SC_AVPHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") // (1024 * 1024)
+    except (ValueError, OSError, AttributeError):
+        avail = -1
+    return {"host": socket.gethostname(), "cpus": os.cpu_count() or 0, "cpu_max": read("/sys/fs/cgroup/cpu.max"),
+            "mem_max": read("/sys/fs/cgroup/memory.max"), "load1": round(load1, 2), "load5": round(load5, 2), "avail_mb": avail,
+            "t": round(time.time(), 1)}
+
+
 def interrupt_session(spark) -> str:
     """Cancel the Spark operations of a test that ran past --test-timeout: what was done, for the chunk's log. Only a Spark
     Connect session (Serverless) is interrupted: its ``interruptAll`` ends this session's operations alone, and the test's

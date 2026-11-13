@@ -559,7 +559,7 @@ def run_source(plan: dict) -> str:
     """The cell that unpacks the checkout, runs one shard's pytest in this process and writes its files."""
     # the chunk fails its own run by the rule its runner and fail fast use (_shard_runner.chunk_failed, inlined: no copy on the node)
     helpers = ("import json, os, re\nfrom typing import Callable\n\n\n" + inspect.getsource(sr.chunk_failed) + "\n\n" + inspect.getsource(sr.node_checkout)
-               + "\n\n" + inspect.getsource(sr.interrupt_session))
+               + "\n\n" + inspect.getsource(sr.interrupt_session) + "\n\n" + inspect.getsource(sr.compute_probe))
     return helpers + '''
 import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
 
@@ -927,11 +927,19 @@ def time_out_test(nodeid):  # an exception in the main thread, at its next Pytho
     print("TEST TIMEOUT: Spark session:", interrupt_session(spark), flush=True)
 
 
+LOADS = []  # (s since the start, 1-minute load) every 30 s: the driver's load through the chunk, beside its start and end probes
+
+
 def watchdog():
     n = 0
     while not state["done"]:
         time.sleep(5)
         n += 1
+        if n %% 6 == 0:
+            try:
+                LOADS.append((round(time.time() - t0), round(os.getloadavg()[0], 2)))
+            except OSError:
+                pass
         if n %% 3 == 0:
             beat()
         if n %% 12 == 0:
@@ -983,6 +991,19 @@ for _k, _v in S.get("spark_conf", {}).items():  # --spark-conf: set before the t
     except Exception as exc:
         CONF_ERR = CONF_ERR or "--spark-conf %%s=%%s refused by this session: %%s: %%s" %% (_k, _v, type(exc).__name__, " ".join(str(exc).split())[:240])
 print("shard", S["name"], "| args", S["args"], "| env", S["env"], "| spark conf", S.get("spark_conf", {}), "| cores", os.cpu_count(), "| session", type(spark).__name__, "| isolation", iso, flush=True)
+
+
+def worker_probe(spark, n=4):  # the hosts the Python workers of a small query run on (a probe: never decides the chunk)
+    from pyspark.sql.functions import udf
+    probe = udf(lambda _i: json.dumps(compute_probe()), "string")
+    try:
+        return [json.loads(r[0]) for r in spark.range(0, n, 1, n).select(probe("id")).collect()]
+    except Exception as exc:
+        return [{"error": type(exc).__name__ + ": " + " ".join(str(exc).split())[:160]}]
+
+
+COMPUTE = {"start": compute_probe(), "workers": worker_probe(spark)}
+print("compute:", json.dumps(COMPUTE), flush=True)
 phase("probe")
 # a test's tmp_path holds the files its virtual tiles name; on Serverless the Python workers are other machines that
 # cannot see the driver's disk, so there tmp_path is under the run's Volume folder, which every worker reads
@@ -1093,7 +1114,10 @@ result = dict(shard=S["name"], slug=SLUG, rc=rc, wall_s=round(time.time() - t0),
               passed=state["passed"], failed=state["failed"], errors=state["errors"], skipped=state["skipped"], total=state["total"],
               first_failure=state["first_failure"], maxfail_hit=maxfail_hit, overrun=state["overrun"], child=CHILD,
               timed_out=state["timed_out"], test_part=S.get("test_part", ""), checkout=CHECKOUT, checkout_s=CHECKOUT_S, runner=RUNNER,
-              empty_ok=S.get("empty_ok", True), phases=PHASES_OUT(), phase_origin="call" if "call" in PHASES else "nb_start", lost=LOST)
+              empty_ok=S.get("empty_ok", True), phases=PHASES_OUT(), phase_origin="call" if "call" in PHASES else "nb_start", lost=LOST,
+              compute=COMPUTE)
+COMPUTE["end"] = compute_probe()
+COMPUTE["load_samples"] = LOADS[-60:]
 json.dump(result, open(root + "/out/result.json", "w"))
 for f in os.listdir(root + "/out"):
     shutil.copy(root + "/out/" + f, OUT + "/" + f)
@@ -1227,6 +1251,7 @@ else:
                    limit=1 if SMOKE else 0, hold=held if (START and not SMOKE and INDEX >= START) else None,
                    stagger_s=ramp_stagger_s(INDEX, START, serverless=bool(PLAN.get("serverless"))) if not SMOKE else 0.0)
     rec["conflicts"] = q.conflicts
+    rec["compute"] = compute_probe()  # the runner task's own host: its chunks' hosts show whether they run beside it
     save(rec)
     print(WHO, "ran", len(rec["shards"]), "shard(s);", q.conflicts, "lost claim commit(s);", rec["stopped"] or "the queue is empty", flush=True)
     # the checkout its chunks shared (the shard cell's node_checkout, on the node's disk) and its own record folder go with it
@@ -1422,6 +1447,23 @@ def schedule_lines(info: dict) -> List[str]:
     return out
 
 
+def compute_line(rows: List[dict]) -> str:
+    """How many hosts the chunks' drivers and Python workers ran on, their cores and cgroup limits, and the drivers' load at start
+    and end (each chunk's ``compute`` record): runner tasks that share a node show as fewer hosts than chunks, and as load."""
+    comp = [r.get("compute") for r in rows if r.get("compute") and (r["compute"].get("start") or {}).get("host")]
+    if not comp:
+        return ""
+    import statistics
+    hosts = {c["start"]["host"] for c in comp}
+    workers = {w.get("host") for c in comp for w in c.get("workers") or [] if w.get("host")}
+    limits = sorted({(c["start"].get("cpus"), c["start"].get("cpu_max"), c["start"].get("mem_max")) for c in comp}, key=str)
+    l0 = [float(c["start"].get("load1", -1)) for c in comp if float(c["start"].get("load1", -1)) >= 0]
+    l1 = [float((c.get("end") or {}).get("load1", -1)) for c in comp if float((c.get("end") or {}).get("load1", -1)) >= 0]
+    med = lambda xs: f"{statistics.median(xs):.1f}" if xs else "-"  # noqa: E731
+    return (f"compute: {len(hosts)} driver host(s) for {len(comp)} chunk(s), {len(workers)} worker host(s); cores, cpu.max, memory.max "
+            f"{'; '.join(f'{a}, {b}, {m}' for a, b, m in limits[:3])}; driver load1 at start median {med(l0)}, at end median {med(l1)}")
+
+
 def isolation_line(rows: List[dict]) -> str:
     """Whether every shard had a Python process and a Spark session of its own (the probe each shard notebook runs)."""
     iso = [r.get("isolation") for r in rows if r.get("isolation")]
@@ -1458,6 +1500,8 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
             out.append("  - peak concurrency: " + ", ".join(f"cluster {c}: {n} chunk(s) at once" for c, n in sorted(info["peaks"].items())))
     if isolation_line(rows):
         out.append(f"- {isolation_line(rows)}")
+    if compute_line(rows):
+        out.append(f"- {compute_line(rows)}")
     if plan["jar"]:
         out.append(f"- JAR `{plan['jar']['name']}` sha1 {plan['jar'].get('sha1', '')[:12]} sha256 {plan['jar']['sha256'][:16]}")
     out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | predicted s | actual s | error % | estimate | contention | beside |",

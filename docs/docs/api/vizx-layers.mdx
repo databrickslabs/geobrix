@@ -123,6 +123,10 @@ Linear normalization crushes a skewed distribution into one end of the ramp. Mos
 
 For a **categorical** column, the values are class names, not a numeric scale. A colormap assigns colors in arbitrary (alphabetical) order, so `vegetation` might land on a colormap's red while `impervious` gets its green. Pass `vector_layer(category_colors=…)` with a `{value: color}` map to fix each category to a meaningful color; the discrete legend then lists the categories present in the map's order. A value present in the data but absent from the map falls back to a neutral gray and is appended to the legend.
 
+Up to 12 categories, `plot_static` keeps the legend inside the map. With more, the legend moves to the right of the map so it does not cover it. It uses a smaller font and as many columns as it needs to fit the map's height. A figure that `plot_static` created widens to make room; a figure you pass in with `ax=` keeps its size.
+
+A qualitative colormap has a fixed number of colors (`tab20` has 20). When the categories outnumber them, some swatches stand for more than one category. `plot_static` then prints a note. For one color per category, pass a colormap with at least as many colors, or `category_colors`.
+
 ```python
 from databricks.labs.gbx.vizx import plot_static, raster_layer, vector_layer
 

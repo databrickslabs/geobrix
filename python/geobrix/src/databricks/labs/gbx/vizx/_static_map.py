@@ -345,6 +345,7 @@ def _draw_one_layer(
     srid=None,
     legend=True,
     emphasis="blend",
+    debug_mode=1,
 ):
     """Draw a single Layer onto an existing matplotlib Axes (already in EPSG:3857).
 
@@ -411,6 +412,9 @@ def _draw_one_layer(
             _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend)
             return
         plot_gdf.plot(**kwargs)
+        _note_palette_reuse(
+            plot_gdf, lyr.column, lyr.cmap, legend, debug_mode, color=lyr.color
+        )
     elif lyr.kind == "raster":
         import numpy as np
 
@@ -496,6 +500,115 @@ def _draw_one_layer(
             ">64MB static fallback decode them to a raster first.",
             stacklevel=2,
         )
+
+
+# A categorical legend with more entries than this would cover the map, so it moves
+# outside the axes (to the right, in columns, smaller font). Up to this many it keeps
+# the default in-axes placement.
+_LEGEND_INSIDE_MAX = 12
+# Gap between the map and an outside legend, in axes-width fractions.
+_LEGEND_OUTSIDE_PAD = 0.02
+
+
+def _is_categorical(series):
+    """True when geopandas would draw ``series`` as categories (a discrete legend)
+    rather than a continuous colorbar."""
+    from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+    return is_bool_dtype(series.dtype) or not is_numeric_dtype(series.dtype)
+
+
+def _note_palette_reuse(plot_gdf, column, cmap, legend, debug_mode, color=None):
+    """Say so when a qualitative cmap has fewer colours than the categories.
+
+    geopandas maps category codes ``0..n-1`` onto the cmap through a linear
+    ``Normalize``; a ``ListedColormap`` with ``N < n`` colours (``tab20`` has 20)
+    then gives runs of 2-3 neighbouring categories the same colour, so the legend
+    shows one swatch for several different labels. The caller's cmap is kept (no
+    change to what existing callers render); this note keeps the legend honest.
+    A continuous cmap (``viridis``, 256 entries) still gives every category its own
+    colour and is not flagged. A scalar ``color`` bypasses the cmap: nothing to note.
+    """
+    if color is not None or not legend or column not in plot_gdf.columns:
+        return
+    if not _is_categorical(plot_gdf[column]):
+        return
+    import matplotlib
+    from matplotlib.colors import Colormap, ListedColormap
+
+    # geopandas' own default for a categorical column with no cmap.
+    cm = cmap if isinstance(cmap, Colormap) else matplotlib.colormaps[cmap or "tab10"]
+    n = int(plot_gdf[column].dropna().nunique())
+    if not isinstance(cm, ListedColormap) or cm.N >= n:
+        return
+    from databricks.labs.gbx.vizx._maplibre import _emit
+
+    _emit(
+        f"[vizx]   legend: {n} categories share the {cm.N} colours of cmap "
+        f"{cm.name!r}, so some swatches stand for more than one category. Pass a "
+        f"cmap with at least {n} colours (or category_colors=) for one colour each.",
+        debug_mode=debug_mode,
+    )
+
+
+def _fit_legend(ax, created):
+    """Move a many-entry legend off the map.
+
+    Up to ``_LEGEND_INSIDE_MAX`` entries the legend stays where geopandas / the
+    category legend put it. Beyond that it covers the map, so it is rebuilt to the
+    right of the axes with a smaller font and as many columns as it takes to fit
+    the map's height. When ``plot_static`` created the figure (``created=True``)
+    and the map is its only axes, the figure is widened by the legend's width, the
+    map keeping its size and place, so nothing is clipped even without a tight
+    bbox. A caller-owned figure keeps its size (a tight-bbox save still frames the
+    legend). Wrapped in try/except so a layout edge case never breaks a render.
+    """
+    leg = ax.get_legend()
+    if leg is None:
+        return
+    labels = [t.get_text() for t in leg.get_texts()]
+    n = len(labels)
+    if n <= _LEGEND_INSIDE_MAX:
+        return
+    try:
+        handles = list(leg.legend_handles)
+        title = leg.get_title().get_text() or None
+        fig = ax.figure
+        # Realise the equal-aspect map box before measuring against it.
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+        ax_h = ax.get_window_extent(renderer).height
+        ncol = 1
+        while True:
+            new = ax.legend(
+                handles,
+                labels,
+                loc="upper left",
+                bbox_to_anchor=(1.0 + _LEGEND_OUTSIDE_PAD, 1.0),
+                borderaxespad=0.0,
+                ncols=ncol,
+                fontsize="small",
+                title=title,
+                title_fontsize="small",
+                framealpha=0.9,
+            )
+            if ncol >= n or new.get_window_extent(renderer).height <= ax_h:
+                break
+            ncol += 1
+        if not created or len(fig.axes) != 1:
+            return
+        overflow_px = new.get_window_extent(renderer).x1 - fig.bbox.width
+        if overflow_px <= 0:
+            return
+        old_w, h = fig.get_size_inches()
+        new_w = old_w + overflow_px / fig.dpi + 0.1
+        # Keep the map's absolute box: its figure fractions shrink as the figure widens.
+        pos = ax.get_position(original=True)
+        s = old_w / new_w
+        fig.set_size_inches(new_w, h)
+        ax.set_position([pos.x0 * s, pos.y0, pos.width * s, pos.height])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _fix_colorbar_position(ax, created):
@@ -664,6 +777,7 @@ def plot_static(
                 srid=srid,
                 legend=legend,
                 emphasis=emphasis,
+                debug_mode=debug_mode,
             )
         if basemap:
             try:
@@ -699,6 +813,7 @@ def plot_static(
         ax.set_title(title or "")
         ax.set_axis_off()
         _fix_colorbar_position(ax, created)
+        _fit_legend(ax, created)
         return ax
 
     # --- Legacy single-data path (Spark DataFrame / GeoDataFrame / bare) ---
@@ -754,6 +869,7 @@ def plot_static(
         # invisible against a "none" face).
         kwargs["facecolor"] = "none"
     plot_gdf.plot(**kwargs)
+    _note_palette_reuse(plot_gdf, column, eff_cmap, legend, debug_mode)
 
     if basemap and plot_gdf.crs is None:
         # No CRS to align tiles against (e.g. a custom grid with srid<=0);
@@ -799,6 +915,7 @@ def plot_static(
         ax.set_title(title)
     ax.set_axis_off()
     _fix_colorbar_position(ax, created)
+    _fit_legend(ax, created)
 
     # No pyplot.show(): the inline/Databricks backend auto-displays the figure at
     # cell end with all overlaid layers; calling show() on the creating call

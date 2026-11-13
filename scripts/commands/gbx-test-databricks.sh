@@ -1,4 +1,5 @@
 #!/bin/bash
+{  # the whole command is one block: bash parses it before it runs, so an edit during a run cannot change it
 # gbx:test:databricks - Run GeoBrix's test shards (CI's) on warm Databricks pool clusters, side by side.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -121,3 +122,4 @@ else
 fi
 "${GBX_SDK_PYTHON[@]}" "$PROJECT_ROOT/examples/tests/push_and_run_tests_on_cluster.py" "${PASS_ARGS[@]}"
 exit $?
+}

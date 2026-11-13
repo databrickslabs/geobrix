@@ -1931,6 +1931,9 @@ def rerun_shards(run_dir: Path, root: Path, shards: Optional[List[ts.Shard]] = N
 
 
 RUN_WALL_SHARE = 0.75  # a Serverless plan aims to end inside this share of --max-wall-min; past it the launch is cut into runs
+# the wall counts from the submit, and the runners start after the seed and the smoke: 3.4 min in tst-sls-g2-dem (r_0 at +204 s);
+# tst-sls-g3-tg was planned at 14.9 min "after the start" and ended at 19.5 min of its 20
+SERVERLESS_PREAMBLE_MIN = 3.5
 
 
 def parts_needed(expected_min: float, wall_min: float) -> int:
@@ -1946,7 +1949,8 @@ def wall_fit_problem(plan: dict) -> str:
     wall = float((plan.get("fail_fast") or {}).get("max_wall_min") or 0)
     if not plan.get("serverless") or not wall:
         return ""
-    worst = max((float(p.get("expected_min") or 0) for p in plan["pools"].values()), default=0.0)
+    worst = max((float(p.get("expected_min") or 0) for p in plan["pools"].values()), default=0.0) + SERVERLESS_PREAMBLE_MIN
+    worst = round(worst, 1)
     n = parts_needed(worst, wall)
     if n <= 1:
         return ""
@@ -1954,7 +1958,7 @@ def wall_fit_problem(plan: dict) -> str:
         cur = int(plan["run_part"].split("/")[1])
         return (f"part {plan['run_part']} is planned at {worst:g} min, past {RUN_WALL_SHARE:.0%} of the {wall:g} min wall: "
                 f"use a finer --run-part (about {cur * n} parts)")
-    return (f"the plan's wall is about {worst:g} min, past {RUN_WALL_SHARE:.0%} of the {wall:g} min wall: run it as {n} runs, "
+    return (f"the plan's wall is about {worst:g} min from the submit, past {RUN_WALL_SHARE:.0%} of the {wall:g} min wall: run it as {n} runs, "
             + ", ".join(f"--run-part {i}/{n}" for i in range(n)) + " (each a run of its own, under the cap)")
 
 

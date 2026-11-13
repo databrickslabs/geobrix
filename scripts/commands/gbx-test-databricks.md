@@ -50,6 +50,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all, on a pool only (Serverless refuses 0).
 - `--run-part <i>/<n>` - run the tests whose node id hashes to part i of n, and plan 1/n of each unit's time.
   - A Serverless plan past 75% of `--max-wall-min` is refused, naming the parts. Launch each part as a run of its own.
+  - The check counts 3.5 min for the seed and smoke tasks, as the wall starts at the submit.
   - A run that ends CANCELED at the wall does not count as green; a part that ends SUCCESS does.
   - A part's chunks leave no timing samples, as a `-k` chunk's do.
 - `--ids-file <path>` - run only the test node ids in this file, one per line, `--ids-per-chunk` (default 8) to a chunk.
@@ -282,3 +283,7 @@ Run `tst-nodefix-1` (commit `109a45ad80`: the `ds` shards, `bench 3/3` and `scri
 - A task runs its tests from the tarball's package. A change to the dependencies or the native payload needs a new wheel (`gbx:build:wheel --env 6`); the command warns when the wheel predates one.
 - Tests that need a Docker-only path or the local sample-data mount skip or fail as they do without the mount. `summary.md` lists the skips.
 - Cost: one on-demand node per pool while a run is on it and for 60 idle minutes after.
+
+## Edits during a run
+
+- The command is one block, so bash parses it whole before it runs. An edit to the script during a run does not change that run.

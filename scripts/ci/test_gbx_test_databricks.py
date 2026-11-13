@@ -2947,11 +2947,43 @@ def test_a_serverless_plan_past_three_quarters_of_the_wall_is_refused_with_its_p
     plan = {"serverless": True, "run_part": "", "pools": {"serverless": {"expected_min": 18.9}}, "fail_fast": {"max_wall_min": 20.0}}
     why = launcher.wall_fit_problem(plan)
     assert "--run-part 0/2" in why and "--run-part 1/2" in why and "75%" in why, why
-    assert launcher.wall_fit_problem(dict(plan, pools={"serverless": {"expected_min": 12.0}})) == ""
+    assert launcher.wall_fit_problem(dict(plan, pools={"serverless": {"expected_min": 11.0}})) == ""
+    # the wall counts from the submit: the seed and smoke before the runners count too (tst-sls-g3-tg: planned 14.9 min after the
+    # start, ended at 19.5 min; runners began 3.4 min in, tst-sls-g2-dem)
+    late = launcher.wall_fit_problem(dict(plan, pools={"serverless": {"expected_min": 12.9}}))
+    assert "--run-part 0/2" in late and "16.4" in late, late
     part = dict(plan, run_part="0/2", pools={"serverless": {"expected_min": 16.0}})
     assert "a finer --run-part" in launcher.wall_fit_problem(part), "a part that does not fit either asks for more parts"
     assert launcher.wall_fit_problem(dict(plan, serverless=False)) == "", "a pool run keeps its own budget rules"
     assert "wall_fit_problem(plan)" in Path(launcher.__file__).read_text(), "the launch refuses by it"
+
+
+def test_an_edit_to_the_command_during_a_run_does_not_change_the_run(tmp_path):
+    """tst-sls-g2-mvph's launch ended in "line 121: unexpected EOF while looking for matching" after its results were in: the
+    script was edited (a help line inserted) while bash was still reading it. The command is one block, parsed before it runs.
+    Here the launcher (a stand-in) inserts a long line at the top of the script, in place, as an editor's save does."""
+    import shutil
+    root = tmp_path / "repo"
+    (root / "scripts").mkdir(parents=True)
+    shutil.copytree(REPO_ROOT / "scripts" / "commands", root / "scripts" / "commands")
+    (root / "scripts" / "docker").mkdir()
+    for f in (REPO_ROOT / "scripts" / "docker").glob("*.sh"):
+        shutil.copy(f, root / "scripts" / "docker" / f.name)
+    script = root / "scripts" / "commands" / "gbx-test-databricks.sh"
+    venv = tmp_path / "venv" / "bin"
+    venv.mkdir(parents=True)
+    fake = venv / "python"
+    fake.write_text("#!/bin/bash\n"
+                    f"f={script}\n"
+                    'body=$(cat "$f"); { echo "#!/bin/bash"; echo "# $(printf \'x%.0s\' $(seq 1 600))"; echo "$body" | tail -n +2; } > "$f.new"\n'
+                    'cat "$f.new" > "$f"; echo LAUNCHER-RAN; exit 0\n')
+    fake.chmod(0o755)
+    env = dict(os.environ, GBX_PYRX_VENV=str(tmp_path / "venv"), NO_COLOR="1")
+    res = subprocess.run(["bash", str(script), "--explain-only", "--shards", "ds"], cwd=root, env=env, capture_output=True, text=True,
+                         timeout=120)
+    assert "LAUNCHER-RAN" in res.stdout, res.stdout[-800:] + res.stderr[-800:]
+    assert "syntax error" not in res.stderr and "unexpected EOF" not in res.stderr, res.stderr[-800:]
+    assert res.returncode == 0 and "x" * 600 in script.read_text(), "the edit landed, and the run kept its own copy"
 
 
 def test_ids_file_runs_exactly_the_named_tests_in_chunks(shards, tmp_path):

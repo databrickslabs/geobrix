@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "9cae5ddf41fac15b0e4dad3a506e91c6e241d67415d289ea9bedf18d472f6aa2",
+  "native_inputs_sha256": "595d4e1e5405bdca558005f0143a3ec6db87d43fbbd38333f5fe68478fc728e1",
   "date": "2026-11-13",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "5b79655d0632ce2772dc79645df6b462b9368df5",
+  "built_from": "49b41b4b1b6f0873061231b50ea9a59d7c798275",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -13,11 +13,11 @@
         "failed": 0
       },
       "env5": {
-        "passed": 14,
+        "passed": 15,
         "failed": 0
       },
       "env6": {
-        "passed": 14,
+        "passed": 15,
         "failed": 0
       }
     },
@@ -27,11 +27,11 @@
         "failed": 0
       },
       "env5": {
-        "passed": 14,
+        "passed": 15,
         "failed": 0
       },
       "env6": {
-        "passed": 14,
+        "passed": 15,
         "failed": 0
       }
     }
@@ -71,6 +71,13 @@
     "python/geobrix/src/databricks/labs/gbx/_native/_rules.py": "c2d094f3a6379e6e5d7c6be3e0d9838629df5a02d584f5a20d70cb8c12ab14d6",
     "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "10823ad36b1b86b37ba6f55fe3a0f54afef129e6a2483f07d343bc4c1433d82d",
     "rust-toolchain.toml": "862adc14eccb8038bf8cead88a04def82032db0e59673d7cf228131e5e25d3b1",
+    "rust/gbxrs/Cargo.lock": "c34133f5bfa419ce47d57b47b210d8ca168a0c8a41d0222fa260e61b3b2488e0",
+    "rust/gbxrs/Cargo.toml": "c02bdfde574a3db71a562bf1ccc30b089aeb44ae3670d893ca225f0c6cd2e615",
+    "rust/gbxrs/pyproject.toml": "9366ea5454ecb5d706de6665937a91a9724b0d029c4c7329120ce3bbb9cd9612",
+    "rust/gbxrs/src/jmath.rs": "254893de3c1da136bf79c86996564cc8681174d2b4ded3416e66f5bee14de0f1",
+    "rust/gbxrs/src/lib.rs": "e51d663d5b6917a8c50d72271cc58fc10b8964f33d51d35ec7a0681ad1a5141d",
+    "rust/gbxrs/src/tin.rs": "27b59e8f7f1a402b72acf3dae644d1d6106a8de3a31c2fa2ac656d131d635051",
+    "rust/gbxrs/testdata/java_hypot.txt": "c0087941b451fef4eb60f528cfaee4df0cd7dc41ca1df12b6cb5cb8c51888248",
     "scripts/native/JniSmoke.java": "d119583c5188d53f3c45ee7e0cf335a05fd2b2d347ead61d8310d2bfeb5b510b",
     "scripts/native/base_held.py": "433e6d93c6b89ab24b6ccb2e9f46fbfb628ebf80e5560dded46a615dd47cdcf6",
     "scripts/native/baseline-requirements-aarch64.txt": "6f2590e291cbe6b1f970170a684098e1f79f67a7b7a9955ba8e712111011f023",
@@ -88,11 +95,11 @@
     "scripts/native/build-requirements.in": "9a4df67eb8215282db860e4bc181c387205b2b72f14db042aaf2359db0b4be34",
     "scripts/native/build-rust-native.sh": "8f77856738e178be7a6a90a0a4709984c1b6ae35ff30cbf6dd774fdff7bced68",
     "scripts/native/build.Dockerfile": "e6dc9c46f06c8374b0955c8dfb841718dabc828d06e66d5440a9307b9ecb69c3",
-    "scripts/native/build_env_wheel.py": "5986030c62d09421dee123e3c61cbd04503cdfbbffd93119c59aaf8e952bf918",
+    "scripts/native/build_env_wheel.py": "ccd2310bccb77440ac41dea060c3907d45de10a9f6648ddd8d4618bee28235e6",
     "scripts/native/cargo-deny-ci.sh": "7343af663e7b1bf5693169bc91fc974fa8aa8aafd6b2e8071bcb96d35dfdb5b3",
     "scripts/native/cargo-offline.toml": "a8326789ecde9b687444088317921b38f25c1cdedcb0117b9a17f945216de55e",
     "scripts/native/cargo-vendor.sh": "535e5b173666967828b06a6f6d7f39bed70af5fd0d4a3df819cba41f62db990c",
-    "scripts/native/check-env-wheel.sh": "e313581c0dcab1ab3d0ae2aac14eda24a162323d509bee2d25463465012307b6",
+    "scripts/native/check-env-wheel.sh": "d899a415e0db962ed16d4830b3213c437007b60ef968b40b4d456b84f755517b",
     "scripts/native/egress_probe.py": "a8c6a03a882106b2473d48916031dad45d43c5b7c0d2e47a5318bc6b025ca555",
     "scripts/native/fetch-lib.sh": "cfae3b6c2536c66fdb3c0a3b7a59153749f42bd95f382e2365db2528bde832a9",
     "scripts/native/index_fetch.py": "75cfa57fba48835844a4b5bc4f38a0d6116997f54db822be3f410bc56275a432",
@@ -102,7 +109,7 @@
     "scripts/native/jvm_payload.py": "798d7792c8d46d54a42e096aaf685870d893c0ddf2aeb70f7a0cd88badf60b91",
     "scripts/native/legacy-consumers.txt": "93dd5fe2478d5691a894e0331f7b4fe03b71b0015b0e1da1c1daf3d0aa1eaee6",
     "scripts/native/maven/gdal-3.13.3-gbx1.jar": "17416efc7f12c47febaa21c50b22ee62d116f1f6102b046fc59607238093dc08",
-    "scripts/native/native_inputs.py": "483793cfa4dff8dc9de16190e25e5eec5bfeb5e1493c98dc429fe8ca5ae3e3c4",
+    "scripts/native/native_inputs.py": "a23f1f90a6054c38de18498b03707a1e8f8ed3232786b700e25bea29f08377d4",
     "scripts/native/p11_probe.py": "2dec1a3e724138cb01caa0288f5f994df4a507e62afdc061be458a1fc992c157",
     "scripts/native/pins.conf": "1851ae79c6d216bc6e18ab87a60e7e75501497286e992beeb33f104ba91fb53c",
     "scripts/native/pins.py": "6d0a78a304017ed0b2944001c9120912dc0cb7d3eedd935ef09f121234a8717d",
@@ -111,6 +118,7 @@
     "scripts/native/relax-click.py": "eec3148c4394b430bff193ceafe6a895c2eb1f01c260866d5deec7dfabd84560",
     "scripts/native/rename-sonames.py": "460bd8b888f03a02042ca1df1d2c1166e9fb6258a7c706ac7cecebd532acbb78",
     "scripts/native/repro_tar.py": "5694793ad0867f80a5f329d9cca4c6716081a4486484d3f901758dab7068de41",
+    "scripts/native/rs_payload.py": "3628b73f8833d749ca7379615e354cebaba24e662e6837f96aaa4f4a95e74757",
     "scripts/native/rust-licenses/gdal-sys/LICENSE.txt": "5323761a1dfa4deb1a253260748902ffa9b5d8ebab7d8c97fc0eea330f742bfb",
     "scripts/native/rust-licenses/rust-std/COPYRIGHT-library.html": "5647be074c8edf7339fd863055923a8fc80bc5610a8d4661ec3b767b9d392c27",
     "scripts/native/rust-licenses/rust-std/LICENSE-APACHE": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff",

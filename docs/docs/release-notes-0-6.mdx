@@ -64,6 +64,7 @@ New:
 - [`rst_gdal` runs an allowlisted GDAL `raster` command](#rst-gdal)
 - [Transactional, versioned Zarr stores](#zarr-stores) with [direct storage access](#zarr-direct)
 - [A Databricks Container Service image for dedicated clusters](#dcs-image)
+- [`segment_raster` loads a GeoSAM checkpoint from a Volume](#geosam-weights)
 
 ## Python API and registration {#python-api}
 
@@ -95,6 +96,12 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
 - **Importing `databricks.labs.gbx.ds` no longer registers the readers.** The Scala data source that registered them is gone.
 - **`register` prints a short reminder that links the [migration guide](./migration-0-6).** It prints the reason once when a function falls back to another level.
 - **`gbx.register(spark, catalog="main", schema="geobrix")` says once when that schema holds functions from another version.** See [Unity Catalog functions](#unity-catalog-functions).
+
+### `register` shows its result in one line (fix) {#register-result}
+
+- **A notebook cell that ends in `gbx.register(spark)` shows one summary line.** It used to print about 250 lines, one for each function.
+  - The line gives the version, the number of functions registered, the number at each level and the first fallback note.
+  - The result is a `RegisterResult`, a `dict` subclass. Its keys, values and iteration are unchanged.
 
 ### Scala no longer registers SQL (breaking) {#scala-registration}
 
@@ -617,6 +624,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 - **`vector_gbx` writes KML, GML and DXF from a DataFrame with any number of partitions (fix).** The writer appended each partition to the file. GDAL cannot reopen those formats to append, so a second partition failed. They now write in one pass, as GeoJSON does.
 - **`vector_gbx` writes CSV with a WKT column (fix).** The CSV driver needs the layer option `GEOMETRY=AS_WKT`, and the writer set none. For CSV input, use Databricks' own reader.
 - **A GPX column named like a GPX field is refused with a Fix (fix).** GPX makes `name`, `ele`, `time` and `desc` itself. The error says to rename or drop the column.
+- **The vector readers and writers no longer leave `OGR_SQLITE_JOURNAL=DELETE` set for the process (fix).** They set it for each call, and put your value back when the last open call ends. Before, every later SQLite or GeoPackage open in the session ran with it (also in v0.5.2).
 - **`vector_gbx`, `gpkg_gbx`, `geojson_gbx` and `shapefile_gbx` write a DataFrame of mixed geometry types as a layer of any geometry (fix).** The layer took the type of the first geometry. GML then read a polygon back as a line string when a line string came first, and FlatGeobuf refused the write. A layer of one geometry type keeps that type. A FileGDB layer still takes the type of the first geometry, and GDAL refuses the others. Polygons mixed with multipolygons are a layer of any geometry too; each geometry is written as it is, not promoted to a multi type.
 - **The vector writers declare a layer 3D when its geometries carry Z (fix).** A 2D layer type made a Shapefile drop the heights and FlatGeobuf refuse the write. A GeoPackage layer that mixes 2D and 3D geometries is declared 3D and keeps each geometry as it is. A Shapefile, FlatGeobuf or FileGDB layer holds one dimension. The writer refuses a mix of 2D and 3D there with a `Fix:`: write one dimension, or set `geometryType` (for example `'Polygon Z'`). A layer of any geometry is not declared 3D.
 
@@ -788,6 +796,10 @@ These changes cover `st_triangulate`, `st_interpolateelevationbbox` and `st_inte
   - Without a `max_distance` it returns the whole DEM.
   - Pixels beyond the distance but inside the window are 0, as before.
   - The `rst_viewshed_towers` count `total_px` is every pixel of that square window, the corners beyond `radius_m` included. So `frac` (`visible_px / total_px`) stays below about 0.79 (π/4) even on open ground.
+- **A whole file that GDAL reads by its path is copied to local disk first (performance).** This covers `rst_viewshed` and `gbx_rst_gdal`, and each Volume source of a VRT.
+  - Each worker copies a file once, in one sequential pass, and reuses the copy.
+  - A 25-tile DSM window on Serverless took 259 s read in place, and 5 s copied first.
+  - A file over `GBX_STAGE_MAX_BYTES` (4 GiB by default) is read in place.
 - **Smaller changes.**
   - `rst_viewshed_towers` gives no row for a tower in a grid cell with no DSM tile.
 
@@ -981,6 +993,9 @@ Every raster function follows the same order of checks at the JVM and Python lev
   - `rst_maketiles` sizes a tile over the cap from its header, as its decoded size. A tile under the cap is split as before.
   - A reprojected piece of a huge tile may take another source pixel than the whole tile would, at a few borderline pixels.
   - Reads that decode no window are not judged: the plain-window warp, a merge by reference and the block-streaming write.
+- **Standard access mode uses the classic caps (fix).** A standard-access session is Spark Connect over classic compute. GeoBrix took it for Serverless.
+  - Its readers, materialize checks and grouped helpers now use the 256 MiB file read cap and the 1536 MiB read cap.
+  - Before, a 110 MiB GeoTIFF failed to materialize on a DBR 19 standard cluster. In v0.5.2 its readers also held a file to 64 MiB.
 - **The JVM and Python levels take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
   - `gbx_rst_subdatasets` and `gbx_rst_getsubdataset` read a netCDF or HDF tile as its own dataset, so they keep working.
   - A netCDF or HDF container with several variables and no band answers `rst_width`, `rst_height`, `rst_numbands`, `rst_subdatasets` and `rst_metadata`. It was an error tile. `rst_metadata` includes the file's own metadata domains.
@@ -1282,6 +1297,31 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
 - **A served GeoSAM model bundles the env wheel of the environment that logs it.** It used to bundle the env5 wheel, also when logged from environment 6.
 - See [GeoSAM](./models/geosam).
 
+### GeoSAM: load the checkpoint from a Volume (new) {#geosam-weights}
+
+- **`segment_raster(..., weights=)` takes a GeoSAM checkpoint file.** Pass a local, `/Volumes/...` or `dbfs:/Volumes/...` path. A workspace that blocks internet egress then needs no download.
+- **With no `weights`, SamGeo downloads `sam_vit_h_4b8939.pth` from Meta's CDN,** as before.
+- **A missing file raises a `FileNotFoundError` that names the path.** `weights` together with `segmenter` raises too, because an injected segmenter loads no checkpoint.
+- See [GeoSAM](./models/geosam).
+
+### Photogrammetry: Volume images and GPS priors (fix, new) {#photogrammetry}
+
+- **`run_sfm` reads images on a Volume (fix).** `exif_gbx` gives their paths as `dbfs:/Volumes/...`, which the feature step could not open. Every image was skipped, and the run ended with no orthomosaic and no error.
+  - `sparse_orthomosaic` and `dense_undistort` take a Volume `image_dir` too.
+- **`run_sfm` raises when no image gives features (behavior change).** The `RuntimeError` names the first skipped image and the reason. When only some images are skipped, it prints a warning and goes on.
+  - `sparse_orthomosaic` refuses to write an empty mosaic.
+- **GPS pose priors carry their accuracy (fix).** pycolmap 4.2.1 wrote them with none, so COLMAP weighted GPS as a 1 m constraint. Some bundle adjustments then dropped the priors.
+  - Each prior takes its accuracy from EXIF `GPSHPositioningError`, else `GPSDOP` × 3 m.
+  - Else it takes `prior_sigma_m`, a new `run_sfm` argument: horizontal and vertical metres, default `(5.0, 10.0)`.
+- **The registered-image count includes the initial pair (fix).** Every model reported two fewer images than it holds.
+- **`run_sfm` no longer sets a Spark property (fix).** Each Serverless run printed a misleading `could not set` line. The feature step now spreads the images over partitions by `source`.
+- See [Orthomosaic](./notebooks/orthomosaic).
+
+### `vizx` tile plots take virtual tiles (fix) {#vizx-virtual-tiles}
+
+- **`plot_tile` and the raster layer of the interactive map take virtual tiles.** `raster_gbx` and `gtiff_gbx` return them by default. `plot_tile` failed with `cannot convert NoneType to bytes`, and the interactive layer refused any tile.
+- **`plot_static` draws a virtual tile as a raster,** with its window and pending edits applied. It used to pass the tile to `plot_cog` as a path.
+
 ### `vizx` legends with many categories (fix) {#vizx-legends}
 
 - **`plot_static` moves a categorical legend of more than 12 entries outside the map.** It adds columns until the legend is no taller than the map. A figure that `plot_static` made widens to fit, so nothing covers the map.
@@ -1297,4 +1337,19 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
     - Tiles deleted from the Volume keep their points until such a reset.
 
   See [Wireless Coverage](./notebooks/wireless-coverage).
+- **Genie Map: the AI Assistant calls a Unity Catalog model service (fix).** The serving endpoint `databricks-gpt-5-2` is refused with `PERMISSION_DENIED`. The model is now `system.ai.gpt-5-2`.
+  - `DATABRICKS_LLM_MODEL` in `app.yaml` and the bundle variable `llm_model` replace `DATABRICKS_SERVING_ENDPOINT_NAME` and `serving_endpoint_name`. Keep the two equal.
+  - The app's resource grants `EXECUTE` on the model service. It replaces `CAN_QUERY` on a serving endpoint.
+  - The committed defaults name the `geospatial_catalog` catalog: `VITE_GOLD_CATALOG`, the Genie space tables and the example SQL. Set your own before you deploy.
+  - The point layers show every point in view. They fetch Arrow. A JSON result over 1 MiB failed with `Event exceeds max size`.
+
+  See [Genie Map](./examples/genie-map).
+- **Vapor Eyes Lakeflow (fix).** The land task installs `earthaccess`, which no env wheel extra carries.
+  - `pmtiles_shards` and `overview_manifest` register GeoBrix, as every other dataset body does. They failed with `UNRESOLVED_ROUTINE`.
+  - `cm_detections` keeps one row per `plume_id`. Overlapping windows no longer count a plume twice.
+- **Wireless Coverage Lakeflow (fix).** The pipeline environment no longer installs the Overture CLI. It needs `click` 8.3 or later, and Lakeflow holds the runtime's 8.2.1. The pipeline reads only the water mask that the land task staged.
+  - The validate task gets the bundle's catalog and schema.
+- **The sample downloaders return every row (fix).** A download that stopped short now raises or completes.
+  - The NYC Neighborhoods download stopped at 250 of 262 areas. Download a staged `nyc_nta.geojson` again.
+  - The wells downloader stopped at 1,000 wells per query. It now pages to the end, and raises when its total differs from the server's count.
 - **The advanced library-integration page no longer shows a PDAL example.** The rasterio and xarray sections are unchanged. GeoBrix reads point clouds itself with the `lidar_gbx` reader. See [Third-party library integration](./advanced/library-integration).

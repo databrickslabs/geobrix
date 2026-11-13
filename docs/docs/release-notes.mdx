@@ -26,6 +26,8 @@ v0.6.0 is under development and not yet released.
 - **Breaking:** [`rst_color_relief` takes the color table as text](./release-notes-0-6#signature-changes) (`color_table`), not a file path.
 - **Breaking:** [`rst_summary` returns GDAL's own JSON](./release-notes-0-6#shape-changes): `bands[].min` and `max` are now `minimum` and `maximum`, and the CRS is `coordinateSystem.wkt`.
 - **Breaking:** [`rst_mapalgebra` reads GDAL's `muparser` grammar](./release-notes-0-6#signature-changes), not NumExpr. [`rst_contour` runs GDAL's `raster contour`](./release-notes-0-6#scala-registration), so its lines reach the tile's edge.
+- **Breaking:** in Python, [generators are DataFrame calls and aggregates return `BINARY`](./release-notes-0-6#shape-changes). In SQL, call a generator with `LATERAL`.
+- **Breaking:** [TIN `snap_tolerance` and `merge_tolerance` can change the triangles](./release-notes-0-6#tin), and the `conforming` mode runs on every level.
 - **Breaking:** [`rst_clip` leaves NoData](./release-notes-0-6#nodata-alpha-mask), not valid zeros, outside the cutline.
 - **Breaking:** the [Scala readers and writers are retired](./release-notes-0-6#readers-retired). The `*_gbx` readers replace them. [`gbx_file_write` defaults to `file_mode="fuse"`](./release-notes-0-6#file-write).
 - **New:** [Unity Catalog functions](./release-notes-0-6#unity-catalog-functions) for SQL warehouses, installed with `gbx.uc.install`, and [`gbx.stage_jar`](./release-notes-0-6#stage-jar) to stage the JAR the env wheel carries.

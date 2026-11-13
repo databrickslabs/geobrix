@@ -33,9 +33,16 @@ Only items under `/Users/<you>/jobs/geobrix/`, and only these:
 - Launchers used to put their notebooks under `/Users/<you>/GeoBrix/`. That folder also holds your own notebooks.
 - The sweep applies the same prefixes and windows there, so old runs still go.
 - It never removes any other item there.
-- It then removes the empty runner folders (`bench`, `runners`, `serverless-run`, `python-task`) and the folders it emptied.
-- It removes `/Users/<you>/GeoBrix/` itself only when it is empty.
-- An empty folder of your own keeps the root.
+
+## Empty folders
+
+- After a sweep with no error, it removes every empty folder under `/Users/<you>/jobs/geobrix/` and `/Users/<you>/GeoBrix/`.
+- It goes bottom-up, whatever the folder is named.
+- It keeps `/Users/<you>/jobs/geobrix/` itself.
+- It removes `/Users/<you>/GeoBrix/` once it is empty.
+- A folder that holds any item stays, and so does a folder an active run uses.
+- `--dry-run` prints `WOULD DELETE <folder> (empty folder)`.
+- The launch-time sweep removes no folder.
 
 ## Rules
 

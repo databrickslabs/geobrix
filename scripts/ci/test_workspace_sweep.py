@@ -34,6 +34,7 @@ class FakeW:
         self.volume = set()  # Volume file paths
         self.active = []  # notebook paths of active runs
         self.deleted = []
+        self.folders_deleted = []  # empty folders pruned
         self.list_runs_error = None
         self.config = SimpleNamespace(host=HOST)
         w = self
@@ -54,7 +55,8 @@ class FakeW:
                 kids = [p for p in w.objects if p.startswith(path + "/")]
                 if kids and not recursive:
                     raise RuntimeError(f"{path} is not empty")
-                w.deleted.append(path)
+                # an empty folder removed by the sweep's folder pruning (not recursive) is not an item delete
+                (w.folders_deleted if not recursive and w.objects.get(path, ("",))[0] == "DIRECTORY" else w.deleted).append(path)
                 for p in kids + [path]:
                     w.objects.pop(p, None)
 
@@ -92,6 +94,10 @@ class FakeW:
     def _info(self, path):
         kind, mtime = self.objects[path]
         return SimpleNamespace(path=path, object_type=SimpleNamespace(value=kind), modified_at=mtime)
+
+    def mkdir(self, path):
+        """An empty folder and the folders above it."""
+        return self.add(path, kind="DIRECTORY")
 
     def add(self, path, age_min=None, kind="NOTEBOOK"):
         """An object and the folders above it; ``age_min`` is how long ago it was modified."""
@@ -403,6 +409,7 @@ def test_the_legacy_root_never_loses_a_non_runner_item(sw):
     report, out = _sweep(sw, w)
     assert report.deleted == [old]
     assert all(p in w.objects for p in keep) and LEGACY in w.objects and report.pruned == [f"{LEGACY}/runners"]
+    assert f"{LEGACY}/bench" in w.objects and f"{LEGACY}/eo-series" in w.objects  # they still hold an item of yours
 
 
 def test_a_recorded_legacy_import_is_swept_but_its_neighbours_are_not(sw):
@@ -438,7 +445,7 @@ def test_the_legacy_root_is_removed_when_the_sweep_empties_it(sw):
     w.add(f"{uc}/uc_it_install", age_min=120)
     report, out = _sweep(sw, w)
     assert LEGACY not in w.objects and not [p for p in w.objects if p.startswith(LEGACY)]
-    assert w.deleted[-1] == LEGACY
+    assert w.folders_deleted[-1] == LEGACY
     assert sorted(report.pruned) == sorted([f"{LEGACY}/bench", f"{LEGACY}/runners", LEGACY])
     assert sorted(report.deleted) == sorted([nb, tst, uc])  # the folders are not counted as deletes
     assert f"DELETED {LEGACY} (empty folder)" in out
@@ -453,12 +460,72 @@ def test_the_legacy_root_stays_while_a_runner_item_is_still_held(sw):
     assert f"{LEGACY}/bench" not in w.objects  # its empty runner folder goes; the root and the other folder stay
 
 
-def test_the_legacy_root_stays_for_an_empty_folder_of_your_own(sw):
+def test_an_empty_folder_of_any_name_is_pruned_and_a_folder_with_an_item_is_kept(sw):
     w = FakeW()
-    w.add(f"{LEGACY}/runners/tests_r1_serverless.ipynb", age_min=120)
-    w.objects[f"{LEGACY}/my-empty-folder"] = ("DIRECTORY", None)
+    w.mkdir(f"{LEGACY}/hub-run-helios")  # an old --ws-dir folder, already empty
+    w.mkdir(f"{ROOT}/my-empty-folder")
+    mine = w.add(f"{LEGACY}/hub-run-eo-series/01_ingest", age_min=999)  # holds a notebook of yours
+    report, out = _sweep(sw, w)
+    assert f"{LEGACY}/hub-run-helios" not in w.objects and f"{ROOT}/my-empty-folder" not in w.objects
+    assert mine in w.objects and f"{LEGACY}/hub-run-eo-series" in w.objects and LEGACY in w.objects
+    assert sorted(report.pruned) == sorted([f"{LEGACY}/hub-run-helios", f"{ROOT}/my-empty-folder"])
+    assert report.deleted == []
+
+
+def test_nested_empty_folders_are_pruned_bottom_up(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/a/b/c")
+    w.mkdir(f"{LEGACY}/a/b")
+    w.mkdir(f"{LEGACY}/a")
+    w.mkdir(f"{ROOT}/x/y")
+    w.mkdir(f"{ROOT}/x")
+    keep = w.add(f"{ROOT}/z/deep/01_main", age_min=999)
+    report, out = _sweep(sw, w)
+    assert w.deleted == []
+    assert w.folders_deleted == [f"{ROOT}/x/y", f"{ROOT}/x", f"{LEGACY}/a/b/c", f"{LEGACY}/a/b", f"{LEGACY}/a", LEGACY]
+    assert keep in w.objects and ROOT in w.objects and f"{ROOT}/z/deep" in w.objects
+    assert LEGACY not in w.objects
+
+
+def test_a_folder_that_holds_a_deeper_item_keeps_every_folder_above_it(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/a/empty")
+    w.mkdir(f"{LEGACY}/a")
+    w.add(f"{LEGACY}/a/b/c/notebook", age_min=999)
     _sweep(sw, w)
-    assert f"{LEGACY}/my-empty-folder" in w.objects and LEGACY in w.objects
+    assert f"{LEGACY}/a/empty" not in w.objects
+    assert all(p in w.objects for p in (LEGACY, f"{LEGACY}/a", f"{LEGACY}/a/b", f"{LEGACY}/a/b/c"))
+
+
+def test_an_empty_folder_an_active_run_uses_is_kept(sw):
+    w = FakeW()
+    folder = f"{LEGACY}/hub-run-x"
+    w.mkdir(folder)
+    w.active = [f"{folder}/01_main"]  # the run's notebook is not listed (not imported yet / a copy)
+    _sweep(sw, w)
+    assert folder in w.objects and LEGACY in w.objects
+
+
+def test_no_folder_is_pruned_after_an_error(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/hub-run-helios")
+    nb = w.add(f"{LEGACY}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    real = w.workspace.delete
+
+    def boom(path, recursive=False):
+        raise RuntimeError("403")
+
+    w.workspace.delete = boom
+    report, out = _sweep(sw, w)
+    assert report.errors == [nb] and report.pruned == [] and f"{LEGACY}/hub-run-helios" in w.objects
+    w.workspace.delete = real
+
+
+def test_the_launch_time_sweep_prunes_no_folder(sw):
+    w = FakeW()
+    w.mkdir(f"{ROOT}/serverless-run")  # another launch made it and has not uploaded yet
+    sw.sweep_at_launch(w, ("bench",), now=NOW)
+    assert f"{ROOT}/serverless-run" in w.objects
 
 
 def test_an_active_run_under_the_legacy_root_keeps_it(sw):
@@ -477,18 +544,20 @@ def test_a_dry_run_names_the_empty_folders_but_removes_nothing(sw):
     assert f"WOULD DELETE {nb}" in out and f"WOULD DELETE {LEGACY} (empty folder)" in out
 
 
-def test_no_legacy_root_means_nothing_to_prune(sw):
+def test_no_legacy_root_means_the_job_roots_emptied_folder_alone_is_pruned(sw):
     w = FakeW()
     w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
     report, out = _sweep(sw, w)
-    assert report.pruned == [] and "empty folder" not in out and ROOT in w.objects
+    assert report.pruned == [f"{ROOT}/bench"] and ROOT in w.objects and w.folders_deleted == [f"{ROOT}/bench"]
+    assert f"{LEGACY}" not in out
 
 
-def test_the_job_root_and_its_folders_are_never_pruned(sw):
+def test_the_job_root_itself_is_never_pruned(sw):
     w = FakeW()
     w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
-    _sweep(sw, w)
-    assert f"{ROOT}/bench" in w.objects and ROOT in w.objects
+    report, out = _sweep(sw, w)
+    assert ROOT in w.objects and f"{ROOT}/bench" not in w.objects  # its emptied folder goes, the root stays
+    assert report.pruned == [f"{ROOT}/bench"] and f"DELETED {ROOT} " not in out
 
 
 # ---- the launchers no longer delete at run end ---------------------------------------------------------------------

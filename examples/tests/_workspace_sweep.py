@@ -21,9 +21,12 @@ later.
     ``--ws-dir`` folders also hold notebooks of your own, so nothing there is removed by name).
 
 * **The legacy root.** Earlier launchers used ``/Users/<you>/GeoBrix/``, which also holds your own notebooks.
-  The sweep applies the same prefixes there during the move, so old runs still go. It never removes
-  anything else in it. Empty folders under it are then removed bottom-up, and the legacy root itself only
-  when it is empty.
+  The sweep applies the same prefixes there during the move, so old runs still go. It never removes an
+  item there that is not a runner item.
+
+* **Empty folders.** After a sweep with no error (not the launch-time sweep), every empty folder under the job
+  root and under the legacy root is removed, bottom-up, whatever its name. The job root itself stays; the
+  legacy root goes once it is empty. A folder that holds anything, or that an active run uses, stays.
 
 * **Active runs.** The active runs' notebook (and Python file) paths are read first. An item an active run
   uses is kept, a folder that holds one is kept, and a recorded import beside one is kept (a ``%run``
@@ -279,28 +282,26 @@ def active_paths(w) -> set:
     return out
 
 
-# The folders the launchers made under the legacy root; an empty one of these may go with it.
-LEGACY_TOPIC_FOLDERS = ("bench", "runners", "serverless-run", "python-task")
-
-
-def _prune_empty(w, folder: str, allowed: set, gone: set, rep: Report, dry_run: bool, out: Callable[[str], None]) -> bool:
+def _prune_empty(w, folder: str, keep: set, protected: set, gone: set, rep: Report, dry_run: bool,
+                 out: Callable[[str], None]) -> bool:
     """Remove ``folder`` when nothing is left in it, children first; True when it is (or would be) gone.
 
     ``gone`` holds the paths this sweep deleted (a dry run did not remove them, but they count as gone).
-    Only a folder in ``allowed`` is removed; any other object, or a folder not allowed (your own, even
-    empty), keeps its parents."""
+    A folder in ``keep`` is never removed (the job root) and neither is one in ``protected`` (an active
+    run uses it). Any other object, or a folder that cannot go, keeps its parents; every child is still
+    judged, so one item does not stop the empty folders beside it going."""
     try:
         kids = list(w.workspace.list(folder))
     except Exception as exc:  # noqa: BLE001
         return _missing(exc)  # already gone counts as empty; anything else keeps the folder
     left = False
-    for k in kids:  # every child is judged: an item of yours must not stop the empty folders beside it going
+    for k in kids:
         p = ws_path(k.path)
         if p in gone:
             continue
-        if _otype(k) != "DIRECTORY" or not _prune_empty(w, p, allowed, gone, rep, dry_run, out):
+        if _otype(k) != "DIRECTORY" or not _prune_empty(w, p, keep, protected, gone, rep, dry_run, out):
             left = True
-    if left or folder not in allowed:
+    if left or folder in keep or folder in protected:
         return False
     if dry_run:
         rep.pruned.append(folder)
@@ -309,9 +310,7 @@ def _prune_empty(w, folder: str, allowed: set, gone: set, rep: Report, dry_run: 
     try:
         w.workspace.delete(folder, recursive=False)
     except Exception as exc:  # noqa: BLE001 - not empty after all (a run raced us), or no right: keep it
-        if _missing(exc):
-            return True
-        return False
+        return _missing(exc)
     rep.pruned.append(folder)
     out(f"DELETED {folder} (empty folder)")
     return True
@@ -328,7 +327,7 @@ def _rm_volume(w, path: str) -> None:
 
 def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] = SCOPES, runner_dir: Optional[str] = None,
           dry_run: bool = False, max_deletes: Optional[int] = None, now: Optional[float] = None,
-          out: Callable[[str], None] = print, verbose: bool = True) -> Report:
+          out: Callable[[str], None] = print, verbose: bool = True, prune_empty: bool = True) -> Report:
     """Remove the GeoBrix-runner items of ``scopes`` that are older than ``older_than_s`` and past their hold.
 
     Prints one line per item it judged (``verbose``; else only the deletions): ``DELETED`` (``WOULD DELETE``
@@ -460,16 +459,18 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
         done = set(rep.deleted) | gone
         done |= {p for p in ledger if any(_under(p, d) for d in removed)}
         _forget(host, done)
-    # The legacy root: once no runner item is left there, drop its empty folders and then the root itself, only
-    # when nothing else is in it (your own notebooks keep it). Not after an error or when an active run is there.
-    if not rep.errors and not any(_under(a, legacy) for a in active):
+    # Empty folders: after a sweep with no error, every empty folder under the job root (not the root itself) and
+    # under the legacy root (the root too, once it is empty), bottom-up. A folder an active run uses stays.
+    if prune_empty and not rep.errors:
         gone_now = set(rep.deleted) | gone
-        allowed = {legacy} | {f"{legacy}/{t}" for t in LEGACY_TOPIC_FOLDERS}
-        for p in gone_now:  # the folders above an item this sweep removed
-            while _under(p, legacy):
-                p = p.rsplit("/", 1)[0]
-                allowed.add(p)
-        _prune_empty(w, legacy, allowed, gone_now, rep, dry_run, out)
+        protected = set()
+        for a_path in active:  # the folder of an active run's notebook and every folder above it
+            d = a_path
+            while "/" in d.strip("/"):
+                d = d.rsplit("/", 1)[0]
+                protected.add(d)
+        _prune_empty(w, root, {root}, protected, gone_now, rep, dry_run, out)
+        _prune_empty(w, legacy, set(), protected, gone_now, rep, dry_run, out)
     return rep
 
 
@@ -480,7 +481,9 @@ def sweep_at_launch(w, scopes: Sequence[str], *, me: Optional[str] = None, runne
         return None
     try:
         me = me or w.current_user.me().user_name
-        rep = sweep(w, me=me, scopes=scopes, runner_dir=runner_dir, max_deletes=LAUNCH_MAX_DELETES, now=now, verbose=False)
+        # no folder pruning at launch: another launch may have made its folder and not uploaded into it yet
+        rep = sweep(w, me=me, scopes=scopes, runner_dir=runner_dir, max_deletes=LAUNCH_MAX_DELETES, now=now, verbose=False,
+                    prune_empty=False)
         if rep.deleted:
             print(f"Swept {len(rep.deleted)} old run item(s) ({', '.join(scopes)}; older than {_span(WINDOW_S)} and past their hold).")
         return rep

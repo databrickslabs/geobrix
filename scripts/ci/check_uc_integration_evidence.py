@@ -105,7 +105,9 @@ def summary_line(ev: dict) -> str:
     sl, ex = ev.get("slice") or {}, ev.get("examples") or {}
     return (
         f"gbx:uc:tests {ev.get('result', '?').upper()} at {str(ev.get('head_sha', '?'))[:12]}: "
-        f"scope {evidence_scope(ev)}, slice {sl.get('passed', '?')} passed / {sl.get('failed', '?')} failed, "
+        f"scope {evidence_scope(ev)}, slice {sl.get('passed', '?')} passed / {sl.get('failed', '?')} failed"
+        + (f" / {sl['harness_errors']} harness error(s) (transient API)" if sl.get("harness_errors") else "")
+        + ", "
         f"examples {ex.get('statements_ok', '?')}/{ex.get('total', '?')}, schema {ev.get('schema', '?')}, "
         f"finished {ev.get('finished', '?')}"
     )

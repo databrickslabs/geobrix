@@ -70,6 +70,20 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - It writes `evidence.json` with `parts` and `part_runs`, then drops the schema and the folders, unless `--keep`.
 - To abandon an unfinished parted run, run `--drop-parts <sha12>`. It drops only `geobrix_uc_it_<sha12>`.
 
+## Transient API errors
+
+- The runner retries one HTTP call to the Statement API when it fails in transit. It never retries a statement.
+- Transient means an SDK `DeadlineExceeded`, a reset or timed-out connection, or HTTP 429, 502, 503 or 504.
+- A failed status fetch asks again about the same statement id. A statement is never submitted twice.
+- A submit that returned no id is submitted again. Nothing ran, or no id came back.
+- Each call gets 2 more tries, after waits of 1 s and 3 s. Each retry logs one line: statement id, error class, attempt n.
+- A statement that ran and returned a SQL error or a wrong value is never retried. It stays a case failure.
+- When the retries run out, the statement is a harness error. The session goes on with the next statements.
+- A batch lost this way runs its cases one by one, as a batch that fails does.
+- The part counts harness errors apart from case failures. Its log shows `slice harness error (transient API)`, and `evidence.json` has `harness_errors`.
+- A harness error never passes: the part and the run fail. Run the part again; its new result replaces the old one.
+- This is not a job retry. It covers one HTTP call, not a job run.
+
 ## Evidence
 
 - File: `test-logs/uc-integration/evidence.json` (the logs of the run are in `test-logs/uc-integration/<sha12>/`).

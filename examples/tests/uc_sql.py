@@ -55,20 +55,91 @@ class StatementTimeout(Exception):
     """A statement was still pending or running when its deadline passed (it has been cancelled)."""
 
 
+class TransientApiError(Exception):
+    """One Statement API call kept failing in transit (a transport error, not a SQL result) after its retries.
+
+    The statement itself is not judged: it is a harness error, recorded as `{"harness_error": message}`.
+    """
+
+
+# One API call (a submit, or a status fetch of a statement that has an id) is tried again this many times after a
+# transient failure, waiting BACKOFF_S[i] seconds before try i + 2. A statement that RAN is never run again.
+API_RETRIES = 2
+BACKOFF_S = (1.0, 3.0)
+_TRANSIENT_NAMES = frozenset(
+    {"DeadlineExceeded", "TemporarilyUnavailable", "TooManyRequests", "RequestLimitExceeded", "BadGateway", "GatewayTimeout"}
+)
+_TRANSIENT_CODES = frozenset({"BAD_GATEWAY", "GATEWAY_TIMEOUT", "TEMPORARILY_UNAVAILABLE", "DEADLINE_EXCEEDED"})
+_TRANSIENT_STATUS = frozenset({429, 502, 503, 504})
+_LOCAL_FILE_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError, FileExistsError)
+
+
+def is_transient_api_error(exc: BaseException) -> bool:
+    """True for a failure of the HTTP call itself: the SDK's DeadlineExceeded, a reset or timed-out connection, or a
+    429/502/503/504. A SQL error never raises (it comes back as a FAILED statement), and an API error that would fail
+    the same way again (bad request, permission, not found) is not transient. Matched by class name: no SDK import.
+    """
+    names = {c.__name__ for c in type(exc).__mro__}
+    if "DatabricksError" in names:
+        status = getattr(exc, "status_code", None)
+        return bool(
+            names & _TRANSIENT_NAMES
+            or str(getattr(exc, "error_code", "") or "").upper() in _TRANSIENT_CODES
+            or status in _TRANSIENT_STATUS
+        )
+    if "HTTPError" in names:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is None:
+            status = getattr(exc, "code", None)
+        return status in _TRANSIENT_STATUS
+    # builtin ConnectionError/TimeoutError and requests' ConnectionError/Timeout are all OSErrors
+    return isinstance(exc, (TimeoutError, OSError)) and not isinstance(exc, _LOCAL_FILE_ERRORS)
+
+
+def _api_call(call, statement_id=None):
+    """`call()`, tried again up to API_RETRIES times after a transient failure; one log line per retry.
+
+    `statement_id` is the id of the statement a status fetch asks about (None for a submit, which has none yet).
+    Raises TransientApiError when the retries are used up; any other exception passes through untouched.
+    """
+    for attempt in range(API_RETRIES + 1):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 - classified below; a non-transient one is re-raised as is
+            if not is_transient_api_error(exc):
+                raise
+            if attempt == API_RETRIES:
+                raise TransientApiError(
+                    f"{type(exc).__name__}: {scrub(str(exc))} (statement {statement_id or 'not submitted'}, "
+                    f"{API_RETRIES + 1} tries)"
+                ) from exc
+            print(
+                f"retry: statement {statement_id or 'not submitted'} {type(exc).__name__} "
+                f"attempt {attempt + 1}/{API_RETRIES}",
+                flush=True,
+            )
+            time.sleep(BACKOFF_S[min(attempt, len(BACKOFF_S) - 1)])
+
+
 def _execute(w, statement, warehouse_id, catalog, schema, timeout_s):
     """Submit a statement and wait for a terminal state; return the response.
 
-    Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted.
+    A submit that fails in transit is tried again (nothing ran, or no id came back); once the statement has an id, a
+    failed status fetch asks about that same id again and never submits it twice.
+    Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted,
+    and TransientApiError when a call keeps failing in transit.
     """
     from databricks.sdk.service.sql import StatementState
 
     api = w.statement_execution
-    resp = api.execute_statement(
-        statement=statement,
-        warehouse_id=warehouse_id,
-        catalog=catalog,
-        schema=schema,
-        wait_timeout="50s",
+    resp = _api_call(
+        lambda: api.execute_statement(
+            statement=statement,
+            warehouse_id=warehouse_id,
+            catalog=catalog,
+            schema=schema,
+            wait_timeout="50s",
+        )
     )
     deadline = time.monotonic() + timeout_s
     while resp.status.state in (StatementState.PENDING, StatementState.RUNNING):
@@ -82,7 +153,8 @@ def _execute(w, statement, warehouse_id, catalog, schema, timeout_s):
                 f"(raise --timeout-s if the warehouse is cold or the statement is slow)"
             )
         time.sleep(POLL_SECS)
-        resp = api.get_statement(resp.statement_id)
+        sid = resp.statement_id
+        resp = _api_call(lambda: api.get_statement(sid), sid)
     return resp
 
 
@@ -205,6 +277,8 @@ def run_single(w, cid: str, statement: str, args) -> dict:
             )
         except StatementTimeout as exc:
             state, error, cell, type_name = None, str(exc), None, None
+        except TransientApiError as exc:  # not a result of the case: a harness error, and the next statements go on
+            return {"harness_error": scrub(str(exc))}
         walls.append(round(time.perf_counter() - t0, 4))
         if error is not None:
             entry = {"error": scrub(error)}
@@ -232,6 +306,9 @@ def run_unit(w, unit: Unit, args) -> dict:
         )
     except StatementTimeout as exc:
         error, cells = str(exc), []
+    except TransientApiError as exc:
+        print(f"batch of {len(unit.members)} ({unit.members[0][0]} ...) lost to the API: {scrub(str(exc))[:160]}; running its cases one by one", flush=True)
+        return {cid: run_single(w, cid, stmt, args) for cid, stmt in unit.members}
     if error is None:
         return batch_entries(unit, cells, round(time.perf_counter() - t0, 4), args.decode_binary)
     print(f"batch of {len(unit.members)} ({unit.members[0][0]} ...) failed: {' '.join(scrub(error).split())[:160]}; running its cases one by one", flush=True)
@@ -269,7 +346,14 @@ def run_statements(w, pairs, args) -> dict:
     return {cid: results[cid] for cid, _ in pairs if cid in results}
 
 
+def harness_errors(results: dict) -> dict:
+    """{cid: message} of the entries that are harness errors (a transient API failure), not results of their case."""
+    return {cid: e["harness_error"] for cid, e in results.items() if "harness_error" in e}
+
+
 def summary_line(cid: str, entry: dict) -> str:
+    if "harness_error" in entry:
+        return f"{cid:28s} HARNESS ERROR (transient API)  {' '.join(entry['harness_error'].split())[:160]}"
     if "error" in entry:
         return f"{cid:28s} ERROR  {' '.join(entry['error'].split())[:160]}"
     value = entry["value"]
@@ -357,6 +441,14 @@ def main(argv=None) -> int:
         return 1
     if args.out:
         print(f"wrote {args.out}")
+    harness = harness_errors(results)
+    if harness:  # no verdict can come from these statements: the run fails, apart from the case failures
+        print(
+            f"harness error (transient API): {len(harness)} of {len(results)} statement(s) got no answer: "
+            f"{', '.join(list(harness)[:10])}{' ...' if len(harness) > 10 else ''}",
+            file=sys.stderr,
+        )
+        return 1
     return 0  # a statement's error is a result (a refusal is an expected one): the oracle judges the file
 
 

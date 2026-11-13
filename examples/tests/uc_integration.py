@@ -152,13 +152,19 @@ def merge_parts(records: Dict[str, dict], expected: Sequence[str], parts: int) -
         failed.update(rec["slice"]["failed_ids"])
         tolerated.update(rec["slice"]["tolerated_ids"])
     failed.update(c for c in expected if c not in ran)
+    harness = set()
+    for rec in records.values():
+        harness.update(rec["slice"].get("harness_error_ids") or [])
+    harness -= failed  # a case that no part ran is a failure, whatever else was recorded
     total = len(set(expected) | ran)
     sl = {
         "total": total,
-        "passed": total - len(failed) - len(tolerated - failed),
+        "passed": total - len(failed) - len(tolerated - failed) - len(harness),
         "failed": len(failed),
         "failed_ids": sorted(failed),
         "tolerated_ids": sorted(tolerated - failed),
+        "harness_errors": len(harness),
+        "harness_error_ids": sorted(harness),
     }
     return sl, records[str(parts)]["examples"]
 
@@ -168,22 +174,42 @@ def failed_id(message: str) -> str:
     return message.split(":", 1)[0].strip()
 
 
-def judge_slice(failures: Sequence[str], total: int, known: Dict[str, str]) -> dict:
-    """{passed, failed, failed_ids, tolerated_ids}: `failed` counts the failures not on the known list."""
+def split_harness_errors(results: dict) -> Tuple[dict, Dict[str, str]]:
+    """(results without the harness errors, {cid: message}): a statement the API never answered has no verdict."""
+    harness = {cid: r["harness_error"] for cid, r in results.items() if "harness_error" in r}
+    return {cid: r for cid, r in results.items() if cid not in harness}, harness
+
+
+def judge_slice(failures: Sequence[str], total: int, known: Dict[str, str], harness: Sequence[str] = ()) -> dict:
+    """{passed, failed, failed_ids, tolerated_ids, harness_errors, harness_error_ids}.
+
+    `failed` counts the failures not on the known list. `harness` names the cases whose statement the API never
+    answered (a transient API failure after its retries): counted apart from the failures, never as a pass.
+    """
     ids = sorted({failed_id(m) for m in failures})
     tolerated = [i for i in ids if i in known]
     unexpected = [i for i in ids if i not in known]
+    hids = sorted(set(harness) - set(ids))
     return {
         "total": total,
-        "passed": total - len(ids),
+        "passed": total - len(ids) - len(hids),
         "failed": len(unexpected),
         "failed_ids": unexpected,
         "tolerated_ids": tolerated,
+        "harness_errors": len(hids),
+        "harness_error_ids": hids,
     }
 
 
 def decide(slice_: dict, examples: dict) -> str:
-    return "pass" if slice_["failed"] == 0 and examples["statements_ok"] == examples["total"] and examples["total"] > 0 else "fail"
+    return (
+        "pass"
+        if slice_["failed"] == 0
+        and slice_.get("harness_errors", 0) == 0
+        and examples["statements_ok"] == examples["total"]
+        and examples["total"] > 0
+        else "fail"
+    )
 
 
 def wheel_info(wheel: Path) -> dict:
@@ -667,15 +693,18 @@ class Gate:
         for name, _, out, _, _ in jobs:
             if name != "examples" and out.is_file():
                 merged.update(oracles_load(out))
+        merged, harness = split_harness_errors(merged)
         ran = {cid for cid, _ in pairs}
         cases = [c for c in all_cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run or a part judges only what it ran
         self.part_cids = sorted(c.cid for c in cases if "uc" in c.surfaces)
-        failures = judge_uc(cases, merged, self.a.scope)
+        failures = [m for m in judge_uc(cases, merged, self.a.scope) if failed_id(m) not in harness]  # a harness error is no "no result"
         (self.run_dir / ("slice_failures.txt" if n_parts == 1 else f"slice_failures_p{i_part}.txt")).write_text("\n".join(failures))
         total = len([1 for c in cases if "uc" in c.surfaces])
-        sl = judge_slice(failures, total, known)
+        sl = judge_slice(failures, total, known, list(harness))
         for line in failures[:30]:
             say("slice failure: " + " ".join(line.split())[:240])
+        for cid, msg in list(harness.items())[:30]:
+            say(f"slice harness error (transient API): {cid}: " + " ".join(msg.split())[:240])
         ex = self.judge_examples(ex_pairs, ex_dir) if run_examples else None
         return sl, ex
 
@@ -697,7 +726,8 @@ class Gate:
             problems += [f"{f.name}: {b}" for b in bad]
         for line in problems[:30]:
             say("example failure: " + " ".join(line.split())[:240])
-        return {"statements_ok": ok, "total": total, "failures": problems}
+        harness = sum("HARNESS ERROR (transient API)" in p for p in problems)
+        return {"statements_ok": ok, "total": total, "failures": problems, "harness_errors": harness}
 
     def cleanup(self) -> str:
         if self.a.keep:
@@ -710,7 +740,7 @@ class Gate:
                 out = self.run_dir / "cleanup.json"
                 rc, text = run_cmd(self.uc_sql_argv(sql, out), self.run_dir / "cleanup.log", "drop schema", echo=False)
                 res = json.loads(out.read_text()) if out.is_file() else {}
-                if rc != 0 or "error" in res.get("drop_schema", {}):
+                if rc != 0 or "error" in res.get("drop_schema", {}) or "harness_error" in res.get("drop_schema", {}):
                     notes.append(f"schema drop failed: {str(res.get('drop_schema', text))[:200]}")
             w = self.client()
             if self.created["folder"]:
@@ -756,7 +786,7 @@ def _save_json(path: Path, data: dict) -> None:
 
 def part_ok(rec: dict) -> bool:
     ex = rec.get("examples")
-    return "error" not in rec and rec["slice"]["failed"] == 0 and (ex is None or (ex["total"] > 0 and ex["statements_ok"] == ex["total"]))
+    return "error" not in rec and rec["slice"]["failed"] == 0 and rec["slice"].get("harness_errors", 0) == 0 and (ex is None or (ex["total"] > 0 and ex["statements_ok"] == ex["total"]))
 
 
 def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
@@ -821,6 +851,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
     if "error" not in rec:
         ex = rec["examples"]
         say(f"part {part}/{n}: slice {rec['slice']['passed']}/{rec['slice']['total']} passed, {rec['slice']['failed']} failed"
+            + (f", {rec['slice']['harness_errors']} harness error(s) (transient API)" if rec["slice"].get("harness_errors") else "")
             + (f"; examples {ex['statements_ok']}/{ex['total']}" if ex else ""))
     todo = [i for i in range(1, n + 1) if str(i) not in state["done"] or "error" in state["done"][str(i)]]
     if todo:
@@ -836,7 +867,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
         "part_runs": {i: {k: done[i].get(k) for k in ("started", "finished", "warehouse_id", "head_sha")} for i in sorted(done, key=int)},
         "wheel": state["install"]["wheel"], "job_run_ids": list(state["install"]["job_run_ids"]),
         "slice": {**sl, "scope": a.scope, "tables": list(tables)},
-        "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40]},
+        "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40], "harness_errors": ex.get("harness_errors", 0)},
         "result": decide(sl, ex), "finished": now(),
     }
     g.write_evidence()
@@ -853,6 +884,8 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
         _save_json(path, state)
     for line in sl["failed_ids"][:30]:
         say(f"slice failure: {line}")
+    for line in sl.get("harness_error_ids", [])[:30]:
+        say(f"slice harness error (transient API): {line}")
     say(gate.summary_line(g.ev) + f"; {n} parts; cleanup {g.ev['cleanup']}")
     say(f"evidence: {EVIDENCE}")
     return 0 if g.ev["result"] == "pass" else 1
@@ -1038,9 +1071,9 @@ def main(argv=None) -> int:
             g.ev["part"] = "%d/%d" % a.run_part
         if ex is None:  # a part with no example files
             g.ev["examples"] = None
-            g.ev["result"] = "pass" if sl["failed"] == 0 else "fail"
+            g.ev["result"] = "pass" if sl["failed"] == 0 and sl.get("harness_errors", 0) == 0 else "fail"
         else:
-            g.ev["examples"] = {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40]}
+            g.ev["examples"] = {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40], "harness_errors": ex.get("harness_errors", 0)}
             g.ev["result"] = decide(sl, ex)
     except StepFailed as exc:
         g.ev["error"] = str(exc)

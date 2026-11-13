@@ -398,12 +398,60 @@ def test_known_failures_need_a_reason_and_skip_comments(driver):
 def test_judge_slice_counts_unexpected_failures_only(driver):
     msgs = ["a: boom", "b: got 1, want 2", "a: second line of a"]
     r = driver.judge_slice(msgs, 10, {"b": "known cause"})
-    assert r == {"total": 10, "passed": 8, "failed": 1, "failed_ids": ["a"], "tolerated_ids": ["b"]}
+    assert r == {"total": 10, "passed": 8, "failed": 1, "failed_ids": ["a"], "tolerated_ids": ["b"], "harness_errors": 0, "harness_error_ids": []}
     ex = {"statements_ok": 5, "total": 5}
     assert driver.decide(r, ex) == "fail"
     assert driver.decide(driver.judge_slice(["b: x"], 10, {"b": "k"}), ex) == "pass"
     assert driver.decide(driver.judge_slice([], 10, {}), {"statements_ok": 4, "total": 5}) == "fail"
     assert driver.decide(driver.judge_slice([], 10, {}), {"statements_ok": 0, "total": 0}) == "fail"
+
+
+def test_a_harness_error_is_counted_apart_never_passes_and_fails_the_verdict(driver):
+    ex = {"statements_ok": 5, "total": 5}
+    sl = driver.judge_slice([], 10, {}, ["h1", "h2"])
+    assert (sl["passed"], sl["failed"], sl["harness_errors"], sl["harness_error_ids"]) == (8, 0, 2, ["h1", "h2"])
+    assert driver.decide(sl, ex) == "fail"  # fail on revert: with failed == 0 alone this would pass
+    assert driver.decide(driver.judge_slice([], 10, {}), ex) == "pass"
+    sl = driver.judge_slice(["a: boom"], 10, {}, ["a", "h1"])  # a case with a verdict is a failure, not a harness error
+    assert (sl["failed"], sl["harness_errors"], sl["passed"]) == (1, 1, 8)
+    assert not driver.part_ok({"slice": driver.judge_slice([], 3, {}, ["h1"]), "examples": None})
+    assert driver.part_ok({"slice": driver.judge_slice([], 3, {}), "examples": None})
+    assert driver.part_ok({"slice": {"failed": 0}, "examples": None})  # a record from before the field
+
+
+def test_harness_errors_are_split_off_the_results_before_judging(driver):
+    res = {"a": {"value": 1}, "b": {"harness_error": "DeadlineExceeded: x"}, "c": {"error": "boom"}}
+    clean, harness = driver.split_harness_errors(res)
+    assert set(clean) == {"a", "c"} and harness == {"b": "DeadlineExceeded: x"}
+
+
+def test_merge_parts_carries_the_harness_errors_of_every_part(driver):
+    def sl(**kw):
+        return {"total": 2, "passed": 2, "failed": 0, "failed_ids": [], "tolerated_ids": [], **kw}
+
+    recs = {
+        "1": {"cids": ["a", "b"], "slice": sl(passed=1, harness_errors=1, harness_error_ids=["b"]), "examples": None},
+        "2": {"cids": ["c"], "slice": sl(total=1, passed=1), "examples": None},
+        "3": {"cids": [], "slice": sl(total=0, passed=0), "examples": {"statements_ok": 1, "total": 1, "failures": []}},
+    }
+    merged, _ = driver.merge_parts(recs, ["a", "b", "c"], 3)
+    assert (merged["harness_errors"], merged["harness_error_ids"], merged["passed"], merged["failed"]) == (1, ["b"], 2, 0)
+    assert driver.decide(merged, {"statements_ok": 1, "total": 1}) == "fail"
+
+
+def test_the_evidence_summary_names_harness_errors(driver):
+    import check_uc_integration_evidence as chk
+
+    ev = {"result": "fail", "slice": {"passed": 9, "failed": 0, "harness_errors": 1}, "examples": {"statements_ok": 1, "total": 1}}
+    assert "9 passed / 0 failed / 1 harness error(s) (transient API)" in chk.summary_line(ev)
+    assert "harness" not in chk.summary_line({**ev, "slice": {"passed": 9, "failed": 0}})
+
+
+def test_the_example_judge_reports_a_harness_error_as_its_own_problem(driver):
+    import uc_examples_sql as ex
+
+    bad = ex.judge([("e1", "CREATE TABLE t AS SELECT 1")], {"e1": {"harness_error": "DeadlineExceeded: x"}})
+    assert len(bad) == 1 and "HARNESS ERROR (transient API)" in bad[0]
 
 
 def test_shards_cover_every_statement_once(driver):
@@ -597,7 +645,7 @@ def test_merge_parts_judges_the_union_and_flags_a_case_no_part_ran(driver):
               "examples": {"statements_ok": 4, "total": 4, "failures": []}},
     }
     sl, ex = driver.merge_parts(recs, ["a", "b", "c"], 3)
-    assert sl == {"total": 3, "passed": 1, "failed": 1, "failed_ids": ["b"], "tolerated_ids": ["c"]}
+    assert sl == {"total": 3, "passed": 1, "failed": 1, "failed_ids": ["b"], "tolerated_ids": ["c"], "harness_errors": 0, "harness_error_ids": []}
     assert ex == {"statements_ok": 4, "total": 4, "failures": []}
     sl, _ = driver.merge_parts(recs, ["a", "b", "c", "d"], 3)  # fail on revert: a case no part ran must not pass
     assert sl["failed_ids"] == ["b", "d"] and sl["total"] == 4 and sl["passed"] == 1

@@ -73,6 +73,8 @@ def judge(pairs, results) -> List[str]:
         entry = results.get(cid)
         if entry is None:
             problems.append(f"{cid}: not run")
+        elif "harness_error" in entry:  # the API failed in transit and the retries ran out: not a verdict on the statement
+            problems.append(f"{cid}: HARNESS ERROR (transient API) {' '.join(entry['harness_error'].split())[:300]}")
         elif "error" in entry:
             problems.append(f"{cid}: ERROR {' '.join(entry['error'].split())[:300]}")
         elif is_query(statement) and entry.get("rows", 0) < 1:

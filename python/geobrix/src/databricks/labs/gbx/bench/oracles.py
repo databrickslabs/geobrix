@@ -6944,10 +6944,17 @@ def _sql_literal(value, param, case: Case) -> str:
         )
         return f"map({items})" if value else f"CAST(map() AS {sql_type(param.uc)})"
     if isinstance(value, dict):
+        # NULL fields are typed: a CTE column of struct<path: void> does not match the UC tile parameter
         raster = (
-            "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"
+            "CAST(NULL AS BINARY)"
+            if value["raster"] is None
+            else "X'" + value["raster"].hex() + "'"
         )
-        path = "NULL" if value["path"] is None else "'" + value["path"] + "'"
+        path = (
+            "CAST(NULL AS STRING)"
+            if value["path"] is None
+            else "'" + value["path"].replace("'", "''") + "'"
+        )
         # The tile's own metadata: an error tile is known by its reason (`last_error`), so a literal without it is an
         # empty tile, which a UC function answers with NULL.
         meta = value.get("metadata") or {}

@@ -172,12 +172,25 @@ VECTOR_SCALAR = (
         "json_subset",
         {"valid": False, "code": 23},
     ),
+    # The session (and the UC handler) diagnose a ring of too few points. On UC the parameter is a GEOMETRY, and the
+    # warehouse refuses that WKT in st_geomfromwkt before the function runs: the UC row is the whole statement, and it
+    # expects the warehouse's own error.
     Case(
         "ev_too_few_points",
         EV,
         ("POLYGON((0 0,1 1,0 0))",),
         "json_subset",
         {"valid": False, "code": 1},
+        SESSION,
+    ),
+    Case(
+        "uc_ev_too_few_points_refused",
+        EV,
+        (),
+        "raises",
+        "WKT_PARSE_ERROR",
+        ("uc",),
+        sql="SELECT {q}gbx_st_explainvalidity(CAST(st_geomfromwkt('POLYGON((0 0,1 1,0 0))', 4326) AS GEOMETRY(ANY))) AS out",
     ),
     # two identical holes overlap along their edges, which GEOS finds before it counts rings
     Case(

@@ -696,11 +696,29 @@ def test_a_lost_schema_is_installed_again(driver, monkeypatch, tmp_path):
     assert calls.count("install") == 2
 
 
-@pytest.mark.parametrize("extra", [["--against", "sch"], ["--scope", "smoke", "--against", "sch"]])
-def test_run_part_is_for_a_gated_run_only(driver, monkeypatch, capsys, extra):
+def test_run_part_takes_no_smoke_scope(driver, monkeypatch, capsys):
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
-    assert driver.main(["--profile", "p", "--warehouse-id", "w", "--run-part", "1/2"] + extra) == 2
+    assert driver.main(["--profile", "p", "--warehouse-id", "w", "--run-part", "1/2", "--scope", "smoke", "--against", "sch"]) == 2
     assert "--run-part" in capsys.readouterr().err
+
+
+def test_an_against_run_of_a_part_runs_its_share_and_writes_only_the_adhoc_file(driver, monkeypatch, tmp_path):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+    seen = []
+    ok = {"total": 2, "passed": 2, "failed": 0, "failed_ids": [], "tolerated_ids": []}
+    monkeypatch.setattr(driver.Gate, "step_warehouse", lambda self, tables, known, part=(1, 1): seen.append(part) or (ok, None))
+    for step in ("step_wheel", "step_stage", "step_install", "cleanup"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("an --against run builds, installs and drops nothing"))
+    assert driver.main(["--profile", "p", "--scope", "full", "--against", "sch", "--warehouse-id", "w", "--run-part", "2/3"]) == 0
+    ev = json.loads((tmp_path / "evidence-adhoc.json").read_text())
+    assert seen == [(2, 3)] and ev["part"] == "2/3" and ev["result"] == "pass" and ev["examples"] is None
+    assert not (tmp_path / "evidence.json").exists() and not list(tmp_path.glob("*/parts-*.json"))
+    bad = {**ok, "passed": 1, "failed": 1, "failed_ids": ["x"]}
+    monkeypatch.setattr(driver.Gate, "step_warehouse", lambda self, tables, known, part=(1, 1): (bad, None))
+    assert driver.main(["--profile", "p", "--scope", "full", "--against", "sch", "--warehouse-id", "w", "--run-part", "2/3"]) == 1
 
 
 def test_drop_parts_cleans_up_an_unfinished_parted_run_of_another_commit(driver, monkeypatch, tmp_path):
@@ -725,3 +743,46 @@ def test_the_dry_run_prints_the_plan_of_every_part(driver, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "part 1/3: slice 5 statements (5 warehouse statements)" in out
     assert "part 2/3: slice 5 statements" in out and "part 3/3: the example files, 3 statements" in out
+
+
+def test_a_judgement_that_needs_osgeo_is_redone_in_the_container(driver, monkeypatch, tmp_path):
+    """Fail on revert: the host has no osgeo, so the summary, polygonize and contour references could not judge a
+    real result (the first full run: `the judge could not read the result (OsgeoUnavailable: ...)`)."""
+    from databricks.labs.gbx.bench import oracles
+
+    host = ["a: the judge could not read the result (OsgeoUnavailable: the summary reference needs osgeo)", "b: boom"]
+    monkeypatch.setattr(oracles, "check_uc_results", lambda cases, results, d: list(host))
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    calls = []
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        calls.append(argv)
+        sent = oracles.load_uc_results(str(next(tmp_path.glob("judge-*-in.json"))))
+        assert sorted(sent) == ["a"] and sent["a"]["value"] == b"\x01"  # only what needs osgeo, bytes intact
+        next(tmp_path.glob("judge-*-in.json")).with_name(next(tmp_path.glob("judge-*-in.json")).name.replace("-in", "-out")).write_text(
+            json.dumps({"failures": ["a: got 2, want 3"]})
+        )
+        return 0, ""
+
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    got = driver.judge_uc([], {"a": {"value": b"\x01"}, "b": {"value": 1}}, "full")
+    assert got == ["b: boom", "a: got 2, want 3"]
+    assert calls[0][1].endswith("gbx-docker-exec.sh") and "--judge-uc" in calls[0][-1] and "--scope full" in calls[0][-1]
+    monkeypatch.setattr(driver, "run_cmd", lambda *a, **k: (1, "container is not running"))
+    with pytest.raises(driver.StepFailed, match="Fix: start the container"):
+        driver.judge_uc([], {"a": {"value": b"\x01"}}, "full")
+    host[:] = ["b: boom"]
+    assert driver.judge_uc([], {}, "full") == ["b: boom"]  # nothing needs osgeo: no container call
+
+
+def test_the_container_side_judges_the_results_it_is_given(driver, monkeypatch, tmp_path):
+    from databricks.labs.gbx.bench import oracles, probes
+
+    monkeypatch.setattr(probes, "uc_slice_cases", lambda tables: [type("C", (), {"cid": "a"})(), type("C", (), {"cid": "z"})()])
+    seen = []
+    monkeypatch.setattr(oracles, "check_uc_results", lambda cases, results, d: seen.append([c.cid for c in cases]) or ["a: x"])
+    inp, out = tmp_path / "in.json", tmp_path / "out.json"
+    oracles.dump_uc_results({"a": {"value": 1}}, str(inp))
+    assert driver.main(["--judge-uc", str(inp), "--judge-out", str(out), "--scope", "full"]) == 0
+    assert seen == [["a"]] and json.loads(out.read_text()) == {"failures": ["a: x"]}

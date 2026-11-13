@@ -102,7 +102,7 @@ def evidence_scope(ev: dict) -> str:
 
 def summary_line(ev: dict) -> str:
     """The one line the PR checklist asks for."""
-    sl, ex = ev.get("slice", {}), ev.get("examples", {})
+    sl, ex = ev.get("slice") or {}, ev.get("examples") or {}
     return (
         f"gbx:uc:tests {ev.get('result', '?').upper()} at {str(ev.get('head_sha', '?'))[:12]}: "
         f"scope {evidence_scope(ev)}, slice {sl.get('passed', '?')} passed / {sl.get('failed', '?')} failed, "

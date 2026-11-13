@@ -125,3 +125,21 @@ def test_uc_table_function_statements_and_rows_round_trip_for_the_generators(tmp
     results["te_offset"]["value"] = json.dumps(rows[1:])
     (failure,) = oracles.check_uc_results(ran, results, str(tmp_path))
     assert failure.startswith("te_offset")
+
+
+def test_a_tile_literal_types_its_null_fields_so_a_cte_column_matches_the_tile_parameter():
+    """A NULL field of a tile literal is typed: a CTE column of struct<path: void> does not match the UC tile parameter
+    (the recipe_stats_partial_merge row on a real warehouse: DATATYPE_MISMATCH, `path:void`).
+    """
+    from databricks.labs.gbx import manifest
+
+    (param,) = manifest.load().functions["gbx_rst_stats_partial"].params[:1]
+    case = next(c for c in oracles.TABLES["RASTER_STAT"] if c.cid == "stats_partial")
+    sql = oracles._sql_literal(
+        {"raster": b"\x00", "path": None, "metadata": {}}, param, case
+    )
+    assert "'path', CAST(NULL AS STRING)" in sql and "'path', NULL" not in sql
+    sql = oracles._sql_literal(
+        {"raster": None, "path": "/x.tif", "metadata": {}}, param, case
+    )
+    assert "'raster', CAST(NULL AS BINARY)" in sql and "'path', '/x.tif'" in sql

@@ -358,6 +358,44 @@ def _slice_via_container(catalog: str, schema: str, tables) -> dict:
 
 
 _CONTAINER_SLICE: dict = {}
+_OSGEO_JUDGE = "(OsgeoUnavailable:"
+
+
+def judge_uc(cases, results: dict, scope: str) -> List[str]:
+    """`check_uc_results` on the host; the cases whose reference needs osgeo are judged again in the dev container.
+
+    The summary, polygonize and contour references need GDAL's Python bindings, which the host lacks. Only those
+    cases go to the container, so a core run never needs it.
+    """
+    from databricks.labs.gbx.bench import oracles
+
+    with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
+        failures = oracles.check_uc_results(cases, results, d)
+    redo = sorted({failed_id(m) for m in failures if _OSGEO_JUDGE in m})
+    if not redo:
+        return failures
+    say(f"{len(redo)} case(s) need osgeo to be judged: judging them in the dev container")
+    tag = f"judge-{os.getpid()}-{int(time.time())}"
+    inp, out = OUT_DIR / f"{tag}-in.json", OUT_DIR / f"{tag}-out.json"
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    oracles.dump_uc_results({cid: results[cid] for cid in redo}, str(inp))
+    inner = (
+        f"cd /root/geobrix && PYTHONPATH=python/geobrix/src python3 examples/tests/uc_integration.py "
+        f"--judge-uc {inp.relative_to(REPO_ROOT).as_posix()} --judge-out {out.relative_to(REPO_ROOT).as_posix()} --scope {scope}"
+    )
+    try:
+        rc, text = run_cmd(["bash", str(CMD / "gbx-docker-exec.sh"), inner], OUT_DIR / f"{tag}.log", "judge", echo=False)
+        if rc != 0 or not out.is_file():
+            tail = " | ".join(text.strip().splitlines()[-3:])[:400]
+            raise StepFailed(
+                f"judging {len(redo)} case(s) in the dev container failed (exit {rc}): {tail}\n"
+                f"Fix: start the container (`gbx:docker:start`) and re-run; the log is {OUT_DIR / f'{tag}.log'}"
+            )
+        again = json.loads(out.read_text())["failures"]
+    finally:
+        inp.unlink(missing_ok=True)
+        out.unlink(missing_ok=True)
+    return [m for m in failures if failed_id(m) not in redo] + again
 
 
 def slice_pairs(catalog: str, schema: str, tables) -> list:
@@ -426,6 +464,8 @@ def parse_args(argv=None):
     p.add_argument("--against", metavar="SCHEMA", default=None, help="run the scope against the existing install in SCHEMA: no build, stage, install or cleanup; writes evidence-adhoc.json, never evidence.json")
     p.add_argument("--run-part", metavar="I/N", type=parse_run_part, default=None, help="run part I of a gated run cut into N parts (N >= 2): parts 1 to N-1 deal the slice, part N runs the example files; evidence.json comes with the last part to finish")
     p.add_argument("--drop-parts", metavar="SHA12", default=None, help="drop the schema and the Volume and workspace folders of the unfinished parted run of commit SHA12, then stop")
+    p.add_argument("--judge-uc", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: judge these results (run in the dev container, where osgeo exists)
+    p.add_argument("--judge-out", metavar="FILE", default=None, help=argparse.SUPPRESS)
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     return p.parse_args(argv)
@@ -608,10 +648,7 @@ class Gate:
         ran = {cid for cid, _ in pairs}
         cases = [c for c in all_cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run or a part judges only what it ran
         self.part_cids = sorted(c.cid for c in cases if "uc" in c.surfaces)
-        with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
-            from databricks.labs.gbx.bench import oracles
-
-            failures = oracles.check_uc_results(cases, merged, d)
+        failures = judge_uc(cases, merged, self.a.scope)
         (self.run_dir / ("slice_failures.txt" if n_parts == 1 else f"slice_failures_p{i_part}.txt")).write_text("\n".join(failures))
         total = len([1 for c in cases if "uc" in c.surfaces])
         sl = judge_slice(failures, total, known)
@@ -811,6 +848,16 @@ def oracles_load(path: Path) -> dict:
 
 def main(argv=None) -> int:
     a = parse_args(argv)
+    if a.judge_uc:
+        from databricks.labs.gbx.bench import oracles, probes
+
+        results = oracles.load_uc_results(a.judge_uc)
+        cases = [c for c in probes.uc_slice_cases(slice_tables(a.scope)) if c.cid in results]
+        with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
+            failures = oracles.check_uc_results(cases, results, d)
+        Path(a.judge_out).write_text(json.dumps({"failures": failures}))
+        say(f"judged {len(cases)} case(s): {len(failures)} failure line(s)")
+        return 0
     if a.emit_slice:
         if not a.against:
             print("--emit-slice needs --against SCHEMA (the schema the statements are written for)", file=sys.stderr)
@@ -822,8 +869,8 @@ def main(argv=None) -> int:
     if not a.profile:
         print("--profile required (a profile is never chosen for you: see `databricks auth profiles`)", file=sys.stderr)
         return 2
-    if a.run_part and (a.against or a.scope == "smoke"):
-        print("--run-part cuts a gated run (scope core or full) into parts: it takes no --against and no smoke scope", file=sys.stderr)
+    if a.run_part and a.scope == "smoke":
+        print("--run-part cuts a core or full run into parts: it takes no smoke scope", file=sys.stderr)
         return 2
     g = Gate(a)
     if a.drop_parts:
@@ -902,7 +949,7 @@ def main(argv=None) -> int:
     if problem:
         print(f"refused: {problem}", file=sys.stderr)
         return 1
-    if a.run_part:
+    if a.run_part and not a.against:
         return run_parted(g, a, tables, known)
     sl = ex = None
     try:
@@ -914,10 +961,17 @@ def main(argv=None) -> int:
             g.ev["wheel"] = info
             volume_wheel = g.step_stage(wheel, info)
             g.step_install(volume_wheel)
-        sl, ex = g.step_warehouse(tables, known)
-        g.ev.update({"slice": {**sl, "scope": a.scope, "tables": list(tables)}, "examples": {k: ex[k] for k in ("statements_ok", "total")}})
-        g.ev["examples"]["failed"] = ex["failures"][:40]
-        g.ev["result"] = decide(sl, ex)
+        # a part here is an --against one: a gated part goes through run_parted
+        sl, ex = g.step_warehouse(tables, known, part=a.run_part) if a.run_part else g.step_warehouse(tables, known)
+        g.ev["slice"] = {**sl, "scope": a.scope, "tables": list(tables)}
+        if a.run_part:
+            g.ev["part"] = "%d/%d" % a.run_part
+        if ex is None:  # a part with no example files
+            g.ev["examples"] = None
+            g.ev["result"] = "pass" if sl["failed"] == 0 else "fail"
+        else:
+            g.ev["examples"] = {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40]}
+            g.ev["result"] = decide(sl, ex)
     except StepFailed as exc:
         g.ev["error"] = str(exc)
         print(f"FAILED: {exc}", file=sys.stderr)

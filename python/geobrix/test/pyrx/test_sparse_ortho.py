@@ -266,6 +266,26 @@ def test_sparse_orthomosaic_raises_when_no_image_file_is_found(tmp_path, monkeyp
     assert "not found" in msg and "Fix:" in msg
 
 
+def test_sparse_orthomosaic_names_the_first_skip_in_name_order_whatever_finishes_first(
+    tmp_path, monkeypatch
+):
+    """Workers finish in any order; the error still names the first image by name."""
+    import concurrent.futures as cf
+
+    ortho = _stub_one_cluster(monkeypatch, ["G0001.JPG", "G0002.JPG", "G0003.JPG"])
+
+    class _Reversed(cf.ThreadPoolExecutor):
+        def map(self, fn, *iterables, **kw):  # run (and so append) last-to-first
+            return [fn(*a) for a in reversed(list(zip(*iterables)))]
+
+    monkeypatch.setattr(cf, "ThreadPoolExecutor", _Reversed)  # ortho imports it at call time
+    with pytest.raises(RuntimeError) as ei:
+        ortho.sparse_orthomosaic(
+            {0: ("sparse", "gps.json")}, f"dbfs:{tmp_path}", tmp_path / "o.tif"
+        )
+    assert f"First skipped: {tmp_path}/G0001.JPG -> not found" in str(ei.value)
+
+
 def test_sparse_orthomosaic_opens_images_under_a_scheme_qualified_image_dir(
     tmp_path, monkeypatch
 ):

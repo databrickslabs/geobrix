@@ -693,7 +693,8 @@ def sparse_orthomosaic(
 
     if n_proj[0] == 0:
         _p, _why = (
-            first_skip[0] if first_skip else ("(no posed image)", "none to project")
+            # Workers append in completion order: report the first skip in image-name order instead.
+            min(first_skip) if first_skip else ("(no posed image)", "none to project")
         )
         raise RuntimeError(
             f"sparse_orthomosaic: no image was projected, so the orthomosaic would be empty. "

@@ -219,6 +219,17 @@ def wheel_reusable(info: dict, root: Path = REPO_ROOT) -> Tuple[bool, str]:
     return True, f"no wheel input changed since its commit {info['git_sha'][:12]}"
 
 
+def inputs_changed(old_head: str, root: Optional[Path] = None) -> List[str]:
+    """The UC sources and wheel inputs that differ between `old_head` and HEAD (a parted run resumes only when none)."""
+    root = root or REPO_ROOT
+    known = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{old_head}^{{commit}}"], capture_output=True)
+    if known.returncode != 0:
+        return [f"<commit {old_head[:12]} is not in this repository>"]
+    paths = tuple(dict.fromkeys(tuple(uc_sources_hash.UC_PATHS) + WHEEL_INPUTS))
+    diff = subprocess.run(["git", "-C", str(root), "diff", "--name-only", old_head, "HEAD", "--", *paths], capture_output=True, text=True)
+    return [line for line in diff.stdout.splitlines() if line]
+
+
 def jar_stale(jar: Path, root: Path = REPO_ROOT) -> bool:
     """True when the built JAR is missing or older than a tracked Scala source or pom.xml."""
     if not jar.is_file():
@@ -742,12 +753,32 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
     part, n = a.run_part
     path = g.run_dir / f"parts-{a.scope}-of-{n}.json"
     src = uc_sources_hash.sources_hash(REPO_ROOT)
+    def usable(st: dict) -> bool:
+        return (st.get("sources_hash") == src and st.get("scope") == a.scope and st.get("parts") == n
+                and not st.get("dropped") and not st.get("merged"))
+
     state = _load_json(path)
-    if state.get("head_sha") != g.head or state.get("sources_hash") != src or state.get("dropped"):
+    if not usable(state):
+        state = {}
+        # Other commits may land between parts. A record of an earlier HEAD is resumed when no UC source and no wheel
+        # input changed since: its install is still the code under test.
+        for other in sorted(OUT_DIR.glob(f"*/{path.name}"), key=lambda q: q.stat().st_mtime, reverse=True):
+            st = _load_json(other)
+            if other == path or not usable(st):
+                continue
+            changed = inputs_changed(st.get("head_sha", ""))
+            if changed:
+                say(f"not resuming the parted run of {st.get('head_sha', '?')[:12]}: {len(changed)} UC source or wheel input(s) changed since, such as {changed[0]}")
+                continue
+            say(f"resuming the parted run of {st['head_sha'][:12]}: no UC source or wheel input changed since")
+            path, state = other, st
+            g.run_dir, g.sha12, g.schema, g.folder = other.parent, other.parent.name, st["schema"], st["volume_dir"]
+            break
+    if not state:
         state = {"head_sha": g.head, "sources_hash": src, "scope": a.scope, "parts": n, "catalog": a.catalog,
                  "schema": g.schema, "volume_dir": g.folder, "done": {}}
     say(f"part {part}/{n} of a gated {a.scope} run; its record is {path}")
-    rec: dict = {"started": now(), "warehouse_id": g.warehouse}
+    rec: dict = {"started": now(), "warehouse_id": g.warehouse, "head_sha": g.head}
     try:
         inst = state.get("install")
         if inst and not g.schema_exists():
@@ -790,13 +821,16 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
     g.ev = {
         "head_sha": g.head, "sources_hash": src, "started": min(r["started"] for r in done.values()), "profile": a.profile,
         "warehouse_id": g.warehouse, "catalog": a.catalog, "schema": g.schema, "volume_dir": g.folder, "scope": a.scope,
-        "parts": n, "part_runs": {i: {k: done[i][k] for k in ("started", "finished", "warehouse_id")} for i in sorted(done, key=int)},
+        "parts": n, "install_head_sha": state["head_sha"],
+        "part_runs": {i: {k: done[i].get(k) for k in ("started", "finished", "warehouse_id", "head_sha")} for i in sorted(done, key=int)},
         "wheel": state["install"]["wheel"], "job_run_ids": list(state["install"]["job_run_ids"]),
         "slice": {**sl, "scope": a.scope, "tables": list(tables)},
         "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40]},
         "result": decide(sl, ex), "finished": now(),
     }
     g.write_evidence()
+    state["merged"] = g.ev["finished"]  # merged: a later part starts a new run
+    _save_json(path, state)
     say("step 6/6: " + ("keeping the schema and the Volume folder" if a.keep else "dropping the schema and deleting the Volume folder"))
     g.ws_dir = state["install"].get("ws_dir")
     g.created = {"folder": True, "schema": True, "ws": True}

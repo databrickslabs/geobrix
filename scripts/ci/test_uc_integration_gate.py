@@ -786,3 +786,39 @@ def test_the_container_side_judges_the_results_it_is_given(driver, monkeypatch, 
     oracles.dump_uc_results({"a": {"value": 1}}, str(inp))
     assert driver.main(["--judge-uc", str(inp), "--judge-out", str(out), "--scope", "full"]) == 0
     assert seen == [["a"]] and json.loads(out.read_text()) == {"failures": ["a: x"]}
+
+
+def test_a_parted_run_resumes_across_a_commit_that_changes_no_uc_source_or_wheel_input(driver, monkeypatch, tmp_path):
+    """Fail on revert: other agents committed docs and commands between parts, and each new HEAD started the parted
+    run again with a fresh install (three installs in one run). The record now follows the UC sources, not HEAD."""
+    calls = _parted(driver, monkeypatch, tmp_path)
+    monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root: "h" * 64)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "a" * 40)
+    assert driver.main(base + ["1/2"]) == 0
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "b" * 40)
+    monkeypatch.setattr(driver, "inputs_changed", lambda old, root=None: [])
+    assert driver.main(base + ["2/2"]) == 0
+    assert calls.count("install") == 1
+    ev = json.loads((tmp_path / "evidence.json").read_text())
+    assert ev["head_sha"] == "b" * 40 and ev["install_head_sha"] == "a" * 40 and ev["schema"] == "geobrix_uc_it_" + "a" * 12
+    assert [r["head_sha"] for r in ev["part_runs"].values()] == ["a" * 40, "b" * 40]
+    assert ev["result"] == "pass" and calls[-1].startswith("cleanup geobrix_uc_it_" + "a" * 12)
+
+
+def test_a_parted_run_starts_again_when_a_wheel_input_changed(driver, monkeypatch, tmp_path):
+    calls = _parted(driver, monkeypatch, tmp_path)
+    monkeypatch.setattr(driver.uc_sources_hash, "sources_hash", lambda root: "h" * 64)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "a" * 40)
+    assert driver.main(base + ["1/2"]) == 0
+    monkeypatch.setattr(driver.uc_sources_hash, "head_sha", lambda root: "c" * 40)
+    monkeypatch.setattr(driver, "inputs_changed", lambda old, root=None: ["python/geobrix/envs/env6.txt"])
+    assert driver.main(base + ["2/2"]) == 0
+    assert calls.count("install") == 2 and not (tmp_path / "evidence.json").exists()  # part 1 of the new run is due
+
+
+def test_inputs_changed_lists_the_uc_and_wheel_inputs_a_commit_range_touched(driver):
+    head = driver.uc_sources_hash.head_sha(REPO_ROOT)
+    assert driver.inputs_changed(head) == []
+    assert driver.inputs_changed("0" * 40) == ["<commit 000000000000 is not in this repository>"]

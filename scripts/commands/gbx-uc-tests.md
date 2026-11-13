@@ -50,6 +50,9 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - Run the parts one after another, in any order. Parts 1 to N-1 deal the slice cases round-robin. Part N runs the example files.
 - The first part to run builds, stages and installs. The other parts reuse that install. A part installs again when the schema is gone.
 - The record of the run is `test-logs/uc-integration/<sha12>/parts-<scope>-of-<N>.json`.
+- Commits may land between parts. A part resumes the record of an earlier commit when no UC source and no wheel input changed since.
+- Then `evidence.json` names HEAD in `head_sha` and the install's commit in `install_head_sha`. Each entry of `part_runs` names its commit.
+- Never run two parts at once: each part rewrites the record when it ends.
 - A part that stops or fails can run again. Its new result replaces the old one.
 - Between parts the schema and the Volume folder stay. No `evidence.json` exists until the last part.
 - The last part to finish judges all parts as one run. Each case is judged on its own, so the verdict equals an unsplit run's. A case that no part ran fails.

@@ -152,6 +152,8 @@ Diagnoses geometry validity and returns a JSON string with four fields. The `val
 
 Returns `NULL` for null or unparseable input.
 
+On Unity Catalog, the function takes a `GEOMETRY`. The warehouse's WKT parser refuses some invalid text, such as a ring with too few points, with `WKT_PARSE_ERROR`. Diagnose that text with the session function or the Python API: they return `{"valid": false, "code": 1}`.
+
 <CodeFromTest
   code={vectorxSqlCode}
   functionName="st_explainvalidity_sql_example"

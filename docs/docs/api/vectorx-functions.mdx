@@ -755,6 +755,10 @@ Diagnoses geometry validity and returns a JSON string with four fields. `valid` 
 
 **Returns:** `STRING` — JSON `{"valid": ..., "reason": ..., "code": ..., "location": ...}`. Returns `NULL` for null or unparseable input.
 
+:::note Unity Catalog takes a parsed geometry
+The Unity Catalog form takes a `GEOMETRY`, so the warehouse's WKT parser runs first. It refuses some invalid text, such as a ring with too few points, with `WKT_PARSE_ERROR`. The session function returns `{"valid": false, "code": 1}` for the same text. Run the session function or the Python API on text the parser refuses.
+:::
+
 See [Geometry Validity](./geometry-validity).
 
 <FunctionExamples

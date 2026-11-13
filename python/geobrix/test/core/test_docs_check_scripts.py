@@ -223,6 +223,17 @@ def test_the_diagram_check_fails_a_stale_diagram():
     assert not ok and "stale" in report
 
 
+def test_the_diagram_check_fails_when_the_generator_refuses(monkeypatch):
+    mod = _load("check-diagram-coverage")
+
+    def refuse():
+        raise SystemExit("page section 'New things' has no card entry")
+
+    monkeypatch.setattr(mod, "generate", refuse)
+    ok, report = mod.check_d4c(mod.DIAGRAM_HTML.read_text())
+    assert not ok and "refused to run" in report and "New things" in report
+
+
 # --- check-docs-examples.py -----------------------------------------------------------------------------
 
 

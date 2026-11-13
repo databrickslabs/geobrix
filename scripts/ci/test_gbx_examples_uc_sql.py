@@ -97,3 +97,32 @@ def test_retarget_rewrites_every_name_of_the_files_for_another_install(runner):
 def test_dry_run_with_another_schema_passes(runner, capsys):
     assert runner.main(["--dry-run", "--schema", "geobrix_uc_it_abc", "--catalog", "geospatial_docs"]) == 0
     assert "geospatial_docs.geobrix_uc_it_abc" in capsys.readouterr().out
+
+
+def test_upload_imports_the_files_retargeted_to_the_install(runner, tmp_path, monkeypatch):
+    """A presenter opens the uploaded files and runs them: they must name the install they were run against."""
+    import base64
+    import sys
+    from types import SimpleNamespace
+
+    # No SDK needed: upload only reads ImportFormat.AUTO from it.
+    monkeypatch.setitem(sys.modules, "databricks.sdk.service.workspace", SimpleNamespace(ImportFormat=SimpleNamespace(AUTO="AUTO")))
+
+    src = tmp_path / "00_setup.sql"
+    src.write_text((EXAMPLES / "00_setup.sql").read_text())
+    sent = {}
+
+    class Ws:
+        def mkdirs(self, path):
+            pass
+
+        def import_(self, path, content, format, overwrite):
+            sent[path] = base64.b64decode(content).decode()
+
+        def list(self, path):
+            return [SimpleNamespace(path=p, object_type="FILE") for p in sent]
+
+    assert runner.upload(SimpleNamespace(workspace=Ws()), [src], "/Workspace/Users/u/x", "cat_x", "sch_x") == 0
+    text = sent["/Users/u/x/00_setup.sql"]
+    assert "USE CATALOG cat_x" in text and "USE SCHEMA sch_x" in text
+    assert "geospatial_docs" not in text and "geobrix_uc" not in text

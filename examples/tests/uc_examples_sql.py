@@ -89,14 +89,17 @@ def workspace_dir(w, override: Optional[str]) -> str:
     return f"/Workspace/Users/{me}/{WS_SUBDIR}"
 
 
-def upload(w, files: List[Path], ws_dir: str) -> int:
-    """Import each file as a workspace file; list the folder afterwards and check every name is there."""
+def upload(w, files: List[Path], ws_dir: str, catalog: str = FILE_CATALOG, schema: str = FILE_SCHEMA) -> int:
+    """Import each file as a workspace file; list the folder afterwards and check every name is there.
+
+    Each file is imported with its names rewritten to `catalog` and `schema`, so it runs as is against that install.
+    """
     from databricks.sdk.service.workspace import ImportFormat
 
     api_dir = ws_dir[len("/Workspace") :] if ws_dir.startswith("/Workspace/") else ws_dir
     w.workspace.mkdirs(api_dir)
     for f in files:
-        content = base64.b64encode(f.read_bytes()).decode()
+        content = base64.b64encode(retarget(f.read_text(), catalog, schema).encode()).decode()
         w.workspace.import_(path=f"{api_dir}/{f.name}", content=content, format=ImportFormat.AUTO, overwrite=True)
         print(f"  uploaded {f.name}", flush=True)
     listed = {Path(o.path).name: o for o in w.workspace.list(api_dir)}
@@ -234,7 +237,7 @@ def main(argv=None) -> int:
     if (args.upload or args.upload_only) and not failed:
         ws_dir = workspace_dir(w, args.ws_dir)
         print(f"uploading to {ws_dir}")
-        if upload(w, files, ws_dir):
+        if upload(w, files, ws_dir, args.catalog, args.schema):
             return 1
     elif args.upload and failed:
         print("not uploading: the run failed", file=sys.stderr)

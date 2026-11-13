@@ -49,6 +49,9 @@ Options:
                           evidence.json (scope, parts N) and drops the schema. Record: <run dir>/parts-*.json
   --drop-parts SHA12      Drop the schema and the folders kept by an unfinished parted run of commit SHA12
   --keep                  Keep the schema and the Volume folder (gated run)
+  --install-into SCHEMA   Install into SCHEMA and keep it, for demos: stage the dist/env6 wheel (any clean build)
+                          and its JAR into <volroot>/uc-install/SCHEMA/, install with procedures, probe the build.
+                          No warehouse step, no cleanup, no evidence. Then run gbx:examples:uc-sql on SCHEMA
   --install-timeout-min N Time limit of the install job (default 90)
   --dry-run               Print the plan and counts; no build, no workspace call
   --log <path>            Write output to a log file (filename -> test-logs/<name>)
@@ -73,6 +76,7 @@ Examples:
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope smoke --against geobrix_uc
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full --run-part 1/6
+  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --install-into geobrix_uc
 HELP
 }
 
@@ -85,7 +89,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--scope|--against|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts)
+    --profile|--catalog|--volroot|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

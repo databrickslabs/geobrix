@@ -22,7 +22,7 @@ Runs the Unity Catalog SQL examples in `examples/uc-functions/` on a SQL warehou
 
 **Run order:** `00_setup.sql` builds the sample tables the other files read, so run it first. A full run takes about 25 minutes, because each statement that calls a Python function costs about 10 s on a warehouse.
 
-**Upload:** the folder is `/Workspace/Users/<you>/geobrix/uc-function-examples/`. The user comes from `databricks current-user me` for `--profile`. Each file is a workspace file that opens in the SQL editor. The command lists the folder afterwards and fails if a file is missing.
+**Upload:** the folder is `/Workspace/Users/<you>/geobrix/uc-function-examples/`. The user comes from `databricks current-user me` for `--profile`. Each file is a workspace file that opens in the SQL editor. The upload rewrites the catalog and schema names to `--catalog` and `--schema`. The command lists the folder afterwards and fails if a file is missing.
 
 **Exit code:** 0 when every statement succeeded and every query returned a row. 1 for a failed statement, an empty query or a failed upload. 2 for a bad option.
 

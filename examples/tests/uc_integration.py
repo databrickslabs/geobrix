@@ -478,6 +478,7 @@ def parse_args(argv=None):
     p.add_argument("--judge-uc", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: judge these results (run in the dev container, where osgeo exists)
     p.add_argument("--judge-out", metavar="FILE", default=None, help=argparse.SUPPRESS)
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
+    p.add_argument("--install-into", metavar="SCHEMA", default=None, help="install the functions and procedures into SCHEMA and keep them: stage into <volroot>/uc-install/SCHEMA/, install, probe; no warehouse step, no evidence")
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     return p.parse_args(argv)
 
@@ -487,8 +488,11 @@ class Gate:
         self.a = args
         self.head = uc_sources_hash.head_sha(REPO_ROOT)
         self.sha12 = self.head[:12]
-        self.schema = args.against or f"geobrix_uc_it_{self.sha12}"
-        self.folder = f"{args.volroot.rstrip('/')}/uc-it/{self.sha12}"
+        install_into = getattr(args, "install_into", None)
+        self.schema = args.against or install_into or f"geobrix_uc_it_{self.sha12}"
+        # A kept install reads its wheel from this folder at every call: it gets a folder of its own, by schema.
+        sub = f"uc-install/{install_into}" if install_into else f"uc-it/{self.sha12}"
+        self.folder = f"{args.volroot.rstrip('/')}/{sub}"
         self.ws_dir: Optional[str] = None
         self.run_dir = OUT_DIR / self.sha12
         self.warehouse = args.warehouse_id or warehouse_from_config()
@@ -519,6 +523,12 @@ class Gate:
     def step_wheel(self) -> Path:
         say("step 2/6: env 6 wheel")
         dist = sorted((REPO_ROOT / "dist" / "env6").glob("geobrix-*+env6-py3-none-any.whl"))
+        if dist and not self.a.rebuild and getattr(self.a, "install_into", None):
+            # An install is not evidence: any clean build serves, whatever commit it records.
+            info = wheel_info(dist[-1])
+            if not info["dirty"] and info["git_sha"]:
+                say(f"reuse {dist[-1].name}: built clean at {info['git_sha'][:12]}, sha256 {info['sha256']}")
+                return dist[-1]
         if dist and not self.a.rebuild:
             ok, why = wheel_reusable(wheel_info(dist[-1]))
             say(f"reuse {dist[-1].name}: {'yes' if ok else 'no'}, {why}")
@@ -880,6 +890,29 @@ def oracles_load(path: Path) -> dict:
     return oracles.load_uc_results(str(path))
 
 
+def install_into(g: "Gate", a) -> int:
+    """Install into a schema that stays: wheel, stage, install and probe. No warehouse step, no cleanup, no evidence."""
+    clash = [f for f, v in (("--against", a.against), ("--run-part", a.run_part), ("--drop-parts", a.drop_parts)) if v]
+    if clash:
+        print(f"--install-into takes no {', '.join(clash)}", file=sys.stderr)
+        return 2
+    say(f"install into {a.catalog}.{g.schema} from the Volume folder {g.folder}; the schema and the folder stay")
+    if a.dry_run:
+        print(f"dry run: install into {a.catalog}.{g.schema}, staging folder {g.folder}; no workspace call")
+        return 0
+    try:
+        wheel = g.step_wheel()
+        info = wheel_info(wheel)
+        g.step_install(g.step_stage(wheel, info))
+    except StepFailed as exc:
+        print(f"FAILED: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        say(f"install job run ids: {', '.join(g.run_ids) or '-'}")
+    say(f"installed {a.catalog}.{g.schema} from {info['name']} (sha256 {info['sha256']}, commit {info['git_sha'][:12]})")
+    return 0
+
+
 def main(argv=None) -> int:
     a = parse_args(argv)
     if a.judge_uc:
@@ -916,6 +949,8 @@ def main(argv=None) -> int:
             print(f"refused: {problem}", file=sys.stderr)
             return 1
         return drop_parts(g, a.drop_parts)
+    if a.install_into:
+        return install_into(g, a)
     say(f"HEAD {g.head}, schema {a.catalog}.{g.schema}, Volume folder {g.folder}")
     if a.scope == "smoke" and not a.against:
         print("--scope smoke needs --against SCHEMA: a smoke run is a wiring check on an existing install, never a gated run", file=sys.stderr)

@@ -23,6 +23,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `--run-part I/N` - run part I of a gated run cut into N parts (N at least 2). See "Gated run in parts".
 - `--drop-parts SHA12` - drop the schema and the folders that an unfinished parted run of commit SHA12 kept. Then stop.
 - `--keep` - keep the schema and the Volume folder (gated run).
+- `--install-into SCHEMA` - install into `SCHEMA` and keep it, for a demo. See "Install that stays".
 - `--install-timeout-min N` - time limit of the install job. Default `90`.
 - `--dry-run` - print the plan and the statement counts. No build, no workspace call.
 - `--log <path>` - tee output to `test-logs/<path>`.
@@ -33,6 +34,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full`
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope smoke --against geobrix_uc`
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full --run-part 1/6`
+- `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --install-into geobrix_uc`
 
 ## Gated run steps
 
@@ -44,6 +46,15 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - Run the scope (`bench.oracles.uc_sql`, judged by `check_uc_results`) in parallel shards and `gbx:examples:uc-sql` against the schema.
 - Drop the schema and delete the Volume folder, unless `--keep`.
 - Keep the workspace folder `GeoBrix/uc-it-<sha>`, so the install run's page opens its notebook. `gbx:workspace:sweep` removes it after 60 min (24 h after a failure).
+
+## Install that stays
+
+- `--install-into SCHEMA` stages the `dist/env6` wheel and its JAR into `<volroot>/uc-install/SCHEMA/`.
+- Any clean build serves: an install is not evidence, so the wheel need not fit HEAD. `--rebuild` builds one.
+- It installs with `procedures=True` from a Serverless environment 6 job, then calls `gbx_probe_build()`.
+- The schema and the folder stay: each function reads the wheel from that folder.
+- It runs no warehouse step, cleans up nothing and writes no evidence file.
+- Run the example files on it next: `gbx:examples:uc-sql --catalog C --schema SCHEMA`.
 
 ## Gated run in parts
 

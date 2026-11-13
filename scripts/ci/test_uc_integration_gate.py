@@ -822,3 +822,41 @@ def test_inputs_changed_lists_the_uc_and_wheel_inputs_a_commit_range_touched(dri
     head = driver.uc_sources_hash.head_sha(REPO_ROOT)
     assert driver.inputs_changed(head) == []
     assert driver.inputs_changed("0" * 40) == ["<commit 000000000000 is not in this repository>"]
+
+
+def test_install_into_stages_installs_and_keeps_without_a_warehouse_or_evidence(driver, monkeypatch, tmp_path):
+    """--install-into is a kept demo install: its own folder by schema, no warehouse step, no cleanup, no evidence."""
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver, "warehouse_problem", lambda *a, **k: pytest.fail("an install looks up no warehouse"))
+    seen = {}
+    monkeypatch.setattr(driver.Gate, "step_wheel", lambda self: Path("w.whl"))
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"name": "w.whl", "sha256": "ab" * 32, "git_sha": "c" * 40})
+    monkeypatch.setattr(driver.Gate, "step_stage", lambda self, w, i: seen.setdefault("folder", self.folder) + "/w.whl")
+    monkeypatch.setattr(driver.Gate, "step_install", lambda self, w: seen.update(schema=self.schema, wheel=w))
+    for step in ("step_warehouse", "cleanup"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("an install runs no warehouse step and keeps everything"))
+    assert driver.main(["--profile", "p", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--install-into", "demo"]) == 0
+    assert seen == {"folder": "/Volumes/c/s/v/uc-install/demo", "schema": "demo", "wheel": "/Volumes/c/s/v/uc-install/demo/w.whl"}
+    assert not (tmp_path / "evidence.json").exists() and not (tmp_path / "evidence-adhoc.json").exists()
+
+
+def test_install_into_takes_no_against(driver, capsys):
+    assert driver.main(["--profile", "p", "--install-into", "demo", "--against", "x"]) == 2
+    assert "--against" in capsys.readouterr().err
+
+
+def test_install_into_reuses_any_clean_wheel_but_not_a_dirty_one(driver, monkeypatch, tmp_path):
+    dist = tmp_path / "dist" / "env6"
+    dist.mkdir(parents=True)
+    (dist / "geobrix-0.6.0+env6-py3-none-any.whl").write_text("")
+    g = driver.Gate(driver.parse_args(["--profile", "p", "--install-into", "demo"]))
+    monkeypatch.setattr(driver, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(driver, "wheel_reusable", lambda info: pytest.fail("an install does not ask whether the wheel fits HEAD"))
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"dirty": False, "git_sha": "c" * 40, "sha256": "ab" * 32})
+    assert g.step_wheel().name == "geobrix-0.6.0+env6-py3-none-any.whl"
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"dirty": True, "git_sha": "c" * 40, "sha256": "ab" * 32})
+    monkeypatch.setattr(driver, "jar_stale", lambda jar: pytest.fail("a dirty wheel is not reused: the run builds"))
+    with pytest.raises(BaseException):
+        g.step_wheel()

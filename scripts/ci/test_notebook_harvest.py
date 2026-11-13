@@ -284,6 +284,20 @@ def test_re_harvesting_one_piece_replaces_only_its_entry():
     assert nb["metadata"]["geobrix_run"]["mixed_wheels"] is True
 
 
+def test_a_piece_replaces_every_entry_inside_its_range_and_keeps_partial_overlaps():
+    nb = {"cells": [_code("a()"), _code("b()"), _code("c()"), _code("d()")], "metadata": {}}
+    hno.stamp_provenance(nb, OTHER, run_id=11, cells=range(1, 2), run_context=CTX, n_cells=4)  # cell 2 on wheel 2
+    hno.stamp_provenance(nb, OTHER, run_id=12, cells=range(2, 4), run_context=CTX, n_cells=4)  # cells 3-4 on wheel 2
+    hno.stamp_provenance(nb, PROV, run_id=13, cells=range(0, 3), run_context=CTX, n_cells=4)  # cells 1-3 again, wheel 1
+    meta = nb["metadata"]["geobrix_run"]
+    # 2:2 lies inside 1:3, so its cells now hold run 13's outputs; 3:4 still covers cell 4 and stays.
+    assert [(r["run_id"], r["cells"]) for r in meta["runs"]] == [(13, "1:3"), (12, "3:4")]
+    hno.stamp_provenance(nb, PROV, run_id=14, cells=range(2, 4), run_context=CTX, n_cells=4)
+    meta = nb["metadata"]["geobrix_run"]
+    assert [(r["run_id"], r["cells"]) for r in meta["runs"]] == [(13, "1:3"), (14, "3:4")]
+    assert meta["wheels"] == ["f" * 64] and "mixed_wheels" not in meta
+
+
 def test_a_whole_notebook_run_replaces_every_piece():
     nb = {"cells": [_code("a()"), _code("b()")], "metadata": {}}
     hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context=CTX, n_cells=2)

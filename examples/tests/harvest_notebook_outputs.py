@@ -261,6 +261,12 @@ def _cell_start(piece: dict) -> int:
     return int(str(piece["cells"]).split(":")[0])
 
 
+def _inside(piece: dict, rng: range) -> bool:
+    """True when every cell of ``piece`` (its 1-based ``A:B``) is in ``rng`` (0-based, stop exclusive)."""
+    start, _, stop = str(piece["cells"]).partition(":")
+    return rng.start + 1 <= int(start) and int(stop or start) <= rng.stop
+
+
 def _upgrade_runs(old: dict) -> list[dict]:
     """The piece entries of a recorded block. The older shape named one wheel at the top and only the run id and cells
     per piece: each piece takes that wheel (and runtime) as its own."""
@@ -297,7 +303,8 @@ def stamp_provenance(nb: dict, prov: Optional[dict], run_id, cells: Optional[ran
     and runtime that ran it, and a top-level summary (``wheels``, the distinct wheel sha256s, and ``mixed_wheels`` when
     there is more than one).
 
-    A piece replaces only the entry of the same cells (or run id); a whole-notebook run replaces them all. With one wheel
+    A piece replaces the entry of the same cells (or run id) and every entry inside its range; a whole-notebook run
+    replaces them all. With one wheel
     the top level also names it (version, git_sha, wheel, wheel_sha256, runtime); with several it does not, as no one
     wheel is the notebook's."""
     meta = nb.setdefault("metadata", {})
@@ -325,7 +332,9 @@ def stamp_provenance(nb: dict, prov: Optional[dict], run_id, cells: Optional[ran
         entry["guard"] = "off: the wheel was not checked on the compute"
     entry = {k: v for k, v in entry.items() if v is not None}
     runs = _upgrade_runs(meta.get(META_KEY) or {}) if cells is not None else []
-    runs = [r for r in runs if r["cells"] != entry["cells"] and (run_id is None or r.get("run_id") != run_id)] + [entry]
+    # Drop an entry whose cells all lie inside this piece (the same range included): those cells now hold this run's
+    # outputs, so a kept entry would name a wheel they no longer ran on. A partial overlap still covers other cells.
+    runs = [r for r in runs if not _inside(r, rng) and (run_id is None or r.get("run_id") != run_id)] + [entry]
     runs.sort(key=_cell_start)
     wheels = list(dict.fromkeys(r["wheel_sha256"] for r in runs if r.get("wheel_sha256")))
     mixed = len({_wheel_id(r) for r in runs if _wheel_id(r)}) > 1

@@ -85,7 +85,7 @@ The executed export (`databricks jobs export-run --views-to-export CODE`) is the
 - The uploaded piece keeps its cells plus the setup cells before A: `%pip`, `%restart_python` and `%run` cells, and cells of definitions only (imports, `def`, `class`, assignments without a call).
 - The state between pieces is what the notebook persists: tables, files, and its `FORCE_*` flags (default False, so a cell reuses what exists).
 - A piece that uses a name only a skipped cell defines is refused before any run. The error names the cell to add with `--prelude`.
-- With `--harvest-outputs` each piece writes only its own cells. It replaces only its own entry in `metadata.geobrix_run.runs`, matched by cell range or run id. Pieces on other wheels keep theirs. A notebook harvested in the earlier shape (one wheel at the top) is upgraded on the next harvest.
+- With `--harvest-outputs` each piece writes only its own cells. It replaces its own entry in `metadata.geobrix_run.runs` (matched by cell range or run id) and any entry whose cells all lie inside its range, since those cells now hold its outputs. An entry that only partly overlaps stays. Pieces on other wheels keep theirs. A notebook harvested in the earlier shape (one wheel at the top) is upgraded on the next harvest.
 - A piece is harvested only into an unchanged notebook: a different cell count at harvest time fails the harvest.
 
 ## Default behavior

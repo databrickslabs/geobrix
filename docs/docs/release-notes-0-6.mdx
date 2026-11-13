@@ -987,6 +987,13 @@ Every raster function follows the same order of checks on both implementations.
   - A `BINARY` `tile` column raises with `Fix: pass gbx_rst_fromcontent(<bytes>, 'GTiff') as tile`. A NULL canvas value raises and names it.
   - The cell rasterize aggregates derive the canvas from the cells when `xmin` to `height` and `kring_pad` are all NULL. A canvas given in part raises.
 
+### A missing file fails fast (fix) {#missing-file}
+
+- **A read of a missing Volume file fails after one retry budget, not minutes.** Serverless retries a file that is not found yet, because Volume reads can lag. A path that is truly missing paid that budget at each read step, about 45 seconds per task.
+  - Each read step now shares one budget per path.
+  - Spark's later attempts of the same failed task try the missing file once.
+  - Any other I/O error keeps its retries.
+
 ### WKB is little-endian and cell rings start south-west (behavior change) {#output-formats}
 
 - **WKB from the JVM-level functions is little-endian,** as the Python-level functions, GDAL and `st_asbinary` give. The same call returns the same bytes on every compute.
@@ -1244,6 +1251,22 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
   - GDAL's viewshed and COG driver replace `xarray-spatial` and `rio-cogeo`. `rst_cog_convert` takes the same profile names.
   - GeoBrix now installs `xarray` itself.
 - **JAR contents.** The GeoBrix JAR no longer bundles the Scala standard library (Databricks Runtime provides it) or `proj4j` (unused). It bundles `h3` 3.7.3, the version DBR 17.3, 18 and 19 ship. Nothing changes for users.
+
+## Models and visualization {#models-vizx}
+
+### GeoSAM segmentation: one object per object (fix) {#geosam-seams}
+
+- **`segment_raster` merges only the pieces of one object that a chip seam split.** It used to join any two fragments that touched, so neighbouring objects chained into a few large blobs.
+  - Fragments of one chip are never merged with each other.
+  - Across chips, two fragments merge when they overlap in the chips' shared zone, or share most of their edge along the seam.
+- **NoData is not segmented.** The raster's NoData value, mask or alpha band marks the pixels to skip, or pixels that are 0 in every band when it declares none. The segmenter gets the colour bands only.
+- **A served GeoSAM model bundles the env wheel of the environment that logs it.** It used to bundle the env5 wheel, also when logged from environment 6.
+- See [GeoSAM](./models/geosam).
+
+### `vizx` legends with many categories (fix) {#vizx-legends}
+
+- **`plot_static` moves a categorical legend of more than 12 entries outside the map.** It adds columns until the legend is no taller than the map. A figure that `plot_static` made widens to fit, so nothing covers the map.
+- **A note prints when a qualitative colour map has fewer colours than the categories.** Some swatches then stand for more than one category. Pass a larger colour map or `category_colors=`.
 
 ## Examples {#examples}
 

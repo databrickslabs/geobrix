@@ -1,0 +1,66 @@
+/* Styles for the GeoBrix HTML diagrams (resources/images/generators/diagrams/*.html.tmpl).
+   Adapted from the Databricks Geospatial Hub diagram styles, so the GeoBrix diagrams share that look.
+   The generator inlines this file into each rendered diagram, so the HTML is self-contained.
+
+   The SVG keeps its dark-stage colours as attributes. The light rules below remap them
+   (CSS beats SVG presentation attributes), so one source renders in either theme.
+   A new colour needs a light rule here, or it keeps its dark-stage value. */
+body{margin:0;padding:8px;background:#0a161b;font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.dg{--bg:#0f1e24;--panel:#16282f;--panel2:#1f3841;--border:#2b4650;--text:#f9f7f4;--muted:#a7b6ba;--faint:#71868c;--lava:#ff3621;
+    background:var(--bg);border-radius:14px;padding:22px 22px 14px;color:var(--text);font:13px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;margin:8px 0 26px;position:relative;overflow:hidden}
+.dg .k{font-size:10px;letter-spacing:1.4px;text-transform:uppercase;color:var(--faint)}
+.dg h3{margin:4px 0 4px;font-size:22px;line-height:1.15;color:var(--text)}
+.dg h3 span{background:linear-gradient(90deg,#ff3621,#ff8a73 55%,#e8c46a);-webkit-background-clip:text;background-clip:text;color:transparent}
+.dg .sub{color:var(--muted);margin:0 0 8px;max-width:780px}
+.dg svg{width:100%;height:auto;display:block}
+.dg svg text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif}
+.dg svg .mono text,.dg svg tspan.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dg .reveal{opacity:0;animation:rv .7s ease forwards}
+.dg .r1{animation-delay:.05s}.dg .r2{animation-delay:.35s}.dg .r3{animation-delay:.65s}.dg .r4{animation-delay:.95s}
+@keyframes rv{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.dg .pulse{animation:pl 2.4s ease-in-out infinite;transform-box:fill-box;transform-origin:center}
+@keyframes pl{0%,100%{opacity:.35;transform:scale(1)}50%{opacity:.9;transform:scale(1.35)}}
+@media (prefers-reduced-motion:reduce){.dg .reveal,.dg .pulse{animation:none;opacity:1}.dg .particles{display:none}}
+.dg .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--faint);font-size:11px;margin-top:6px}
+.dg .legend i{display:inline-block;width:18px;height:3px;border-radius:2px;vertical-align:middle;margin-right:6px}
+
+/* Light theme: <html data-theme="light"> (the exporter's --theme light sets it). */
+html[data-theme="light"] body{background:#fff}
+html[data-theme="light"] .dg{--bg:#f8f6f2;--panel:#fff;--panel2:#f3f0ea;--border:#d3dbdb;--text:#14232a;--muted:#4e6168;--faint:#5f7177;--lava:#dc2f19}
+html[data-theme="light"] .dg h3 span{background:linear-gradient(90deg,#dc2f19,#c9472d 55%,#94700e);-webkit-background-clip:text;background-clip:text}
+/* ink: light text on dark -> dark text on light */
+html[data-theme="light"] .dg [fill="#f9f7f4"],html[data-theme="light"] .dg [fill="#fff"]{fill:#14232a}
+html[data-theme="light"] .dg [fill="#a7b6ba"]{fill:#4e6168}
+html[data-theme="light"] .dg [fill="#86999f"]{fill:#5f7177}
+/* surfaces: dark chips and badge ink -> white */
+html[data-theme="light"] .dg [fill="#0f1e24"]{fill:#fff}
+html[data-theme="light"] .dg [stroke="#2b4650"]{stroke:#cbd4d4}
+/* category accents, darkened for contrast on a light stage */
+html[data-theme="light"] .dg [fill="#9fc3d6"]{fill:#3b7593}
+html[data-theme="light"] .dg [stroke="#9fc3d6"]{stroke:#3b7593}
+html[data-theme="light"] .dg [fill="#c8b6e2"]{fill:#6b52a3}
+html[data-theme="light"] .dg [stroke="#c8b6e2"]{stroke:#6b52a3}
+html[data-theme="light"] .dg [fill="#e8c46a"]{fill:#8f6b0c}
+html[data-theme="light"] .dg [stroke="#e8c46a"]{stroke:#a8800f}
+html[data-theme="light"] .dg [fill="#98c9b8"]{fill:#2c7a63}
+html[data-theme="light"] .dg [stroke="#98c9b8"]{stroke:#2c7a63}
+html[data-theme="light"] .dg [fill="#ff8a73"]{fill:#c9472d}
+html[data-theme="light"] .dg [stroke="#ff8a73"]{stroke:#c9472d}
+html[data-theme="light"] .dg [fill="#f3d98f"]{fill:#c08f17}
+/* card gradient and backdrop glows */
+html[data-theme="light"] .dg [stop-color="#1f3841"]{stop-color:#fff}
+html[data-theme="light"] .dg [stop-color="#16282f"]{stop-color:#f2efe9}
+html[data-theme="light"] .dg [stop-color="#9fc3d6"]{stop-color:#3b7593}
+html[data-theme="light"] .dg [stop-color="#ff3621"]{stop-color:#dc2f19}
+html[data-theme="light"] .dg radialGradient [stop-opacity=".12"]{stop-opacity:.06}
+html[data-theme="light"] .dg radialGradient [stop-opacity=".03"]{stop-opacity:.015}
+html[data-theme="light"] .dg [flood-color="#000"]{flood-color:#3b2f25;flood-opacity:.1}
+/* particles stay bright accents */
+html[data-theme="light"] .dg .particles [fill="#fff"]{fill:#dc2f19}
+html[data-theme="light"] .dg .particles [fill="#ffd2c9"]{fill:#e0583d}
+/* legend swatches (inline styles in the source) */
+html[data-theme="light"] .dg .legend i[style*="#9fc3d6"]{background:#3b7593 !important}
+html[data-theme="light"] .dg .legend i[style*="#c8b6e2"]{background:#6b52a3 !important}
+html[data-theme="light"] .dg .legend i[style*="#e8c46a"]{background:#a8800f !important}
+html[data-theme="light"] .dg .legend i[style*="#98c9b8"]{background:#2c7a63 !important}
+html[data-theme="light"] .dg .legend i[style*="#ff8a73"]{background:#c9472d !important}

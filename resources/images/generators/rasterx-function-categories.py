@@ -1,595 +1,355 @@
 #!/usr/bin/env python3
-"""Generate the RasterX function-categories infographic SVG (portrait + landscape).
+"""Generate the RasterX function-categories diagram (HTML source for the PNG exports).
 
-Re-render after adding/removing/renaming a RasterX function:
+The data comes from two places, never a hand-kept function list:
 
-    python3 resources/images/generators/rasterx-function-categories.py
-    # writes both:
-    #   resources/images/diagrams/rasterx/rasterx-function-categories.svg          (portrait, 2-col)
-    #   resources/images/diagrams/rasterx/rasterx-function-categories_landscape.svg (landscape, 3-col)
+  - the function manifest (python/geobrix/src/databricks/labs/gbx/manifest/functions.json):
+    the registered ``gbx_rst_*`` set, and each function's levels (JVM, Unity Catalog);
+  - the RasterX Function Reference page (docs/docs/api/raster-functions.mdx): each
+    ``## <category>`` section and the ``### rst_<name>`` functions under it.
 
-Rasterize portrait PNG (used by docs/packages/rasterx.mdx + docs/api/raster-functions.mdx).
-The height MUST match the "portrait canvas" the script prints — it grows as functions
-are added, and a too-short window clips the bottom cards (e.g. Vector-Raster Bridge):
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\
-        --headless --disable-gpu --hide-scrollbars \\
-        --force-device-scale-factor=2 --window-size=1416,<portrait_height> \\
-        --screenshot=resources/images/diagrams/rasterx/rasterx-function-categories.png \\
-        resources/images/diagrams/rasterx/rasterx-function-categories.svg
+Each card is one page category. Its pills are the registered functions in that section.
+The script fails when a registered function is on no page section, or when the page has a
+category that CATEGORIES (below) does not describe.
 
-Rasterize landscape PNG (for slides / 16:9 decks):
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\
-        --headless --disable-gpu --hide-scrollbars \\
-        --force-device-scale-factor=2 --window-size=2100,<landscape_height> \\
-        --screenshot=resources/images/diagrams/rasterx/rasterx-function-categories_landscape.png \\
-        resources/images/diagrams/rasterx/rasterx-function-categories_landscape.svg
-    # Landscape canvas is 2100x1200 (printed by the script on each run).
+Run it through the command, which also exports the PNGs:
+
+    bash scripts/commands/gbx-docs-diagrams.sh
+
+or on its own (stdlib only) to rewrite just the HTML:
+
+    python3 resources/images/generators/rasterx-function-categories.py [OUT.html]
+
+The HTML fills resources/images/generators/diagrams/function-categories.html.tmpl and inlines
+diagrams.css (light and dark themes). docs/scripts/check-diagram-coverage.py reads the HTML.
 """
-from dataclasses import dataclass, field
-from textwrap import dedent
+from __future__ import annotations
 
-# --- Data: 166 functions, organized by category --------------------------------
+import json
+import re
+import sys
+from dataclasses import dataclass
+from html import escape
+from pathlib import Path
+from string import Template
+
+ROOT = Path(__file__).resolve().parents[3]
+MANIFEST = ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+PAGE = ROOT / "docs/docs/api/raster-functions.mdx"
+TEMPLATES = Path(__file__).resolve().parent / "diagrams"
+OUT = ROOT / "resources/images/diagrams/rasterx/rasterx-function-categories.html"
+
+# --- Category display: title, one-line description, colour group, keyed by the page heading ---------------
+# Headings are matched without their {#anchor}. Function lists are NOT kept here; they come from the page.
+
+BLUE, PURPLE, GOLD, GREEN, CORAL = "#9fc3d6", "#c8b6e2", "#e8c46a", "#98c9b8", "#ff8a73"
+
+LEGEND = [
+    (BLUE, "load &amp; inspect"),
+    (PURPLE, "tile &amp; aggregate"),
+    (GOLD, "grid cells"),
+    (GREEN, "terrain, spectral &amp; point clouds"),
+    (CORAL, "transform, convert &amp; analyze"),
+]
+
+CATEGORIES = {
+    "Accessor Functions": ("Accessors", "Size, georeference, CRS, bands and statistics", BLUE),
+    "Aggregator Functions": ("Aggregators", "Merge, combine and rasterize tiles in GROUP BY", PURPLE),
+    "Constructor Functions": ("Constructors", "Tiles from files, bytes, bands, points or shapes", BLUE),
+    "LiDAR / Point-Cloud DSM": ("LiDAR &amp; Point Clouds", "Bin points into surface and canopy-height models", GREEN),
+    "Generator Functions": ("Generators", "Split a tile into tiles, bands or grid cells", PURPLE),
+    "Grid Functions (H3)": ("H3 Grid", "Raster values to H3 cells", GOLD),
+    "Grid Functions (quadbin)": ("Quadbin Grid", "Raster values to CARTO quadbin cells", GOLD),
+    "Grid Functions (BNG)": ("BNG Grid", "Raster values to British National Grid cells", GOLD),
+    "Grid Functions (Custom Grid)": ("Custom Grid", "Raster values to the cells of your own grid", GOLD),
+    "Operations": ("Operations", "Clip, resample, reproject, combine, map algebra, coordinates and XYZ tiles", CORAL),
+    "Vector↔raster bridge": ("Vector ↔ Raster", "Geometries to tiles and tiles to polygons", CORAL),
+    "Terrain Analysis": ("Terrain Analysis", "Slope, aspect, hillshade and relief from a DEM", GREEN),
+    "Spectral Indices": ("Spectral Indices", "Vegetation, water, burn and land-cover indices", GREEN),
+    "Pixel ops + extraction": ("Pixel Ops &amp; Extraction", "Bands, NoData fill, thresholds, samples, histograms and overviews", CORAL),
+    "Analysis": ("Analysis", "Contours, proximity, viewshed, COG output and GDAL commands", CORAL),
+}
+
+# --- Layout (SVG units; the reference grid is 4 columns of 289.5 on a 1240-wide stage) ---------------------
+
+W = 1240
+MARGIN = 20
+NCOLS = 4
+COL_W = 289.5
+COL_GAP = 14
+CARD_GAP = 14
+CARDS_TOP = 98
+PAD_X = 14
+PILL_H, PILL_ROW, PILL_GAP = 21, 27, 5
+MONO_W, SANS_W, LABEL_W = 6.9, 6.1, 7.4  # per-character widths for 11.5px mono, 11.5px sans, 12px bold labels
+DESC_CHARS = 48
+
+# The surfaces a user calls, as the page's "How to read the tabs" table shows them.
+# Each value is a list of (text, mono) runs.
+SURFACES = [
+    ("SQL", [("gbx_rst_*", True), (" after ", False), ("register(spark)", True)]),
+    ("Python", [("from databricks.labs.gbx.rasterx import functions as rx", True)]),
+    ("Unity Catalog SQL", [("<catalog>.<schema>.gbx_rst_*", True)]),
+]
+
 
 @dataclass
-class Section:
-    label: str
-    fns: list
-
-@dataclass
-class Card:
+class Category:
     title: str
-    subtitle: str
-    color: str            # accent (header)
-    tint: str             # light fill used for pill background
-    sections: list = field(default_factory=list)
-    fns: list = field(default_factory=list)   # if no sections, flat list
+    desc: str
+    color: str
+    fns: list[str]
 
-CARDS_LEFT = [
-    Card(
-        title="Constructors",
-        subtitle="Load rasters from path, bytes, or bands",
-        color="#E04E2A", tint="#FCE9E2",
-        fns=["rst_fromfile", "rst_fromcontent", "rst_frombands"],
-    ),
-    Card(
-        title="Accessors",
-        subtitle="Read raster metadata, geometry, dimensions, statistics",
-        color="#1F6FB5", tint="#E3EEF8",
-        sections=[
-            Section("Geo & extent", [
-                "rst_boundingbox", "rst_srid", "rst_georeference",
-                "rst_upperleftx", "rst_upperlefty",
-                "rst_scalex", "rst_scaley",
-                "rst_skewx", "rst_skewy", "rst_rotation",
-            ]),
-            Section("Dimensions", [
-                "rst_width", "rst_height",
-                "rst_pixelwidth", "rst_pixelheight",
-                "rst_pixelcount", "rst_memsize",
-            ]),
-            Section("Bands & types", [
-                "rst_numbands", "rst_bandmetadata", "rst_type",
-                "rst_getnodata", "rst_subdatasets", "rst_getsubdataset",
-                "rst_format", "rst_metadata",
-            ]),
-            Section("Statistics", [
-                "rst_min", "rst_max", "rst_avg", "rst_median", "rst_summary",
-                "rst_sample", "rst_histogram", "rst_stats_partial",
-            ]),
-        ],
-    ),
-    Card(
-        title="Aggregators",
-        subtitle="Combine tiles in GROUP BY",
-        color="#7A4FD3", tint="#ECE6FA",
-        fns=[
-            "rst_combineavg_agg", "rst_derivedband_agg", "rst_merge_agg",
-            "rst_frombands_agg", "rst_rasterize_agg",
-            "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg", "rst_binpoints_agg",
-            "rst_binpoints_partial", "rst_binpoints_finalize",
-            "rst_h3_rasterize_agg",
-            "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
-            "rst_custom_rasterize_agg",
-            "rst_merge_tvf", "rst_bng_rasterize_tvf",
-        ],
-    ),
-    Card(
-        title="Terrain Analysis",
-        subtitle="Elevation-derived surface models via gdaldem",
-        color="#8B5E3C", tint="#F5EDE4",
-        fns=[
-            "rst_slope", "rst_aspect", "rst_hillshade",
-            "rst_tri", "rst_tpi", "rst_roughness",
-            "rst_color_relief", "rst_viewshed", "rst_chm",
-        ],
-    ),
-    Card(
-        title="Spectral Indices",
-        subtitle="Band-math indices for vegetation, water, and fire",
-        color="#2E8B57", tint="#E0F4EA",
-        fns=["rst_ndvi", "rst_evi", "rst_savi", "rst_ndwi", "rst_nbr", "rst_index", "rst_land_cover"],
-    ),
-    Card(
-        title="H3 Grid",
-        subtitle="Aggregate raster values onto H3 cells",
-        color="#0F8E8B", tint="#D5ECEC",
-        fns=[
-            "rst_h3_rastertogridavg", "rst_h3_rastertogridcount",
-            "rst_h3_rastertogridmax", "rst_h3_rastertogridmin",
-            "rst_h3_rastertogridmedian", "rst_h3_rastertogridstddev",
-            "rst_h3_rastertogridsum", "rst_h3_rastertogridvariance",
-            "rst_h3_rastertogrid_partial",
-        ],
-    ),
-]
 
-CARDS_RIGHT = [
-    Card(
-        title="Generators",
-        subtitle="Explode a tile into many tiles or bands",
-        color="#D49213", tint="#FBEED1",
-        fns=[
-            "rst_maketiles", "rst_retile", "rst_tooverlappingtiles",
-            "rst_separatebands", "rst_h3_tessellate",
-            "rst_quadbin_tessellate", "rst_bng_tessellate",
-            "rst_custom_tessellate",
-        ],
-    ),
-    Card(
-        title="Operations",
-        subtitle="Transform pixels, geometry, format, and coordinates",
-        color="#1F8F5A", tint="#DDF1E6",
-        sections=[
-            Section("Transform", [
-                "rst_clip", "rst_transform", "rst_merge",
-                "rst_asformat", "rst_updatetype",
-                "rst_resample", "rst_resample_to_res", "rst_resample_to_size",
-                "rst_setsrid", "rst_band",
-                "rst_crs", "rst_setcrs", "rst_transformcrs",
-            ]),
-            Section("Compute", [
-                "rst_filter", "rst_convolve",
-                "rst_mapalgebra", "rst_combineavg",
-                "rst_combinemin", "rst_combinemax", "rst_combinemedian",
-                "rst_combinesum", "rst_combinestddev", "rst_combinecount",
-                "rst_derivedband", "rst_initnodata",
-                "rst_threshold", "rst_percentile_stretch",
-                "rst_fillnodata", "rst_proximity", "rst_contour",
-                "rst_align_to", "rst_gdal",
-            ]),
-            Section("Optimise", [
-                "rst_buildoverviews", "rst_cog_convert",
-            ]),
-            Section("Coordinates", [
-                "rst_rastertoworldcoord",
-                "rst_rastertoworldcoordx", "rst_rastertoworldcoordy",
-                "rst_worldtorastercoord",
-                "rst_worldtorastercoordx", "rst_worldtorastercoordy",
-            ]),
-            Section("Validity", ["rst_isempty", "rst_tryopen"]),
-        ],
-    ),
-    Card(
-        title="Vector-Raster Bridge",
-        subtitle="Convert between vector geometries and raster tiles",
-        color="#6B48A8", tint="#EEE8F8",
-        fns=[
-            "rst_rasterize", "rst_polygonize", "rst_isoband",
-            "rst_dtmfromgeoms", "rst_gridfrompoints", "rst_binpoints",
-            "rst_h3_rasterize", "rst_quadbin_rasterize", "rst_bng_rasterize",
-            "rst_custom_rasterize",
-        ],
-    ),
-    Card(
-        title="Quadbin Grid",
-        subtitle="Aggregate raster values onto Quadbin cells",
-        color="#1571A8", tint="#DFF0FA",
-        fns=[
-            "rst_quadbin_rastertogridavg", "rst_quadbin_rastertogridcount",
-            "rst_quadbin_rastertogridmax", "rst_quadbin_rastertogridmin",
-            "rst_quadbin_rastertogridmedian", "rst_quadbin_rastertogridstddev",
-            "rst_quadbin_rastertogridsum", "rst_quadbin_rastertogridvariance",
-            "rst_quadbin_rastertogrid_partial",
-        ],
-    ),
-    Card(
-        title="BNG Grid",
-        subtitle="Aggregate raster values onto British National Grid cells",
-        color="#B0357A", tint="#F8E1EF",
-        fns=[
-            "rst_bng_rastertogridavg", "rst_bng_rastertogridcount",
-            "rst_bng_rastertogridmax", "rst_bng_rastertogridmin",
-            "rst_bng_rastertogridmedian", "rst_bng_rastertogridstddev",
-            "rst_bng_rastertogridsum", "rst_bng_rastertogridvariance",
-            "rst_bng_rastertogrid_partial",
-        ],
-    ),
-    Card(
-        title="Custom Grid",
-        subtitle="Aggregate raster values onto user-defined custom grid cells",
-        color="#4B8E6A", tint="#E0F0E8",
-        fns=[
-            "rst_custom_rastertogridavg", "rst_custom_rastertogridcount",
-            "rst_custom_rastertogridmax", "rst_custom_rastertogridmin",
-            "rst_custom_rastertogridmedian", "rst_custom_rastertogridstddev",
-            "rst_custom_rastertogridsum", "rst_custom_rastertogridvariance",
-            "rst_custom_rastertogrid_partial",
-        ],
-    ),
-    Card(
-        title="Web-Mercator Tile Output",
-        subtitle="Reproject and slice rasters to XYZ/web-mercator tiles",
-        color="#D44E12", tint="#FAECE3",
-        fns=["rst_to_webmercator", "rst_tilexyz", "rst_xyzpyramid"],
-    ),
-]
+def registered() -> dict[str, dict]:
+    """Registered rst_ names (gbx_ prefix dropped) -> manifest row."""
+    rows = json.loads(MANIFEST.read_text())["functions"]
+    return {r["sql_name"][len("gbx_"):]: r for r in rows if r["sql_name"].startswith("gbx_rst_")}
 
-# --- Layout -------------------------------------------------------------------
 
-PAD = 36
-COL_GAP = 24
-CARD_GAP = 22
-TITLE_BLOCK_H = 110
-CARD_W = 660
-CANVAS_W = PAD * 2 + CARD_W * 2 + COL_GAP
+def page_sections(text: str) -> list[tuple[str, list[str]]]:
+    """[(heading, [rst_name, ...]), ...] in page order; code fences skipped, {#anchors} dropped."""
+    sections: list[tuple[str, list[str]]] = []
+    fence = False
+    for line in text.splitlines():
+        if line.startswith("```"):
+            fence = not fence
+        if fence:
+            continue
+        if m := re.match(r"^## (.+?)\s*(\{#[^}]*\})?\s*$", line):
+            sections.append((m.group(1), []))
+        elif (m := re.match(r"^### (rst_[a-z0-9_]+)\b", line)) and sections:
+            sections[-1][1].append(m.group(1))
+    return sections
 
-CARD_PAD_X = 22
-CARD_PAD_TOP = 22
-CARD_HEAD_GAP = 14
-SECTION_LABEL_H = 22
-SECTION_GAP = 14
-PILL_H = 28
-PILL_GAP_X = 8
-PILL_GAP_Y = 8
-PILL_PAD_X = 12
-CHAR_W = 8.0     # approx for 13px monospace (SF Mono / Menlo); tuned visually
-PILL_FONT = 13
 
-def pill_width(text):
-    return max(int(len(text) * CHAR_W) + PILL_PAD_X * 2, 60)
+def categories(reg: dict[str, dict]) -> list[Category]:
+    out, placed, unknown = [], {}, []
+    for heading, names in page_sections(PAGE.read_text()):
+        fns = sorted(n for n in names if n in reg)
+        if not fns:
+            continue  # a section of Python helpers only (not registered SQL functions)
+        if heading not in CATEGORIES:
+            unknown.append(heading)
+            continue
+        for n in fns:
+            placed.setdefault(n, []).append(heading)
+        title, desc, color = CATEGORIES[heading]
+        out.append(Category(title, desc, color, fns))
+    errors = []
+    if unknown:
+        errors.append(f"page categories with no CATEGORIES entry: {unknown}")
+    if missing := sorted(set(reg) - set(placed)):
+        errors.append(f"registered functions on no {PAGE.name} section: {missing}")
+    if twice := {n: h for n, h in placed.items() if len(h) > 1}:
+        errors.append(f"functions in more than one section: {twice}")
+    if errors:
+        sys.exit("rasterx-function-categories: " + "; ".join(errors))
+    return out
 
-def layout_pills(fns, max_w):
-    """Return (rows, total_height) where rows = list of [(x, w, text), ...]."""
-    rows = []
-    cur = []
-    cur_w = 0
-    for f in fns:
-        w = pill_width(f)
-        needed = w if not cur else cur_w + PILL_GAP_X + w
-        if cur and needed > max_w:
-            rows.append(cur)
-            cur = [(0, w, f)]
-            cur_w = w
+
+# --- SVG ----------------------------------------------------------------------------------------------------
+
+
+def wrap(text: str, width: int) -> list[str]:
+    lines, cur = [], ""
+    for word in text.split():
+        if cur and len(cur) + 1 + len(word) > width:
+            lines.append(cur)
+            cur = word
         else:
-            x = 0 if not cur else cur_w + PILL_GAP_X
-            cur.append((x, w, f))
-            cur_w = needed
-    if cur:
-        rows.append(cur)
-    h = len(rows) * PILL_H + max(0, len(rows) - 1) * PILL_GAP_Y
-    return rows, h
-
-def card_height(card):
-    inner_w = CARD_W - 2 * CARD_PAD_X
-    h = CARD_PAD_TOP + 28 + 6 + 16 + CARD_HEAD_GAP   # title + subtitle + gap
-    if card.sections:
-        for i, sec in enumerate(card.sections):
-            if i > 0:
-                h += SECTION_GAP
-            h += SECTION_LABEL_H
-            _, ph = layout_pills(sec.fns, inner_w)
-            h += ph
-    else:
-        _, ph = layout_pills(card.fns, inner_w)
-        h += ph
-    h += CARD_PAD_TOP   # bottom padding
-    return h
-
-def column_height(cards):
-    return sum(card_height(c) for c in cards) + (len(cards) - 1) * CARD_GAP
-
-# --- Render -------------------------------------------------------------------
-
-def esc(s):
-    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-def render_pill(x, y, w, text, color, tint):
-    return (
-        f'<rect x="{x:.1f}" y="{y:.1f}" rx="13" ry="13" '
-        f'width="{w}" height="{PILL_H}" fill="{tint}" stroke="{color}" '
-        f'stroke-opacity="0.35" stroke-width="1"/>'
-        f'<text x="{x + w/2:.1f}" y="{y + PILL_H/2 + 4:.1f}" '
-        f'text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" '
-        f'font-size="{PILL_FONT}" fill="{color}" font-weight="600">{esc(text)}</text>'
-    )
-
-def render_card(x, y, card):
-    inner_w = CARD_W - 2 * CARD_PAD_X
-    h = card_height(card)
-    out = []
-
-    out.append(
-        f'<rect x="{x}" y="{y}" rx="14" ry="14" width="{CARD_W}" height="{h}" '
-        f'fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" '
-        f'filter="url(#card-shadow)"/>'
-    )
-    # Top accent stripe - rounded only on top corners
-    r = 14
-    stripe_h = 5
-    out.append(
-        f'<path d="M {x} {y + r} '
-        f'A {r} {r} 0 0 1 {x + r} {y} '
-        f'H {x + CARD_W - r} '
-        f'A {r} {r} 0 0 1 {x + CARD_W} {y + r} '
-        f'V {y + stripe_h} '
-        f'H {x} Z" fill="{card.color}"/>'
-    )
-
-    # Title block
-    tx = x + CARD_PAD_X
-    ty = y + CARD_PAD_TOP + 18
-    # Function count badge to the right
-    total = len(card.fns) if not card.sections else sum(len(s.fns) for s in card.sections)
-    badge_text = f"{total} fns"
-    badge_w = int(len(badge_text) * 7) + 22
-    badge_x = x + CARD_W - CARD_PAD_X - badge_w
-    badge_y = y + CARD_PAD_TOP + 4
-    out.append(
-        f'<rect x="{badge_x}" y="{badge_y}" rx="11" ry="11" '
-        f'width="{badge_w}" height="22" fill="{card.color}"/>'
-        f'<text x="{badge_x + badge_w/2}" y="{badge_y + 15.5}" '
-        f'text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" '
-        f'font-size="12" font-weight="700" fill="#FFFFFF">{esc(badge_text)}</text>'
-    )
-
-    out.append(
-        f'<text x="{tx}" y="{ty}" font-family="Inter, -apple-system, system-ui, sans-serif" '
-        f'font-size="20" font-weight="800" fill="#1B3139">{esc(card.title)}</text>'
-    )
-    out.append(
-        f'<text x="{tx}" y="{ty + 20}" font-family="Inter, -apple-system, system-ui, sans-serif" '
-        f'font-size="12" fill="#5A6878">{esc(card.subtitle)}</text>'
-    )
-
-    cy = ty + 20 + CARD_HEAD_GAP + 8
-
-    if card.sections:
-        for i, sec in enumerate(card.sections):
-            if i > 0:
-                cy += SECTION_GAP
-            out.append(
-                f'<text x="{tx}" y="{cy + 14}" font-family="Inter, -apple-system, system-ui, sans-serif" '
-                f'font-size="11" font-weight="700" fill="#7A8794" letter-spacing="1.2">'
-                f'{esc(sec.label.upper())}</text>'
-            )
-            cy += SECTION_LABEL_H
-            rows, ph = layout_pills(sec.fns, inner_w)
-            for r_idx, row in enumerate(rows):
-                row_y = cy + r_idx * (PILL_H + PILL_GAP_Y)
-                for px, pw, name in row:
-                    out.append(render_pill(tx + px, row_y, pw, name, card.color, card.tint))
-            cy += ph
-    else:
-        rows, ph = layout_pills(card.fns, inner_w)
-        for r_idx, row in enumerate(rows):
-            row_y = cy + r_idx * (PILL_H + PILL_GAP_Y)
-            for px, pw, name in row:
-                out.append(render_pill(tx + px, row_y, pw, name, card.color, card.tint))
-
-    return "\n".join(out), h
+            cur = f"{cur} {word}" if cur else word
+    return lines + [cur] if cur else lines
 
 
-def render():
-    # Compute total canvas height from taller column.
-    h_left = column_height(CARDS_LEFT)
-    h_right = column_height(CARDS_RIGHT)
-    body_h = max(h_left, h_right)
-    canvas_h = PAD + TITLE_BLOCK_H + body_h + PAD
-
-    parts = []
-    parts.append(
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {CANVAS_W} {canvas_h}" '
-        f'width="{CANVAS_W}" height="{canvas_h}" '
-        f'style="font-family: Inter, -apple-system, system-ui, sans-serif;">'
-    )
-    # Defs
-    parts.append(dedent('''\
-        <defs>
-          <filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">
-            <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F1B2A" flood-opacity="0.08"/>
-          </filter>
-          <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#FAFBFC"/>
-            <stop offset="1" stop-color="#F1F4F8"/>
-          </linearGradient>
-        </defs>
-        '''))
-    # Background
-    parts.append(f'<rect x="0" y="0" width="{CANVAS_W}" height="{canvas_h}" fill="url(#bg)"/>')
-
-    # Header block
-    parts.append(
-        f'<text x="{PAD}" y="{PAD + 28}" font-size="30" font-weight="800" fill="#0F1B2A">'
-        f'GeoBrix &#183; RasterX'
-        f'</text>'
-    )
-    parts.append(
-        f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'166 SQL functions for raster data on Spark &#8212; registered as '
-        f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
-        f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
-        f' &#183; also available in Python &amp; Scala as '
-        f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
-        f'font-weight="700" fill="#0F1B2A">rst_*</tspan>'
-        f'</text>'
-    )
-    # Version pill (top-right)
-    pill_text = "v0.6.0"
-    pw = int(len(pill_text) * 6.8) + 24
-    parts.append(
-        f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '
-        f'width="{pw}" height="26" fill="#0F1B2A"/>'
-        f'<text x="{CANVAS_W - PAD - pw/2}" y="{PAD + 26}" text-anchor="middle" '
-        f'font-size="12" font-weight="700" fill="#FFFFFF">{pill_text}</text>'
-    )
-
-    # Cards
-    body_y = PAD + TITLE_BLOCK_H
-    # Left column
-    cy = body_y
-    for c in CARDS_LEFT:
-        s, h = render_card(PAD, cy, c)
-        parts.append(s)
-        cy += h + CARD_GAP
-    # Right column
-    cy = body_y
-    for c in CARDS_RIGHT:
-        s, h = render_card(PAD + CARD_W + COL_GAP, cy, c)
-        parts.append(s)
-        cy += h + CARD_GAP
-
-    # Footer
-    parts.append(
-        f'<text x="{PAD}" y="{canvas_h - 14}" font-size="11" fill="#7A8794">'
-        f'databrickslabs/geobrix &#183; DBR 17.3 / 18 LTS &#183; Scala 2.13.16 / Spark 4.0&#8211;4.1 / Python 3.12'
-        f'</text>'
-    )
-    parts.append(
-        f'<text x="{CANVAS_W - PAD}" y="{canvas_h - 14}" text-anchor="end" '
-        f'font-size="11" fill="#7A8794">'
-        f'docs/api/rasterx-functions'
-        f'</text>'
-    )
-
-    parts.append('</svg>')
-    return "\n".join(parts)
+def pill_rows(fns: list[str], max_w: float) -> list[list[tuple[float, float, str]]]:
+    rows, cur, x = [], [], 0.0
+    for f in fns:
+        w = round(len(f) * MONO_W + 12, 1)
+        if cur and x + PILL_GAP + w > max_w:
+            rows.append(cur)
+            cur, x = [], 0.0
+        px = x + PILL_GAP if cur else 0.0
+        cur.append((px, w, f))
+        x = px + w
+    return rows + [cur] if cur else rows
 
 
-def render_landscape():
-    """Render a 3-column landscape variant — better aspect ratio for 16:9 slides.
+def card_height(c: Category) -> float:
+    lines = len(wrap(c.desc, DESC_CHARS))
+    rows = len(pill_rows(c.fns, COL_W - 2 * PAD_X))
+    pills_top = 45 + 15 * (lines - 1) + 13
+    return pills_top + (rows - 1) * PILL_ROW + PILL_H + 16
 
-    All cards from CARDS_LEFT + CARDS_RIGHT are distributed across 3 columns
-    using a greedy height-balance algorithm: each card is placed into the
-    currently shortest column (by cumulative card_height + CARD_GAP).
+
+def masonry(cats: list[Category]) -> list[list[tuple[float, Category]]]:
+    """Balance the columns: tallest card first, each into the shortest column so far.
+
+    Inside a column the cards then follow the legend order (then page order), and the
+    columns are ordered by their first card, so the colour groups read left to right.
     """
-    NCOLS = 3
-    LANDSCAPE_W = PAD * 2 + CARD_W * NCOLS + COL_GAP * (NCOLS - 1)
+    group = {color: i for i, (color, _) in enumerate(LEGEND)}
+    rank = {id(c): (group[c.color], i) for i, c in enumerate(cats)}
+    cols: list[list[Category]] = [[] for _ in range(NCOLS)]
+    heights = [0.0] * NCOLS
+    for c in sorted(cats, key=lambda c: (-card_height(c), rank[id(c)])):
+        i = heights.index(min(heights))
+        cols[i].append(c)
+        heights[i] += card_height(c) + CARD_GAP
+    cols = sorted((sorted(col, key=lambda c: rank[id(c)]) for col in cols), key=lambda col: rank[id(col[0])])
+    placed = []
+    for col in cols:
+        y, out = float(CARDS_TOP), []
+        for c in col:
+            out.append((y, c))
+            y += card_height(c) + CARD_GAP
+        placed.append(out)
+    return placed
 
-    all_cards = CARDS_LEFT + CARDS_RIGHT
 
-    # Greedy height-balanced column assignment.
-    # col_cards[i] = list of cards in column i
-    # col_h[i] = running pixel height of column i (cards + gaps so far)
-    col_cards = [[] for _ in range(NCOLS)]
-    col_h = [0] * NCOLS
+def render_card(x: float, y: float, c: Category, cid: str) -> tuple[str, str]:
+    h = card_height(c)
+    n = str(len(c.fns))
+    bw = round(14 + 7.2 * len(n), 1)
+    bx = round(x + COL_W - PAD_X - bw, 1)
+    clip = f'<clipPath id="{cid}"><rect x="{x}" y="{y}" width="{COL_W}" height="{h}" rx="12"/></clipPath>'
+    out = [
+        f'<g class="node" data-category="{c.title}">'
+        f'<rect class="box" x="{x}" y="{y}" width="{COL_W}" height="{h}" rx="12" fill="url(#card)" '
+        f'stroke="{c.color}" stroke-opacity=".55" stroke-width="1.3" filter="url(#shd)"/>',
+        f'  <rect x="{x}" y="{y}" width="{COL_W}" height="4" fill="{c.color}" clip-path="url(#{cid})"/>',
+        f'  <text x="{x + PAD_X}" y="{y + 27}" font-size="15" font-weight="700" fill="#f9f7f4">{c.title}</text>',
+        f'  <g class="badge"><rect x="{bx}" y="{y + 13}" width="{bw}" height="20" rx="10" fill="{c.color}"/>'
+        f'<text x="{round(bx + bw / 2, 2)}" y="{y + 27}" font-size="11.5" font-weight="800" fill="#0f1e24" '
+        f'text-anchor="middle">{n}</text></g>',
+    ]
+    lines = wrap(c.desc, DESC_CHARS)
+    for i, line in enumerate(lines):
+        out.append(f'  <text x="{x + PAD_X}" y="{y + 45 + 15 * i}" font-size="11" fill="#a7b6ba">{line}</text>')
+    py = y + 45 + 15 * (len(lines) - 1) + 13
+    out.append(f'  <g class="mono" font-size="11.5" fill="{c.color}" text-anchor="middle">')
+    for r, row in enumerate(pill_rows(c.fns, COL_W - 2 * PAD_X)):
+        ry = py + r * PILL_ROW
+        cells = []
+        for px, w, name in row:
+            rx = round(x + PAD_X + px, 1)
+            cells.append(
+                f'<g class="pill" data-fn="{name}"><rect x="{rx}" y="{ry}" width="{w}" height="{PILL_H}" rx="10.5" '
+                f'fill="#0f1e24" fill-opacity=".55" stroke="{c.color}" stroke-opacity=".4"/>'
+                f'<text x="{round(rx + w / 2, 2)}" y="{ry + 14.5}">{name}</text></g>'
+            )
+        out.append("    " + "".join(cells))
+    out.append("  </g></g>")
+    return "\n".join(out), clip
 
-    for card in all_cards:
-        ch = card_height(card)
-        # Find the column with minimum current height
-        min_col = col_h.index(min(col_h))
-        if col_cards[min_col]:
-            col_h[min_col] += CARD_GAP
-        col_h[min_col] += ch
-        col_cards[min_col].append(card)
 
-    body_h = max(col_h)
-    canvas_h = PAD + TITLE_BLOCK_H + body_h + PAD
+def render_surfaces(kicker: str) -> str:
+    out = [
+        '<g class="reveal r1">',
+        '  <circle class="pulse" cx="24" cy="20" r="3.5" fill="#ff8a73"/>',
+        f'  <text x="34" y="24" font-size="10.5" fill="#86999f" letter-spacing="1.6">{kicker}</text>',
+    ]
+    x = float(MARGIN)
+    for label, runs in SURFACES:
+        lw = round(len(label) * LABEL_W + 20, 1)
+        tw = sum(len(t) * (MONO_W if mono else SANS_W) for t, mono in runs)
+        cw = round(lw + 12 + tw + 12, 2)
+        spans = "".join(
+            (f'<tspan class="mono" fill="#f3d98f">{escape(t)}</tspan>' if mono else f'<tspan fill="#a7b6ba">{escape(t)}</tspan>')
+            for t, mono in runs
+        )
+        out.append(
+            f'  <rect x="{x}" y="34" width="{cw}" height="30" rx="8" fill="#0f1e24" stroke="#2b4650"/>'
+            f'<rect x="{x}" y="34" width="{lw}" height="30" rx="8" fill="#ff8a73" fill-opacity=".14"/>'
+            f'<text x="{round(x + lw / 2, 2)}" y="53.5" font-size="12" font-weight="700" fill="#ff8a73" '
+            f'text-anchor="middle">{label}</text>'
+        )
+        out.append(f'  <text x="{round(x + lw + 12, 2)}" y="53.5" font-size="11.5" xml:space="preserve">{spans}</text>')
+        x = round(x + cw + 12, 2)
+    out.append("</g>")
+    if x - 12 > W - MARGIN:
+        sys.exit(f"rasterx-function-categories: the surfaces bar is {x - 12:.0f} wide; the stage is {W - MARGIN}")
+    return "\n".join(out)
 
-    parts = []
-    parts.append(
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {LANDSCAPE_W} {canvas_h}" '
-        f'width="{LANDSCAPE_W}" height="{canvas_h}" '
-        f'style="font-family: Inter, -apple-system, system-ui, sans-serif;">'
+
+def render(reg: dict[str, dict], cats: list[Category]) -> str:
+    total = sum(len(c.fns) for c in cats)
+    n_jvm = sum("L1" in reg[f]["levels"] for c in cats for f in c.fns)
+    n_uc = sum("L4" in reg[f]["levels"] for c in cats for f in c.fns)
+    cols = masonry(cats)
+    bottom = max(y + card_height(c) for col in cols for y, c in col)
+    h = round(bottom + 44)
+
+    cards, clips = [], []
+    k = 0
+    for ci, col in enumerate(cols):
+        cards.append(f'<g class="reveal r{min(ci + 1, 4)}">')
+        for y, c in col:
+            k += 1
+            svg, clip = render_card(round(MARGIN + ci * (COL_W + COL_GAP), 1), y, c, f"c{k}")
+            cards.append(svg)
+            clips.append(clip)
+        cards.append("</g>")
+
+    aria = (
+        f"The {total} RasterX functions in {len(cats)} categories, each card listing its function names: "
+        + ", ".join(f"{c.title} {len(c.fns)}" for c in cats)
+        + ". Call them from SQL after register(spark), from Python with "
+        "from databricks.labs.gbx.rasterx import functions as rx, and from Unity Catalog SQL."
     )
-    # Defs (identical structure to portrait)
-    parts.append(dedent('''\
-        <defs>
-          <filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">
-            <feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F1B2A" flood-opacity="0.08"/>
-          </filter>
-          <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stop-color="#FAFBFC"/>
-            <stop offset="1" stop-color="#F1F4F8"/>
-          </linearGradient>
-        </defs>
-        '''))
-    # Background
-    parts.append(f'<rect x="0" y="0" width="{LANDSCAPE_W}" height="{canvas_h}" fill="url(#bg)"/>')
+    svg = f"""  <svg viewBox="0 0 {W} {h}" role="img" aria-label="{aria}">
+    <defs>
+      <radialGradient id="ga" cx="18%" cy="20%" r="45%"><stop offset="0" stop-color="#9fc3d6" stop-opacity=".12"/><stop offset="1" stop-color="#9fc3d6" stop-opacity="0"/></radialGradient>
+      <radialGradient id="gb" cx="82%" cy="70%" r="50%"><stop offset="0" stop-color="#ff3621" stop-opacity=".12"/><stop offset=".6" stop-color="#ff3621" stop-opacity=".03"/><stop offset="1" stop-color="#ff3621" stop-opacity="0"/></radialGradient>
+      <linearGradient id="card" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1f3841"/><stop offset="1" stop-color="#16282f"/></linearGradient>
+      <filter id="glow" x="-400%" y="-400%" width="900%" height="900%"><feGaussianBlur stdDeviation="5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      <filter id="shd" x="-10%" y="-10%" width="120%" height="140%"><feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#000" flood-opacity=".35"/></filter>
+      <pattern id="grat" width="62" height="62" patternUnits="userSpaceOnUse"><path d="M62 0H0V62" fill="none" stroke="#2b4650" stroke-width=".6" opacity=".55"/></pattern>
+      {chr(10).join("      " + c for c in clips).strip()}
+    </defs>
+    <rect width="{W}" height="{h}" fill="url(#grat)" opacity=".45"/>
+    <rect width="{W}" height="{h}" fill="url(#ga)"/><rect width="{W}" height="{h}" fill="url(#gb)"/>
+{render_surfaces("CALL THEM FROM SQL, PYTHON &amp; UNITY CATALOG SQL")}
+    <path id="scan" d="M{MARGIN},80 H{W - MARGIN}" fill="none" stroke="#2b4650" stroke-width="1" stroke-dasharray="2 5"/>
+{chr(10).join(cards)}
+    <g class="particles">
+      <circle r="3" fill="#fff" filter="url(#glow)"><animateMotion dur="4.8s" repeatCount="indefinite"><mpath href="#scan"/></animateMotion></circle>
+      <circle r="2.4" fill="#ffd2c9"><animateMotion dur="4.8s" begin="2.4s" repeatCount="indefinite"><mpath href="#scan"/></animateMotion></circle>
+    </g>
+    <text x="{MARGIN}" y="{h - 16}" font-size="12" fill="#a7b6ba"><tspan fill="#ff8a73" font-weight="700">{len(cats)}</tspan> categories · <tspan fill="#ff8a73" font-weight="700">{total}</tspan> functions</text>
+    <text x="{W - MARGIN}" y="{h - 16}" font-size="11" fill="#86999f" text-anchor="end">Source: GeoBrix function manifest · RasterX Function Reference</text>
+  </svg>"""
 
-    # Header block (same title, same subtitle, same version pill)
-    parts.append(
-        f'<text x="{PAD}" y="{PAD + 28}" font-size="30" font-weight="800" fill="#0F1B2A">'
-        f'GeoBrix &#183; RasterX'
-        f'</text>'
+    sub = (
+        f"The {total} RasterX functions on the Function Reference page, in {len(cats)} groups: "
+        "load and inspect, tile and aggregate, grid cells, and transform and analyze. "
+        "Every function runs at the Python level on any compute. "
+        f"With the JAR on dedicated compute, GeoBrix runs {n_jvm} of them at the faster JVM level. "
+        f"{n_uc} of them also install as Unity Catalog functions for SQL warehouses."
     )
-    parts.append(
-        f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'166 SQL functions for raster data on Spark &#8212; registered as '
-        f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
-        f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
-        f' &#183; also available in Python &amp; Scala as '
-        f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
-        f'font-weight="700" fill="#0F1B2A">rst_*</tspan>'
-        f'</text>'
-    )
-    # Version pill (top-right)
-    pill_text = "v0.6.0"
-    pw = int(len(pill_text) * 6.8) + 24
-    parts.append(
-        f'<rect x="{LANDSCAPE_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '
-        f'width="{pw}" height="26" fill="#0F1B2A"/>'
-        f'<text x="{LANDSCAPE_W - PAD - pw/2}" y="{PAD + 26}" text-anchor="middle" '
-        f'font-size="12" font-weight="700" fill="#FFFFFF">{pill_text}</text>'
-    )
-
-    # Cards — 3 columns
-    body_y = PAD + TITLE_BLOCK_H
-    for col_i, cards in enumerate(col_cards):
-        col_x = PAD + col_i * (CARD_W + COL_GAP)
-        cy = body_y
-        for card in cards:
-            s, h = render_card(col_x, cy, card)
-            parts.append(s)
-            cy += h + CARD_GAP
-
-    # Footer
-    parts.append(
-        f'<text x="{PAD}" y="{canvas_h - 14}" font-size="11" fill="#7A8794">'
-        f'databrickslabs/geobrix &#183; DBR 17.3 / 18 LTS &#183; Scala 2.13.16 / Spark 4.0&#8211;4.1 / Python 3.12'
-        f'</text>'
-    )
-    parts.append(
-        f'<text x="{LANDSCAPE_W - PAD}" y="{canvas_h - 14}" text-anchor="end" '
-        f'font-size="11" fill="#7A8794">'
-        f'docs/api/rasterx-functions'
-        f'</text>'
+    legend = "".join(f'<span><i style="background:{c}"></i>{label}</span>' for c, label in LEGEND)
+    return Template((TEMPLATES / "function-categories.html.tmpl").read_text()).substitute(
+        generator="resources/images/generators/rasterx-function-categories.py",
+        title_text="GeoBrix RasterX functions",
+        css=(TEMPLATES / "diagrams.css").read_text().strip(),
+        kicker="GeoBrix · RasterX functions",
+        title_lead=f"{total} RasterX functions,",
+        title_span="raster processing for Databricks.",
+        sub=sub,
+        svg=svg,
+        legend=legend,
     )
 
-    parts.append('</svg>')
-    return "\n".join(parts), canvas_h
+
+def main() -> int:
+    out = Path(sys.argv[1]) if len(sys.argv) > 1 else OUT
+    reg = registered()
+    cats = categories(reg)
+    out.write_text(render(reg, cats))
+    print(f"wrote {out.relative_to(ROOT) if out.is_relative_to(ROOT) else out}: "
+          f"{len(cats)} categories, {sum(len(c.fns) for c in cats)} functions")
+    return 0
 
 
 if __name__ == "__main__":
-    import os
-    import sys
-
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    default_portrait = os.path.join(script_dir, "..", "diagrams", "rasterx", "rasterx-function-categories.svg")
-    default_landscape = os.path.join(script_dir, "..", "diagrams", "rasterx", "rasterx-function-categories_landscape.svg")
-
-    # Portrait (unchanged behaviour: optional explicit path as first arg)
-    out_portrait = sys.argv[1] if len(sys.argv) > 1 else default_portrait
-    with open(out_portrait, "w") as f:
-        f.write(render())
-    print(f"wrote {out_portrait}")
-    portrait_h = PAD + TITLE_BLOCK_H + max(column_height(CARDS_LEFT), column_height(CARDS_RIGHT)) + PAD
-    print(f"portrait canvas: {CANVAS_W} x {portrait_h}  "
-          f"(use --window-size={CANVAS_W},{portrait_h} for Chrome — it grows as functions are added)")
-
-    # Landscape (always next to portrait)
-    landscape_svg, landscape_h = render_landscape()
-    with open(default_landscape, "w") as f:
-        f.write(landscape_svg)
-    print(f"wrote {default_landscape}")
-    print(f"landscape canvas: {PAD * 2 + CARD_W * 3 + COL_GAP * 2} x {landscape_h}  "
-          f"(use --window-size={PAD * 2 + CARD_W * 3 + COL_GAP * 2},{landscape_h} for Chrome)")
+    sys.exit(main())

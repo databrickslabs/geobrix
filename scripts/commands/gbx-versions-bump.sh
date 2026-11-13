@@ -153,11 +153,8 @@ show_separator
 
 echo -e "${CYAN}4. Diagram version pills (generators + committed SVG)${NC}"
 PILL_FILES=(
-    "resources/images/generators/rasterx-function-categories.py"
     "resources/images/generators/rasterx-tile-structure.py"
     "resources/images/generators/vapor-eyes-lakeflow-functions.py"
-    "resources/images/diagrams/rasterx/rasterx-function-categories.svg"
-    "resources/images/diagrams/rasterx/rasterx-function-categories_landscape.svg"
     "resources/images/diagrams/rasterx/rasterx-tile-structure.svg"
     "resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.svg"
 )

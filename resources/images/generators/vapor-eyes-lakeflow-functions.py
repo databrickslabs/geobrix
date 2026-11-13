@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Generate the Vapor-Eyes Lakeflow function-palette infographic (landscape only).
 
-Reuses the card/pill/header/footer rendering system from
-``rasterx-function-categories.py`` (imported directly, since that filename has
-hyphens) rather than reinventing it. Two family columns sit side by side —
+Reuses the card/pill rendering helpers in ``function_cards_svg.py`` rather
+than reinventing them. Two family columns sit side by side —
 "GeoBrix" (3 cards, cool blue/teal/green accents) on the left, "Databricks
 built-in" (2 cards, orange/amber accents) on the right — each with a small
 section header + rule above it so the split reads at a glance.
@@ -27,8 +26,8 @@ import importlib.util
 import os
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_rfc_path = os.path.join(SCRIPT_DIR, "rasterx-function-categories.py")
-_spec = importlib.util.spec_from_file_location("rasterx_function_categories", _rfc_path)
+_rfc_path = os.path.join(SCRIPT_DIR, "function_cards_svg.py")
+_spec = importlib.util.spec_from_file_location("function_cards_svg", _rfc_path)
 rfc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(rfc)
 
@@ -44,7 +43,7 @@ TITLE_BLOCK_H = 110
 FAMILY_HEADER_H = 26
 HEADER_CARD_GAP = 14
 
-# Two family columns side by side (not the RasterX reference's 3-col grid) —
+# Two family columns side by side (not a 3-col grid) —
 # narrower cards than the 660px reference so the overall canvas lands near a
 # 16:9 slide aspect ratio once the two uneven-height columns are accounted for.
 CARD_W = 580
@@ -130,7 +129,7 @@ def render():
         f'width="{LANDSCAPE_W}" height="{canvas_h}" '
         f'style="font-family: Inter, -apple-system, system-ui, sans-serif;">'
     )
-    # Defs (identical structure to the RasterX reference).
+    # Defs.
     parts.append(
         '<defs>'
         '<filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">'

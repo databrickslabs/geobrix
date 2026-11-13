@@ -3,6 +3,7 @@ coverage, and the docs example checks."""
 
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -170,6 +171,56 @@ def test_the_diagram_check_counts_the_manifests_rst_names():
     names = mod.canonical_rst()
     assert {"rst_transformcrs", "rst_merge_agg"} <= names
     assert not any(n.startswith("gbx_") for n in names)
+
+
+def test_the_diagram_check_passes_on_the_committed_diagram():
+    r = _run("check-diagram-coverage")
+    assert r.returncode == 0, r.stdout[-1200:] + r.stderr[-800:]
+    n = len(_load("check-diagram-coverage").canonical_rst())
+    assert (
+        f"PASS D4a: diagram pills match the registered rst_ set exactly ({n} functions)"
+        in r.stdout
+    )
+    assert "PASS D4b" in r.stdout and "PASS D4c" in r.stdout
+
+
+def test_the_diagram_check_fails_a_missing_stale_or_doubled_pill():
+    mod = _load("check-diagram-coverage")
+    pills = mod.diagram_pills(mod.DIAGRAM_HTML.read_text())
+    reg = mod.canonical_rst()
+    assert set(pills) == reg and len(pills) == len(reg)
+    ok, report = mod.check_d4a(reg, pills[1:])
+    assert not ok and pills[0] in report and "MISSING" in report
+    ok, report = mod.check_d4a(reg, pills + ["rst_gone"])
+    assert not ok and "rst_gone" in report
+    ok, report = mod.check_d4a(reg, pills + pills[:1])
+    assert not ok and "more than once" in report
+    ok, _ = mod.check_d4a(set(), [])
+    assert not ok
+
+
+def test_the_diagram_check_fails_a_wrong_count_or_badge():
+    mod = _load("check-diagram-coverage")
+    html = mod.DIAGRAM_HTML.read_text()
+    n = len(mod.canonical_rst())
+    assert mod.check_d4b(n, html)[0]
+    ok, report = mod.check_d4b(n + 1, html)
+    assert not ok and f"'{n} RasterX functions' (has {n}, expected {n + 1})" in report
+    # Drop one pill from the first card: its badge no longer matches.
+    title, body = mod.CARD_RE.findall(html)[0]
+    first_pill = re.search(r'<g class="pill".*?</text></g>', body).group(0)
+    ok, report = mod.check_d4b(n, html.replace(first_pill, "", 1))
+    assert not ok and f"card '{title}'" in report
+    ok, report = mod.check_d4b(n, "<html></html>")
+    assert not ok and "no count mention" in report and "no category cards" in report
+
+
+def test_the_diagram_check_fails_a_stale_diagram():
+    mod = _load("check-diagram-coverage")
+    html = mod.DIAGRAM_HTML.read_text()
+    assert mod.check_d4c(html)[0]
+    ok, report = mod.check_d4c(html.replace("Accessors", "Readers", 1))
+    assert not ok and "stale" in report
 
 
 # --- check-docs-examples.py -----------------------------------------------------------------------------

@@ -7,6 +7,9 @@ import CodeFromTest from '@site/src/components/CodeFromTest';
 import Surfaces from '@site/src/components/Surfaces';
 import { Impl } from '@site/src/components/Impl';
 import RasterXIcon from '../../../resources/images/brand/RasterX.png';
+import ThemedImage from '@theme/ThemedImage';
+import rasterxCategoriesLight from '../../../resources/images/diagrams/rasterx/rasterx-function-categories-light.png';
+import rasterxCategoriesDark from '../../../resources/images/diagrams/rasterx/rasterx-function-categories-dark.png';
 import pyrxCode from '!!raw-loader!../../tests/python/api/pyrx_functions.py';
 import rasterxSqlCode from '!!raw-loader!../../tests/python/api/rasterx_functions_sql.py';
 import rasterxLightCode from '!!raw-loader!../../tests/python/api/rasterx_functions_python_light.py';
@@ -59,7 +62,10 @@ Many RasterX functions accept CRS parameters. Use `srid` / `out_srid` (integer E
 
 RasterX exposes 166 SQL functions (registered as `gbx_rst_*`; available in Python as `rst_*`), organized into the following categories:
 
-![RasterX function categories — Constructors, Accessors, Aggregators, Generators, Operations, H3 Grid](../../../resources/images/diagrams/rasterx/rasterx-function-categories.png)
+<ThemedImage
+  alt="The RasterX functions in their categories, each card listing its function names. Call them from SQL after register(spark), from the rasterx Python API, or from Unity Catalog SQL."
+  sources={{ light: rasterxCategoriesLight, dark: rasterxCategoriesDark }}
+/>
 
 - **Accessor Functions**: Read raster properties and metadata (bounds, dimensions, CRS, bands, pixel size, georeference, format, type, NoData, subdatasets, summary, etc.)
 - **Aggregator Functions**: Combine or merge rasters in group-by (combineavg_agg, derivedband_agg, merge_agg, h3_rasterize_agg)

@@ -9,12 +9,18 @@ import RasterXIcon from '../../../resources/images/brand/RasterX.png';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
 import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 import VizXIcon from '../../../resources/images/brand/VizX.png';
+import ThemedImage from '@theme/ThemedImage';
+import onDatabricksLight from '../../../resources/images/diagrams/overview/geobrix-on-databricks-light.gif';
+import onDatabricksDark from '../../../resources/images/diagrams/overview/geobrix-on-databricks-dark.gif';
 
 # Functions Overview
 
-GeoBrix provides four specialized packages for different spatial processing needs. All packages expose SQL and Python APIs. The GeoBrix JAR is the performance tier: it speeds up some functions on a dedicated cluster. See [Functions the JAR speeds up](./jar-functions).
+GeoBrix provides four specialized packages for different spatial processing needs. All packages expose SQL and Python APIs. The GeoBrix JAR is a performance add-on that dedicated compute can load: it speeds up some functions there. See [Functions the JAR speeds up](./jar-functions).
 
-![GeoBrix Vision](../../../resources/images/brand/geobrix_vision.png)
+<ThemedImage
+  alt="GeoBrix on Databricks. GeoBrix brings raster, grid and vector functions, plus readers and writers, to Spark SQL and Python. It hands its results to native GEOMETRY, H3 and FILE columns, so one Unity Catalog governed copy serves pipelines, spatial SQL and AI."
+  sources={{ light: onDatabricksLight, dark: onDatabricksDark }}
+/>
 
 ## Available Packages
 

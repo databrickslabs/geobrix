@@ -28,7 +28,7 @@
 
 > **Full docs:** **https://databrickslabs.github.io/geobrix/** — this README is the 2-minute tour.
 
-<img src="resources/images/brand/geobrix_vision.png" width="70%" />
+<img src="resources/images/diagrams/overview/geobrix-on-databricks-light.gif" alt="GeoBrix on Databricks: results land in native GEOMETRY, H3 and FILE columns" width="100%" />
 
 ## Implementations
 

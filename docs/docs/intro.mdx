@@ -5,6 +5,11 @@ sidebar_label: Intro
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import GeoBrixLogo from '../../resources/images/brand/GeoBriX.png';
+import ThemedImage from '@theme/ThemedImage';
+import onDatabricksLight from '../../resources/images/diagrams/overview/geobrix-on-databricks-light.gif';
+import onDatabricksDark from '../../resources/images/diagrams/overview/geobrix-on-databricks-dark.gif';
+import rastersAsFileLight from '../../resources/images/diagrams/overview/rasters-as-file-light.gif';
+import rastersAsFileDark from '../../resources/images/diagrams/overview/rasters-as-file-dark.gif';
 
 # Introduction
 
@@ -108,7 +113,17 @@ Databricks first acquired [MosaicML](https://www.databricks.com/company/newsroom
 
 If this were not the case, we would have simply iterated on DBLabs Mosaic "in-place" keeping the same name for what is now called GeoBrix. DBLabs Mosaic is in maintenance mode. The latest/last version of Mosaic targets DBR 13.3 LTS since product introduced ST functions starting with private preview work in DBR 14. As such, Mosaic does not have any awareness of advancements in recent runtimes, including product support for spatial sql and types. It will be retired with [DBR 13.3 EoS](https://docs.databricks.com/aws/en/release-notes/runtime/#supported-databricks-runtime-lts-releases) in AUG 2026.
 
-![GeoBrix Vision](../../resources/images/brand/geobrix_vision.png)
+<ThemedImage
+  alt="GeoBrix on Databricks. GeoBrix brings raster, grid and vector functions, plus readers and writers, to Spark SQL and Python. It hands its results to native GEOMETRY, H3 and FILE columns, so one Unity Catalog governed copy serves pipelines, spatial SQL and AI."
+  sources={{ light: onDatabricksLight, dark: onDatabricksDark }}
+/>
+
+GeoBrix keeps rasters as governed FILE references and reads pixels on demand. See [Virtual tiles](./api/virtual-tiles).
+
+<ThemedImage
+  alt="Rasters as governed FILE references. A FILE column stores small pointers to files that Unity Catalog governs. GeoBrix carries them as virtual tiles, about 100 bytes a row, and reads only the windows an operation needs."
+  sources={{ light: rastersAsFileLight, dark: rastersAsFileDark }}
+/>
 
 ## Key Features
 

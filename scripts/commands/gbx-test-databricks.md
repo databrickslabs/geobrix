@@ -48,6 +48,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--max-wall-min <n>` - stop the run at n minutes of wall. Default: 20. 0 turns it off.
   - The budget of each pool starts when its job is submitted, after its cluster lease, not during the lease wait.
 - `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all, on a pool only (Serverless refuses 0).
+- `--ids-file <path>` - run only the test node ids in this file, one per line, `--ids-per-chunk` (default 8) to a chunk.
+  - Use it to finish a table that one run's wall cannot hold: list the ids that run left unrun. Pass the run's `--env`.
 - `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.
   - It also reruns a test that `--test-timeout` stopped with its chunk (the chunk's `result.json`, `timed_out`). Its junit holds no failure.
   - Each chunk runs where its file's CI shard runs: a heavy dir's file on the JAR pool, with its integration tests.

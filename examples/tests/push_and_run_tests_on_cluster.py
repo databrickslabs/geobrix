@@ -155,6 +155,8 @@ def parse(argv):
     p.add_argument("--overrun-x", type=float, default=OVERRUN_X, help="stop a chunk at this many times its estimate (0: off)")
     p.add_argument("--max-wall-min", type=float, default=MAX_WALL_MIN, help="stop the run when its wall time reaches this (0: no budget)")
     p.add_argument("--rerun-failed", default="", metavar="RUN_ID", help="run only the tests that failed in that earlier run (its local results)")
+    p.add_argument("--ids-file", default="", metavar="PATH", help="run only the test node ids listed in this file, one per line")
+    p.add_argument("--ids-per-chunk", type=int, default=8, help="node ids per chunk with --ids-file (default 8)")
     return p.parse_args(argv)
 
 
@@ -213,6 +215,12 @@ def problems(a) -> list:
     if a.serverless and a.start_chunks == 0:
         out.append("--start-chunks 0 is refused with --serverless: every runner starting at once lost 5 of 8 to "
                    "ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (2026-11-12); keep the default ramp, or give a positive n")
+    if a.ids_file and a.rerun_failed:
+        out.append("--ids-file and --rerun-failed each choose the tests to run: give one")
+    if a.ids_file and not Path(a.ids_file).is_file():
+        out.append(f"--ids-file {a.ids_file}: no such file")
+    if a.ids_per_chunk < 1:
+        out.append("--ids-per-chunk must be 1 or more")
     if a.rerun_failed and not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", a.rerun_failed):
         out.append("--rerun-failed takes the run id of an earlier run (its results under test-logs/databricks-tests/<run id>/)")
     if a.split not in ("auto", "off"):
@@ -1758,7 +1766,10 @@ def main(argv=None) -> int:
         if not shards:
             print(f"No failed test in test-logs/databricks-tests/{a.rerun_failed}/*/junit.xml: nothing to run.")
             return 0
-    if extra_env(a).get("GBX_ORACLE_TABLES"):  # --env narrows the family file to those tables: plan its shards by them
+    if a.ids_file:  # the named node ids only, a chunk per --ids-per-chunk of them
+        shards = ids_shards(a.ids_file, a.ids_per_chunk, extra_env(a).get("GBX_ORACLE_TABLES", ""), REPO_ROOT, all_shards)
+        print(f"--ids-file {a.ids_file}: {sum(len(s.paths) for s in shards)} test id(s) in {len(shards)} chunk(s)")
+    elif extra_env(a).get("GBX_ORACLE_TABLES"):  # --env narrows the family file to those tables: plan its shards by them
         shards = ts.narrow_tables(shards, extra_env(a)["GBX_ORACLE_TABLES"])
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
@@ -1771,14 +1782,14 @@ def main(argv=None) -> int:
     fsolo = tm.seconds(hist, time_slots, adjust=False)  # the same without the factors: what the next run's ratios compare with
     hot = set() if a.serverless else tm.contended(hist)  # contention-heavy units: they join the heavy gate
     lower = tm.lower_bounds(hist, time_slots)
-    if a.split == "auto" and shards and not a.rerun_failed:
+    if a.split == "auto" and shards and not (a.rerun_failed or a.ids_file):
         n_slots = plan_slots(a) * (1 if a.serverless else max(1, a.clusters))
         lo, hi = SERVERLESS_TARGET if a.serverless else POOL_TARGET
         target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots, lo=lo, hi=hi)
         shards = ts.auto_split(shards, REPO_ROOT, fsec, target, lower, hot)
         split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s)"
                            + (" (Serverless: its own timings where it has them, else the pools' solo times)" if a.serverless else ""))
-    elif shards and not a.rerun_failed:  # a rerun chunk keeps its estimate: its few test ids, not its whole file or tables
+    elif shards and not (a.rerun_failed or a.ids_file):  # a rerun chunk keeps its estimate: its few test ids, not its whole file or tables
         shards = [ts.annotate(ts.Shard(**{**s.__dict__, "est_min": round(e, 2), "est_src": src}), REPO_ROOT, fsec, hot)
                   for s in shards for e, src in [ts.estimate_src(s, REPO_ROOT, fsec, lower)]]
     shards = [ts.Shard(**{**s.__dict__, "solo_min": ts.solo_min(s, REPO_ROOT, fsec, fsolo)}) for s in shards]
@@ -1892,6 +1903,26 @@ def rerun_shards(run_dir: Path, root: Path, shards: Optional[List[ts.Shard]] = N
         home = ts.owner_of(shards, f, root)
         out.append(ts.Shard(kind=home.kind if home else "light", pool=home.pool if home else ts.POOL_LIGHT,
                             marker=home.marker if home else "not integration", delta=bool(home and home.delta), **common))
+    return out
+
+
+def ids_shards(path, per_chunk: int, oracle_tables: str, root: Path, shards: Optional[List[ts.Shard]] = None) -> List[ts.Shard]:
+    """``--ids-file``: the node ids listed in ``path`` (one per line; blank lines and ``#`` comments skipped), ``per_chunk`` to a chunk
+    in their order, each chunk where its file's CI shard runs, with ``oracle_tables`` (the run's ``GBX_ORACLE_TABLES``). A table that
+    does not fit one run's wall is finished this way: the ids an earlier run left unrun."""
+    shards = shards if shards is not None else ts.load(root)
+    ids = [ln.strip() for ln in Path(path).read_text().splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    by_file: Dict[str, List[str]] = {}
+    for nid in ids:
+        by_file.setdefault(nid.split("::", 1)[0], []).append(nid)
+    out = []
+    for f, fids in by_file.items():
+        home = ts.owner_of(shards, f, root)
+        parts = [fids[i:i + per_chunk] for i in range(0, len(fids), per_chunk)]
+        for i, part in enumerate(parts, 1):
+            out.append(ts.Shard(name=f"ids {f} [{i}/{len(parts)}]", paths=part, est_min=ts.FIXED_MIN + 0.5 * len(part), est_src="ci",
+                                oracle_tables=oracle_tables, kind=home.kind if home else "light", pool=home.pool if home else ts.POOL_LIGHT,
+                                marker=home.marker if home else "not integration", delta=bool(home and home.delta)))
     return out
 
 

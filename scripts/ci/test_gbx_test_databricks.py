@@ -2895,6 +2895,22 @@ def test_a_heavy_rerun_runs_on_the_jar_pool_with_its_integration_tests_and_the_f
     assert not heavy.subset and not fam.subset, "a rerun that collects nothing is a selection error, not a pass"
 
 
+def test_ids_file_runs_exactly_the_named_tests_in_chunks(shards, tmp_path):
+    """A table that does not fit the 20 min wall in one run is finished by a follow-up of the ids it left unrun (2026-11-12,
+    tst-sls-g1-gdal: 18 of 27 chunks): ``--ids-file`` runs those node ids, ``--ids-per-chunk`` to a chunk, with the run's env."""
+    fam = "test/manager/test_family_cross_tier.py"
+    ids = [f"{fam}::test_family_oracle[gbx_rst_gdal-L3engine-c0-sql-raises-gdal_x{i}]" for i in range(10)]
+    f = tmp_path / "ids.txt"
+    f.write_text("\n".join(ids + ["", "# a comment"]) + "\n")
+    got = launcher.ids_shards(f, 4, "SPEC_GDAL", REPO_ROOT, shards)
+    assert [len(s.paths) for s in got] == [4, 4, 2] and [p for s in got for p in s.paths] == ids
+    assert all(s.oracle_tables == "SPEC_GDAL" and s.kind == "light" and s.marker == "not integration" for s in got)
+    assert got[0].name == f"ids {fam} [1/3]" and ts.pytest_args(got[0])[:4] == ids[:4]
+    assert launcher.parse(["--ids-file", str(f)]).ids_per_chunk == 8
+    assert any("--ids-file" in e for e in launcher.problems(_args("--explain-only", "--ids-file", str(f), "--rerun-failed", "x")))
+    assert any("no such file" in e for e in launcher.problems(_args("--explain-only", "--ids-file", str(tmp_path / "none.txt"))))
+
+
 def test_rerun_failed_also_reruns_a_test_the_timeout_stopped(shards, tmp_path):
     """A test past --test-timeout that does not stop is killed with its chunk: the junit then holds no failure for it (2026-11-12,
     tst-sls-b4: gbx_rst_color_relief-L3engine-c0-sql), but the chunk's result names it in timed_out."""

@@ -46,6 +46,7 @@ show_help() {
     echo -e "  ${GREEN}--overrun-x <x>${NC}        Stop a chunk at x times its estimate, at least 3 min (default 2; 0 off)"
     echo -e "  ${GREEN}--max-wall-min <n>${NC}     Stop the run at n minutes of wall (default 20; 0 off)"
     echo -e "  ${GREEN}--rerun-failed <run id>${NC} Run only the tests that failed in that earlier run (--maxfail 1)"
+    echo -e "  ${GREEN}--ids-file <path>${NC}      Run only the test node ids in this file, --ids-per-chunk (default 8) to a chunk"
     echo -e "  ${GREEN}--pip-extra \"<reqs>\"${NC}  More pip requirements the tests import"
     echo -e "  ${GREEN}--env KEY=VAL${NC}          An environment variable every shard sets (repeatable; e.g. GBX_CAP_ARROW_TILE_TRANSPORT=0)"
     echo -e "  ${GREEN}--spark-conf KEY=VAL${NC}   A Spark conf every shard's session sets before its tests (repeatable)"
@@ -73,7 +74,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--spark-conf|--run-id|--first-failed|--max-failed-chunks|--max-failures|--maxfail|--start-chunks|--serverless-cap|--test-timeout|--overrun-x|--max-wall-min|--rerun-failed)
+        --profile|--purpose|--shards|--base|--sha|--wheel|--jar-path|--max-parallel|--clusters|--split|--target-min|--timings|--pool-light|--pool-jar|--node-type|--shard-cap-min|--stall-min|--start-cap-min|--pool-wait-min|--pip-extra|--env|--spark-conf|--run-id|--first-failed|--max-failed-chunks|--max-failures|--maxfail|--start-chunks|--serverless-cap|--ids-file|--ids-per-chunk|--test-timeout|--overrun-x|--max-wall-min|--rerun-failed)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASS_ARGS+=("$1" "$2")
             shift 2

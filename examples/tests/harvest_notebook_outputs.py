@@ -267,6 +267,25 @@ def _inside(piece: dict, rng: range) -> bool:
     return rng.start + 1 <= int(start) and int(stop or start) <= rng.stop
 
 
+def _cell_set(piece: dict) -> set:
+    """The 1-based cell numbers of ``piece`` (its ``A:B``)."""
+    start, _, stop = str(piece["cells"]).partition(":")
+    return set(range(int(start), int(stop or start) + 1))
+
+
+def _drop_superseded(runs: list[dict], entry: dict) -> list[dict]:
+    """Drop each kept entry whose cells were all re-run by later harvests: the new ``entry`` together with the entries
+    harvested after it. No cell holds its outputs any more, so naming it would claim a run (and a wheel) the notebook no
+    longer shows. An entry harvested in the same second as another is kept (the order between them is unknown)."""
+    kept = []
+    for r in runs:
+        newer = [o for o in runs if o is not r and (o.get("harvested") or "") > (r.get("harvested") or "")]
+        covered = set().union(_cell_set(entry), *(_cell_set(o) for o in newer))
+        if not _cell_set(r) <= covered:
+            kept.append(r)
+    return kept
+
+
 def _upgrade_runs(old: dict) -> list[dict]:
     """The piece entries of a recorded block. The older shape named one wheel at the top and only the run id and cells
     per piece: each piece takes that wheel (and runtime) as its own."""
@@ -334,7 +353,10 @@ def stamp_provenance(nb: dict, prov: Optional[dict], run_id, cells: Optional[ran
     runs = _upgrade_runs(meta.get(META_KEY) or {}) if cells is not None else []
     # Drop an entry whose cells all lie inside this piece (the same range included): those cells now hold this run's
     # outputs, so a kept entry would name a wheel they no longer ran on. A partial overlap still covers other cells.
-    runs = [r for r in runs if not _inside(r, rng) and (run_id is None or r.get("run_id") != run_id)] + [entry]
+    runs = [r for r in runs if not _inside(r, rng) and (run_id is None or r.get("run_id") != run_id)]
+    # An entry no single piece contains can still be covered by this piece and later ones together (a whole-notebook run
+    # re-run as two pieces): it no longer owns any cell either.
+    runs = _drop_superseded(runs, entry) + [entry]
     runs.sort(key=_cell_start)
     wheels = list(dict.fromkeys(r["wheel_sha256"] for r in runs if r.get("wheel_sha256")))
     mixed = len({_wheel_id(r) for r in runs if _wheel_id(r)}) > 1

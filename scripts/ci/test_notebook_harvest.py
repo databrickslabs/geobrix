@@ -298,6 +298,19 @@ def test_a_piece_replaces_every_entry_inside_its_range_and_keeps_partial_overlap
     assert meta["wheels"] == ["f" * 64] and "mixed_wheels" not in meta
 
 
+def test_an_older_entry_covered_by_newer_pieces_together_is_dropped():
+    # An earlier whole-notebook run on another wheel, then two pieces that between them re-run every cell: no cell holds
+    # the old run's outputs any more, so it must not be named (nor its wheel counted as a mix).
+    old = {"harvested": "2026-11-11T00:00:00Z", "runs": [dict(OTHER, run_id=10, cells="1:4", harvested="2026-11-11T00:00:00Z")]}
+    nb = {"cells": [_code("a()"), _code("b()"), _code("c()"), _code("d()")], "metadata": {"geobrix_run": old}}
+    hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 2), run_context=CTX, n_cells=4)
+    assert [r["run_id"] for r in nb["metadata"]["geobrix_run"]["runs"]] == [10, 11]  # cells 3-4 still hold run 10's outputs
+    hno.stamp_provenance(nb, PROV, run_id=12, cells=range(2, 4), run_context=CTX, n_cells=4)
+    meta = nb["metadata"]["geobrix_run"]
+    assert [(r["run_id"], r["cells"]) for r in meta["runs"]] == [(11, "1:2"), (12, "3:4")]
+    assert meta["wheels"] == ["f" * 64] and "mixed_wheels" not in meta and meta["wheel_sha256"] == "f" * 64
+
+
 def test_a_whole_notebook_run_replaces_every_piece():
     nb = {"cells": [_code("a()"), _code("b()")], "metadata": {}}
     hno.stamp_provenance(nb, PROV, run_id=11, cells=range(0, 1), run_context=CTX, n_cells=2)

@@ -33,6 +33,13 @@ def pytest_configure(config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_sweep(monkeypatch, tmp_path):
+    """A launcher under test records its notebooks in a ledger of the test's own and sweeps nothing at launch."""
+    monkeypatch.setenv("GBX_WS_SWEEP_LEDGER", str(tmp_path / "workspace-sweep.jsonl"))
+    monkeypatch.setenv("GBX_WS_SWEEP_AT_LAUNCH", "0")
+
+
 @pytest.fixture(scope="session")
 def examples_root() -> Path:
     """Root path of the examples directory (examples/)."""

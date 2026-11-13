@@ -61,7 +61,10 @@ Read this before any run on a workspace: a benchmark, a notebook run, UC tests, 
 
 ## After the run
 - **Record the results.** Write the result rows to the ledger table for the work, with a verdict per part: linear, sub-linear, over-bar, skipped by projection, or error with its cause.
-- **Clean up what you made.** Remove your worktrees, isolated staging folders, ladder outputs and leftover runner notebooks. Leave shared inputs (`mvp_in_*`) unless the owner says otherwise. Delete a shared artifact only with the user's confirmation.
+- **Clean up what you made.** Remove your worktrees, isolated staging folders and ladder outputs. Leave shared inputs (`mvp_in_*`) unless the owner says otherwise. Delete a shared artifact only with the user's confirmation.
+  - **Runner notebooks are cleaned up later, not at run end.** The run page opens the notebook, so the user asked to keep it for a while.
+  - The launchers keep each run's notebooks and folders for 60 min after the run ends. A run that did not succeed keeps them 24 h, for a repair run.
+  - `gbx:workspace:sweep --profile <name>` then removes them. Each launcher also sweeps its own old items at launch. Never delete a runner notebook by hand at run end.
 - **Keep one current version** in an artifact folder (the norm). Older release wheels stay unless the user says to remove them.
 
 ## Agents on a shared working tree

@@ -42,7 +42,8 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - Install with `gbx.uc.install(catalog, "geobrix_uc_it_<sha12>", folder, procedures=True)` from a Serverless environment 6 job.
 - In the same job, call `gbx_probe_build()` once. It reports the build commit and a source digest that the function imports. The job fails when they differ from the staged wheel's.
 - Run the scope (`bench.oracles.uc_sql`, judged by `check_uc_results`) in parallel shards and `gbx:examples:uc-sql` against the schema.
-- Drop the schema and delete the Volume folder and the workspace folder, unless `--keep`.
+- Drop the schema and delete the Volume folder, unless `--keep`.
+- Keep the workspace folder `GeoBrix/uc-it-<sha>`, so the install run's page opens its notebook. `gbx:workspace:sweep` removes it after 60 min (24 h after a failure).
 
 ## Gated run in parts
 

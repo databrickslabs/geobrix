@@ -349,20 +349,26 @@ def test_the_levels_run_gets_the_same_default_time_limit_as_any_other(monkeypatc
     assert launcher.DEFAULT_RUN_TIMEOUT_MIN == 360
 
 
-def test_a_failed_run_keeps_its_notebook_for_a_repair_run(capsys):
+def test_a_run_keeps_its_notebook_and_records_its_hold_for_the_sweep(capsys):
+    """The run page opens the notebook: it stays, held 60 min (24 h after a failure, for a repair run)."""
+    import _workspace_sweep
+
     deleted = []
 
     class Workspace:
-        def delete(self, path):
+        def delete(self, path, recursive=False):
             deleted.append(path)
 
     class W:
         workspace = Workspace()
 
-    launcher._remove_notebook(W(), "/nb/failed", succeeded=False)
-    assert deleted == [] and "/nb/failed" in capsys.readouterr().out
-    launcher._remove_notebook(W(), "/nb/ok")
-    assert deleted == ["/nb/ok"]
+    launcher._release_notebook(W(), "/nb/failed", succeeded=False)
+    launcher._release_notebook(W(), "/nb/ok")
+    assert deleted == []
+    out = capsys.readouterr().out
+    assert "/nb/failed for 24 h" in out and "/nb/ok for 60 min" in out
+    held = _workspace_sweep.load_ledger(None)
+    assert held["/nb/failed"]["keep_until"] - held["/nb/ok"]["keep_until"] > 22 * 3600
 
 
 class _ExportWorkspace:
@@ -406,11 +412,11 @@ def test_a_run_with_no_exported_view_saves_nothing_and_says_so(tmp_path, capsys)
     assert "no view" in capsys.readouterr().err
 
 
-def test_the_launch_exports_the_notebook_before_it_removes_it():
+def test_the_launch_exports_the_notebook_before_it_releases_it():
     import inspect
 
     src = inspect.getsource(launcher._main)  # main() only leases and gives back; _main is the launch
-    assert src.index("_save_run_output(") < src.index("_remove_notebook(")
+    assert src.index("_save_run_output(") < src.rindex("_release_notebook(w, notebook_path")
 
 
 def test_with_jar_needs_a_job_cluster_made_for_the_run(monkeypatch, capsys):

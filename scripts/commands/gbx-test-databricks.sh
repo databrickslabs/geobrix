@@ -53,7 +53,7 @@ show_help() {
     echo -e "  ${GREEN}--env KEY=VAL${NC}          An environment variable every shard sets (repeatable; e.g. GBX_CAP_ARROW_TILE_TRANSPORT=0)"
     echo -e "  ${GREEN}--spark-conf KEY=VAL${NC}   A Spark conf every shard's session sets before its tests (repeatable)"
     echo -e "  ${GREEN}--run-id <id>${NC}          Default tst-<date>-<time>-<4 hex>"
-    echo -e "  ${GREEN}--keep-stage${NC}           Keep the Volume folder, the notebooks and the queue table"
+    echo -e "  ${GREEN}--keep-stage${NC}           Keep the Volume folder and the queue table; hold the notebooks 24 h"
     echo -e "  ${GREEN}--explain-only${NC}         Print the plan and stop; no network"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to a log file"
     echo -e "  ${GREEN}--help${NC}                 Show this help"

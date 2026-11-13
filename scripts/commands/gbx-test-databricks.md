@@ -66,7 +66,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--env KEY=VAL` - an environment variable every shard sets before its tests (repeatable). For example, `GBX_CAP_ARROW_TILE_TRANSPORT=0` runs the light tile functions with pickled rows.
 - `--spark-conf KEY=VAL` - a Spark conf every shard's session sets before its tests (repeatable). For example, `spark.sql.execution.arrow.maxBytesPerBatch=16m` makes the Arrow batches of tile rows smaller.
 - `--run-id <id>` - default `tst-<date>-<time>-<4 hex>`.
-- `--keep-stage` - keep the Volume folder, the notebooks and the queue table.
+- `--keep-stage` - keep the Volume folder and the queue table. The notebooks are held 24 h.
 - `--explain-only` - print the plan and stop. No network, nothing staged.
 - `--log <path>` - write output to `test-logs/<path>` (relative) or an absolute path.
 - `--help`, `-h` - show usage.
@@ -102,7 +102,9 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
   - The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
 - Prints a row per chunk the moment it ends, and stops the run early on failures (see "Fail fast").
 - Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`. It prints one table and writes `summary.md` with the first lines of each failure and the skip reasons.
-- Removes the Volume folder, the notebooks and the queue table after the download. Exit code 1 when any shard failed, errored or did not finish, or the run stopped early.
+- Removes the Volume folder and the queue table after the download. The runners read them only while they run; a rerun is a new launch.
+- Keeps the notebooks, so the run page still opens them. `gbx:workspace:sweep` removes them after 60 min, or 24 h after a failed run.
+- Each launch first sweeps old runner notebooks (`--scope runners`). Exit code 1 when any shard failed, errored or did not finish, or the run stopped early.
 
 ## What to expect
 

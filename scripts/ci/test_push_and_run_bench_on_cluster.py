@@ -307,11 +307,16 @@ def test_a_custom_runtime_without_env_version_is_one_clear_line_not_a_traceback(
     assert sdk.submits == [] and sdk.uploads == []
 
 
-def test_a_finished_run_removes_its_notebook(launch, sdk):
+def test_a_finished_run_keeps_its_notebook_for_the_sweep(launch, sdk):
+    """The run page opens the notebook: it stays, and gbx:workspace:sweep removes it after 60 min."""
+    import _workspace_sweep
+
     assert launch("--serverless", "--zarr-only", "--run-id", "t4") == 0
 
     (path, _), = sdk.uploads
-    assert path.endswith("_t4.ipynb") and sdk.deleted == [path]
+    assert path.endswith("_t4.ipynb") and sdk.deleted == []
+    entry = _workspace_sweep.load_ledger(None)[path]
+    assert entry["keep_until"] - entry["recorded_at"] == _workspace_sweep.WINDOW_S
 
 
 def test_a_failed_run_keeps_its_notebook_for_a_repair_run(launch, sdk):
@@ -763,10 +768,11 @@ def _smoke(module, monkeypatch, problems, smoke_only=False):
 
 
 @pytest.mark.parametrize("smoke_only", [False, True])
-def test_a_clean_smoke_removes_its_notebook(launch, monkeypatch, smoke_only):
+def test_a_clean_smoke_keeps_its_notebook_for_the_sweep(launch, monkeypatch, smoke_only):
     module = importlib.import_module("push_and_run_bench_on_cluster")
     rc, deleted = _smoke(module, monkeypatch, [], smoke_only=smoke_only)
-    assert rc == (0 if smoke_only else None) and deleted == ["/p/x_smoke.ipynb"]
+    assert rc == (0 if smoke_only else None) and deleted == []  # kept for the run page; the sweep removes it later
+    assert "/p/x_smoke.ipynb" in importlib.import_module("_workspace_sweep").load_ledger(None)
 
 
 def test_a_failed_smoke_keeps_its_notebook(launch, monkeypatch):

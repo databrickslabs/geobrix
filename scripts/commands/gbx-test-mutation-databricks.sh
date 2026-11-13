@@ -31,7 +31,7 @@ show_help() {
     echo -e "  ${GREEN}--setup-cap-min <n>${NC}    Stop when no mutant was tried n minutes after the work started (default 30)"
     echo -e "  ${GREEN}--stall-min <n>${NC}        Stop when no mutant finished for n minutes (default 15)"
     echo -e "  ${GREEN}--start-cap-min <n>${NC}    Cancel when the node has not beaten n minutes after the submit (default 20)"
-    echo -e "  ${GREEN}--keep-stage${NC}           Keep the Volume folder and the runner notebook"
+    echo -e "  ${GREEN}--keep-stage${NC}           Keep the Volume folder; hold the runner notebook 24 h"
     echo -e "  ${GREEN}--explain-only${NC}         Print the plan and stop; no network"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to a log file"
     echo -e "  ${GREEN}--help${NC}                 Show this help"

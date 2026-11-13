@@ -217,9 +217,12 @@ See [Hardening](#hardening) for what each stage does.
 - Without `--run-id`, a launch gets an id of its own (`cluster-<date>-<time>-<4 hex>`).
 - `--resume` needs the `--run-id` of the run it resumes.
 - `--truncate-results` needs the `--run-id` whose rows it clears. With a fresh id it has nothing to clear.
-- Each run uploads its notebook to `/Users/<you>/GeoBrix/bench/geobrix_bench_runner_<run-id>.ipynb`. `GBX_BENCH_RUNNER_NOTEBOOK_PATH` replaces the `/Users/<you>/GeoBrix/bench/geobrix_bench_runner` prefix. A clean smoke deletes its own notebook; a failed smoke keeps it.
-- After the run ends, a launch that waited for it saves the executed notebook's output. Then it deletes the notebook; a run that did not succeed keeps its notebook. `jobs export-run` answers only while the notebook exists, so the saved copy is the way to read the run's progress lines (`[LEVELS IO] form ... RUNNING elapsed ...`) afterwards.
-- The saved output is `test-logs/bench/<run-id>/notebook-output.html` (the launch prints the path). If the export fails, the launch prints why and carries on: the run's result and exit code do not change. A `--no-wait` launch does not delete the notebook, so `jobs export-run <task run id> --views-to-export CODE` still works for it.
+- Each run uploads its notebook to `/Users/<you>/GeoBrix/bench/geobrix_bench_runner_<run-id>.ipynb`. `GBX_BENCH_RUNNER_NOTEBOOK_PATH` replaces the `/Users/<you>/GeoBrix/bench/geobrix_bench_runner` prefix.
+- The launcher keeps each notebook at run end, so the run page still opens it. `gbx:workspace:sweep` removes it later.
+  - A smoke or run that succeeded is held 60 min; one that did not, 24 h (a repair run re-runs it).
+  - Each launch first sweeps old bench notebooks (`--scope bench`).
+- After the run ends, a launch that waited for it saves the executed notebook's output. `jobs export-run` answers only while the notebook exists. The saved copy keeps the progress lines (`[LEVELS IO] form ... RUNNING elapsed ...`) after the sweep.
+- The saved output is `test-logs/bench/<run-id>/notebook-output.html` (the launch prints the path). If the export fails, the launch prints why and carries on: the run's result and exit code do not change. A `--no-wait` launch records no hold. The sweep keeps its notebook while the run is active, then judges it by age.
 - A job reads its notebook when it is submitted. Launches at the same time need their own paths. With one shared path, an earlier job ran a later launch's notebook.
 
 ## `--levels` details {#levels-details}

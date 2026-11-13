@@ -210,8 +210,8 @@ def test_main_runs_the_smoke_then_the_real_run_and_verifies_the_sampled_sha256(m
     out = capsys.readouterr().out
     assert [s["run_name"] for s in sdk.submits] == ["geobrix-gen-corpus-t1-smoke", "geobrix-gen-corpus-t1"]
     assert [p for p, _ in sdk.uploads] == [
-        "/Users/me@example.com/geobrix_gen_corpus_t1_smoke.ipynb",
-        "/Users/me@example.com/geobrix_gen_corpus_t1.ipynb",
+        "/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t1_smoke.ipynb",
+        "/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t1.ipynb",
     ]
     modes = ['"mode": "smoke"' in "".join("".join(c["source"]) for c in nb["cells"]) for _, nb in sdk.uploads]
     assert all("def run_guard(" in "".join(nb["cells"][1]["source"]) for _, nb in sdk.uploads)  # the wheel guard follows the environment cell
@@ -219,7 +219,11 @@ def test_main_runs_the_smoke_then_the_real_run_and_verifies_the_sampled_sha256(m
     (env,) = sdk.submits[1]["environments"]
     assert env.spec.environment_version == "6" and env.spec.dependencies[0].endswith("+env6-py3-none-any.whl")
     assert sdk.submits[1]["tasks"][0].max_retries == 0 and sdk.submits[1]["timeout_seconds"] == 240 * 60
-    assert sdk.deleted == [p for p, _ in sdk.uploads]  # both notebooks removed once their runs succeeded
+    assert sdk.deleted == []  # both notebooks stay for the run pages; gbx:workspace:sweep removes them after 60 min
+    import _workspace_sweep
+
+    held = _workspace_sweep.load_ledger(None)
+    assert sorted(held) == sorted(p for p, _ in sdk.uploads) and all(e["scope"] == "bench" for e in held.values())
     assert "SMOKE CLEAN" in out and "VERIFIED: count and sha256 sample match the local corpus." in out
     assert (tmp_path / "test-logs" / "bench" / "t1" / "notebook-output.html").is_file()
 
@@ -232,7 +236,7 @@ def test_main_stops_with_exit_4_when_the_smoke_fails_and_never_submits_the_real_
     err = capsys.readouterr().err
     assert "SMOKE FAILED: nothing else is submitted" in err and "mismatch" in err
     assert [s["run_name"] for s in sdk.submits] == ["geobrix-gen-corpus-t2-smoke"]
-    assert [p for p, _ in sdk.uploads] == ["/Users/me@example.com/geobrix_gen_corpus_t2_smoke.ipynb"]
+    assert [p for p, _ in sdk.uploads] == ["/Users/me@example.com/GeoBrix/bench/geobrix_gen_corpus_t2_smoke.ipynb"]
 
 
 def test_main_stops_with_exit_4_when_the_smoke_run_itself_ends_failed(monkeypatch, launcher, tmp_path, sdk, wheel, capsys):
@@ -262,6 +266,10 @@ def test_a_failed_run_exits_1_and_keeps_its_notebook_for_a_repair(monkeypatch, l
     sdk.gen = ("FAILED", {})
     assert go(monkeypatch, launcher, tmp_path, "--no-smoke", "--run-id", "t4", *NOTEBOOK_ARGS) == launcher.EXIT_FAILED == 1
     assert "FAILED: boom" in capsys.readouterr().err and sdk.deleted == []
+    import _workspace_sweep
+
+    (entry,) = _workspace_sweep.load_ledger(None).values()
+    assert entry["keep_until"] - entry["recorded_at"] == _workspace_sweep.FAILED_WINDOW_S  # held 24 h
 
 
 def test_a_sha256_difference_or_an_incomplete_count_fails_the_verification(monkeypatch, launcher, tmp_path, sdk, wheel, capsys):

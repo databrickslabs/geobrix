@@ -38,7 +38,8 @@ import _preflight  # sibling module
 import _wheel_guard  # sibling module: the run fails if the imported geobrix is not the staged wheel
 from _preflight import serverless_dependencies
 
-import push_and_run_bench_on_cluster as bench  # sibling module: wheel lookup, output save, notebook removal
+import push_and_run_bench_on_cluster as bench  # sibling module: wheel lookup, output save, notebook release
+import _workspace_sweep  # sibling module: deferred cleanup of the run's notebooks
 
 REPO = Path(__file__).resolve().parents[2]
 # The command runs this launcher from a snapshot of the code; the local corpus, the built wheel and the logs
@@ -240,9 +241,12 @@ def main() -> int:
     print("=" * 64)
 
     me = w.current_user.me()
-    base = f"/Users/{me.user_name}/geobrix_gen_corpus_{run_id}"
+    # Under GeoBrix/bench/ beside the bench runner notebooks, never the home root: gbx:workspace:sweep removes
+    # them there once their window has passed.
+    base = f"/Users/{me.user_name}/GeoBrix/bench/geobrix_gen_corpus_{run_id}"
     nb_path = base + ".ipynb"
     smoke_path = base + "_smoke.ipynb"
+    _workspace_sweep.sweep_at_launch(w, ("bench",), me=me.user_name)
     try:
         w.workspace.mkdirs(str(Path(nb_path).parent))
     except Exception:  # noqa: BLE001
@@ -319,10 +323,11 @@ def main() -> int:
             print("SMOKE FAILED: nothing else is submitted.", file=sys.stderr)
             for b in bad:
                 print(f"  - {b}", file=sys.stderr)
+            bench._release_notebook(w, smoke_path, False)
             return EXIT_SMOKE
         chk = res["import_check"]
         print(f"SMOKE CLEAN: geobrix {chk.get('version')} on {chk.get('arch')}; worker bytes equal the host's.")
-        bench._remove_notebook(w, smoke_path, True)
+        bench._release_notebook(w, smoke_path, True)
         if args.smoke_only:
             return 0
 
@@ -343,11 +348,12 @@ def main() -> int:
     bench._save_run_output(w, run, run_id, ROOT)
     if stalled:
         _write_status(status, run_id, "STALLED", wall, None, f"- job run id: {rid}\n")
+        bench._release_notebook(w, nb_path, False)
         return EXIT_STALLED
     if result != "SUCCESS":
         print(f"FAILED: {run.state.state_message if run.state else ''}", file=sys.stderr)
         _write_status(status, run_id, f"{lc}/{result}", wall, None, f"- job run id: {rid}\n")
-        bench._remove_notebook(w, nb_path, False)
+        bench._release_notebook(w, nb_path, False)
         return EXIT_FAILED
     payload = payload_of(run)
     problems = dr.compare_payload(payload, verify_sha, len(idx))
@@ -361,7 +367,7 @@ def main() -> int:
               f"{'== local' if got.get('sha256') == verify_sha[str(j)] else '!= LOCAL ' + verify_sha[str(j)]}")  # fmt: skip
     _write_status(status, run_id, "VERIFIED" if not problems else "VERIFY FAILED", wall, None,
                   f"- job run id: {rid}\n- inventory: {inv.get('complete')}/{inv.get('expected')} complete, {inv.get('bytes')} bytes\n")  # fmt: skip
-    bench._remove_notebook(w, nb_path, True)
+    bench._release_notebook(w, nb_path, not problems)  # a failed verification is held 24 h, like a failed run
     if problems:
         print("VERIFICATION FAILED:", file=sys.stderr)
         for p in problems:

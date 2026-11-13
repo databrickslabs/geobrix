@@ -34,7 +34,8 @@ Options:
   --stall-min <n>        stop when no mutant finished for this long (default 15)
   --start-cap-min <n>    cancel when the node has not beaten this long after the submit (default 20: a cold DBR 19 start)
   --pip-extra "<reqs>"   more pip requirements the selected tests import (default "mercantile>=1.2,<2": the oracle tables)
-  --keep-stage           leave the Volume folder and the runner notebook (default: remove them after the download)
+  --keep-stage           leave the Volume folder; hold the runner notebook 24 h (default: the folder goes after the download,
+                         or is held 24 h after a failed run; the notebook is held 60 min, 24 h after a failure)
   --explain-only         print the plan and exit; no network, nothing staged or started
 """
 
@@ -56,6 +57,7 @@ from typing import Optional
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
+import _workspace_sweep  # sibling module: deferred cleanup of the run's notebook
 import _run_watchdog  # sibling module
 import _wheel_guard as wg  # sibling module: force the staged wheel in, fail the run if another geobrix is imported
 
@@ -463,8 +465,11 @@ def launch(a, plan: dict) -> int:
     local_out.mkdir(parents=True, exist_ok=True)
     nb_path = f"{runner_dir(w)}/mutation_{run_id}.ipynb"
     nb_path = "/" + nb_path.strip().removeprefix("/Workspace").lstrip("/")
+    # Earlier runs' notebooks stay for their window; remove those past it (bounded, never fails the launch).
+    _workspace_sweep.sweep_at_launch(w, ("runners",), me=me, runner_dir=runner_dir(w))
 
     ok = False
+    uploaded = False
     rc = EXIT_FAILED
     try:
         tar_local = local_out / f"{run_id}-src.tar.gz"
@@ -487,6 +492,7 @@ def launch(a, plan: dict) -> int:
                 plan["cores"] = cores_of(plan["node_type"]) or "?"
             w.workspace.mkdirs(str(Path(nb_path).parent))
             w.workspace.upload(nb_path, io.BytesIO(json.dumps(build_notebook(plan, token), indent=1).encode()), format=ImportFormat.JUPYTER, overwrite=True)
+            uploaded = True
             print(f"Uploaded runner notebook {nb_path}", flush=True)
 
             name = f"gbx-mutation-{run_id} | {plan['purpose'][:80]} | {plan['sha'][:10]}"
@@ -541,19 +547,17 @@ def launch(a, plan: dict) -> int:
                 except Exception:  # noqa: BLE001
                     pass
     finally:
+        # The run page opens the notebook, so it stays: gbx:workspace:sweep removes it after 60 min, or 24 h when the run
+        # did not succeed. A failed run also keeps its stage for 24 h: a repair run reads the wheel and the tarball there.
+        repairable = not ok and rc not in (_run_watchdog.EXIT_STALLED, EXIT_NO_START, EXIT_USAGE)
         if a.keep_stage:
-            print(f"Kept {stage} and {nb_path} (--keep-stage).")
+            print(f"Kept {stage} (--keep-stage); remove it by hand.")
+        elif repairable and uploaded:
+            _workspace_sweep.release(w, [stage], scope="runners", succeeded=False, run_id=run_id, kind="volume")
         else:
             rm_volume_dir(w, stage)
-            if ok or rc in (_run_watchdog.EXIT_STALLED, EXIT_NO_START, EXIT_USAGE):
-                try:
-                    w.workspace.delete(nb_path)
-                    print(f"Removed the runner notebook {nb_path}")
-                except Exception as exc:  # noqa: BLE001 - absent when it was never uploaded
-                    if "RESOURCE_DOES_NOT_EXIST" not in str(exc) and "does not exist" not in str(exc).lower():
-                        print(f"WARNING: could not remove {nb_path} ({exc}); delete it by hand.", file=sys.stderr)
-            else:
-                print(f"Kept the runner notebook {nb_path} (the run did not succeed; a repair run reads it).")
+        if uploaded:
+            _workspace_sweep.release(w, [nb_path], scope="runners", succeeded=ok and not a.keep_stage, run_id=run_id)
     return rc
 
 

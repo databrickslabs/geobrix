@@ -69,6 +69,7 @@ from typing import Optional
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
+import _workspace_sweep  # sibling module: deferred cleanup of the run's notebooks
 import _preflight  # sibling module (script dir is on sys.path)
 import _run_watchdog  # sibling module (script dir is on sys.path)
 import _wheel_guard  # sibling module: the wheel guard cell (the run fails if another geobrix is imported)
@@ -219,9 +220,9 @@ def _default_run_id() -> str:
 
 
 def _save_run_output(w, run, bench_run_id: str, root: Path) -> Optional[Path]:
-    """Save the executed notebook (its cell output, with the progress lines) before the notebook is deleted.
+    """Save the executed notebook (its cell output, with the progress lines) before the sweep removes it.
 
-    ``jobs export-run`` answers only while the notebook exists, so once ``_remove_notebook`` has run the
+    ``jobs export-run`` answers only while the notebook exists, so once gbx:workspace:sweep has removed it the
     progress lines are gone from the run. Written to ``test-logs/bench/<run-id>/notebook-output.html``;
     returns the path, or None. Best effort: a failure says why on stderr and never fails the run."""
     try:
@@ -248,18 +249,12 @@ def _save_run_output(w, run, bench_run_id: str, root: Path) -> Optional[Path]:
         return None
 
 
-def _remove_notebook(w, path: str, succeeded: bool = True) -> None:
-    """Delete the run's notebook once the run has succeeded (``_save_run_output`` has exported its output).
+def _release_notebook(w, path: str, succeeded: bool = True) -> None:
+    """Keep the run's notebook at run end and record it for gbx:workspace:sweep.
 
-    A run that did not succeed keeps its notebook: a Jobs repair run re-runs it."""
-    if not succeeded:
-        print(f"Kept the run's notebook {path} (the run did not succeed; delete it when done).")
-        return
-    try:
-        w.workspace.delete(path)
-        print(f"Removed the run's notebook {path}")
-    except Exception as e:  # noqa: BLE001 - best effort; say what is left
-        print(f"WARNING: could not remove {path} ({e}); delete it by hand.", file=sys.stderr)
+    The run page opens the notebook from the workspace, so it stays for the window: 60 min after a run that
+    succeeded, 24 h after one that did not (a Jobs repair run re-runs it). The sweep removes it after that."""
+    _workspace_sweep.release(w, [path], scope="bench", succeeded=succeeded)
 
 
 def _discover_warehouse(w):
@@ -726,6 +721,7 @@ def run_smoke_stage(
     )  # fmt: skip
     if outcome.stall:
         print("SMOKE STAGE STALLED: nothing else is submitted.", file=sys.stderr)
+        _release_notebook(w, smoke_path, succeeded=False)
         return EXIT_STALLED
     problems = smoke_problems(outcome, require_forms=bool(levels_mvp), allow_errors=allow_errors)
     print_smoke(outcome)
@@ -733,8 +729,9 @@ def run_smoke_stage(
         print("SMOKE STAGE FAILED: nothing else is submitted.", file=sys.stderr)
         for pr in problems:
             print(f"  - {pr}", file=sys.stderr)
+        _release_notebook(w, smoke_path, succeeded=False)  # held 24 h: a repair run re-runs it
         return EXIT_SMOKE_FAILED
-    _remove_notebook(w, smoke_path)  # a clean smoke needs no repair run; a failed one keeps its notebook
+    _release_notebook(w, smoke_path)  # a clean smoke: held 60 min, then the sweep removes it
     if smoke_only:
         print(f"SMOKE STAGE CLEAN ({outcome.seconds:.0f} s): --smoke-only, the real run is not submitted.")
         return 0
@@ -2023,6 +2020,8 @@ def _main(_stack) -> int:
     # Ensure it doesn't have the /Workspace prefix for the SDK calls.
     notebook_path = "/" + notebook_path.strip().removeprefix("/Workspace").lstrip("/")
     smoke_path = notebook_path[: -len(".ipynb")] + "_smoke.ipynb"
+    # Earlier runs' notebooks stay for their window; remove those past it (bounded, never fails the launch).
+    _workspace_sweep.sweep_at_launch(w, ("bench",), me=me.user_name)
 
     # Ensure parent directory exists (workspace API).
     notebook_parent = Path(notebook_path).parent
@@ -2321,16 +2320,17 @@ def _main(_stack) -> int:
             f"Rows sunk before the stall are in {table} (run_id = '{run_id}'). Not retried.",
             file=sys.stderr,
         )
+        _release_notebook(w, notebook_path, succeeded=False)
         return EXIT_STALLED
 
     run = outcome.run
     run_id_remote = remote_run_id
     state = run.state
     _result = getattr(state, "result_state", None)
-    # the run has ended; export its executed notebook first (export-run needs the notebook), then delete it;
-    # a failed run keeps its notebook
+    # the run has ended; export its executed notebook (export-run needs the notebook), then keep it for the
+    # sweep's window (24 h for a run that did not succeed)
     _save_run_output(w, run, run_id, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent))
-    _remove_notebook(w, notebook_path, getattr(_result, "value", str(_result)) == "SUCCESS")
+    _release_notebook(w, notebook_path, getattr(_result, "value", str(_result)) == "SUCCESS")
     if state and getattr(state, "life_cycle_state", None):
         lc = (
             state.life_cycle_state.value

@@ -27,7 +27,9 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - `--setup-cap-min <n>` - stop when no mutant was tried n minutes after the work started. Default: 30.
 - `--stall-min <n>` - stop when no mutant finished for n minutes. Default: 15.
 - `--start-cap-min <n>` - cancel when the node has not beaten n minutes after the submit. Default: 20.
-- `--keep-stage` - keep the Volume folder and the runner notebook.
+- `--keep-stage` - keep the Volume folder. The runner notebook is held 24 h.
+- By default the notebook stays 60 min after the run, or 24 h after a failure. Then `gbx:workspace:sweep` removes it.
+- A failed run also keeps its Volume folder 24 h: a repair run reads the wheel and the tarball there.
 - `--explain-only` - print the plan and stop. No network, nothing staged.
 - `--log <path>` - write output to `test-logs/<path>` (relative) or an absolute path.
 - `--help`, `-h` - show usage.

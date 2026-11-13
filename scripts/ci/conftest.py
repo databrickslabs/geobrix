@@ -26,6 +26,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _isolated_workspace_sweep(monkeypatch, tmp_path):
+    """A launcher under test records its notebooks in a ledger of the test's own and sweeps nothing at launch."""
+    monkeypatch.setenv("GBX_WS_SWEEP_LEDGER", str(tmp_path / "workspace-sweep.jsonl"))
+    monkeypatch.setenv("GBX_WS_SWEEP_AT_LAUNCH", "0")
+
+
 def gbx_packages(script: str = "gbx-test-scala.sh") -> list:
     """The Scala packages a by-package run loops over, read from the script's own GBX_PACKAGES."""
     text = (REPO_ROOT / "scripts" / "commands" / script).read_text()

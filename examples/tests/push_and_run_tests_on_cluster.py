@@ -50,7 +50,8 @@ Options:
   --spark-conf KEY=VAL   a Spark conf every shard's session sets before its tests (repeatable), e.g.
                          spark.sql.execution.arrow.maxBytesPerBatch=16m (smaller Arrow batches of tile rows)
   --run-id <id>          default tst-<date>-<time>-<4 hex>
-  --keep-stage           leave the Volume folder, the notebooks and the queue table
+  --keep-stage           leave the Volume folder and the queue table; hold the notebooks 24 h (default: the stage and
+                         the table go at the end, the notebooks are held 60 min, 24 h after a failure; gbx:workspace:sweep)
   --explain-only         print the plan and exit; no network, nothing staged or started
 """
 
@@ -80,6 +81,7 @@ except ImportError:  # pragma: no cover - the launcher venv may lack it
 
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 from _cluster_config import cluster_config_file  # sibling module
+import _workspace_sweep  # sibling module: deferred cleanup of the run's notebooks
 import _affected as af  # sibling module: the test files and oracle tables a change reaches (the import graph)
 import _shard_runner as sr  # sibling module: the runners' claim-and-run loop (its source rides in the runner notebook)
 import _test_shards as ts  # sibling module: the shards, read from CI's files
@@ -2374,6 +2376,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
     local_out = REPO_ROOT / plan["local_out"]
     local_out.mkdir(parents=True, exist_ok=True)
     base_dir = "/" + runner_dir(w).strip().removeprefix("/Workspace").lstrip("/")
+    # Earlier runs' notebooks stay for their window; remove those past it (bounded, never fails the launch).
+    _workspace_sweep.sweep_at_launch(w, ("runners",), me=me, runner_dir=base_dir)
     nbs: List[str] = []
     rc = EXIT_FAILED
     ok = False
@@ -2462,18 +2466,16 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 print(f"WARNING: the timings of this run were not merged ({type(exc).__name__}: {str(exc)[:120]})", file=sys.stderr)
         tables = [spec["table"] for spec in plan["pools"].values()]
         if a.keep_stage:
-            print(f"Kept {stage}, {', '.join(nbs)} and the queue table(s) {', '.join(tables)} (--keep-stage).")
+            print(f"Kept {stage} and the queue table(s) {', '.join(tables)} (--keep-stage); remove them by hand.")
+            _workspace_sweep.release(w, nbs, scope="runners", succeeded=False, run_id=run_id)  # --keep-stage: the 24-h hold
         else:
+            # The stage and the queue tables are read only while the runners run, and a rerun is a new launch
+            # (--rerun-failed), so they go now. The notebooks stay: the run page opens them. gbx:workspace:sweep
+            # removes them after 60 min, or 24 h when the run did not succeed.
             mut.rm_volume_dir(w, stage)
             if nbs:  # a run was submitted: its queue tables may exist
                 drop_queue_tables(w, tables)
-            for nb in nbs:
-                if ok or rc in (EXIT_FAILED, EXIT_NO_START, EXIT_STALLED):
-                    try:
-                        w.workspace.delete(nb)
-                    except Exception as exc:  # noqa: BLE001
-                        if "does not exist" not in str(exc).lower():
-                            print(f"WARNING: could not remove {nb} ({exc}); delete it by hand.", file=sys.stderr)
+                _workspace_sweep.release(w, nbs, scope="runners", succeeded=ok, run_id=run_id)
         if plan["jar"]:
             shutil.rmtree(Path(plan["jar"]["local"]).parent, ignore_errors=True)  # the temporary copy and its folder
     return rc

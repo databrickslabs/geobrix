@@ -42,6 +42,7 @@ from typing import Optional
 
 import _cell_range  # sibling module: run a notebook in pieces (--cells)
 import _wheel_guard  # sibling module: force the staged wheel in, then fail the run if another geobrix is imported
+import _workspace_sweep  # sibling module: deferred cleanup of the imported notebooks (gbx:workspace:sweep)
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _snapshot import snapshot_files  # sibling module (script dir is on sys.path)
 
@@ -334,6 +335,25 @@ def _warn_cluster_wheel_libraries(w, cluster_id: str, wheel: str) -> None:
 
 # --pip-wheel: the wheel the `%pip install ... @ file://<...>.whl` lines of an uploaded copy install instead of theirs
 PIP_WHEEL: Optional[str] = None
+# --keep-notebooks: the imports are not recorded, so gbx:workspace:sweep never removes them.
+KEEP_NOTEBOOKS = False
+
+
+def _record_import(w, ws_path: str) -> None:
+    """Record an imported notebook or file for gbx:workspace:sweep (judged by its age until its run ends)."""
+    try:
+        if KEEP_NOTEBOOKS:  # an earlier run may have recorded the same path
+            _workspace_sweep.forget(w, [ws_path])
+            return
+        _workspace_sweep.record(w, [ws_path], scope="notebooks")
+    except Exception as exc:  # noqa: BLE001 - the run does not depend on the record
+        print(f"    (could not record {ws_path} for the sweep: {exc})", flush=True)
+
+
+def _release_import(w, ws_path: str, ok: bool) -> None:
+    """At the end of a run: keep the notebook for the window (60 min, 24 h after a failure); the sweep removes it after."""
+    if not KEEP_NOTEBOOKS:
+        _workspace_sweep.release(w, [ws_path], scope="notebooks", succeeded=ok, out=lambda m: print(f"    {m}", flush=True))
 _PIP_FILE_WHEEL = re.compile(r"@\s*file://(/Volumes/[^\"'\s]+\.whl)")
 
 
@@ -571,6 +591,7 @@ def _import_notebook(
         overwrite=True,
     )
     print(f"    imported → {ws_path}", flush=True)
+    _record_import(w, ws_path)
     return ws_path
 
 
@@ -774,6 +795,7 @@ def run_one(
 
     from databricks.sdk.service.jobs import RunResultState
     ok = (result == RunResultState.SUCCESS)
+    _release_import(w, ws_path, ok)
     if not ok:
         print(f"!!! STOP — {local_path.name} did not SUCCEED ({result}).", flush=True)
     elif harvest_outputs:
@@ -921,6 +943,7 @@ def run_python_task(
         content=base64.b64encode(local_path.read_bytes()).decode(),
         overwrite=True,
     )
+    _record_import(w, ws_path)
     kind = w.workspace.get_status(ws_path).object_type
     if kind != workspace.ObjectType.FILE:  # a notebook would run as a notebook, not as the Python file
         print(f"!!! STOP - {ws_path} was imported as {kind}, not as a workspace file.", flush=True)
@@ -965,7 +988,9 @@ def run_python_task(
             print(f"    (no output for {t.task_key}: {exc})", flush=True)
     from databricks.sdk.service.jobs import RunResultState
 
-    return result == RunResultState.SUCCESS
+    ok = result == RunResultState.SUCCESS
+    _release_import(w, ws_path, ok)
+    return ok
 
 
 # ---------------------------------------------------------------------------
@@ -1083,6 +1108,14 @@ def main() -> int:
         help=(
             "Workspace folder to import notebooks into. "
             "Default: /Users/<current-user>/GeoBrix/serverless-run"
+        ),
+    )
+    parser.add_argument(
+        "--keep-notebooks",
+        action="store_true",
+        help=(
+            "Do not record the imported notebooks, so gbx:workspace:sweep never removes them. By default each "
+            "stays 60 min after its run ends (24 h after a failure), then the sweep removes it."
         ),
     )
     parser.add_argument(
@@ -1404,8 +1437,9 @@ def main() -> int:
         parser.error("--extra-jar goes with --python-task (--jar-task runs the one --jar)")
     if args.pip_wheel and not args.pip_wheel.startswith("/Volumes/"):
         parser.error("--pip-wheel takes a /Volumes path to a .whl")
-    global PIP_WHEEL
+    global PIP_WHEEL, KEEP_NOTEBOOKS
     PIP_WHEEL = args.pip_wheel
+    KEEP_NOTEBOOKS = bool(args.keep_notebooks)
     # the guard compares with the wheel the run installs; a DCS image or --no-wheel names none, so there is nothing to compare
     WHEEL_GUARD.update(
         on=bool(args.wheel) and not args.no_wheel_guard and not args.docker_image,
@@ -1449,6 +1483,7 @@ def main() -> int:
 
         w = WorkspaceClient(profile=args.profile)
         me = w.current_user.me().user_name
+        _workspace_sweep.sweep_at_launch(w, ("notebooks",), me=me)
         snap = snapshot_files([local], prefix="gbx-py-")
         cluster = JobCluster(
             spark_version=args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version,
@@ -1595,6 +1630,8 @@ def main() -> int:
     if not ws_dir:
         me = w.current_user.me().user_name or "unknown"
         ws_dir = f"/Users/{me}/GeoBrix/serverless-run"
+    # Earlier runs' imports stay for their window; remove those past it (bounded, never fails the launch).
+    _workspace_sweep.sweep_at_launch(w, ("notebooks",))
 
     print(f"Profile  : {args.profile}", flush=True)
     print(f"Workspace: {ws_dir}", flush=True)

@@ -49,4 +49,5 @@ Generate the seeded benchmark corpus (GeoTIFF tiles + `corpus.json` manifest) in
 - The real run fans out a DataFrame of tile indices with `repartition(N, column)`. Each task writes its tiles through the Volume mount from a local temp file.
 - Nothing on the Volume is deleted. A short file left by an interrupted run is overwritten.
 - The launcher shows the latest notebook progress line every minute. The run's notebook output is saved to `test-logs/bench/<run-id>/notebook-output.html`.
+- The notebooks are `/Users/<you>/GeoBrix/bench/geobrix_gen_corpus_<run-id>[_smoke].ipynb`. They stay at run end: 60 min, or 24 h after a failure. Then `gbx:workspace:sweep` removes them.
 - At the end it compares the count of complete tiles and the sha256 sample with the local corpus (exit 1 on a difference).

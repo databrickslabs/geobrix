@@ -43,6 +43,11 @@ Options:
                           mean smaller batches)
   --example-files-parallel N  Example files run side by side (default 6; file 00, the setup, runs first)
   --rebuild               Build the wheel even when dist/env6 holds one that fits HEAD
+  --run-part I/N          Run part I of a gated run cut into N parts (N >= 2), one part after another. Parts 1
+                          to N-1 deal the slice; part N runs the example files. The first part to run installs,
+                          the others reuse it. A failed part can be run again. The last part to finish writes
+                          evidence.json (scope, parts N) and drops the schema. Record: <run dir>/parts-*.json
+  --drop-parts SHA12      Drop the schema and the folders kept by an unfinished parted run of commit SHA12
   --keep                  Keep the schema and the Volume folder (gated run)
   --install-timeout-min N Time limit of the install job (default 90)
   --dry-run               Print the plan and counts; no build, no workspace call
@@ -67,6 +72,7 @@ Examples:
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full
   bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope smoke --against geobrix_uc
+  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full --run-part 1/6
 HELP
 }
 
@@ -79,7 +85,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--scope|--against|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min)
+    --profile|--catalog|--volroot|--scope|--against|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

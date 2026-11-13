@@ -20,6 +20,8 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `--shards N` - separate slice sessions (processes). Default `1`; each session batches only its own share of the cases, so more sessions mean smaller batches.
 - `--example-files-parallel N` - example files run side by side. Default `6`. File `00` (the setup that creates the tables the others read) runs first, alone. The statements of one file stay in order, and the files' text is not batched.
 - `--rebuild` - build the wheel even when `dist/env6` holds one that fits HEAD.
+- `--run-part I/N` - run part I of a gated run cut into N parts (N at least 2). See "Gated run in parts".
+- `--drop-parts SHA12` - drop the schema and the folders that an unfinished parted run of commit SHA12 kept. Then stop.
 - `--keep` - keep the schema and the Volume folder (gated run).
 - `--install-timeout-min N` - time limit of the install job. Default `90`.
 - `--dry-run` - print the plan and the statement counts. No build, no workspace call.
@@ -30,6 +32,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe`
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full`
 - `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope smoke --against geobrix_uc`
+- `bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full --run-part 1/6`
 
 ## Gated run steps
 
@@ -40,6 +43,17 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - In the same job, call `gbx_probe_build()` once. It reports the build commit and a source digest that the function imports. The job fails when they differ from the staged wheel's.
 - Run the scope (`bench.oracles.uc_sql`, judged by `check_uc_results`) in parallel shards and `gbx:examples:uc-sql` against the schema.
 - Drop the schema and delete the Volume folder and the workspace folder, unless `--keep`.
+
+## Gated run in parts
+
+- Run the parts one after another, in any order. Parts 1 to N-1 deal the slice cases round-robin. Part N runs the example files.
+- The first part to run builds, stages and installs. The other parts reuse that install. A part installs again when the schema is gone.
+- The record of the run is `test-logs/uc-integration/<sha12>/parts-<scope>-of-<N>.json`.
+- A part that stops or fails can run again. Its new result replaces the old one.
+- Between parts the schema and the Volume folder stay. No `evidence.json` exists until the last part.
+- The last part to finish judges all parts as one run. Each case is judged on its own, so the verdict equals an unsplit run's. A case that no part ran fails.
+- It writes `evidence.json` with `parts` and `part_runs`, then drops the schema and the folders, unless `--keep`.
+- To abandon an unfinished parted run, run `--drop-parts <sha12>`. It drops only `geobrix_uc_it_<sha12>`.
 
 ## Evidence
 

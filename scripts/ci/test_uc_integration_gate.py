@@ -447,7 +447,7 @@ def test_the_help_names_the_options_and_a_missing_profile_exits_2():
     sh = str(REPO_ROOT / "scripts" / "commands" / "gbx-uc-tests.sh")
     res = subprocess.run(["bash", sh, "--help"], capture_output=True, text=True)
     assert res.returncode == 0
-    for opt in ("--profile", "--keep", "--dry-run", "--scope", "--against", "--shards", "--warehouse-id", "--rebuild"):
+    for opt in ("--profile", "--keep", "--dry-run", "--scope", "--against", "--shards", "--warehouse-id", "--rebuild", "--run-part", "--drop-parts"):
         assert opt in res.stdout
     for gone in ("--slice", "--smoke"):
         assert gone not in res.stdout
@@ -564,3 +564,164 @@ def test_the_driver_hands_the_runner_its_batch_and_concurrency(driver, monkeypat
     assert argv[argv.index("--batch") + 1] == "7" and argv[argv.index("--concurrency") + 1] == "5"
     assert "--batch" not in g.uc_sql_argv(Path("a.sql"), Path("a.json"))  # cleanup and the like run alone
     assert driver.parse_args(["--profile", "p"]).batch == driver.DEFAULT_BATCH == 25
+
+
+# ---- a gated run in parts (--run-part I/N) -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", ["0/3", "4/3", "1/1", "x", "2", "2/x"])
+def test_run_part_needs_i_of_n_with_n_at_least_2(driver, bad, capsys):
+    with pytest.raises(SystemExit) as exc:
+        driver.parse_args(["--profile", "p", "--run-part", bad])
+    assert exc.value.code == 2
+    assert driver.parse_args(["--profile", "p", "--run-part", "2/5"]).run_part == (2, 5)
+    assert driver.parse_args(["--profile", "p"]).run_part is None
+
+
+def test_parts_deal_the_slice_and_give_the_examples_to_the_last_part(driver):
+    pairs = [(f"c{i}", "SELECT 1") for i in range(23)]
+    work = [driver.part_work(pairs, i, 4) for i in range(1, 5)]
+    assert [ex for _, ex in work] == [False, False, False, True]
+    dealt = [c for sl, _ in work for c, _ in sl]
+    assert sorted(dealt) == sorted(c for c, _ in pairs) and len(dealt) == len(pairs)
+    assert work[-1][0] == []
+    assert driver.part_work(pairs, 1, 1) == (pairs, True)  # an unsplit run: all of it
+
+
+def test_merge_parts_judges_the_union_and_flags_a_case_no_part_ran(driver):
+    recs = {
+        "1": {"cids": ["a", "b"], "slice": {"total": 2, "passed": 1, "failed": 1, "failed_ids": ["b"], "tolerated_ids": []}, "examples": None},
+        "2": {"cids": ["c"], "slice": {"total": 1, "passed": 0, "failed": 0, "failed_ids": [], "tolerated_ids": ["c"]}, "examples": None},
+        "3": {"cids": [], "slice": {"total": 0, "passed": 0, "failed": 0, "failed_ids": [], "tolerated_ids": []},
+              "examples": {"statements_ok": 4, "total": 4, "failures": []}},
+    }
+    sl, ex = driver.merge_parts(recs, ["a", "b", "c"], 3)
+    assert sl == {"total": 3, "passed": 1, "failed": 1, "failed_ids": ["b"], "tolerated_ids": ["c"]}
+    assert ex == {"statements_ok": 4, "total": 4, "failures": []}
+    sl, _ = driver.merge_parts(recs, ["a", "b", "c", "d"], 3)  # fail on revert: a case no part ran must not pass
+    assert sl["failed_ids"] == ["b", "d"] and sl["total"] == 4 and sl["passed"] == 1
+
+
+def _parted(driver, monkeypatch, tmp_path):
+    """A gated run with every workspace step faked; returns the call log."""
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+    calls = []
+    monkeypatch.setattr(driver.Gate, "step_wheel", lambda self: calls.append("wheel") or Path("w.whl"))
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"name": "w.whl"})
+    monkeypatch.setattr(driver.Gate, "step_stage", lambda self, w, i: calls.append("stage") or "/v/w.whl")
+
+    def install(self, w):
+        calls.append("install")
+        self.run_ids.append("111")
+        self.ws_dir = "/Users/me/GeoBrix/uc-it-x"
+
+    monkeypatch.setattr(driver.Gate, "step_install", install)
+    monkeypatch.setattr(driver.Gate, "schema_exists", lambda self: True)
+
+    def warehouse(self, tables, known, part=(1, 1)):
+        i, n = part
+        calls.append(f"warehouse {i}/{n}")
+        self.slice_expected = ["a", "b", "c"]
+        cids = {1: ["a", "b"], 2: ["c"], 3: []}[i]
+        self.part_cids = cids
+        sl = {"total": len(cids), "passed": len(cids), "failed": 0, "failed_ids": [], "tolerated_ids": []}
+        ex = {"statements_ok": 5, "total": 5, "failures": []} if i == n else None
+        return sl, ex
+
+    monkeypatch.setattr(driver.Gate, "step_warehouse", warehouse)
+    monkeypatch.setattr(driver.Gate, "cleanup", lambda self: calls.append(f"cleanup {self.schema} {self.ws_dir}") or "dropped")
+    return calls
+
+
+def test_a_parted_run_installs_once_resumes_and_writes_evidence_after_the_last_part(driver, monkeypatch, tmp_path):
+    calls = _parted(driver, monkeypatch, tmp_path)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    assert driver.main(base + ["1/3"]) == 0
+    assert calls == ["wheel", "stage", "install", "warehouse 1/3"]
+    assert not (tmp_path / "evidence.json").exists()  # a part alone is not evidence, and nothing is dropped yet
+    calls.clear()
+    assert driver.main(base + ["3/3"]) == 0  # any order; a rerun or a later part resumes on the install
+    assert driver.main(base + ["1/3"]) == 0
+    assert calls == ["warehouse 3/3", "warehouse 1/3"] and not (tmp_path / "evidence.json").exists()
+    calls.clear()
+    assert driver.main(base + ["2/3"]) == 0
+    assert calls[0] == "warehouse 2/3" and calls[1].startswith("cleanup geobrix_uc_it_") and calls[1].endswith("/Users/me/GeoBrix/uc-it-x")
+    ev = json.loads((tmp_path / "evidence.json").read_text())
+    assert ev["result"] == "pass" and ev["scope"] == "full" and ev["parts"] == 3 and ev["job_run_ids"] == ["111"]
+    assert ev["slice"]["total"] == 3 and ev["slice"]["passed"] == 3 and ev["examples"]["total"] == 5
+    assert ev["wheel"] == {"name": "w.whl"} and ev["cleanup"] == "dropped" and "adhoc" not in ev
+
+
+def test_a_failed_part_keeps_the_install_and_its_rerun_completes_the_run(driver, monkeypatch, tmp_path):
+    calls = _parted(driver, monkeypatch, tmp_path)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    good = driver.Gate.step_warehouse
+    monkeypatch.setattr(driver.Gate, "step_warehouse", lambda self, t, k, part=(1, 1): (_ for _ in ()).throw(driver.StepFailed("slice_0 stopped")))
+    assert driver.main(base + ["1/2"]) == 1
+    assert not any(c.startswith("cleanup") for c in calls)  # the install stays for the rerun
+    monkeypatch.setattr(driver.Gate, "step_warehouse", good)
+    assert driver.main(base + ["2/2"]) == 0 and not (tmp_path / "evidence.json").exists()  # part 1 has no result yet
+    assert driver.main(base + ["1/2"]) == 0
+    assert calls.count("install") == 1 and json.loads((tmp_path / "evidence.json").read_text())["result"] == "pass"
+
+
+def test_a_part_that_finds_a_failure_fails_and_so_does_the_merged_evidence(driver, monkeypatch, tmp_path):
+    _parted(driver, monkeypatch, tmp_path)
+    good = driver.Gate.step_warehouse
+
+    def one_bad(self, tables, known, part=(1, 1)):
+        sl, ex = good(self, tables, known, part)
+        if part[0] == 1:
+            sl = {**sl, "passed": 1, "failed": 1, "failed_ids": ["b"]}
+        return sl, ex
+
+    monkeypatch.setattr(driver.Gate, "step_warehouse", one_bad)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    assert driver.main(base + ["1/2"]) == 1
+    assert driver.main(base + ["2/2"]) == 1
+    ev = json.loads((tmp_path / "evidence.json").read_text())
+    assert ev["result"] == "fail" and ev["slice"]["failed_ids"] == ["b"]
+
+
+def test_a_lost_schema_is_installed_again(driver, monkeypatch, tmp_path):
+    calls = _parted(driver, monkeypatch, tmp_path)
+    base = ["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part"]
+    assert driver.main(base + ["1/2"]) == 0
+    monkeypatch.setattr(driver.Gate, "schema_exists", lambda self: False)
+    assert driver.main(base + ["2/2"]) == 0
+    assert calls.count("install") == 2
+
+
+@pytest.mark.parametrize("extra", [["--against", "sch"], ["--scope", "smoke", "--against", "sch"]])
+def test_run_part_is_for_a_gated_run_only(driver, monkeypatch, capsys, extra):
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    assert driver.main(["--profile", "p", "--warehouse-id", "w", "--run-part", "1/2"] + extra) == 2
+    assert "--run-part" in capsys.readouterr().err
+
+
+def test_drop_parts_cleans_up_an_unfinished_parted_run_of_another_commit(driver, monkeypatch, tmp_path):
+    calls = _parted(driver, monkeypatch, tmp_path)
+    assert driver.main(["--profile", "p", "--scope", "full", "--warehouse-id", "w", "--run-part", "1/2"]) == 0
+    sha12 = next(p.parent.name for p in tmp_path.glob("*/parts-*.json"))
+    calls.clear()
+    assert driver.main(["--profile", "p", "--warehouse-id", "w", "--drop-parts", sha12]) == 0
+    assert calls == [f"cleanup geobrix_uc_it_{sha12} /Users/me/GeoBrix/uc-it-x"]
+    state = json.loads(next(tmp_path.glob("*/parts-*.json")).read_text())
+    assert state["dropped"] == "dropped"
+    assert driver.main(["--profile", "p", "--warehouse-id", "w", "--drop-parts", "000000000000"]) == 1
+
+
+def test_the_dry_run_prints_the_plan_of_every_part(driver, monkeypatch, capsys):
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(10)])
+    monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
+    monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
+    assert driver.main(["--profile", "p", "--dry-run", "--scope", "full", "--run-part", "1/3"]) == 0
+    out = capsys.readouterr().out
+    assert "part 1/3: slice 5 statements (5 warehouse statements)" in out
+    assert "part 2/3: slice 5 statements" in out and "part 3/3: the example files, 3 statements" in out

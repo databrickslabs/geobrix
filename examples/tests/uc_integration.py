@@ -14,6 +14,10 @@ interpreter that has the Databricks SDK. Steps, each with a progress line:
   6. drop the schema and delete the Volume folder (unless --keep);
   7. write test-logs/uc-integration/evidence.json (which records the scope: core or full).
 
+`--run-part I/N` cuts a gated run into N parts run one after another (each can be rerun): parts 1 to N-1 deal the
+slice, part N runs the example files. The first part to run installs; the others reuse the install, recorded in
+`<run dir>/parts-<scope>-of-<N>.json`. evidence.json is written, and the schema dropped, when every part has run.
+
 `--scope smoke|core|full` picks what runs: smoke is 12 slice statements plus example files 00 and 01, core is the
 grid and vector tables, full adds the raster tables. `--against SCHEMA` runs the scope against an existing install
 (no build, stage, install or cleanup) and writes evidence-adhoc.json, never evidence.json: the installed code
@@ -112,6 +116,50 @@ def shard(pairs: Sequence, n: int) -> List[list]:
     n = max(1, min(n, len(pairs) or 1))
     shards = [list(pairs[i::n]) for i in range(n)]
     return [s for s in shards if s]
+
+
+def parse_run_part(text: str) -> Tuple[int, int]:
+    """`I/N` with 1 <= I <= N and N >= 2 (an argparse type)."""
+    m = re.fullmatch(r"\s*(\d+)\s*/\s*(\d+)\s*", text or "")
+    if not m or not (1 <= int(m.group(1)) <= int(m.group(2))) or int(m.group(2)) < 2:
+        raise argparse.ArgumentTypeError(f"expected I/N with 1 <= I <= N and N >= 2, got {text!r}")
+    return int(m.group(1)), int(m.group(2))
+
+
+def part_work(pairs: Sequence, part: int, parts: int) -> Tuple[list, bool]:
+    """(the slice statements of part `part` of `parts`, whether it runs the example files).
+
+    Unsplit (`parts` 1): everything. Otherwise parts 1 to N-1 deal the slice round-robin and part N runs the examples.
+    """
+    if parts <= 1:
+        return list(pairs), True
+    if part == parts:
+        return [], True
+    dealt = shard(pairs, parts - 1)
+    return (dealt[part - 1] if part - 1 < len(dealt) else []), False
+
+
+def merge_parts(records: Dict[str, dict], expected: Sequence[str], parts: int) -> Tuple[dict, dict]:
+    """(slice, examples) of a run in parts, as one unsplit run would judge them.
+
+    Every case is judged on its own, so the union of the parts' verdicts is the run's verdict. A case of `expected`
+    (the scope's UC cases) that no part ran is a failure, as `check_uc_results` counts a case with no result.
+    """
+    ran, failed, tolerated = set(), set(), set()
+    for rec in records.values():
+        ran.update(rec.get("cids") or [])
+        failed.update(rec["slice"]["failed_ids"])
+        tolerated.update(rec["slice"]["tolerated_ids"])
+    failed.update(c for c in expected if c not in ran)
+    total = len(set(expected) | ran)
+    sl = {
+        "total": total,
+        "passed": total - len(failed) - len(tolerated - failed),
+        "failed": len(failed),
+        "failed_ids": sorted(failed),
+        "tolerated_ids": sorted(tolerated - failed),
+    }
+    return sl, records[str(parts)]["examples"]
 
 
 def failed_id(message: str) -> str:
@@ -376,6 +424,8 @@ def parse_args(argv=None):
     p.add_argument("--keep", action="store_true", help="keep the schema and the Volume folder")
     p.add_argument("--install-timeout-min", type=int, default=90)
     p.add_argument("--against", metavar="SCHEMA", default=None, help="run the scope against the existing install in SCHEMA: no build, stage, install or cleanup; writes evidence-adhoc.json, never evidence.json")
+    p.add_argument("--run-part", metavar="I/N", type=parse_run_part, default=None, help="run part I of a gated run cut into N parts (N >= 2): parts 1 to N-1 deal the slice, part N runs the example files; evidence.json comes with the last part to finish")
+    p.add_argument("--drop-parts", metavar="SHA12", default=None, help="drop the schema and the Volume and workspace folders of the unfinished parted run of commit SHA12, then stop")
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     return p.parse_args(argv)
@@ -395,6 +445,17 @@ class Gate:
         self.run_ids: List[str] = []
         self.ev: dict = {}
         self.created = {"folder": False, "schema": False, "ws": False}
+        self.slice_expected: List[str] = []  # the scope's UC case ids (set by step_warehouse)
+        self.part_cids: List[str] = []  # the UC case ids this run judged
+
+    def schema_exists(self) -> bool:
+        try:
+            self.client().schemas.get(f"{self.a.catalog}.{self.schema}")
+            return True
+        except Exception as exc:  # noqa: BLE001 - only "not found" means gone; any other error stops the part
+            if type(exc).__name__ in ("NotFound", "ResourceDoesNotExist"):
+                return False
+            raise
 
     # -- steps --
     def client(self):
@@ -488,39 +549,55 @@ class Gate:
             argv += ["--warehouse-id", self.warehouse]
         return argv
 
-    def step_warehouse(self, tables, known: Dict[str, str]) -> Tuple[dict, dict]:
+    def step_warehouse(self, tables, known: Dict[str, str], part: Tuple[int, int] = (1, 1)) -> Tuple[dict, Optional[dict]]:
+        """(slice verdict, examples verdict) of this run's share: all of it, or part `part` (I, N) of a parted run.
+
+        The examples verdict is None for a part that does not run the example files.
+        """
         from databricks.labs.gbx.bench import probes
 
-        say("step 5/6: the oracle slice and the example files on the warehouse, in parallel")
+        i_part, n_parts = part
+        label = "" if n_parts == 1 else f"part {i_part}/{n_parts}: "
         pairs = slice_pairs(self.a.catalog, self.schema, tables)
         if self.a.scope == "smoke":
             pairs = pairs[:SMOKE_STATEMENTS]
+        all_cases = probes.uc_slice_cases(tables)
+        in_pairs = {cid for cid, _ in pairs}
+        self.slice_expected = sorted(c.cid for c in all_cases if "uc" in c.surfaces and c.cid in in_pairs)
+        pairs, run_examples = part_work(pairs, i_part, n_parts)
+        say(f"step 5/6: {label}" + ("the oracle slice and the example files on the warehouse, in parallel" if pairs and run_examples
+                                     else "the oracle slice on the warehouse" if pairs else "the example files on the warehouse"))
         batchable = slice_batchable(tables)
-        say(f"slice: {len(pairs)} cases as {warehouse_statements(pairs, batchable, self.a.batch)} warehouse statements (batch {self.a.batch}, concurrency {self.a.concurrency}, {self.a.shards} session(s))")
-        shards = shard(pairs, self.a.shards)
         jobs: List[Tuple[str, subprocess.Popen, Path, Path, int]] = []
-        for i, part in enumerate(shards):
-            sql, out, log = self.run_statements(f"slice_{i}", part, batchable)
-            jobs.append((f"slice_{i}", self._popen(self.uc_sql_argv(sql, out, self.schema, batch=True), log), out, log, len(part)))
+        if pairs:
+            say(f"slice: {len(pairs)} cases as {warehouse_statements(pairs, batchable, self.a.batch)} warehouse statements (batch {self.a.batch}, concurrency {self.a.concurrency}, {self.a.shards} session(s))")
+            prefix = "slice" if n_parts == 1 else f"slice_p{i_part}"
+            for i, share in enumerate(shard(pairs, self.a.shards)):
+                sql, out, log = self.run_statements(f"{prefix}_{i}", share, batchable)
+                jobs.append((f"{prefix}_{i}", self._popen(self.uc_sql_argv(sql, out, self.schema, batch=True), log), out, log, len(share)))
         ex_dir = self.run_dir / "examples"
-        ex_log = self.run_dir / "examples.log"
-        ex_argv = ["bash", str(CMD / "gbx-examples-uc-sql.sh"), "--profile", self.a.profile, "--catalog", self.a.catalog,
-                   "--schema", self.schema, "--out-dir", str(ex_dir), "--timeout-s", "900",
-                   "--parallel", str(self.a.example_files_parallel)]
-        if self.warehouse:
-            ex_argv += ["--warehouse-id", self.warehouse]
-        if self.a.scope == "smoke":
-            ex_argv += ["--files", SMOKE_EXAMPLES]
-        ex_pairs = example_pairs(self.a.catalog, self.schema, SMOKE_EXAMPLES if self.a.scope == "smoke" else None)
-        ex_total = sum(len(p) for p in ex_pairs.values())
-        jobs.append(("examples", self._popen(ex_argv, ex_log), ex_dir, ex_log, ex_total))
+        ex_pairs: Dict[Path, list] = {}
+        if run_examples:
+            ex_log = self.run_dir / "examples.log"
+            ex_argv = ["bash", str(CMD / "gbx-examples-uc-sql.sh"), "--profile", self.a.profile, "--catalog", self.a.catalog,
+                       "--schema", self.schema, "--out-dir", str(ex_dir), "--timeout-s", "900",
+                       "--parallel", str(self.a.example_files_parallel)]
+            if self.warehouse:
+                ex_argv += ["--warehouse-id", self.warehouse]
+            if self.a.scope == "smoke":
+                ex_argv += ["--files", SMOKE_EXAMPLES]
+            ex_pairs = example_pairs(self.a.catalog, self.schema, SMOKE_EXAMPLES if self.a.scope == "smoke" else None)
+            ex_total = sum(len(p) for p in ex_pairs.values())
+            for old in ex_dir.glob("*.json") if ex_dir.exists() else []:
+                old.unlink()  # a rerun of the part must not count the files of an earlier one
+            jobs.append(("examples", self._popen(ex_argv, ex_log), ex_dir, ex_log, ex_total))
         start = time.time()
         while any(j[1].poll() is None for j in jobs):
             time.sleep(HEARTBEAT_S)
             slice_done = sum(count_results(o) for n, _, o, _, _ in jobs if n != "examples")
-            ex_done = len(list(ex_dir.glob("*.json"))) if ex_dir.exists() else 0
+            ex_done = len(list(ex_dir.glob("*.json"))) if run_examples and ex_dir.exists() else 0
             running = sum(j[1].poll() is None for j in jobs)
-            say(f"warehouse: {int(time.time() - start)} s, slice {slice_done}/{len(pairs)} statements, examples {ex_done}/{len(ex_pairs)} files, {running} sessions running")
+            say(f"warehouse: {label}{int(time.time() - start)} s, slice {slice_done}/{len(pairs)} statements, examples {ex_done}/{len(ex_pairs)} files, {running} sessions running")
         for name, proc, _, log, _ in jobs:
             if proc.returncode not in (0, 1):  # 1 = the run finished and found failures: judged below
                 raise StepFailed(f"{name} stopped (exit {proc.returncode}); see {log}")
@@ -528,19 +605,19 @@ class Gate:
         for name, _, out, _, _ in jobs:
             if name != "examples" and out.is_file():
                 merged.update(oracles_load(out))
-        cases = probes.uc_slice_cases(tables)
         ran = {cid for cid, _ in pairs}
-        cases = [c for c in cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run judges only what it ran
+        cases = [c for c in all_cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run or a part judges only what it ran
+        self.part_cids = sorted(c.cid for c in cases if "uc" in c.surfaces)
         with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
             from databricks.labs.gbx.bench import oracles
 
             failures = oracles.check_uc_results(cases, merged, d)
-        (self.run_dir / "slice_failures.txt").write_text("\n".join(failures))
+        (self.run_dir / ("slice_failures.txt" if n_parts == 1 else f"slice_failures_p{i_part}.txt")).write_text("\n".join(failures))
         total = len([1 for c in cases if "uc" in c.surfaces])
         sl = judge_slice(failures, total, known)
         for line in failures[:30]:
             say("slice failure: " + " ".join(line.split())[:240])
-        ex = self.judge_examples(ex_pairs, ex_dir)
+        ex = self.judge_examples(ex_pairs, ex_dir) if run_examples else None
         return sl, ex
 
     def _popen(self, argv: List[str], log: Path) -> subprocess.Popen:
@@ -601,6 +678,131 @@ class Gate:
         path.write_text(json.dumps(self.ev, indent=2, sort_keys=True) + "\n")
 
 
+# ---- a gated run in parts ---------------------------------------------------------------------------------------------
+
+
+def _load_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    tmp.replace(path)
+
+
+def part_ok(rec: dict) -> bool:
+    ex = rec.get("examples")
+    return "error" not in rec and rec["slice"]["failed"] == 0 and (ex is None or (ex["total"] > 0 and ex["statements_ok"] == ex["total"]))
+
+
+def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
+    """Part I of N of a gated run: install unless an earlier part did, run the part's share, merge after the last part."""
+    part, n = a.run_part
+    path = g.run_dir / f"parts-{a.scope}-of-{n}.json"
+    src = uc_sources_hash.sources_hash(REPO_ROOT)
+    state = _load_json(path)
+    if state.get("head_sha") != g.head or state.get("sources_hash") != src or state.get("dropped"):
+        state = {"head_sha": g.head, "sources_hash": src, "scope": a.scope, "parts": n, "catalog": a.catalog,
+                 "schema": g.schema, "volume_dir": g.folder, "done": {}}
+    say(f"part {part}/{n} of a gated {a.scope} run; its record is {path}")
+    rec: dict = {"started": now(), "warehouse_id": g.warehouse}
+    try:
+        inst = state.get("install")
+        if inst and not g.schema_exists():
+            say(f"the schema {a.catalog}.{g.schema} of the recorded install is gone: installing again")
+            inst = None
+            state.pop("install", None)
+        if inst:
+            g.run_ids, g.ws_dir = list(inst["job_run_ids"]), inst.get("ws_dir")
+            say(f"steps 2-4/6: reuse the install of an earlier part (job run {', '.join(g.run_ids) or '-'}, wheel {inst['wheel'].get('name')})")
+        else:
+            wheel = g.step_wheel()
+            info = wheel_info(wheel)
+            g.step_install(g.step_stage(wheel, info))
+            state["install"] = {"wheel": info, "job_run_ids": list(g.run_ids), "ws_dir": g.ws_dir, "finished": now()}
+            _save_json(path, state)
+        sl, ex = g.step_warehouse(tables, known, part=(part, n))
+        rec.update({"slice": sl, "examples": ex, "cids": g.part_cids})
+        state["expected"] = g.slice_expected
+    except StepFailed as exc:
+        rec["error"] = str(exc)
+        print(f"FAILED: part {part}/{n}: {exc}", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - any other error fails the part; its rerun resumes
+        rec["error"] = f"{type(exc).__name__}: {str(exc)[:400]}"
+        print(f"FAILED: part {part}/{n}: {rec['error']}", file=sys.stderr)
+    rec["finished"] = now()
+    state["done"][str(part)] = rec
+    _save_json(path, state)
+    ok = part_ok(rec)
+    if "error" not in rec:
+        ex = rec["examples"]
+        say(f"part {part}/{n}: slice {rec['slice']['passed']}/{rec['slice']['total']} passed, {rec['slice']['failed']} failed"
+            + (f"; examples {ex['statements_ok']}/{ex['total']}" if ex else ""))
+    todo = [i for i in range(1, n + 1) if str(i) not in state["done"] or "error" in state["done"][str(i)]]
+    if todo:
+        say(f"part {part}/{n} {'passed' if ok else 'FAILED'}; still to run: {', '.join(f'--run-part {i}/{n}' for i in todo)}. "
+            f"The schema stays until then (drop an abandoned run with --drop-parts {g.sha12})")
+        return 0 if ok else 1
+    sl, ex = merge_parts(state["done"], state.get("expected", []), n)
+    done = state["done"]
+    g.ev = {
+        "head_sha": g.head, "sources_hash": src, "started": min(r["started"] for r in done.values()), "profile": a.profile,
+        "warehouse_id": g.warehouse, "catalog": a.catalog, "schema": g.schema, "volume_dir": g.folder, "scope": a.scope,
+        "parts": n, "part_runs": {i: {k: done[i][k] for k in ("started", "finished", "warehouse_id")} for i in sorted(done, key=int)},
+        "wheel": state["install"]["wheel"], "job_run_ids": list(state["install"]["job_run_ids"]),
+        "slice": {**sl, "scope": a.scope, "tables": list(tables)},
+        "examples": {"statements_ok": ex["statements_ok"], "total": ex["total"], "failed": ex["failures"][:40]},
+        "result": decide(sl, ex), "finished": now(),
+    }
+    g.write_evidence()
+    say("step 6/6: " + ("keeping the schema and the Volume folder" if a.keep else "dropping the schema and deleting the Volume folder"))
+    g.ws_dir = state["install"].get("ws_dir")
+    g.created = {"folder": True, "schema": True, "ws": True}
+    g.ev["cleanup"] = g.cleanup()
+    g.ev["finished"] = now()
+    g.write_evidence()
+    if not a.keep:
+        state["dropped"] = g.ev["cleanup"]
+        _save_json(path, state)
+    for line in sl["failed_ids"][:30]:
+        say(f"slice failure: {line}")
+    say(gate.summary_line(g.ev) + f"; {n} parts; cleanup {g.ev['cleanup']}")
+    say(f"evidence: {EVIDENCE}")
+    return 0 if g.ev["result"] == "pass" else 1
+
+
+def drop_parts(g: "Gate", sha12: str) -> int:
+    """Clean up the unfinished parted runs of commit `sha12`: what a parted run keeps between its parts."""
+    states = sorted((OUT_DIR / sha12).glob("parts-*.json"))
+    if not states:
+        print(f"no parted run recorded under {OUT_DIR / sha12}", file=sys.stderr)
+        return 1
+    rc = 0
+    for path in states:
+        state = _load_json(path)
+        if state.get("dropped"):
+            say(f"{path.name}: already cleaned up ({state['dropped']})")
+            continue
+        if state.get("schema") != f"geobrix_uc_it_{sha12}":  # only the gate's own scratch schema is ever dropped
+            print(f"{path.name}: refused, it names schema {state.get('schema')!r}, not geobrix_uc_it_{sha12}", file=sys.stderr)
+            rc = 1
+            continue
+        g.schema, g.folder, g.run_dir = state["schema"], state["volume_dir"], path.parent
+        g.ws_dir = (state.get("install") or {}).get("ws_dir")
+        g.created = {"folder": True, "schema": True, "ws": True}
+        say(f"{path.name}: dropping {state.get('catalog')}.{g.schema} and deleting {g.folder}")
+        state["dropped"] = g.cleanup()
+        _save_json(path, state)
+        say(f"{path.name}: cleanup {state['dropped']}")
+        rc = rc or (0 if state["dropped"] == "dropped" else 1)
+    return rc
+
+
 def oracles_load(path: Path) -> dict:
     from databricks.labs.gbx.bench import oracles
 
@@ -620,7 +822,19 @@ def main(argv=None) -> int:
     if not a.profile:
         print("--profile required (a profile is never chosen for you: see `databricks auth profiles`)", file=sys.stderr)
         return 2
+    if a.run_part and (a.against or a.scope == "smoke"):
+        print("--run-part cuts a gated run (scope core or full) into parts: it takes no --against and no smoke scope", file=sys.stderr)
+        return 2
     g = Gate(a)
+    if a.drop_parts:
+        if not g.warehouse:
+            print("--warehouse-id required to drop the schema", file=sys.stderr)
+            return 2
+        problem = warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile)
+        if problem:
+            print(f"refused: {problem}", file=sys.stderr)
+            return 1
+        return drop_parts(g, a.drop_parts)
     say(f"HEAD {g.head}, schema {a.catalog}.{g.schema}, Volume folder {g.folder}")
     if a.scope == "smoke" and not a.against:
         print("--scope smoke needs --against SCHEMA: a smoke run is a wiring check on an existing install, never a gated run", file=sys.stderr)
@@ -659,6 +873,15 @@ def main(argv=None) -> int:
             f"examples: {sum(len(p) for p in ex_pairs.values())} statements in {len(ex_pairs)} files; "
             f"warehouse {g.warehouse or '-'}; known failures {len(known)}; no workspace call"
         )
+        if a.run_part:
+            n = a.run_part[1]
+            batchable = slice_batchable(tables)
+            for i in range(1, n + 1):
+                share, run_ex = part_work(pairs, i, n)
+                if share:
+                    print(f"  part {i}/{n}: slice {len(share)} statements ({warehouse_statements(share, batchable, a.batch)} warehouse statements)")
+                if run_ex:
+                    print(f"  part {i}/{n}: the example files, {sum(len(p) for p in ex_pairs.values())} statements in {len(ex_pairs)} files")
         return 0
 
     started = now()
@@ -679,6 +902,8 @@ def main(argv=None) -> int:
     if problem:
         print(f"refused: {problem}", file=sys.stderr)
         return 1
+    if a.run_part:
+        return run_parted(g, a, tables, known)
     sl = ex = None
     try:
         if a.against:

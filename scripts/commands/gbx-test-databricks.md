@@ -48,6 +48,10 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--max-wall-min <n>` - stop the run at n minutes of wall. Default: 20. 0 turns it off.
   - The budget of each pool starts when its job is submitted, after its cluster lease, not during the lease wait.
 - `--start-chunks <n>` - runners that start at once. The rest start when n chunks have passed. Default: 2. 0 starts them all, on a pool only (Serverless refuses 0).
+- `--run-part <i>/<n>` - run the tests whose node id hashes to part i of n, and plan 1/n of each unit's time.
+  - A Serverless plan past 75% of `--max-wall-min` is refused, naming the parts. Launch each part as a run of its own.
+  - A run that ends CANCELED at the wall does not count as green; a part that ends SUCCESS does.
+  - A part's chunks leave no timing samples, as a `-k` chunk's do.
 - `--ids-file <path>` - run only the test node ids in this file, one per line, `--ids-per-chunk` (default 8) to a chunk.
   - Use it to finish a table that one run's wall cannot hold: list the ids that run left unrun. Pass the run's `--env`.
 - `--rerun-failed <run id>` - run only the tests that failed in that earlier run (from its junit files under `test-logs/databricks-tests/<run id>/`), a chunk per file.

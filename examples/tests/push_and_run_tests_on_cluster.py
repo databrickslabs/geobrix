@@ -156,6 +156,7 @@ def parse(argv):
     p.add_argument("--max-wall-min", type=float, default=MAX_WALL_MIN, help="stop the run when its wall time reaches this (0: no budget)")
     p.add_argument("--rerun-failed", default="", metavar="RUN_ID", help="run only the tests that failed in that earlier run (its local results)")
     p.add_argument("--ids-file", default="", metavar="PATH", help="run only the test node ids listed in this file, one per line")
+    p.add_argument("--run-part", default="", metavar="I/N", help="run the tests whose node id hashes to part I of N: a table cut into runs")
     p.add_argument("--ids-per-chunk", type=int, default=8, help="node ids per chunk with --ids-file (default 8)")
     return p.parse_args(argv)
 
@@ -215,6 +216,9 @@ def problems(a) -> list:
     if a.serverless and a.start_chunks == 0:
         out.append("--start-chunks 0 is refused with --serverless: every runner starting at once lost 5 of 8 to "
                    "ENVIRONMENT_DOWNLOAD_USER_ERROR.NOT_FOUND (2026-11-12); keep the default ramp, or give a positive n")
+    m = re.fullmatch(r"(\d+)/(\d+)", a.run_part or "")
+    if a.run_part and not (m and 0 <= int(m.group(1)) < int(m.group(2))):
+        out.append("--run-part takes I/N with 0 <= I < N, for example 0/2")
     if a.ids_file and a.rerun_failed:
         out.append("--ids-file and --rerun-failed each choose the tests to run: give one")
     if a.ids_file and not Path(a.ids_file).is_file():
@@ -575,7 +579,8 @@ def run_source(plan: dict) -> str:
     """The cell that unpacks the checkout, runs one shard's pytest in this process and writes its files."""
     # the chunk fails its own run by the rule its runner and fail fast use (_shard_runner.chunk_failed, inlined: no copy on the node)
     helpers = ("import json, os, re\nfrom typing import Callable\n\n\n" + inspect.getsource(sr.chunk_failed) + "\n\n" + inspect.getsource(sr.node_checkout)
-               + "\n\n" + inspect.getsource(sr.interrupt_session) + "\n\n" + inspect.getsource(sr.compute_probe))
+               + "\n\n" + inspect.getsource(sr.interrupt_session) + "\n\n" + inspect.getsource(sr.compute_probe)
+               + "\n\nimport zlib\n\n" + inspect.getsource(sr.run_part_of))
     return helpers + '''
 import faulthandler, json, os, shutil, signal, sys, tarfile, threading, time, _thread
 
@@ -1046,7 +1051,20 @@ class TestPart:  # --target-min cut this chunk's one file or table into parts: k
             items[:] = keep
 
 
-plugins = [Counter()] + ([TestPart(S["test_part"])] if S.get("test_part") else [])
+class RunPart:  # --run-part i/n: this run keeps the tests whose node id hashes (run_part_of) to its part, before any test part
+    def __init__(self, spec):
+        self.i, self.n = (int(x) for x in spec.split("/"))
+
+    @pytest.hookimpl(tryfirst=True)
+    def pytest_collection_modifyitems(self, config, items):
+        drop = [it for it in items if run_part_of(it.nodeid, self.n) != self.i]
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+            items[:] = [it for it in items if run_part_of(it.nodeid, self.n) == self.i]
+
+
+RUN_PARTS = [RunPart(PLAN["run_part"])] if PLAN.get("run_part") else []
+plugins = [Counter()] + RUN_PARTS + ([TestPart(S["test_part"])] if S.get("test_part") else [])
 
 
 def fresh_tests():  # each pytest session of the smoke imports the test modules again, under its own env (the family file reads it)
@@ -1070,7 +1088,7 @@ def smoke_pick():  # the first tests of the run's fastest chunk that collects an
         os.chdir(repo + "/" + C["cwd"])
         got = Ids()
         fresh_tests()
-        pytest.main(C["args"] + ["--collect-only", "-q", "-p", "no:cacheprovider"], plugins=[got] + ([TestPart(C["test_part"])] if C.get("test_part") else []))
+        pytest.main(C["args"] + ["--collect-only", "-q", "-p", "no:cacheprovider"], plugins=[got] + RUN_PARTS + ([TestPart(C["test_part"])] if C.get("test_part") else []))
         print("smoke: chunk %%s collects %%d test(s)" %% (C["name"], len(got.ids)), flush=True)
         if got.ids:
             marker = [x for i, x in enumerate(C["args"]) if C["args"][i - 1:i] == ["-m"]]
@@ -1771,6 +1789,8 @@ def main(argv=None) -> int:
         print(f"--ids-file {a.ids_file}: {sum(len(s.paths) for s in shards)} test id(s) in {len(shards)} chunk(s)")
     elif extra_env(a).get("GBX_ORACLE_TABLES"):  # --env narrows the family file to those tables: plan its shards by them
         shards = ts.narrow_tables(shards, extra_env(a)["GBX_ORACLE_TABLES"])
+    if a.run_part:  # 1/N of every unit's tests, by node-id hash: its time is planned at 1/N
+        shards = [with_run_part(s, a.run_part) for s in shards]
     split_notes: List[str] = []
     if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
         a.clusters = planned_clusters(a)
@@ -1840,8 +1860,12 @@ def main(argv=None) -> int:
             jar["volume"] = f"{volroot}/{jar['dir']}/{jar['name']}"
     resources = resources_entry(sha, volroot)
     plan = make_plan(a, sha, shards, wheel, jar, volroot, REPO_ROOT, resources, fsolo)
+    plan["run_part"] = a.run_part
     local_only = [s for s in all_shards if s.local_only]
-    print(explain(plan, local_only, notes))
+    print(explain(plan, local_only, notes + ([wall_fit_problem(plan)] if wall_fit_problem(plan) else [])))
+    if wall_fit_problem(plan) and not a.explain_only:
+        print("ERROR: " + wall_fit_problem(plan) + "; run not started.", file=sys.stderr)
+        return EXIT_USAGE
     if a.explain_only:
         print("\nexplain-only: nothing staged or started.")
         return 0
@@ -1904,6 +1928,40 @@ def rerun_shards(run_dir: Path, root: Path, shards: Optional[List[ts.Shard]] = N
         out.append(ts.Shard(kind=home.kind if home else "light", pool=home.pool if home else ts.POOL_LIGHT,
                             marker=home.marker if home else "not integration", delta=bool(home and home.delta), **common))
     return out
+
+
+RUN_WALL_SHARE = 0.75  # a Serverless plan aims to end inside this share of --max-wall-min; past it the launch is cut into runs
+
+
+def parts_needed(expected_min: float, wall_min: float) -> int:
+    """How many ``--run-part`` runs a plan of ``expected_min`` needs to end inside RUN_WALL_SHARE of its wall (1: it fits)."""
+    if not wall_min or expected_min <= RUN_WALL_SHARE * wall_min:
+        return 1
+    return math.ceil(expected_min / (RUN_WALL_SHARE * wall_min) - 1e-9)
+
+
+def wall_fit_problem(plan: dict) -> str:
+    """Why a Serverless plan cannot launch as one run ("" when it can): its projected wall passes 75% of --max-wall-min, so a run would
+    end CANCELED at the wall (tst-sls-g2-dem: planned 18.9 min of 20, its last chunk ended 9 s past the deadline). Names the parts."""
+    wall = float((plan.get("fail_fast") or {}).get("max_wall_min") or 0)
+    if not plan.get("serverless") or not wall:
+        return ""
+    worst = max((float(p.get("expected_min") or 0) for p in plan["pools"].values()), default=0.0)
+    n = parts_needed(worst, wall)
+    if n <= 1:
+        return ""
+    if plan.get("run_part"):
+        cur = int(plan["run_part"].split("/")[1])
+        return (f"part {plan['run_part']} is planned at {worst:g} min, past {RUN_WALL_SHARE:.0%} of the {wall:g} min wall: "
+                f"use a finer --run-part (about {cur * n} parts)")
+    return (f"the plan's wall is about {worst:g} min, past {RUN_WALL_SHARE:.0%} of the {wall:g} min wall: run it as {n} runs, "
+            + ", ".join(f"--run-part {i}/{n}" for i in range(n)) + " (each a run of its own, under the cap)")
+
+
+def with_run_part(shard: ts.Shard, spec: str) -> ts.Shard:
+    """The shard as one ``--run-part`` runs it: 1/N of its tests, so 1/N of its units' time is planned (``share``)."""
+    n = int(spec.split("/")[1])
+    return ts.Shard(**{**shard.__dict__, "share": (shard.share or 1.0) / n})
 
 
 def ids_shards(path, per_chunk: int, oracle_tables: str, root: Path, shards: Optional[List[ts.Shard]] = None) -> List[ts.Shard]:
@@ -2264,7 +2322,8 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         act = actual_s(r, busy)
         # a chunk pytest stopped at --maxfail did not run all its tests: its times are lower bounds, as a capped chunk's are
         verdict = "INCOMPLETE" if (r.get("maxfail_hit") and r["verdict"] == "FAILED") or r["verdict"] == "OVERRUN" else r["verdict"]
-        got_s = [] if chunk.get("smoke") or chunk.get("select_k") else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
+        part_run = bool(plan.get("run_part"))  # a --run-part chunk runs 1/N of its units: no unit's time, as a -k chunk
+        got_s = [] if chunk.get("smoke") or chunk.get("select_k") or part_run else tm.run_samples(  # a smoke or -k chunk runs a few rows: no unit's time
             chunk, verdict, act, junit, REPO_ROOT, slots, fn_table, stop=stop if verdict == "INCOMPLETE" else "", prefix=tm.SLS if sls else "",
             progress=progress_of(local_out / r["slug"] / "pytest.log") if verdict == "INCOMPLETE" else None)
         n_parts = int(str(chunk.get("test_part") or "0/1").split("/")[1])
@@ -2276,7 +2335,7 @@ def record_timings(path: Path, plan: dict, rows: List[dict], local_out: Path, re
         near = per.get(r["slug"], {})
         solo = float(chunk.get("solo_min") or chunk.get("expected_min") or 0.0)
         r.update(x=round(act / (solo * 60), 2) if act and solo else None, nb=near.get("nb", 0), peak=near.get("peak", 0))
-        if verdict in ("ok", "FAILED", "INCOMPLETE") and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k"):
+        if verdict in ("ok", "FAILED", "INCOMPLETE") and n_parts == 1 and not chunk.get("smoke") and not chunk.get("select_k") and not part_run:
             recs = tm.contention_records(chunk, act, tm.key_seconds(junit, REPO_ROOT, chunk, fn_table), near.get("nb", 0), near.get("peak", 0),
                                          incomplete=verdict == "INCOMPLETE")
             cont += [dict(c, key=tm.SLS + c["key"]) for c in recs] if sls else recs  # a Serverless record under its own key

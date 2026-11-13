@@ -32,6 +32,7 @@ import os
 import random
 import re
 import time
+import zlib
 from typing import Callable, Dict, Iterable, List, Optional
 
 # The exceptions of a lost Delta commit (docs: "Conflict exceptions"), by class name or error class.
@@ -474,6 +475,12 @@ def ramp_stagger_s(index: int, start: int, serverless: bool) -> float:
     if not serverless or not start or index <= start:
         return 0.0
     return (index - start) * RAMP_STAGGER_S
+
+
+def run_part_of(nodeid: str, n: int) -> int:
+    """The ``--run-part`` a test belongs to of ``n``: a hash of its node id of its own (salted, so it is independent of a chunk's
+    test part, which is ``crc32(nodeid) % n``). A table that does not fit one run's wall is cut into runs by it."""
+    return zlib.crc32(("run-part:" + nodeid).encode()) % n
 
 
 def ramp_open(results: List[dict], need: int, queued: int) -> bool:

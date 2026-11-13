@@ -2909,6 +2909,40 @@ def test_a_heavy_rerun_runs_on_the_jar_pool_with_its_integration_tests_and_the_f
     assert not heavy.subset and not fam.subset, "a rerun that collects nothing is a selection error, not a pass"
 
 
+def test_a_run_part_keeps_its_hash_share_of_the_tests_and_plans_that_share(shards, tmp_path, capsys):
+    """tst-sls-g2-dem ended CANCELED: its last chunk ran past the 20 min wall (r_2's chunk +855 to +1209 s, the deadline +1200 s),
+    planned at 18.9 min. A table that does not fit is cut into runs: ``--run-part i/n`` keeps the tests whose node id hashes to i
+    (a hash of its own, apart from a chunk's test part), and plans 1/n of every unit's time. Each part is a run of its own."""
+    ids = [f"test/manager/test_family_cross_tier.py::test_family_oracle[gbx_rst_x{i}-L3-sql]" for i in range(300)]
+    parts = [[n for n in ids if sr.run_part_of(n, 3) == i] for i in range(3)]
+    assert sorted(sum(parts, [])) == sorted(ids) and all(60 < len(p) < 140 for p in parts), [len(p) for p in parts]
+    inner = [n for n in parts[0] if zlib.crc32(n.encode()) % 3 == 0]
+    assert 0 < len(inner) < len(parts[0]), "independent of a chunk's own test part (which hashes crc32 % n)"
+    assert launcher.parse(["--run-part", "1/3"]).run_part == "1/3"
+    assert any("--run-part" in e for e in launcher.problems(_args("--explain-only", "--run-part", "3/3")))
+    src = launcher.run_source({"stage": "/x"})
+    assert 'RunPart(PLAN["run_part"])' in src and "def run_part_of(" in src
+    fam = next(s for s in shards if s.name == "manager family 1/3")
+    whole = ts.estimate(fam, REPO_ROOT, {f"table:{t}": 600.0 for t in fam.oracle_tables.split(",")})
+    third = ts.estimate(launcher.with_run_part(fam, "0/3"), REPO_ROOT, {f"table:{t}": 600.0 for t in fam.oracle_tables.split(",")})
+    assert third - ts.FIXED_MIN == pytest.approx((whole - ts.FIXED_MIN) / 3, rel=0.02)
+
+
+def test_a_serverless_plan_past_three_quarters_of_the_wall_is_refused_with_its_part_count(shards, tmp_path, capsys):
+    """A plan must end well inside its wall: past 75% of --max-wall-min a Serverless launch is refused, naming the --run-part
+    count that fits; --explain-only shows the same note."""
+    assert launcher.parts_needed(18.9, 20.0) == 2 and launcher.parts_needed(14.0, 20.0) == 1 and launcher.parts_needed(31.0, 20.0) == 3
+    assert launcher.parts_needed(50.0, 0.0) == 1, "no wall budget: no cut"
+    plan = {"serverless": True, "run_part": "", "pools": {"serverless": {"expected_min": 18.9}}, "fail_fast": {"max_wall_min": 20.0}}
+    why = launcher.wall_fit_problem(plan)
+    assert "--run-part 0/2" in why and "--run-part 1/2" in why and "75%" in why, why
+    assert launcher.wall_fit_problem(dict(plan, pools={"serverless": {"expected_min": 12.0}})) == ""
+    part = dict(plan, run_part="0/2", pools={"serverless": {"expected_min": 16.0}})
+    assert "a finer --run-part" in launcher.wall_fit_problem(part), "a part that does not fit either asks for more parts"
+    assert launcher.wall_fit_problem(dict(plan, serverless=False)) == "", "a pool run keeps its own budget rules"
+    assert "wall_fit_problem(plan)" in Path(launcher.__file__).read_text(), "the launch refuses by it"
+
+
 def test_ids_file_runs_exactly_the_named_tests_in_chunks(shards, tmp_path):
     """A table that does not fit the 20 min wall in one run is finished by a follow-up of the ids it left unrun (2026-11-12,
     tst-sls-g1-gdal: 18 of 27 chunks): ``--ids-file`` runs those node ids, ``--ids-per-chunk`` to a chunk, with the run's env."""

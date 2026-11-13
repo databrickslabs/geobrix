@@ -472,29 +472,98 @@ def test_an_empty_folder_of_any_name_is_pruned_and_a_folder_with_an_item_is_kept
     assert report.deleted == []
 
 
-def test_nested_empty_folders_are_pruned_bottom_up(sw):
+def test_nested_empty_folders_under_the_job_root_are_pruned_bottom_up(sw):
     w = FakeW()
-    w.mkdir(f"{LEGACY}/a/b/c")
-    w.mkdir(f"{LEGACY}/a/b")
-    w.mkdir(f"{LEGACY}/a")
+    w.mkdir(f"{ROOT}/x/y/z")
     w.mkdir(f"{ROOT}/x/y")
     w.mkdir(f"{ROOT}/x")
-    keep = w.add(f"{ROOT}/z/deep/01_main", age_min=999)
+    keep = w.add(f"{ROOT}/k/deep/01_main", age_min=999)
+    w.mkdir(f"{ROOT}/k/deep/empty")
     report, out = _sweep(sw, w)
     assert w.deleted == []
-    assert w.folders_deleted == [f"{ROOT}/x/y", f"{ROOT}/x", f"{LEGACY}/a/b/c", f"{LEGACY}/a/b", f"{LEGACY}/a", LEGACY]
-    assert keep in w.objects and ROOT in w.objects and f"{ROOT}/z/deep" in w.objects
-    assert LEGACY not in w.objects
+    assert w.folders_deleted == [f"{ROOT}/k/deep/empty", f"{ROOT}/x/y/z", f"{ROOT}/x/y", f"{ROOT}/x"]
+    assert keep in w.objects and ROOT in w.objects and f"{ROOT}/k/deep" in w.objects
 
 
-def test_a_folder_that_holds_a_deeper_item_keeps_every_folder_above_it(sw):
+def test_a_users_nested_empty_folder_in_a_legacy_subtree_is_kept(sw):
+    """The incident: GeoBrix/gbx-beta-dbr-17.3/EO Series/out/WIP and GeoBrix/gbx-beta-dbr-v0.2.0/... VHR-10 are the user's."""
     w = FakeW()
-    w.mkdir(f"{LEGACY}/a/empty")
-    w.mkdir(f"{LEGACY}/a")
-    w.add(f"{LEGACY}/a/b/c/notebook", age_min=999)
+    users = [
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/out/WIP"),
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/out/WIP (1)"),
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-v0.2.0/Raster DE -  xView/VHR-10"),
+        w.mkdir(f"{LEGACY}/my-empty-folder"),  # not a launcher folder name
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/runners"),  # a launcher name, but not a direct child of the root
+        w.mkdir(f"{LEGACY}/gbx-beta-dbr-17.3/bench"),
+    ]
+    w.add(f"{LEGACY}/gbx-beta-dbr-17.3/EO Series/01_ingest", age_min=999)
+    report, out = _sweep(sw, w)
+    assert w.deleted == [] and w.folders_deleted == [] and report.pruned == []
+    assert all(p in w.objects for p in users) and LEGACY in w.objects
+
+
+def test_a_users_empty_folder_beside_an_emptied_runner_folder_is_kept(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb", age_min=120)
+    wip = w.mkdir(f"{LEGACY}/gbx-beta/sample-data/WIP")
+    sibling = w.mkdir(f"{LEGACY}/gbx-beta/sample-data/tests/my-empty")
+    _sweep(sw, w, runner_dir=f"/Workspace{LEGACY}/gbx-beta/sample-data/tests")
+    assert wip in w.objects and sibling in w.objects  # nothing of the user's goes, so every folder above stays
+    assert f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb" not in w.objects
+
+
+def test_the_folders_a_sweep_emptied_and_their_empty_ancestors_are_pruned_in_the_legacy_root(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/gbx-beta/sample-data/tests/tests_r1_serverless.ipynb", age_min=120)
+    keep = w.add(f"{LEGACY}/gbx-other/01_ingest", age_min=999)
+    report, out = _sweep(sw, w, runner_dir=f"/Workspace{LEGACY}/gbx-beta/sample-data/tests")
+    assert w.folders_deleted == [f"{LEGACY}/gbx-beta/sample-data/tests", f"{LEGACY}/gbx-beta/sample-data", f"{LEGACY}/gbx-beta"]
+    assert keep in w.objects and LEGACY in w.objects
+
+
+@pytest.mark.parametrize("name", [
+    "hub-run-x", "hub-run-helios", "uc-it-0123456789ab", "uc-showcase-run", "serverless-run", "python-task", "runners",
+    "bench", "wc-coverage-diag", "ortho-london-20261105", "eo-series-run-0123abc", "probe-run-20261105",
+])
+def test_an_empty_launcher_folder_directly_under_the_legacy_root_is_pruned(sw, name):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/{name}")
+    keep = w.add(f"{LEGACY}/Antimeridian", age_min=999)
+    report, out = _sweep(sw, w)
+    assert f"{LEGACY}/{name}" not in w.objects and report.pruned == [f"{LEGACY}/{name}"]
+    assert keep in w.objects and LEGACY in w.objects
+
+
+@pytest.mark.parametrize("name", [
+    "hub-run", "uc-it", "uc-showcase", "serverless", "python-tasks", "bench2", "wc-diag", "ortho-london-2026", "eo-series",
+    "my-run-notes", "probe-run-xyz", "WIP", "EO Series", "Raster DE -  xView",
+])
+def test_an_empty_folder_not_named_like_a_launcher_folder_is_kept(sw, name):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/{name}")
     _sweep(sw, w)
-    assert f"{LEGACY}/a/empty" not in w.objects
-    assert all(p in w.objects for p in (LEGACY, f"{LEGACY}/a", f"{LEGACY}/a/b", f"{LEGACY}/a/b/c"))
+    assert f"{LEGACY}/{name}" in w.objects and w.folders_deleted == []
+
+
+def test_a_launcher_named_folder_that_holds_something_is_kept(sw):
+    w = FakeW()
+    w.add(f"{LEGACY}/hub-run-eo/01_main", age_min=999)
+    w.mkdir(f"{LEGACY}/hub-run-eo/out/WIP")  # never descended into to prune
+    _sweep(sw, w)
+    assert f"{LEGACY}/hub-run-eo/out/WIP" in w.objects and f"{LEGACY}/hub-run-eo" in w.objects
+
+
+def test_the_legacy_root_goes_only_when_nothing_at_all_is_left(sw):
+    w = FakeW()
+    w.mkdir(f"{LEGACY}/hub-run-a")
+    w.mkdir(f"{LEGACY}/hub-run-b")
+    _sweep(sw, w)
+    assert LEGACY not in w.objects and w.folders_deleted[-1] == LEGACY
+    w2 = FakeW()
+    w2.mkdir(f"{LEGACY}/hub-run-a")
+    w2.mkdir(f"{LEGACY}/WIP")
+    _sweep(sw, w2)
+    assert f"{LEGACY}/hub-run-a" not in w2.objects and LEGACY in w2.objects and f"{LEGACY}/WIP" in w2.objects
 
 
 def test_an_empty_folder_an_active_run_uses_is_kept(sw):
@@ -560,6 +629,55 @@ def test_the_job_root_itself_is_never_pruned(sw):
     assert report.pruned == [f"{ROOT}/bench"] and f"DELETED {ROOT} " not in out
 
 
+# ---- the full report -----------------------------------------------------------------------------------------------
+
+
+def test_the_full_report_is_written_to_a_file_with_every_line(sw, tmp_path):
+    w = FakeW()
+    old = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    young = w.add(f"{ROOT}/bench/geobrix_bench_runner_r2.ipynb", age_min=5)
+    w.mkdir(f"{LEGACY}/hub-run-x")
+    outside = w.add(f"/Users/{ME}/Other/x", age_min=999)
+    sw.record(w, [outside], scope="notebooks", now=NOW - 999 * MIN)
+    path = tmp_path / "logs" / "report.log"
+    console = []
+    rep = sw.sweep_with_report(w, me=ME, report_path=path, header="Sweeping", out=console.append, now=NOW)
+    text = path.read_text()
+    assert text.splitlines()[0] == "Sweeping"
+    assert f"DELETED {old}" in text and f"KEPT {young}: younger than 60 min" in text
+    assert f"DELETED {LEGACY}/hub-run-x (empty folder)" in text and f"SKIPPED {outside}" in text
+    assert "Summary: deleted 1, pruned 2 empty folder(s)" in text
+    assert text.strip().splitlines()[1:] == [c for c in console if not c.startswith("Full report:")]
+    assert f"Full report: {path}" in console and rep.deleted == [old]
+
+
+def test_a_dry_run_writes_its_report_too(sw, tmp_path):
+    w = FakeW()
+    nb = w.add(f"{ROOT}/bench/geobrix_bench_runner_r1.ipynb", age_min=120)
+    path = tmp_path / "dry.log"
+    sw.sweep_with_report(w, me=ME, report_path=path, out=lambda s: None, dry_run=True, now=NOW)
+    assert f"WOULD DELETE {nb}" in path.read_text() and nb in w.objects
+
+
+def test_the_report_is_written_even_when_the_sweep_raises(sw, tmp_path, monkeypatch):
+    w = FakeW()
+    path = tmp_path / "boom.log"
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(sw, "sweep", boom)
+    with pytest.raises(RuntimeError):
+        sw.sweep_with_report(w, me=ME, report_path=path, header="Sweeping", out=lambda s: None)
+    assert path.read_text().strip() == "Sweeping"
+
+
+def test_the_default_report_path_is_a_timestamped_log_under_test_logs(sw):
+    p = sw.default_report_path("oauth-fe", now=NOW)
+    assert p.parent == REPO_ROOT / "test-logs"
+    assert re.fullmatch(r"workspace-sweep-oauth-fe-\d{8}T\d{6}Z\.log", p.name)
+
+
 # ---- the launchers no longer delete at run end ---------------------------------------------------------------------
 
 
@@ -607,7 +725,7 @@ CMD = REPO_ROOT / "scripts" / "commands" / "gbx-workspace-sweep.sh"
 def test_the_command_prints_help():
     res = subprocess.run(["bash", str(CMD), "--help"], capture_output=True, text=True)
     assert res.returncode == 0
-    for opt in ("--profile", "--older-than", "--dry-run", "--scope", "--log", "--help"):
+    for opt in ("--profile", "--older-than", "--dry-run", "--scope", "--report-file", "--log", "--help"):
         assert opt in res.stdout, opt
 
 

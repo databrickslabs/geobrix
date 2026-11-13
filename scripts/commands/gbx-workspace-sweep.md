@@ -10,6 +10,7 @@ Remove the runner notebooks and folders the launchers keep at run end, once they
 - `--older-than <age>`: remove items older than this, by modified time. Default `60m`; also `90s`, `2h`, `1d`, or bare minutes.
 - `--scope <s[,s]>`: `bench`, `runners`, `uc`, `notebooks`. Repeat or comma-separate. Default all four.
 - `--dry-run`: print what would be removed; remove nothing.
+- `--report-file <path>`: write the full report there. Default `test-logs/workspace-sweep-<profile>-<UTC timestamp>.log`.
 - `--log <path>`: write output to a log file.
 - `--help`: show the help.
 
@@ -36,13 +37,22 @@ Only items under `/Users/<you>/jobs/geobrix/`, and only these:
 
 ## Empty folders
 
-- After a sweep with no error, it removes every empty folder under `/Users/<you>/jobs/geobrix/` and `/Users/<you>/GeoBrix/`.
-- It goes bottom-up, whatever the folder is named.
+- After a sweep with no error, it removes every empty folder under `/Users/<you>/jobs/geobrix/`, bottom-up.
 - It keeps `/Users/<you>/jobs/geobrix/` itself.
-- It removes `/Users/<you>/GeoBrix/` once it is empty.
+- Under `/Users/<you>/GeoBrix/` it removes only two kinds of empty folder, because your own demo trees are there.
+- One kind: a folder it emptied by deleting runner items, and an ancestor of one that is now empty.
+- The other kind: a direct child of the root named `hub-run-*`, `uc-it-*`, `uc-showcase-run`, `serverless-run`, `python-task`, `runners`, `bench`, `wc-*-diag`, `ortho-*-<yyyymmdd>` or `*-run-<sha or date>`.
+- It never prunes inside any other legacy folder.
+- It removes `/Users/<you>/GeoBrix/` only when nothing at all is left in it.
 - A folder that holds any item stays, and so does a folder an active run uses.
 - `--dry-run` prints `WOULD DELETE <folder> (empty folder)`.
 - The launch-time sweep removes no folder.
+
+## Full report
+
+- Each run writes every `DELETED`, `WOULD DELETE`, `KEPT` and `SKIPPED` line, and the summary, to a file.
+- `--report-file <path>`: where it goes. Default `test-logs/workspace-sweep-<profile>-<UTC timestamp>.log`.
+- The run prints the path at the end.
 
 ## Rules
 

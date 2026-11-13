@@ -9,13 +9,15 @@ show_help() {
     cat <<'EOT'
 Remove the runner notebooks and folders the launchers kept at run end, once they pass their window.
 Only GeoBrix runner items under /Users/<you>/jobs/geobrix/ (and the legacy /Users/<you>/GeoBrix/) are removed;
-an item an active run uses is kept. Empty folders under both roots are removed too (the legacy root itself once empty).
+an item an active run uses is kept. Empty folders under the job root are removed too; under the legacy root only launcher
+folders and folders the sweep emptied (it holds your own trees).
 
 Usage: bash scripts/commands/gbx-workspace-sweep.sh --profile <name> [options]
   --profile <name>      Databricks profile (required)
   --older-than <age>    Remove items older than this, by modified time (default 60m; also 90s, 2h, 1d)
   --scope <s[,s]>       bench, runners, uc, notebooks; repeat or comma-separate (default all)
   --dry-run             Print what would be removed; remove nothing
+  --report-file <path>  Full report file (default test-logs/workspace-sweep-<profile>-<UTC timestamp>.log)
   --log <path>          Write output to a log file
   --help                Show this help
 
@@ -32,7 +34,7 @@ while [[ $# -gt 0 ]]; do
         --log)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option --log needs a value${NC}" >&2; exit 2; }
             LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
-        --profile|--older-than|--scope)
+        --profile|--older-than|--scope|--report-file)
             [[ $# -ge 2 && -n "$2" ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             [[ "$1" == "--profile" ]] && HAS_PROFILE=1
             PASS_ARGS+=("$1" "$2"); shift 2 ;;

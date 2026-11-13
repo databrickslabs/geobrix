@@ -25,8 +25,11 @@ later.
   item there that is not a runner item.
 
 * **Empty folders.** After a sweep with no error (not the launch-time sweep), every empty folder under the job
-  root and under the legacy root is removed, bottom-up, whatever its name. The job root itself stays; the
-  legacy root goes once it is empty. A folder that holds anything, or that an active run uses, stays.
+  root is removed, bottom-up; the job root itself stays. Under the legacy root, which also holds your own demo
+  trees, only a folder this sweep emptied by deleting runner items (and an ancestor of one that is now empty)
+  and a direct child named like a launcher folder (``LEGACY_RUNNER_FOLDERS``) is removed; your own empty
+  folders there stay. The legacy root goes only when nothing at all is left in it. A folder an active run
+  uses stays.
 
 * **Active runs.** The active runs' notebook (and Python file) paths are read first. An item an active run
   uses is kept, a folder that holds one is kept, and a recorded import beside one is kept (a ``%run``
@@ -282,14 +285,35 @@ def active_paths(w) -> set:
     return out
 
 
-def _prune_empty(w, folder: str, keep: set, protected: set, gone: set, rep: Report, dry_run: bool,
-                 out: Callable[[str], None]) -> bool:
+# Folders the launchers made directly under the legacy root. An empty one of these may go; nothing else
+# there is judged by its name (the root also holds your own demo trees, empty folders included).
+LEGACY_RUNNER_FOLDERS = (
+    r"hub-run-.+",
+    r"uc-it-.+",
+    r"uc-showcase-run",
+    r"serverless-run",
+    r"python-task",
+    r"runners",
+    r"bench",
+    r"wc-.+-diag",
+    r"ortho-.+-\d{8}",
+    r".+-run-(?:[0-9a-f]{7,12}|\d{8})",
+)
+
+
+def legacy_runner_folder(name: str) -> bool:
+    """True when ``name`` (a direct child of the legacy root) is one of the folders the launchers made."""
+    return any(re.fullmatch(pat, name) for pat in LEGACY_RUNNER_FOLDERS)
+
+
+def _prune_empty(w, folder: str, allowed: Optional[set], keep: set, protected: set, gone: set, rep: Report,
+                 dry_run: bool, out: Callable[[str], None]) -> bool:
     """Remove ``folder`` when nothing is left in it, children first; True when it is (or would be) gone.
 
     ``gone`` holds the paths this sweep deleted (a dry run did not remove them, but they count as gone).
-    A folder in ``keep`` is never removed (the job root) and neither is one in ``protected`` (an active
-    run uses it). Any other object, or a folder that cannot go, keeps its parents; every child is still
-    judged, so one item does not stop the empty folders beside it going."""
+    ``allowed`` limits which folders may go (None: any); a folder not in it is only read, never removed, and
+    keeps its parents. A folder in ``keep`` (the job root) or ``protected`` (an active run uses it) stays.
+    Every child is judged, so one item does not stop the empty folders beside it going."""
     try:
         kids = list(w.workspace.list(folder))
     except Exception as exc:  # noqa: BLE001
@@ -299,9 +323,9 @@ def _prune_empty(w, folder: str, keep: set, protected: set, gone: set, rep: Repo
         p = ws_path(k.path)
         if p in gone:
             continue
-        if _otype(k) != "DIRECTORY" or not _prune_empty(w, p, keep, protected, gone, rep, dry_run, out):
+        if _otype(k) != "DIRECTORY" or not _prune_empty(w, p, allowed, keep, protected, gone, rep, dry_run, out):
             left = True
-    if left or folder in keep or folder in protected:
+    if left or folder in keep or folder in protected or (allowed is not None and folder not in allowed):
         return False
     if dry_run:
         rep.pruned.append(folder)
@@ -314,6 +338,53 @@ def _prune_empty(w, folder: str, keep: set, protected: set, gone: set, rep: Repo
     rep.pruned.append(folder)
     out(f"DELETED {folder} (empty folder)")
     return True
+
+
+def _prune_legacy(w, legacy: str, protected: set, gone: set, rep: Report, dry_run: bool, out: Callable[[str], None]) -> None:
+    """Empty folders under the legacy root, and only these:
+
+    * a folder this sweep emptied by deleting runner items in it, and an ancestor of one that is now empty;
+    * a direct child of the root named like a launcher folder (``LEGACY_RUNNER_FOLDERS``).
+
+    No other folder is removed, however empty. The root goes only when nothing at all is left in it."""
+    try:
+        kids = list(w.workspace.list(legacy))
+    except Exception:  # noqa: BLE001 - no legacy root (or unreadable): nothing to prune
+        return
+    emptied = set()  # folders below the root that this sweep took a runner item out of, and their ancestors
+    for d in rep.deleted:  # (a dry run lists what it would delete: the same folders)
+        d = d.rsplit("/", 1)[0]
+        while _under(d, legacy):
+            emptied.add(d)
+            d = d.rsplit("/", 1)[0]
+    allowed = set(emptied)
+    depth = len(legacy.split("/")) + 1
+    top = {"/".join(e.split("/")[:depth]) for e in emptied}  # the direct children of the root that hold one
+    left = False
+    for k in kids:
+        p = ws_path(k.path)
+        if p in gone:
+            continue
+        name = p.rsplit("/", 1)[-1]
+        is_dir = _otype(k) == "DIRECTORY"
+        if is_dir and legacy_runner_folder(name):
+            allowed.add(p)
+            top.add(p)
+        if is_dir and p in top and _prune_empty(w, p, allowed, set(), protected, gone, rep, dry_run, out):
+            continue
+        left = True
+    if left or legacy in protected:
+        return
+    if dry_run:
+        rep.pruned.append(legacy)
+        out(f"WOULD DELETE {legacy} (empty folder)")
+        return
+    try:
+        w.workspace.delete(legacy, recursive=False)
+    except Exception:  # noqa: BLE001 - not empty after all, or no right: keep it
+        return
+    rep.pruned.append(legacy)
+    out(f"DELETED {legacy} (empty folder)")
 
 
 def _rm_volume(w, path: str) -> None:
@@ -459,8 +530,9 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
         done = set(rep.deleted) | gone
         done |= {p for p in ledger if any(_under(p, d) for d in removed)}
         _forget(host, done)
-    # Empty folders: after a sweep with no error, every empty folder under the job root (not the root itself) and
-    # under the legacy root (the root too, once it is empty), bottom-up. A folder an active run uses stays.
+    # Empty folders: after a sweep with no error. Under the job root, every empty folder, bottom-up (not the root
+    # itself). Under the legacy root, which holds your own trees too, only the folders of the runner items this
+    # sweep removed and the launcher folders (_prune_legacy). A folder an active run uses stays.
     if prune_empty and not rep.errors:
         gone_now = set(rep.deleted) | gone
         protected = set()
@@ -469,8 +541,8 @@ def sweep(w, *, me: str, older_than_s: float = WINDOW_S, scopes: Sequence[str] =
             while "/" in d.strip("/"):
                 d = d.rsplit("/", 1)[0]
                 protected.add(d)
-        _prune_empty(w, root, {root}, protected, gone_now, rep, dry_run, out)
-        _prune_empty(w, legacy, set(), protected, gone_now, rep, dry_run, out)
+        _prune_empty(w, root, None, {root}, protected, gone_now, rep, dry_run, out)
+        _prune_legacy(w, legacy, protected, gone_now, rep, dry_run, out)
     return rep
 
 
@@ -511,12 +583,47 @@ def _load_config() -> None:
                     os.environ[k.strip()] = v.strip()
 
 
+def default_report_path(profile: str, now: Optional[float] = None) -> Path:
+    """``test-logs/workspace-sweep-<profile>-<UTC timestamp>.log`` in the checkout."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(time.time() if now is None else now))
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", profile) or "profile"
+    return Path(__file__).resolve().parents[2] / "test-logs" / f"workspace-sweep-{safe}-{stamp}.log"
+
+
+def sweep_with_report(w, *, me: str, report_path: Path, header: str = "", out: Callable[[str], None] = print, **kw) -> Report:
+    """``sweep`` that also writes its FULL report (every DELETED, KEPT, SKIPPED, WOULD DELETE and pruned line,
+    then the summary) to ``report_path``, so a console that scrolls or is cut never hides what was deleted.
+    The file is written even when the sweep raises."""
+    lines: List[str] = [header] if header else []
+
+    def tee(line: str) -> None:
+        lines.append(line)
+        out(line)
+
+    rep = Report()
+    try:
+        rep = sweep(w, me=me, out=tee, verbose=True, **kw)
+        verb = "would delete" if kw.get("dry_run") else "deleted"
+        tee(f"Summary: {verb} {len(rep.deleted)}, pruned {len(rep.pruned)} empty folder(s), kept {len(rep.kept)}, "
+            f"skipped {len(rep.skipped)}, errors {len(rep.errors)}" + (f"; {rep.error}" if rep.error else ""))
+    finally:
+        try:
+            report_path = Path(report_path)
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text("\n".join(lines) + "\n")
+            out(f"Full report: {report_path}")
+        except OSError as exc:
+            print(f"WARNING: could not write the sweep report {report_path} ({type(exc).__name__}: {exc}).", file=sys.stderr)
+    return rep
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     p = argparse.ArgumentParser(prog="gbx:workspace:sweep", description="Remove old GeoBrix runner notebooks and folders.")
     p.add_argument("--profile", required=True)
     p.add_argument("--older-than", default="60m")
     p.add_argument("--scope", action="append", help=f"one of {', '.join(SCOPES)}; repeat or comma-separate (default all)")
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--report-file", help="where the full report goes (default test-logs/workspace-sweep-<profile>-<UTC timestamp>.log)")
     a = p.parse_args(argv)
     try:
         older = parse_age(a.older_than)
@@ -535,12 +642,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     w = WorkspaceClient(profile=a.profile)
     me = w.current_user.me().user_name
     rd = runner_dir(w)
-    print(f"Sweeping {', '.join(scopes)} under {root_of(me)}/ and the legacy {legacy_root_of(me)}/ (runner folder {ws_path(rd)}): older than {_span(older)} and "
-          f"past their hold{'; DRY RUN, nothing is deleted' if a.dry_run else ''}.", flush=True)
-    rep = sweep(w, me=me, older_than_s=older, scopes=scopes, runner_dir=rd, dry_run=a.dry_run)
-    verb = "would delete" if a.dry_run else "deleted"
-    print(f"Summary: {verb} {len(rep.deleted)}, kept {len(rep.kept)}, skipped {len(rep.skipped)}, errors {len(rep.errors)}"
-          + (f"; {rep.error}" if rep.error else ""))
+    header = (f"Sweeping {', '.join(scopes)} under {root_of(me)}/ and the legacy {legacy_root_of(me)}/ (runner folder {ws_path(rd)}): "
+              f"older than {_span(older)} and past their hold{'; DRY RUN, nothing is deleted' if a.dry_run else ''}.")
+    print(header, flush=True)  # the report file starts with it too
+    report_path = Path(a.report_file) if a.report_file else default_report_path(a.profile)
+    rep = sweep_with_report(w, me=me, report_path=report_path, header=header, older_than_s=older, scopes=scopes, runner_dir=rd, dry_run=a.dry_run)
     return 1 if rep.error or rep.errors else 0
 
 

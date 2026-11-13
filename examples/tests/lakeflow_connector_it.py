@@ -295,6 +295,13 @@ def rel_source(path: str, landing: str) -> Optional[str]:
     return p[len(root):] if p.startswith(root) else None
 
 
+def need(rc: int, what: str, out: str, fix: str) -> None:
+    """Stop the run when a step's command failed: the last lines of its output, then one Fix line."""
+    if rc != 0:
+        tail = " | ".join(out.strip().splitlines()[-3:]) if out else ""
+        raise StepFailed(f"{what} failed (exit {rc}){': ' + tail[:400] if tail else ''}. Fix: {fix}")
+
+
 def check(name: str, ok: bool, detail: str) -> dict:
     return {"name": name, "ok": bool(ok), "detail": detail}
 
@@ -440,9 +447,11 @@ class Run:
         summary = m[-1] if m else "(no pytest summary)"
         self.checks.append(check("unit-tests", rc == 0, summary))
         say(f"connector unit tests: {summary}")
-        uc.need(rc, "the connector unit tests", out)
+        need(rc, "the connector unit tests", out,
+             f"run bash scripts/commands/gbx-test-connectors.sh and fix the failing tests (log {self.run_dir / 'unit-tests.log'})")
         if not CONNECTOR_VENV_PY.exists():
-            raise StepFailed(f"the unit tests left no connector venv at {CONNECTOR_VENV_PY}")
+            raise StepFailed(f"the unit tests left no connector venv at {CONNECTOR_VENV_PY}. Fix: run "
+                             "bash scripts/commands/gbx-test-connectors.sh --resync")
 
     def step_wheels(self, commit: str) -> Dict[str, Path]:
         say("step 3/12: the three wheels")
@@ -459,7 +468,8 @@ class Run:
             rc, out = uc.run_cmd([str(CONNECTOR_VENV_PY), "-m", "pip", "wheel", "--no-deps", "-w", str(fw_dir),
                                   f"lakeflow-community-connectors @ git+https://github.com/databrickslabs/lakeflow-community-connectors@{commit}"],
                                  self.run_dir / "build-framework.log", "framework wheel", echo=False)
-            uc.need(rc, "the framework wheel build", out)
+            need(rc, "the framework wheel build", out, "check access to github.com and the package index "
+                 f"(log {self.run_dir / 'build-framework.log'}), then run again")
             fw = sorted(fw_dir.glob("lakeflow_community_connectors-*.whl"))
         wheels["framework"] = fw[-1]
         # The connector wheel from the committed tree at the run's commit (git archive), never the working tree.
@@ -471,10 +481,11 @@ class Run:
         subprocess.run(["tar", "-x", "-C", str(src)], input=arch, check=True)
         rc, out = uc.run_cmd([str(CONNECTOR_VENV_PY), "-m", "pip", "wheel", "--no-deps", "-w", str(out_dir), str(src / CONNECTOR_DIR)],
                              self.run_dir / "build-connector.log", "connector wheel", echo=False)
-        uc.need(rc, "the connector wheel build", out)
+        need(rc, "the connector wheel build", out, f"read {self.run_dir / 'build-connector.log'}; the build is "
+             f"pip wheel --no-deps {CONNECTOR_DIR} at commit {self.sha12}")
         conn = sorted(out_dir.glob("geobrix_lakeflow_connectors-*.whl"))
         if not conn:
-            raise StepFailed("the connector wheel build left no wheel")
+            raise StepFailed(f"the connector wheel build left no wheel in {out_dir}. Fix: read {self.run_dir / 'build-connector.log'}")
         wheels["connector"] = conn[-1]
         for kind, p in wheels.items():
             say(f"  {kind}: {p.name} ({p.stat().st_size} bytes, sha256 {_sha256(p)[:16]})")
@@ -511,10 +522,12 @@ class Run:
             say("  building the JAR (target/ is missing or older than the Scala sources)")
             rc, out = uc.run_cmd(["bash", str(CMD / "gbx-data-stage-jar.sh")], self.run_dir / "build-jar.log", "JAR build",
                                  env={"GBX_BUNDLE_SKIP_JAR_UPLOAD": "1"})
-            uc.need(rc, "the JAR build", out)
+            need(rc, "the JAR build", out, "run bash scripts/commands/gbx-data-stage-jar.sh (needs the dev container), "
+                 "or pass --geobrix-wheel")
         say("  building the env 6 wheel")
         rc, out = uc.run_cmd(["bash", str(CMD / "gbx-build-wheel.sh"), "--env", "6"], self.run_dir / "build-wheel.log", "wheel build")
-        uc.need(rc, "the wheel build", out)
+        need(rc, "the wheel build", out, "run bash scripts/commands/gbx-build-wheel.sh --env 6 (needs the dev container), "
+             "or pass --geobrix-wheel")
         dist = sorted(DIST_ENV6.glob("geobrix-*+env6-py3-none-any.whl"))
         info = uc.wheel_info(dist[-1]) if dist else None
         if not info or info["dirty"] or info["git_sha"] != self.head:

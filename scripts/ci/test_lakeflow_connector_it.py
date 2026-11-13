@@ -832,3 +832,157 @@ def test_the_expect_helper_reads_a_tiny_landing_folder_with_the_connector(tmp_pa
     assert got["format"] == "geojson_gbx" and got["files"] == {"pts/a.geojson": 2, "pts/b.geojson": 1}
     names = [c[0] for c in got["columns"]]
     assert names[0] == "name" and names[-2:] == ["_source_path", "_source_mtime"] and "geom_0" in names
+
+
+# ---- step_unit_tests: gbx:test:connectors --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cmds(it, monkeypatch):
+    """uc.run_cmd faked at the boundary: records each argv; ``results`` maps a label to (rc, output)."""
+    state = {"argv": [], "results": {}}
+
+    def run_cmd(argv, log, label, env=None, echo=True):
+        state["argv"].append(list(argv))
+        rc, out = state["results"].get(label, (0, "ok"))
+        if rc == 0 and "-w" in argv:  # a pip wheel build leaves its wheel in the -w folder
+            dest = Path(argv[argv.index("-w") + 1])
+            name = ("geobrix_lakeflow_connectors-0.1.0-py3-none-any.whl" if label == "connector wheel"
+                    else "lakeflow_community_connectors-0.1.0-py3-none-any.whl")
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / name).write_bytes(label.encode())
+        return rc, out
+
+    monkeypatch.setattr(it.uc, "run_cmd", run_cmd)
+    return state
+
+
+def test_step_unit_tests_runs_gbx_test_connectors_and_records_the_pass_count(it, tmp_path, cmds, monkeypatch):
+    venv = tmp_path / "venv-python"
+    venv.write_text("")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", venv)
+    cmds["results"]["connector unit tests"] = (0, "...\n======== 60 passed, 3 warnings in 24.96s ========\n")
+    r = wheel_run(it, tmp_path)
+    r.step_unit_tests()
+    assert cmds["argv"] == [["bash", str(it.UNIT_TESTS_CMD), "--log", str(r.run_dir / "unit-tests.log")]]
+    assert it.UNIT_TESTS_CMD.name == "gbx-test-connectors.sh" and it.UNIT_TESTS_CMD.is_file()
+    assert r.checks == [{"name": "unit-tests", "ok": True, "detail": "60 passed, 3 warnings"}]
+
+
+def test_a_failed_unit_test_run_stops_the_run_with_a_fix(it, tmp_path, cmds, monkeypatch):
+    venv = tmp_path / "venv-python"
+    venv.write_text("")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", venv)
+    cmds["results"]["connector unit tests"] = (1, "FAILED test_x\n===== 2 failed, 58 passed in 3.10s =====\n")
+    r = wheel_run(it, tmp_path)
+    with pytest.raises(it.StepFailed, match=r"connector unit tests failed \(exit 1\).*Fix: run bash scripts/commands/gbx-test-connectors.sh"):
+        r.step_unit_tests()
+    assert r.checks == [{"name": "unit-tests", "ok": False, "detail": "2 failed, 58 passed"}]
+
+
+def test_unit_tests_that_leave_no_connector_venv_stop_the_run(it, tmp_path, cmds, monkeypatch):
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", tmp_path / "no-venv" / "python")
+    cmds["results"]["connector unit tests"] = (0, "== 60 passed in 1.00s ==")
+    with pytest.raises(it.StepFailed, match="no connector venv.*Fix:"):
+        wheel_run(it, tmp_path).step_unit_tests()
+
+
+# ---- step_wheels: the three wheels as BUILD_WHEELS documents them ---------------------------------------------------
+
+
+@pytest.fixture
+def wheels_env(it, tmp_path, cmds, monkeypatch):
+    """A Run at the real HEAD (git archive needs a real commit), with the GeoBrix wheel given and the cache in tmp."""
+    gbx = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    gbx.write_bytes(b"gbx")
+    monkeypatch.setattr(it, "FRAMEWORK_CACHE", tmp_path / "cache")
+    monkeypatch.setattr(it, "CONNECTOR_VENV_PY", tmp_path / "venv" / "python")
+    monkeypatch.setattr(it.Run, "record_geobrix_wheel", lambda self, w: {})
+    archived = []
+    real_run = subprocess.run
+
+    def spy(argv, *a, **k):  # the real git and tar, with each argv recorded
+        archived.append(list(argv))
+        return real_run(argv, *a, **k)
+
+    monkeypatch.setattr(it, "subprocess", SimpleNamespace(run=spy, PIPE=subprocess.PIPE))
+    r = wheel_run(it, tmp_path, "--geobrix-wheel", str(gbx))
+    return r, cmds, archived, gbx
+
+
+def test_step_wheels_builds_the_framework_and_connector_as_build_wheels_documents(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    wheels = r.step_wheels(commit)
+    venv = str(it.CONNECTOR_VENV_PY)
+    fw_dir, out_dir, src = str(it.FRAMEWORK_CACHE / commit), str(r.run_dir / "wheels"), r.run_dir / "src" / it.CONNECTOR_DIR
+    requirement = f"lakeflow-community-connectors @ git+https://github.com/databrickslabs/lakeflow-community-connectors@{commit}"
+    assert cmds["argv"] == [
+        [venv, "-m", "pip", "wheel", "--no-deps", "-w", fw_dir, requirement],
+        [venv, "-m", "pip", "wheel", "--no-deps", "-w", out_dir, str(src)],
+    ]
+    doc = it.doc_constant("BUILD_WHEELS")
+    assert "pip wheel --no-deps -w wheels ./geobrix/connectors/lakeflow" in doc  # the same two builds as the docs
+    assert f'pip wheel --no-deps -w wheels \\\n  "{requirement}"' in doc
+    assert wheels["geobrix"] == gbx
+    assert wheels["framework"].parent == it.FRAMEWORK_CACHE / commit
+    assert wheels["connector"].parent == r.run_dir / "wheels"
+
+
+def test_the_connector_wheel_is_built_from_git_archive_of_the_runs_commit(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    r.step_wheels(it.framework_commit())
+    assert ["git", "-C", str(it.REPO_ROOT), "archive", "--format=tar", r.head, it.CONNECTOR_DIR] in archived
+    # The extracted tree is the commit's, not the working tree's.
+    src = r.run_dir / "src" / it.CONNECTOR_DIR / "pyproject.toml"
+    committed = subprocess.run(["git", "-C", str(REPO_ROOT), "show", f"{r.head}:{it.CONNECTOR_DIR}/pyproject.toml"],
+                               capture_output=True, text=True, check=True).stdout
+    assert src.read_text() == committed
+
+
+def test_a_cached_framework_wheel_is_not_built_again(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    (it.FRAMEWORK_CACHE / commit).mkdir(parents=True)
+    (it.FRAMEWORK_CACHE / commit / "lakeflow_community_connectors-0.1.0-py3-none-any.whl").write_bytes(b"cached")
+    wheels = r.step_wheels(commit)
+    assert [a[-1] for a in cmds["argv"]] == [str(r.run_dir / "src" / it.CONNECTOR_DIR)]
+    assert wheels["framework"].read_bytes() == b"cached"
+
+
+def test_a_failed_wheel_build_stops_the_run_with_a_fix(it, wheels_env):
+    r, cmds, archived, gbx = wheels_env
+    commit = it.framework_commit()
+    cmds["results"]["framework wheel"] = (1, "ERROR: Could not fetch git+https://github.com/...")
+    with pytest.raises(it.StepFailed, match=r"framework wheel build failed \(exit 1\).*Fix: check access to github.com"):
+        r.step_wheels(commit)
+    assert len(cmds["argv"]) == 1  # the connector build does not run
+    cmds["argv"].clear()
+    cmds["results"] = {"connector wheel": (1, "error: invalid pyproject.toml")}
+    with pytest.raises(it.StepFailed, match=r"connector wheel build failed \(exit 1\).*Fix: read .*build-connector.log"):
+        r.step_wheels(commit)
+
+
+# ---- main_root: the main checkout from a linked worktree -----------------------------------------------------------
+
+
+def test_main_root_finds_the_main_checkout_from_a_linked_worktree(it, tmp_path):
+    main = tmp_path / "main"
+    main.mkdir()
+    git(main, "init", "-q", "-b", "main")
+    (main / "a.txt").write_text("a\n")
+    git(main, "add", "a.txt")
+    git(main, "commit", "-q", "-m", "init")
+    wt = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", "--detach", str(wt))
+    assert it.main_root(wt).resolve() == main.resolve()
+    assert it.main_root(main).resolve() == main.resolve()
+    # Untracked artifacts: the worktree's own when present, else the main checkout's.
+    (main / "dist").mkdir()
+    assert it.untracked("dist", wt).resolve() == (main / "dist").resolve()
+    (wt / "dist").mkdir()
+    assert it.untracked("dist", wt) == wt / "dist"
+
+
+def test_main_root_outside_a_repository_is_the_root_itself(it, tmp_path):
+    assert it.main_root(tmp_path) == tmp_path

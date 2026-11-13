@@ -6,8 +6,11 @@ Run the GeoBrix Lakeflow connector end to end on Databricks, as the docs set it 
 
 **Options:**
 - `--profile NAME` - Databricks profile. Required, never defaulted.
-- `--catalog C` - catalog of the scratch schema. Default `geospatial_docs`.
-- `--warehouse-id ID` - SQL warehouse for the row counts. Default `GBX_UC_GATE_WAREHOUSE_ID`, else `GBX_UC_WAREHOUSE_ID`, in `examples/tests/databricks_cluster_config.env`.
+- `--catalog C` - catalog of the scratch schema. Default `GBX_GATE_CATALOG__<profile>` in `examples/tests/databricks_cluster_config.env`, else `geospatial_docs`.
+- `--warehouse-id ID` - SQL warehouse for the row counts. Default `GBX_UC_GATE_WAREHOUSE_ID__<profile>` in the same file.
+  - If that key is absent, the default is `GBX_UC_GATE_WAREHOUSE_ID`, then `GBX_UC_WAREHOUSE_ID`.
+  - `<profile>` is the profile name with each character outside letters and digits as `_`. The profile `fevm-geospatial` gives `fevm_geospatial`.
+  - Before staging, the run looks up the warehouse and the catalog in the workspace of `--profile`. If either is missing there, it stops with a Fix.
 - `--geobrix-wheel PATH` - a local GeoBrix env 6 wheel. Default: `dist/env6` when it fits HEAD, else a build.
 - `--rebuild` - build the env 6 wheel even when `dist/env6` fits HEAD. Needs Docker.
 - `--data-dir DIR` - local sample data. Default the essential bundle's `geobrix-examples`.
@@ -21,8 +24,14 @@ Run the GeoBrix Lakeflow connector end to end on Databricks, as the docs set it 
 - `--help, -h` - show help.
 
 **Examples:**
-- `bash scripts/commands/gbx-test-lakeflow-connector.sh --profile oauth-fe`
-- `bash scripts/commands/gbx-test-lakeflow-connector.sh --profile oauth-fe --dry-run`
+- `bash scripts/commands/gbx-test-lakeflow-connector.sh --profile fevm-geospatial`
+- `bash scripts/commands/gbx-test-lakeflow-connector.sh --profile fevm-geospatial --dry-run`
+
+## Gate workspace
+
+- The gate workspace is the Geospatial Hub: profile `fevm-geospatial`, catalog `geospatial_catalog`.
+- The connection is type `COMMUNITY`. Creating it needs `CREATE CONNECTION` on the workspace's metastore.
+- Without that grant, the run stops with a `PRECONDITION MISSING` line naming it.
 
 ## Steps
 

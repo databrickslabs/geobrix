@@ -335,6 +335,7 @@ def fake_run(it, monkeypatch, tmp_path):
     monkeypatch.setattr(it, "OUT_DIR", out)
     monkeypatch.setattr(it, "EVIDENCE", out / "evidence.json")
     monkeypatch.setattr(it.uc, "warehouse_problem", lambda *a, **k: None)
+    monkeypatch.setattr(it.uc, "catalog_problem", lambda *a, **k: None)
     monkeypatch.setattr(it.uc_sources_hash, "head_sha", lambda root: SHA12 + "c" * 28)
     monkeypatch.setattr(it.lfc_check, "sources_hash", lambda root=None, rev="HEAD": "h" * 64)
     monkeypatch.setattr(it.Run, "step_unit_tests", lambda self: self.checks.append(it.check("unit-tests", True, "60 passed")))
@@ -986,3 +987,30 @@ def test_main_root_finds_the_main_checkout_from_a_linked_worktree(it, tmp_path):
 
 def test_main_root_outside_a_repository_is_the_root_itself(it, tmp_path):
     assert it.main_root(tmp_path) == tmp_path
+
+
+# ---- the per-profile gate target (the keys the UC gate reads) ---------------------------------------------------
+
+
+def test_the_lakeflow_driver_takes_catalog_and_warehouse_from_the_profile_keys(it, monkeypatch, tmp_path):
+    cfg = tmp_path / "c.env"
+    cfg.write_text("GBX_UC_GATE_WAREHOUSE_ID=legacy\nGBX_UC_GATE_WAREHOUSE_ID__hub_ws=hubwh\nGBX_GATE_CATALOG__hub_ws=hub_cat\n")
+    monkeypatch.setattr(it.uc, "CONFIG", cfg)
+    a = it.parse_args(["--profile", "hub-ws"])
+    assert (a.catalog, a.warehouse_id) == ("hub_cat", "hubwh")
+    assert not hasattr(a, "volroot")
+    other = it.parse_args(["--profile", "e2-demo"])
+    assert (other.catalog, other.warehouse_id) == (it.DEFAULT_CATALOG, "legacy")
+    over = it.parse_args(["--profile", "hub-ws", "--catalog", "c", "--warehouse-id", "w"])
+    assert (over.catalog, over.warehouse_id) == ("c", "w")
+
+
+def test_a_catalog_the_workspace_lacks_stops_the_lakeflow_run_before_staging(fake_run, it, monkeypatch):
+    make, ev_path = fake_run
+    monkeypatch.setattr(it.uc, "catalog_problem", lambda *a, **k: "the catalog cat does not exist.\nFix: pass --catalog <name>.")
+    r = make()
+    monkeypatch.setattr(it.Run, "step_stage", lambda self, *a: pytest.fail("a run with no catalog must not stage"))
+    assert r.run() == 1
+    ev = json.loads(ev_path.read_text())
+    bad = [c for c in ev["checks"] if not c["ok"]]
+    assert ev["result"] == "fail" and bad and "Fix:" in bad[0]["detail"] and "catalog" in bad[0]["detail"]

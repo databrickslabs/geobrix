@@ -318,6 +318,7 @@ def driver(monkeypatch):
     mod = importlib.import_module("uc_integration")
     # No workspace call: the warehouse looks fine unless a test says otherwise.
     monkeypatch.setattr(mod, "warehouse_problem", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "catalog_problem", lambda *a, **k: None)
     monkeypatch.setattr(mod.Gate, "client", lambda self: object())
     return mod
 
@@ -931,3 +932,39 @@ def test_install_into_reports_a_failed_step_and_exits_1(driver, monkeypatch, cap
     monkeypatch.setattr(driver.Gate, "step_install", lambda self, w: pytest.fail("no install after a failed stage"))
     assert driver.main(["--profile", "p", "--catalog", "c", "--volroot", "/Volumes/c/s/v", "--install-into", "demo"]) == 1
     assert "FAILED: stage refused" in capsys.readouterr().err
+
+
+# ---- the per-profile gate target ---------------------------------------------------------------------------------
+
+TARGET_CFG = (
+    "GBX_UC_GATE_WAREHOUSE_ID=legacy\n"
+    "GBX_UC_GATE_WAREHOUSE_ID__hub_ws=hubwh\nGBX_GATE_CATALOG__hub_ws=hub_cat\nGBX_GATE_VOLROOT__hub_ws=/Volumes/hub_cat/s/v\n"
+)
+
+
+def test_the_driver_takes_catalog_warehouse_and_volume_folder_from_the_profile_keys(driver, monkeypatch, tmp_path):
+    cfg = tmp_path / "c.env"
+    cfg.write_text(TARGET_CFG)
+    monkeypatch.setattr(driver, "CONFIG", cfg)
+    a = driver.parse_args(["--profile", "hub-ws"])
+    assert (a.catalog, a.warehouse_id, a.volroot) == ("hub_cat", "hubwh", "/Volumes/hub_cat/s/v")
+    g = driver.Gate(a)
+    assert g.warehouse == "hubwh" and g.folder.startswith("/Volumes/hub_cat/s/v/uc-it/")
+    other = driver.parse_args(["--profile", "e2-demo"])
+    assert (other.catalog, other.warehouse_id, other.volroot) == (driver.DEFAULT_CATALOG, "legacy", driver.DEFAULT_VOLROOT)
+    over = driver.parse_args(["--profile", "hub-ws", "--catalog", "c", "--warehouse-id", "w", "--volroot", "/Volumes/c/s/v"])
+    assert (over.catalog, over.warehouse_id, over.volroot) == ("c", "w", "/Volumes/c/s/v")
+
+
+def test_a_catalog_the_workspace_lacks_stops_the_run_before_any_step(driver, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+    monkeypatch.setattr(driver, "catalog_problem", lambda *a, **k: "the catalog c does not exist.\nFix: pass --catalog <name>.")
+    for step in ("step_wheel", "step_stage", "step_install", "step_warehouse", "cleanup"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("a run with no catalog must not start a step"))
+    assert driver.main(["--profile", "p", "--scope", "core", "--warehouse-id", "w", "--catalog", "c"]) == 1
+    err = capsys.readouterr().err
+    assert "refused" in err and "Fix:" in err

@@ -19,9 +19,13 @@ Usage: bash scripts/commands/gbx-test-lakeflow-connector.sh --profile <name> [op
 
 Options:
   --profile <name>      Databricks config profile (required; never chosen for you)
-  --catalog C           Catalog of the scratch schema (default geospatial_docs)
-  --warehouse-id ID     SQL warehouse for the row counts (default: GBX_UC_GATE_WAREHOUSE_ID, else
-                        GBX_UC_WAREHOUSE_ID, in examples/tests/databricks_cluster_config.env)
+  --catalog C           Catalog of the scratch schema. Default: GBX_GATE_CATALOG__<profile> in
+                        examples/tests/databricks_cluster_config.env, else geospatial_docs
+  --warehouse-id ID     SQL warehouse for the row counts. Default: GBX_UC_GATE_WAREHOUSE_ID__<profile> in the
+                        same file, then GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID. <profile> is the
+                        profile name with each character outside letters and digits as _
+                        (fevm-geospatial -> fevm_geospatial). The run looks up both in the workspace of
+                        --profile and stops with a Fix when either is missing there
   --geobrix-wheel PATH  A local GeoBrix env 6 wheel to use (default: dist/env6 when it fits HEAD, else a build)
   --rebuild             Build the env 6 wheel even when dist/env6 fits HEAD (needs Docker)
   --data-dir DIR        Local sample data (default sample-data/.../geobrix-examples, the essential bundle)
@@ -37,8 +41,8 @@ Options:
 Exit code: 0 when every check passed, 1 on a failure or a refusal, 2 for bad options.
 
 Examples:
-  bash scripts/commands/gbx-test-lakeflow-connector.sh --profile oauth-fe
-  bash scripts/commands/gbx-test-lakeflow-connector.sh --profile oauth-fe --dry-run
+  bash scripts/commands/gbx-test-lakeflow-connector.sh --profile fevm-geospatial
+  bash scripts/commands/gbx-test-lakeflow-connector.sh --profile fevm-geospatial --dry-run
 HELP
 }
 

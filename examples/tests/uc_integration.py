@@ -53,7 +53,7 @@ sys.path.insert(0, str(REPO_ROOT / "python" / "geobrix" / "src"))  # databricks.
 import check_uc_integration_evidence as gate  # noqa: E402
 from _cluster_config import cluster_config_file  # noqa: E402
 from _job_submit import jobs_root  # noqa: E402
-from _uc_warehouse import warehouse_problem  # noqa: E402
+from _uc_warehouse import apply_gate_target, catalog_problem, gate_warehouse, target_line, warehouse_problem  # noqa: E402
 import uc_sources_hash  # noqa: E402
 
 CMD = REPO_ROOT / "scripts" / "commands"
@@ -266,15 +266,14 @@ def jar_stale(jar: Path, root: Path = REPO_ROOT) -> bool:
     return jar.stat().st_mtime < newest
 
 
-def warehouse_from_config(config: Path = CONFIG) -> Optional[str]:
-    if not config.is_file():
-        return None
-    text = config.read_text()
-    for key in ("GBX_UC_GATE_WAREHOUSE_ID", "GBX_UC_WAREHOUSE_ID"):  # the gate's own warehouse wins
-        ids = re.findall(rf"^{key}=(.*)$", text, flags=re.M)
-        if ids and ids[-1].strip().strip("\"'"):
-            return ids[-1].strip().strip("\"'")
-    return None
+def warehouse_from_config(config: Path = CONFIG, profile: str = "") -> Optional[str]:
+    """The gate warehouse of `profile` in the cluster config (its own key, then the global gate key, then the shared one)."""
+    return gate_warehouse(config, profile)[0]
+
+
+def target_problem(g, a) -> Optional[str]:
+    """A message with a Fix when the workspace of the profile lacks the warehouse or the catalog, else None."""
+    return warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile) or catalog_problem(g.client(), a.catalog, CONFIG, a.profile)
 
 
 def install_notebook(catalog: str, schema: str, folder: str) -> dict:
@@ -488,9 +487,9 @@ def count_results(path: Path) -> int:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0], formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--profile", default=None, help="Databricks config profile (required; never chosen for you)")
-    p.add_argument("--warehouse-id", default=None, help="SQL warehouse (default GBX_UC_WAREHOUSE_ID in the cluster config)")
-    p.add_argument("--catalog", default=DEFAULT_CATALOG)
-    p.add_argument("--volroot", default=DEFAULT_VOLROOT, help="Volume folder that holds the uc-it/<sha12>/ staging folder")
+    p.add_argument("--warehouse-id", default=None, help="SQL warehouse (default GBX_UC_GATE_WAREHOUSE_ID__<profile> in the cluster config, then GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID)")
+    p.add_argument("--catalog", default=None, help=f"catalog of the schema (default GBX_GATE_CATALOG__<profile> in the cluster config, else {DEFAULT_CATALOG})")
+    p.add_argument("--volroot", default=None, help=f"Volume folder that holds the uc-it/<sha12>/ staging folder (default GBX_GATE_VOLROOT__<profile> in the cluster config, else {DEFAULT_VOLROOT})")
     p.add_argument("--scope", choices=("smoke", "core", "full"), default="core", help="smoke: 12 slice statements and example files 00 and 01; core: grid and vector tables and all examples; full: also the raster tables")
     p.add_argument("--shards", type=int, default=DEFAULT_SHARDS, help="separate warehouse sessions (processes) for the slice; each batches its own share, so 1 batches best")
     p.add_argument("--batch", type=int, default=DEFAULT_BATCH, help="value cases per warehouse statement (1 runs each alone); a case that must be refused always runs alone")
@@ -507,7 +506,9 @@ def parse_args(argv=None):
     p.add_argument("--emit-slice", metavar="FILE", default=None, help=argparse.SUPPRESS)  # internal: write the slice statements as JSON and exit (run in the dev container, where osgeo exists)
     p.add_argument("--install-into", metavar="SCHEMA", default=None, help="install the functions and procedures into SCHEMA and keep them: stage into <volroot>/uc-install/SCHEMA/, install, probe; no warehouse step, no evidence")
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    apply_gate_target(a, CONFIG, DEFAULT_CATALOG, DEFAULT_VOLROOT)
+    return a
 
 
 class Gate:
@@ -522,7 +523,7 @@ class Gate:
         self.folder = f"{args.volroot.rstrip('/')}/{sub}"
         self.ws_dir: Optional[str] = None
         self.run_dir = OUT_DIR / self.sha12
-        self.warehouse = args.warehouse_id or warehouse_from_config()
+        self.warehouse = args.warehouse_id or warehouse_from_config(profile=args.profile or "")
         self.w = None
         self.run_ids: List[str] = []
         self.ev: dict = {}
@@ -934,6 +935,10 @@ def install_into(g: "Gate", a) -> int:
     if a.dry_run:
         print(f"dry run: install into {a.catalog}.{g.schema}, staging folder {g.folder}; no workspace call")
         return 0
+    problem = catalog_problem(g.client(), a.catalog, CONFIG, a.profile)
+    if problem:
+        print(f"refused: {problem}", file=sys.stderr)
+        return 1
     try:
         wheel = g.step_wheel()
         info = wheel_info(wheel)
@@ -974,11 +979,12 @@ def main(argv=None) -> int:
         print("--run-part cuts a core or full run into parts: it takes no smoke scope", file=sys.stderr)
         return 2
     g = Gate(a)
+    say(target_line(a, a.profile))
     if a.drop_parts:
         if not g.warehouse:
             print("--warehouse-id required to drop the schema", file=sys.stderr)
             return 2
-        problem = warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile)
+        problem = target_problem(g, a)
         if problem:
             print(f"refused: {problem}", file=sys.stderr)
             return 1
@@ -1048,7 +1054,7 @@ def main(argv=None) -> int:
         print("--warehouse-id required (or GBX_UC_GATE_WAREHOUSE_ID / GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
         return 2
     # Before any build, stage or install: a configured warehouse that was deleted would fail only after all three.
-    problem = warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile)
+    problem = target_problem(g, a)
     if problem:
         print(f"refused: {problem}", file=sys.stderr)
         return 1

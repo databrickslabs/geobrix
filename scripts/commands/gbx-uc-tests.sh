@@ -28,12 +28,16 @@ Options:
   --against SCHEMA        Run the scope against the existing install in SCHEMA. No build, stage, install or
                           cleanup. Writes evidence-adhoc.json, never evidence.json: the installed code may
                           not match HEAD, so the run is not evidence for a pull request.
-  --warehouse-id ID       SQL warehouse (default: GBX_UC_GATE_WAREHOUSE_ID, else GBX_UC_WAREHOUSE_ID, in
-                          examples/tests/databricks_cluster_config.env, untracked: keep the ID there, not in
-                          a committed file). The run looks it up first and stops with a Fix if it is gone
-  --catalog C             Catalog of the schema (default geospatial_docs)
-  --volroot DIR           Volume folder that holds uc-it/<sha12>/ (default
-                          /Volumes/geospatial_docs/geobrix/sample-data)
+  --warehouse-id ID       SQL warehouse. Default: GBX_UC_GATE_WAREHOUSE_ID__<profile> in
+                          examples/tests/databricks_cluster_config.env (untracked: keep the ID there), then
+                          GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID. <profile> is the profile name
+                          with each character outside letters and digits as _ (fevm-geospatial -> fevm_geospatial)
+  --catalog C             Catalog of the schema. Default: GBX_GATE_CATALOG__<profile>, else geospatial_docs
+  --volroot DIR           Volume folder that holds uc-it/<sha12>/. Default: GBX_GATE_VOLROOT__<profile>, else
+                          /Volumes/geospatial_docs/geobrix/sample-data
+                          Before any build, the run looks up the warehouse and the catalog in the workspace of
+                          --profile. It stops with a Fix when either is missing there. It prints each value
+                          with its source
   --batch N               Value cases per warehouse statement (default 25; 1 runs each alone). The warehouse
                           pays ~10 s per statement that calls a UC Python function, whatever it computes, so
                           the cases of a batch share one. A case that must be refused always runs alone, and a
@@ -65,30 +69,30 @@ Behaviour:
   Time: warehouse capacity bounds it. On a shared X-Small, one-cluster warehouse `core` took about 35 min
   (about 70 min before batching); `full` takes well over an hour there. On a Serverless Pro Medium
   warehouse of 2 to 4 clusters `core` took about 22 min end to end (the warehouse step 15 min of it).
-  Use a bigger warehouse with --warehouse-id, or set GBX_UC_GATE_WAREHOUSE_ID, to go faster.
+  Use a bigger warehouse with --warehouse-id, or set GBX_UC_GATE_WAREHOUSE_ID__<profile>, to go faster.
+  The gate workspace is the Geospatial Hub: use --profile fevm-geospatial.
   Raster statements (scope full) need osgeo. A host without it builds them in the dev container (gbx:docker:exec),
   which must be running (gbx:docker:start).
   Exit code: 0 when the result is pass, 1 on fail or refusal, 2 for bad options.
   Known failures: scripts/ci/uc_integration_known_failures.txt (empty).
 
 Examples:
-  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe
-  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full
-  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope smoke --against geobrix_uc
-  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --scope full --run-part 1/6
-  bash scripts/commands/gbx-uc-tests.sh --profile oauth-fe --install-into geobrix_uc
+  bash scripts/commands/gbx-uc-tests.sh --profile fevm-geospatial
+  bash scripts/commands/gbx-uc-tests.sh --profile fevm-geospatial --scope full
+  bash scripts/commands/gbx-uc-tests.sh --profile fevm-geospatial --scope smoke --against geobrix_uc
+  bash scripts/commands/gbx-uc-tests.sh --profile fevm-geospatial --scope full --run-part 1/6
+  bash scripts/commands/gbx-uc-tests.sh --profile fevm-geospatial --install-into geobrix_uc
 HELP
 }
 
 LOG_PATH=""
-HAVE_WAREHOUSE=false
 ARGS=()
 while [[ $# -gt 0 ]]; do case $1 in
     --help|-h) show_help; exit 0 ;;
     --log) [[ $# -ge 2 ]] || { echo "Option --log needs a value" >&2; exit 2; }
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
-        HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
+        ARGS+=("$1" "$2"); shift 2 ;;
     --profile|--catalog|--volroot|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
@@ -102,16 +106,8 @@ setup_log_file "$LOG_PATH"
 # A detached worktree has no untracked config: the main checkout's is used.
 gbx_export_cluster_config && CONFIG="$GBX_CLUSTER_CONFIG_ENV"
 
-# The warehouse id may live in the (untracked) cluster config; read those keys, never source the file.
-# GBX_UC_GATE_WAREHOUSE_ID (a warehouse sized for the gate) wins over the shared GBX_UC_WAREHOUSE_ID.
-if [[ "$HAVE_WAREHOUSE" == false && -f "$CONFIG" ]]; then
-    WAREHOUSE_ID=""
-    for KEY in GBX_UC_GATE_WAREHOUSE_ID GBX_UC_WAREHOUSE_ID; do
-        WAREHOUSE_ID="$(grep -E "^${KEY}=" "$CONFIG" | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'")"
-        [[ -n "$WAREHOUSE_ID" ]] && break
-    done
-    [[ -n "$WAREHOUSE_ID" ]] && ARGS+=(--warehouse-id "$WAREHOUSE_ID")
-fi
+# The driver reads the catalog, the warehouse and the Volume folder of --profile from the (untracked) cluster
+# config itself (examples/tests/_uc_warehouse.py), when an option does not give them.
 
 # The driver needs databricks-sdk and Python >= 3.11: see gbx_python_with_sdk in common.sh.
 gbx_python_with_sdk || exit 1

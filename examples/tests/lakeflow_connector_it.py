@@ -52,6 +52,7 @@ import check_lakeflow_connector_evidence as lfc_check  # noqa: E402
 import run_sdp_bundle  # noqa: E402  (the pipeline update poll, shared with gbx:test:sdp)
 import uc_integration as uc  # noqa: E402  (wheel reuse and build helpers, shared with gbx:uc:tests)
 import uc_sources_hash  # noqa: E402
+import _uc_warehouse as gate  # noqa: E402  (the per-profile gate target: catalog and warehouse)
 from _job_submit import jobs_root  # noqa: E402
 
 CMD = REPO_ROOT / "scripts" / "commands"
@@ -418,7 +419,7 @@ class Run:
         self.sha12 = self.head[:12]
         self.n = names(self.sha12, a.catalog)
         self.run_dir = OUT_DIR / self.sha12
-        self.warehouse = a.warehouse_id or uc.warehouse_from_config()
+        self.warehouse = a.warehouse_id or uc.warehouse_from_config(profile=a.profile or "")
         self.w = None
         self.checks: List[dict] = []
         self.ev: dict = {}
@@ -773,7 +774,8 @@ class Run:
             self.ev["framework_commit"] = commit
             landing, expect = self.step_expect()
             self.client()
-            problem = uc.warehouse_problem(self.w, self.warehouse, profile=self.a.profile)
+            problem = (uc.warehouse_problem(self.w, self.warehouse, uc.CONFIG, self.a.profile)
+                       or uc.catalog_problem(self.w, self.a.catalog, uc.CONFIG, self.a.profile))
             if problem:
                 raise StepFailed(problem)
             left = self.leftovers()
@@ -840,7 +842,7 @@ class Run:
 def plan(a, sha12: str) -> None:
     n = names(sha12, a.catalog)
     print(f"=== gbx:test:lakeflow-connector at {sha12} (dry run: no build, no workspace call) ===")
-    print(f"    profile    : {a.profile}   catalog: {a.catalog}   warehouse: {a.warehouse_id or uc.warehouse_from_config()}")
+    print(f"    profile    : {a.profile}   catalog: {a.catalog}   warehouse: {a.warehouse_id or uc.warehouse_from_config(profile=a.profile or '')}")
     for k in ("schema", "connection", "pipeline", "landing", "wheels"):
         print(f"    {k:<11}: {n[k]}")
     print(f"    source file: /Users/<you>/jobs/geobrix/{n['ws_folder']}/ingest.py ({CHANNEL}, Serverless)")
@@ -863,8 +865,8 @@ def plan(a, sha12: str) -> None:
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     p.add_argument("--profile", default=None, help="Databricks CLI profile (required)")
-    p.add_argument("--catalog", default=DEFAULT_CATALOG)
-    p.add_argument("--warehouse-id", default=None, help="SQL warehouse for the row counts")
+    p.add_argument("--catalog", default=None, help=f"catalog of the scratch schema (default GBX_GATE_CATALOG__<profile> in the cluster config, else {DEFAULT_CATALOG})")
+    p.add_argument("--warehouse-id", default=None, help="SQL warehouse for the row counts (default GBX_UC_GATE_WAREHOUSE_ID__<profile> in the cluster config, then GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID)")
     p.add_argument("--data-dir", default=str(DEFAULT_DATA_DIR), help="the local sample data (geobrix-examples)")
     p.add_argument("--timeout-min", type=int, default=DEFAULT_TIMEOUT_MIN, help="limit per pipeline update")
     p.add_argument("--poll-secs", type=int, default=DEFAULT_POLL_SECS)
@@ -874,7 +876,9 @@ def parse_args(argv=None):
     p.add_argument("--keep", action="store_true", help="keep the pipeline, the connection and the schema")
     p.add_argument("--drop", default=None, metavar="SHA12", help="drop what a run of commit SHA12 left, then stop")
     p.add_argument("--dry-run", action="store_true")
-    return p.parse_args(argv)
+    a = p.parse_args(argv)
+    gate.apply_gate_target(a, uc.CONFIG, DEFAULT_CATALOG)
+    return a
 
 
 def main(argv=None) -> int:
@@ -905,10 +909,11 @@ def main(argv=None) -> int:
     if a.dry_run:
         plan(a, sha12)
         return 0
-    if not (a.warehouse_id or uc.warehouse_from_config()):
-        print("no SQL warehouse: pass --warehouse-id or set GBX_UC_GATE_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env",
-              file=sys.stderr)
+    if not a.warehouse_id:
+        print("no SQL warehouse: pass --warehouse-id or set "
+              f"{gate.profile_key(gate.GATE_WAREHOUSE_KEY, a.profile)} in examples/tests/databricks_cluster_config.env", file=sys.stderr)
         return 2
+    say(gate.target_line(a, a.profile))
     say(f"step 1/12: connector sources clean at {sha12}")
     return Run(a).run()
 

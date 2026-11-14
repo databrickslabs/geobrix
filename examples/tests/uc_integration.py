@@ -75,6 +75,8 @@ WHEEL_INPUTS = tuple(p for p in uc_sources_hash.UC_PATHS if not p.startswith("ex
     "python/geobrix/README.md",
     "scripts/native",
 )
+# The CI stamp of gbx:native:verify-arches sits under scripts/native, but no wheel contains it.
+WHEEL_NOT_INPUTS = (":(exclude)scripts/native/arch-gate.json",)
 HEARTBEAT_S = 60
 # The warehouse pays ~10 s of sandbox cost per statement that calls a UC Python function, whatever it computes:
 # value cases share a statement (DEFAULT_BATCH per statement) and statements run side by side.
@@ -237,7 +239,7 @@ def wheel_reusable(info: dict, root: Path = REPO_ROOT) -> Tuple[bool, str]:
     if known.returncode != 0:
         return False, f"the wheel's commit {info['git_sha'][:12]} is not in this repository"
     diff = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", info["git_sha"], "HEAD", "--", *WHEEL_INPUTS],
+        ["git", "-C", str(root), "diff", "--name-only", info["git_sha"], "HEAD", "--", *WHEEL_INPUTS, *WHEEL_NOT_INPUTS],
         capture_output=True,
         text=True,
     )
@@ -254,7 +256,7 @@ def inputs_changed(old_head: str, root: Optional[Path] = None) -> List[str]:
     if known.returncode != 0:
         return [f"<commit {old_head[:12]} is not in this repository>"]
     paths = tuple(dict.fromkeys(tuple(uc_sources_hash.UC_PATHS) + WHEEL_INPUTS))
-    diff = subprocess.run(["git", "-C", str(root), "diff", "--name-only", old_head, "HEAD", "--", *paths], capture_output=True, text=True)
+    diff = subprocess.run(["git", "-C", str(root), "diff", "--name-only", old_head, "HEAD", "--", *paths, *WHEEL_NOT_INPUTS], capture_output=True, text=True)
     return [line for line in diff.stdout.splitlines() if line]
 
 

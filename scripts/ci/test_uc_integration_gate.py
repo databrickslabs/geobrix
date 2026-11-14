@@ -922,6 +922,29 @@ def test_inputs_changed_lists_the_uc_and_wheel_inputs_a_commit_range_touched(dri
     assert driver.inputs_changed("0" * 40) == ["<commit 000000000000 is not in this repository>"]
 
 
+def test_a_restamped_arch_gate_is_not_a_wheel_input(driver, tmp_path):
+    """Fail on revert: the stamp lives under scripts/native, a wheel input, but no wheel contains it. A run that
+    restamped the gate after building the wheel would rebuild every wheelhouse for nothing."""
+    root = tmp_path / "r"
+    (root / "scripts" / "native").mkdir(parents=True)
+    (root / "scripts/native/arch-gate.json").write_text("1\n")
+    (root / "scripts/native/build_env_wheel.py").write_text("1\n")
+    git(root, "init", "-q", "-b", "main")
+    git(root, *COMMIT, "add", "-A")
+    git(root, *COMMIT, "commit", "-q", "-m", "init")
+    built = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    info = {"dirty": False, "git_sha": built}
+    (root / "scripts/native/arch-gate.json").write_text("2\n")
+    git(root, *COMMIT, "commit", "-q", "-am", "restamp")
+    assert driver.wheel_reusable(info, root)[0] is True
+    assert driver.inputs_changed(built, root) == []
+    (root / "scripts/native/build_env_wheel.py").write_text("2\n")
+    git(root, *COMMIT, "commit", "-q", "-am", "builder")
+    ok, why = driver.wheel_reusable(info, root)
+    assert not ok and "build_env_wheel.py" in why
+    assert driver.inputs_changed(built, root) == ["scripts/native/build_env_wheel.py"]
+
+
 def test_install_into_stages_installs_and_keeps_without_a_warehouse_or_evidence(driver, monkeypatch, tmp_path):
     """--install-into is a kept demo install: its own folder by schema, no warehouse step, no cleanup, no evidence."""
     monkeypatch.setattr(driver, "OUT_DIR", tmp_path)

@@ -908,3 +908,156 @@ def test_the_vizx_check_unholds_only_a_security_move():
     # be held at base there; everything else is
     assert bew.verify_unheld(bew.PYDIR / "envs" / "env5") == {"requests"}
     assert bew.verify_unheld(bew.PYDIR / "envs" / "env6") == set()
+
+
+# --- step 4b: the pinned, hashed dependency lists (_native/deps/) ------------------------------------------------
+
+
+def _pick(req, base):
+    """A version that meets ``req``: the base version, else a floor, else a plain release."""
+    n = bew.canonicalize_name(req.name)
+    tries = ([str(base[n])] if n in base else []) + [
+        s.version for s in req.specifier if s.operator in (">=", "==", "~=")
+    ] + ["1.0", "2.5.0", "0.1"]
+    return next(v for v in tries if req.specifier.contains(v, prereleases=True))
+
+
+def _fake_houses(tmp_path, monkeypatch, env, extra_adds=None, moves=None):
+    """bew.fetch_wheelhouse replaced by houses of fake wheels: every requirement at a version that meets it (the UC pins
+    at the manifest's), plus ``extra_adds`` (extra -> {name: version}) and ``moves`` (extra -> {core name: version})."""
+    envdir = bew.PYDIR / "envs" / f"env{env}"
+    base = bew.pins_of(envdir / "base.txt")
+    calls = []
+
+    def fake(args, envdir_, env_, arch, extra=None, pins=None):
+        calls.append((arch, extra, dict(pins or {})))
+        house = tmp_path / "houses" / f"env{env_}-{extra or 'core'}" / arch
+        house.mkdir(parents=True, exist_ok=True)
+        want = {}
+        for f in ["core.txt"] + ([f"extra-{extra}.txt"] if extra else []):
+            for r in bew.reqs_of(envdir_ / f):
+                want[bew.canonicalize_name(r.name)] = _pick(r, base)
+        want |= dict(pins or {}) | (extra_adds or {}).get(extra, {}) | (moves or {}).get(extra, {})
+        for n, v in want.items():
+            (house / f"{n.replace('-', '_')}-{v}-py3-none-any.whl").write_bytes(f"{n} {v} {arch}".encode())
+        return house
+
+    monkeypatch.setattr(bew, "fetch_wheelhouse", fake)
+    return calls
+
+
+def test_the_dependency_lists_leave_out_the_base_hold_the_core_pins_and_carry_the_uc_pins(tmp_path, monkeypatch):
+    calls = _fake_houses(tmp_path, monkeypatch, 6, extra_adds={"zarr": {"zarrs": "0.2.3", "requests": "2.33.0"}})
+    lists = bew.dep_lists(None, 6, "0.6.0+env6")
+    base = bew.pins_of(bew.PYDIR / "envs" / "env6" / "base.txt")
+    uc = bew.uc_pins(6)
+    assert uc == {"h3": "4.5.0", "quadbin": "0.2.2"}
+    assert set(lists) == bew._expected_lists(6)
+    for arch in bew.ARCHES:
+        core = bew.DEPS.parse_list(lists[f"env6-{arch}.txt"])
+        assert not set(core) & set(base)  # every base package is at its base version here: left out
+        assert {n: core[n][0] for n in uc} == uc
+        assert bew.DEPS.parse_list(lists[f"env6-{arch}-uc.txt"]) == {n: core[n] for n in uc}
+        zarr = bew.DEPS.parse_list(lists[f"env6-{arch}-zarr.txt"])
+        assert zarr["zarrs"][0] == "0.2.3"
+        assert zarr["requests"][0] == "2.33.0"  # a base package at another version stays on the list
+        assert not set(zarr) & set(core)
+    # the core resolution holds the UC pins; each extra's holds the core pins too
+    core_calls = [c for c in calls if c[1] is None]
+    assert len(core_calls) == 2 and all(c[2] == uc for c in core_calls)
+    for _, extra, pins in (c for c in calls if c[1]):
+        assert set(uc) <= set(pins) and "numexpr" in pins, extra
+
+
+def test_an_extra_that_moves_a_core_pin_fails_the_build(tmp_path, monkeypatch, capsys):
+    _fake_houses(tmp_path, monkeypatch, 6, moves={"stac": {"numexpr": "9.9"}})
+    with pytest.raises(SystemExit):
+        bew.dep_lists(None, 6, "0.6.0+env6")
+    assert "moves ['numexpr'] off the core list" in capsys.readouterr().out
+
+
+def test_env5_has_no_uc_list(tmp_path, monkeypatch):
+    _fake_houses(tmp_path, monkeypatch, 5)
+    lists = bew.dep_lists(None, 5, "0.6.0+env5")
+    assert set(lists) == bew._expected_lists(5) and not any(n.endswith("-uc.txt") for n in lists)
+
+
+def test_the_wheelhouse_fetch_uses_the_shared_target_options_and_keeps_a_current_house(tmp_path, monkeypatch):
+    monkeypatch.setattr(bew, "WHEELHOUSE", tmp_path / "wh")
+    seen = []
+
+    def run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(bew.subprocess, "run", run)
+    monkeypatch.setattr(bew, "host_python_version", lambda args: "3.12")
+    args = type("A", (), {"host_python": "python3"})()
+    envdir = bew.PYDIR / "envs" / "env6"
+    house = bew.fetch_wheelhouse(args, envdir, 6, "aarch64", "zarr", pins={"h3": "4.5.0"})
+    assert house == tmp_path / "wh" / "env6-zarr" / "aarch64"
+    (cmd,) = seen
+    assert cmd[cmd.index("-c") + 1] == str(house / "constraints.txt")
+    assert cmd[-len(bew.DEPS.pip_target_args("aarch64")) - 2 : -2] == bew.DEPS.pip_target_args("aarch64")
+    assert "manylinux_2_28_aarch64" in cmd and "manylinux2014_aarch64" in cmd and "manylinux_2_17_aarch64" in cmd
+    assert "manylinux_2_24_aarch64" in cmd  # obstore's aarch64 wheel is manylinux_2_24 only
+    held = (house / "constraints.txt").read_text()
+    assert "h3==4.5.0" in held and "numpy==2.3.4" in held
+    assert bew.fetch_wheelhouse(args, envdir, 6, "aarch64", "zarr", pins={"h3": "4.5.0"}) == house
+    assert len(seen) == 1  # same inputs: the house is current
+    bew.fetch_wheelhouse(args, envdir, 6, "aarch64", "zarr", pins={"h3": "4.6.0"})
+    assert len(seen) == 2  # another pin: fetched again
+
+
+def _wheel_with_lists(tmp_path, lists, env=6, drop=None, change=None):
+    whl = tmp_path / f"w{len(list(tmp_path.glob('w*.whl')))}.whl"
+    root = f"{bew.PKG}/_native/deps/"
+    with zipfile.ZipFile(whl, "w") as zf:
+        zf.writestr(f"{bew.PKG}/manifest/functions.json", bew.MANIFEST_JSON.read_text())
+        for name, text in lists.items():
+            if name != drop:
+                zf.writestr(root + name, (change or {}).get(name, text))
+    return zipfile.ZipFile(whl)
+
+
+def test_the_wheel_check_wants_every_list_hashed_and_covering_its_requirements(tmp_path, monkeypatch, capsys):
+    _fake_houses(tmp_path, monkeypatch, 6)
+    lists = bew.dep_lists(None, 6, "0.6.0+env6")
+    with _wheel_with_lists(tmp_path, lists) as zf:
+        bew.verify_dep_lists(zf, 6)  # as built: passes
+    core = "env6-aarch64.txt"
+    no_hash = "\n".join(ln.split(" --hash")[0] for ln in lists[core].splitlines()) + "\n"
+    no_numexpr = "".join(ln + "\n" for ln in lists[core].splitlines() if not ln.startswith("numexpr=="))
+    stray = {**lists, "env6-aarch64-extra.txt": "# none\n"}
+    for kw, said in [
+        (dict(drop="env6-x86_64-zarr.txt"), "has no"),
+        (dict(drop="env6-x86_64-uc.txt"), "has no"),
+        (dict(change={core: no_hash}), "is not '<name>==<version> --hash=sha256:<hex>'"),
+        (dict(change={core: no_numexpr}), "numexpr"),
+        (dict(change={"env6-base.txt": "numpy==2.3.4\n"}), "differs from envs/env6/base.txt"),
+    ]:
+        with pytest.raises(SystemExit), _wheel_with_lists(tmp_path, lists, **kw) as zf:
+            bew.verify_dep_lists(zf, 6)
+        assert said in capsys.readouterr().out, kw
+    with pytest.raises(SystemExit), _wheel_with_lists(tmp_path, stray) as zf:
+        bew.verify_dep_lists(zf, 6)
+    assert "lists no build writes" in capsys.readouterr().out
+
+
+def test_the_lists_ship_as_package_data_and_the_source_tree_holds_none():
+    toml = bew.tomllib.loads((bew.PYDIR / "envs" / "pyproject.env.toml").read_text())
+    assert "deps/*.txt" in toml["tool"]["setuptools"]["package-data"]["databricks.labs.gbx._native"]
+    assert not (bew.PYDIR / "src" / bew.PKG / "_native" / bew.DEPS.DIR).exists()
+
+
+def test_the_lists_need_a_python_312_pip(monkeypatch, capsys):
+    """pip evaluates markers with its own interpreter: a 3.10 pip pulled exceptiongroup into the env6 wheelhouse."""
+    monkeypatch.setattr(bew, "host_python_version", lambda args: "3.10")
+    with pytest.raises(SystemExit):
+        bew.dep_lists(type("A", (), {"host_python": "python3"})(), 6, "0.6.0+env6")
+    assert "PRECONDITION MISSING" in capsys.readouterr().out
+
+
+def test_the_command_prefers_a_python_312_pip():
+    sh = (bew.REPO / "scripts/commands/gbx-build-wheel.sh").read_text()
+    assert "for cand in python3.12 python3; do" in sh

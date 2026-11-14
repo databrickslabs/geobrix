@@ -72,9 +72,15 @@ setup_log_file "$LOG_PATH"
 # Every precondition before any step: Docker, uv, and a host pip for the index downloads.
 docker info > /dev/null 2>&1 || { echo "PRECONDITION MISSING: Docker is not running (auditwheel and the install check run in the toolchain images); gbx:build:wheel not run"; exit 1; }
 command -v uv > /dev/null 2>&1 || { echo "PRECONDITION MISSING: uv is not installed; gbx:build:wheel not run"; exit 1; }
-HOST_PYTHON="$(command -v python3 || true)"
-[ -n "$HOST_PYTHON" ] && "$HOST_PYTHON" -m pip --version > /dev/null 2>&1 \
-    || { echo "PRECONDITION MISSING: python3 has no pip (the index downloads go through it); gbx:build:wheel not run"; exit 1; }
+# pip evaluates environment markers with its own interpreter, so the dependency lists (step 4b) need a CPython 3.12
+# pip: python3.12 first, else python3 (the builder refuses another version for the lists).
+HOST_PYTHON=""
+for cand in python3.12 python3; do
+    p="$(command -v "$cand" || true)"
+    if [ -n "$p" ] && "$p" -m pip --version > /dev/null 2>&1; then HOST_PYTHON="$p"; break; fi
+done
+[ -n "$HOST_PYTHON" ] \
+    || { echo "PRECONDITION MISSING: neither python3.12 nor python3 has pip (the index downloads go through it); gbx:build:wheel not run"; exit 1; }
 
 # Index output can carry the configured index's URL or host: every line from pip, uv and the builder is
 # redacted by scripts/native/redact.py (URLs, and hosts printed without a scheme).

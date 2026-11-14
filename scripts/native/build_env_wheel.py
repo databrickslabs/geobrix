@@ -44,11 +44,16 @@ Steps (each prints `== <n> ...`; a failure prints `BUILD FAILED: <what>`, a miss
     and whose cap is no higher than its own, or click or another base.txt package at the base version, or,
     for a VENDORED_FOR_EXTRA package, one that extra names; the extra-<name>.txt files must be EXTRAS[env],
     and no extra may name a vendored distribution or exclude a base.txt version;
+  4b the pinned, hashed dependency lists, _native/deps/ (names and format: _native/_deps.py), per architecture:
+    core.txt resolved with base.txt (and, for env 6, the manifest's uc_dependencies) as constraints, each extra
+    resolved with those pins held, and the UC pins; the base.txt packages are left out (the runtime has them).
+    The wheelhouses they come from (build/env-wheel/wheelhouse/env<N>[-<extra>]/<arch>, host pip, kept while their
+    inputs are unchanged) are the ones --verify installs from, so the lists name exactly the wheels it proves;
   5 python -m build --wheel --no-isolation, with SOURCE_DATE_EPOCH = HEAD's commit time;
   6 wheel unpack, add geobrix-native.pth (`import _gbx_native_path`), wheel pack (same epoch, so the
     same tree gives the same bytes);
   7 verify the wheel (metadata against the env files and EXTRAS, the payload, the JAR, the licence guard, the
-    URLs in the metadata, the size against envs/size-budget.json, with its delta against the last build) and
+    dependency lists (every one there, hashed, and covering core.txt, each extra and the UC pins), the URLs in the metadata, the size against envs/size-budget.json, with its delta against the last build) and
     extract its payload to build/env-wheel/env<N>/payload/, the GBX_NATIVE_ROOT layout;
   8 per architecture, in that architecture's toolchain image (--network none): auditwheel show on a
     throwaway wheel of _native/<arch> + _vendor/<arch> is consistent with manylinux_2_28_<arch> and
@@ -58,12 +63,13 @@ Only then the wheel goes to dist/env<N>/, which keeps no other wheel.
 `--verify <arch>` builds nothing: it installs dist/env<N>'s wheel in a fresh offline venv in that
 architecture's toolchain image and runs scripts/native/check-env-wheel.sh (the install, the .pth and
 import-time activation, the CA rule, the tripwire, Python 3.11, the payload's `_selfcheck`, and [vizx]'s one
-GDAL). The venvs' wheelhouses (core.txt with base.txt as constraints; core.txt and extra-vizx.txt) are fetched on the
-host first, through `--host-python`'s pip, its output redacted.
+GDAL). The venvs' wheelhouses (core.txt, and core.txt with extra-vizx.txt: the ones step 4b writes the lists from) are
+fetched on the host first, through `--host-python`'s pip, its output redacted.
 """
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -88,6 +94,13 @@ from redact import redact  # noqa: E402
 REPO = Path(__file__).resolve().parents[2]
 PYDIR = REPO / "python" / "geobrix"
 PKG = Path("databricks/labs/gbx")
+# The dependency lists' names, line format and target platforms: the package's own module, loaded by path, so the lists
+# the build writes and the readers in the wheel (gbx.stage deps, gbx.uc.install) share one definition.
+_deps_spec = importlib.util.spec_from_file_location("gbx_native_deps", PYDIR / "src" / PKG / "_native" / "_deps.py")
+DEPS = importlib.util.module_from_spec(_deps_spec)
+_deps_spec.loader.exec_module(DEPS)
+MANIFEST_JSON = PYDIR / "src" / PKG / "manifest" / "functions.json"
+WHEELHOUSE = REPO / "build" / "env-wheel" / "wheelhouse"
 ARCHES = ("x86_64", "aarch64")
 PLATFORMS = {"x86_64": "linux/amd64", "aarch64": "linux/arm64"}
 # The 0.5.x runtime extras, by the env wheel that replaces them. The plain wheel (the committed pyproject) declares
@@ -454,7 +467,7 @@ def build_tree(args, env, version):
         "__pycache__", "*.pyc", "*.egg-info", "_build_info.py", "_vendor", "_jar"
     )
     shutil.copytree(PYDIR / "src", tree / "src", ignore=ignore)
-    for a in ARCHES:  # the source tree never holds a payload; the build adds it
+    for a in (*ARCHES, DEPS.DIR):  # the source tree never holds a payload or the lists; the build adds them
         if (tree / "src" / PKG / "_native" / a).exists():
             fail(f"python/geobrix/src/{PKG}/_native/{a} exists in the source tree")
     shutil.copy2(PYDIR / "README.md", tree / "README.md")
@@ -1270,6 +1283,7 @@ def verify(args, whl, env, version, extras, epoch):
         verify_metadata(zf, env, version, extras)
         verify_payload(zf, version, epoch)
         verify_rust_members(set(zf.namelist()), args.no_rs)
+        verify_dep_lists(zf, env)
         extract_payload(zf, args.work / "payload")
     size = whl.stat().st_size / 1e6
     size_gate(size, env, json.loads(SIZE_BUDGET.read_text()), last_size(args, env))
@@ -1320,40 +1334,192 @@ def verify_unheld(envdir):
     return {d for d, (floor, _cve) in SECURITY_FLOORS.items() if d in base and base[d] < Version(floor)}
 
 
-def fetch_vizx_wheelhouse(args, envdir, env, arch):
-    """The wheels check 9 installs [vizx] from: core.txt and extra-vizx.txt, base.txt (but verify_unheld) as
-    constraints, fetched on the host through --host-python's pip; kept while those files are unchanged."""
-    house = REPO / "build" / "env-wheel" / "wheelhouse" / f"env{env}-vizx" / arch
-    files = [envdir / "core.txt", envdir / "extra-vizx.txt", envdir / "base.txt"]
+def uc_pins(env):
+    """name -> version of the manifest's uc_dependencies: the pins a UC function's ENVIRONMENT names (env 6 only)."""
+    if env != 6:
+        return {}
+    raw = json.loads(MANIFEST_JSON.read_text())["uc_dependencies"]
+    return {canonicalize_name(n): v for n, v in raw.items()}
+
+
+def host_python_version(args):
+    """``major.minor`` of --host-python (pip evaluates environment markers with its own interpreter)."""
+    if not getattr(args, "_host_version", None):
+        res = subprocess.run(
+            [args.host_python, "-c", "import sys; print('%d.%d' % sys.version_info[:2])"],
+            capture_output=True, text=True,
+        )  # fmt: skip
+        args._host_version = res.stdout.strip() if res.returncode == 0 else "?"
+    return args._host_version
+
+
+def fetch_wheelhouse(args, envdir, env, arch, extra=None, pins=None):
+    """The wheels of core.txt (and extra-<extra>.txt) for ``arch``: base.txt (but verify_unheld) and ``pins``
+    (name -> version) as constraints, fetched on the host through --host-python's pip with the target options of
+    _native/_deps.py, into build/env-wheel/wheelhouse/env<N>[-<extra>]/<arch>; kept while those inputs are unchanged.
+    The dependency lists (step 4b) are written from these wheelhouses and --verify installs from them."""
+    house = WHEELHOUSE / (f"env{env}-{extra}" if extra else f"env{env}") / arch
+    files = [envdir / "core.txt"] + ([envdir / f"extra-{extra}.txt"] if extra else [])
     unheld = verify_unheld(envdir)
-    key = hashlib.sha256(b"".join(f.read_bytes() for f in files) + repr(sorted(unheld)).encode()).hexdigest()
+    held = "".join(
+        ln + "\n"
+        for ln in (envdir / "base.txt").read_text().splitlines()
+        if ln.strip() and canonicalize_name(ln.split("==")[0].strip()) not in unheld
+    ) + "".join(f"{n}=={v}\n" for n, v in sorted((pins or {}).items()))
+    target = DEPS.pip_target_args(arch)
+    key = hashlib.sha256(
+        b"".join(f.read_bytes() for f in files)
+        + held.encode()
+        + repr(target).encode()
+        + host_python_version(args).encode()
+    ).hexdigest()
     stamp = house / ".inputs-sha256"
     if stamp.is_file() and stamp.read_text().strip() == key:
         print(f"    wheelhouse {house}: current", flush=True)
         return house
-    print(f"    wheelhouse {house}: fetching core.txt + extra-vizx.txt (host pip)", flush=True)
+    what = " + ".join(f.name for f in files)
+    print(f"    wheelhouse {house}: fetching {what} (host pip)", flush=True)
     shutil.rmtree(house, ignore_errors=True)
     house.mkdir(parents=True)
-    held = house / "constraints.txt"
-    held.write_text(
-        "".join(
-            ln + "\n"
-            for ln in (envdir / "base.txt").read_text().splitlines()
-            if canonicalize_name(ln.split("==")[0].strip()) not in unheld
-        )
-    )
-    res = subprocess.run(
-        [args.host_python, "-m", "pip", "download", "-q", "--disable-pip-version-check",
-         "-r", str(envdir / "core.txt"), "-r", str(envdir / "extra-vizx.txt"), "-c", str(held),
-         "--only-binary", ":all:", "--platform", f"manylinux_2_28_{arch}", "--platform", f"manylinux2014_{arch}",
-         "--platform", f"manylinux_2_17_{arch}", "--python-version", "3.12", "-d", str(house)],
-        capture_output=True, text=True,
-    )  # fmt: skip
+    (house / "constraints.txt").write_text(held)
+    cmd = [args.host_python, "-m", "pip", "download", "-q", "--disable-pip-version-check"]
+    for f in files:
+        cmd += ["-r", str(f)]
+    cmd += ["-c", str(house / "constraints.txt"), *target, "-d", str(house)]
+    res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         print(redact((res.stdout + res.stderr)[-3000:]))
-        fail(f"pip download of the env{env} [vizx] wheelhouse for {arch} exited {res.returncode}")
+        label = f" [{extra}]" if extra else ""
+        fail(f"pip download of the env{env}{label} wheelhouse for {arch} exited {res.returncode}")
     stamp.write_text(key + "\n")
     return house
+
+
+def house_pins(house):
+    """canonical name -> (version, sha256) of the wheels in a wheelhouse (one wheel per name, or fail)."""
+    out = {}
+    for whl in sorted(Path(house).glob("*.whl")):
+        name, ver = DEPS.wheel_name_version(whl.name)
+        if name in out:
+            fail(f"wheelhouse {house} holds two wheels of {name}")
+        out[name] = (ver, sha256(whl))
+    return out
+
+
+def _held_out(pins, base):
+    """``pins`` without the packages the runtime has at that version (base.txt)."""
+    return {n: p for n, p in pins.items() if not (n in base and Version(p[0]) == base[n])}
+
+
+def dep_lists(args, env, version, envdir=None):
+    """Step 4b: file name -> text of every list under _native/deps/ (see _native/_deps.py)."""
+    envdir = envdir or PYDIR / "envs" / f"env{env}"
+    if args is not None and host_python_version(args) != DEPS.PYTHON_VERSION:
+        missing(
+            f"--host-python {args.host_python} is Python {host_python_version(args)}: the dependency lists need a "
+            f"CPython {DEPS.PYTHON_VERSION} pip (pip evaluates markers with its own interpreter). Put python3.12 with pip on PATH"
+        )
+    base = pins_of(envdir / "base.txt")
+    uc = uc_pins(env)
+    out = {DEPS.base_name(env): "".join(f"{n}=={v}\n" for n, v in sorted(base.items()))}
+    for arch in ARCHES:
+        head = f"geobrix {version} {arch}: generated by gbx:build:wheel; do not edit."
+        core = _held_out(house_pins(fetch_wheelhouse(args, envdir, env, arch, pins=uc)), base)
+        out[DEPS.list_name(env, arch)] = DEPS.format_list(
+            f"{head}\nenvs/env{env}/core.txt, base.txt as constraints; the base.txt packages are left out.", core
+        )
+        held = {n: v for n, (v, _) in core.items()} | uc
+        for extra in EXTRAS[env]:
+            got = _held_out(house_pins(fetch_wheelhouse(args, envdir, env, arch, extra, pins=held)), base)
+            moved = sorted(n for n in got if n in core and got[n] != core[n])
+            if moved:
+                fail(f"[{extra}] on {arch} moves {moved} off the core list")
+            out[DEPS.list_name(env, arch, extra)] = DEPS.format_list(
+                f"{head}\nwhat [{extra}] adds to {DEPS.list_name(env, arch)} (its pins held).",
+                {n: p for n, p in got.items() if n not in core},
+            )
+        if uc:
+            off = sorted(n for n, v in uc.items() if n not in core or Version(core[n][0]) != Version(v))
+            if off:
+                fail(f"the UC pins {off} are not on the {arch} core list at the manifest's versions")
+            out[DEPS.list_name(env, arch, DEPS.UC)] = DEPS.format_list(
+                f"{head}\nthe UC ENVIRONMENT pins (manifest uc_dependencies), from {DEPS.list_name(env, arch)}.",
+                {n: core[n] for n in uc},
+            )
+    return out
+
+
+def add_dep_lists(args, tree, env, version):
+    """Step 4b: write the lists into the tree's _native/deps/."""
+    lists = dep_lists(args, env, version)
+    d = tree / "src" / PKG / "_native" / DEPS.DIR
+    d.mkdir(parents=True)
+    for name, text in lists.items():
+        (d / name).write_text(text)
+    return sorted(lists)
+
+
+def verify_dep_lists(zf, env, envdir=None):
+    """Step 7: every list is in the wheel and parses, each pin hashed; core.txt, each extra and the UC pins are covered
+    (by the list or base.txt) at versions their requirements admit."""
+    envdir = envdir or PYDIR / "envs" / f"env{env}"
+    root = f"{PKG}/_native/{DEPS.DIR}/"
+    names = set(zf.namelist())
+
+    def read(name):
+        if root + name not in names:
+            fail(f"the wheel has no {root}{name}")
+        return zf.read(root + name).decode()
+
+    base = {n: Version(v) for n, v in DEPS.parse_pins(read(DEPS.base_name(env))).items()}
+    if base != pins_of(envdir / "base.txt"):
+        fail(f"{root}{DEPS.base_name(env)} differs from envs/env{env}/base.txt")
+
+    def covered(pins, reqs, label):
+        for r in reqs:
+            n = canonicalize_name(r.name)
+            have = Version(pins[n][0]) if n in pins else base.get(n)
+            if have is None or not r.specifier.contains(have, prereleases=True):
+                fail(f"{label}: {r} is not met by the list or base.txt (has {have})")
+
+    uc = {}
+    if env == 6:
+        raw = json.loads(zf.read(f"{PKG}/manifest/functions.json"))["uc_dependencies"]
+        uc = {canonicalize_name(n): v for n, v in raw.items()}
+    for arch in ARCHES:
+        def parsed(name):
+            try:
+                return DEPS.parse_list(read(name), root + name)
+            except ValueError as exc:
+                fail(str(exc))
+
+        core = parsed(DEPS.list_name(env, arch))
+        covered(core, reqs_of(envdir / "core.txt"), DEPS.list_name(env, arch))
+        for extra in EXTRAS[env]:
+            name = DEPS.list_name(env, arch, extra)
+            add = parsed(name)
+            if set(add) & set(core):
+                fail(f"{name} repeats {sorted(set(add) & set(core))} from the core list")
+            covered(core | add, reqs_of(envdir / f"extra-{extra}.txt"), name)
+        if uc:
+            name = DEPS.list_name(env, arch, DEPS.UC)
+            got = parsed(name)
+            if {n: v for n, (v, _) in got.items()} != uc or any(core.get(n) != p for n, p in got.items()):
+                fail(f"{name} is not the manifest's uc_dependencies {uc} as the core list pins them")
+    stray = sorted(
+        n[len(root):] for n in names if n.startswith(root) and n[len(root):] not in _expected_lists(env)
+    )
+    if stray:
+        fail(f"{root} holds lists no build writes: {stray}")
+
+
+def _expected_lists(env):
+    out = {DEPS.base_name(env)}
+    for arch in ARCHES:
+        out |= {DEPS.list_name(env, arch)} | {DEPS.list_name(env, arch, e) for e in EXTRAS[env]}
+        if env == 6:
+            out.add(DEPS.list_name(env, arch, DEPS.UC))
+    return out
 
 
 def verify_install(args, env, version, arch):
@@ -1365,35 +1531,11 @@ def verify_install(args, env, version, arch):
     image = toolchain_image(bindings, arch)
     check_docker([image])
     envdir = PYDIR / "envs" / f"env{env}"
-    house = REPO / "build" / "env-wheel" / "wheelhouse" / f"env{env}" / arch
-    key = hashlib.sha256(
-        (envdir / "core.txt").read_bytes() + (envdir / "base.txt").read_bytes()
-    ).hexdigest()
-    if (house / ".inputs-sha256").is_file() and (
-        house / ".inputs-sha256"
-    ).read_text().strip() == key:
-        print(f"    wheelhouse {house}: current", flush=True)
-    else:
-        print(
-            f"    wheelhouse {house}: fetching core.txt with base.txt as constraints (host pip)",
-            flush=True,
-        )
-        shutil.rmtree(house, ignore_errors=True)
-        house.mkdir(parents=True)
-        res = subprocess.run(
-            [args.host_python, "-m", "pip", "download", "-q", "--disable-pip-version-check",
-             "-r", str(envdir / "core.txt"), "-c", str(envdir / "base.txt"), "--only-binary", ":all:",
-             "--platform", f"manylinux_2_28_{arch}", "--platform", f"manylinux2014_{arch}",
-             "--python-version", "3.12", "-d", str(house)],
-            capture_output=True, text=True,
-        )  # fmt: skip
-        if res.returncode != 0:
-            print(redact((res.stdout + res.stderr)[-3000:]))
-            fail(
-                f"pip download of the env{env} wheelhouse for {arch} exited {res.returncode}"
-            )
-        (house / ".inputs-sha256").write_text(key + "\n")
-    vizx = fetch_vizx_wheelhouse(args, envdir, env, arch)
+    house = fetch_wheelhouse(args, envdir, env, arch, pins=uc_pins(env))
+    core = _held_out(house_pins(house), pins_of(envdir / "base.txt"))
+    vizx = fetch_wheelhouse(
+        args, envdir, env, arch, "vizx", pins={n: v for n, (v, _) in core.items()} | uc_pins(env)
+    )
     res = subprocess.run(
         ["docker", "run", "--rm", "--network", "none", "--platform", PLATFORMS[arch],
          "-v", f"{args.out}:/dist:ro", "-v", f"{house}:/wheelhouse:ro", "-v", f"{vizx}:/wheelhouse-vizx:ro",
@@ -1457,6 +1599,9 @@ def main():
     print(
         f"    vendored: {', '.join(vendored)}; every Requires-Dist covered, by version"
     )
+    step("4b", "the pinned, hashed dependency lists (_native/deps/)")
+    lists = add_dep_lists(args, tree, env, version)
+    print(f"    lists: {', '.join(lists)}")
     step(5, "python -m build --wheel --no-isolation")
     whl = build_wheel(args, tree, epoch)
     step(6, "geobrix-native.pth")

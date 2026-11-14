@@ -96,6 +96,11 @@ from test._provided_spark import install as _use_provided_spark  # noqa: E402
 
 _use_provided_spark()
 
+# Local Spark workers run the interpreter the tests run under, not whatever `python3` is first on PATH.
+from test._spark_python import pin as _pin_spark_python  # noqa: E402
+
+_pin_spark_python()
+
 # The driver policy before any rasterio import. Importing the package serves the env wheel's payload and sets the
 # policy's registration-time part (databricks/labs/gbx/__init__.py), so every session that collects a light dir has
 # them before a test module imports rasterio. A rasterio imported first is the PyPI one (another GDAL: partial mode),

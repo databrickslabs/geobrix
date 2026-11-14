@@ -922,6 +922,32 @@ def test_inputs_changed_lists_the_uc_and_wheel_inputs_a_commit_range_touched(dri
     assert driver.inputs_changed("0" * 40) == ["<commit 000000000000 is not in this repository>"]
 
 
+def test_cleanup_deletes_the_volume_folder_with_its_wheel_subfolders(driver, monkeypatch, tmp_path):
+    """Fail on revert: a volume-deps folder holds <arch>/ subfolders, and files.delete refuses a directory
+    ("Paths ending in the '/' character represent directories"), so the first volume-mode run left its folder."""
+    tree = {"/v/f": ["/v/f/a.whl", "/v/f/x86_64/", "/v/f/aarch64/"], "/v/f/x86_64/": ["/v/f/x86_64/h3.whl"], "/v/f/aarch64/": ["/v/f/aarch64/h3.whl"]}
+    gone = []
+
+    class Files:
+        def list_directory_contents(self, d):
+            return [SimpleNamespace(path=p, is_directory=p.endswith("/")) for p in tree[d]]
+
+        def delete(self, p):
+            assert not p.endswith("/"), p
+            gone.append(p)
+
+        def delete_directory(self, p):
+            gone.append(p)
+
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver.Gate, "client", lambda self: SimpleNamespace(files=Files()))
+    g = driver.Gate(driver.parse_args(["--profile", "p", "--warehouse-id", "w"]))
+    g.run_dir, g.folder = tmp_path, "/v/f"
+    g.created = {"folder": True, "schema": False, "ws": False}
+    assert g.cleanup() == "dropped"
+    assert gone == ["/v/f/a.whl", "/v/f/x86_64/h3.whl", "/v/f/x86_64/", "/v/f/aarch64/h3.whl", "/v/f/aarch64/", "/v/f"]
+
+
 def test_a_restamped_arch_gate_is_not_a_wheel_input(driver, tmp_path):
     """Fail on revert: the stamp lives under scripts/native, a wheel input, but no wheel contains it. A run that
     restamped the gate after building the wheel would rebuild every wheelhouse for nothing."""

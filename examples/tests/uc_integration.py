@@ -269,6 +269,17 @@ def jar_stale(jar: Path, root: Path = REPO_ROOT) -> bool:
     return jar.stat().st_mtime < newest
 
 
+def rm_volume_tree(w, path: str) -> None:
+    """Delete a Volume folder with what it holds: a volume-deps folder has <arch>/ wheel folders, and files.delete
+    refuses a directory."""
+    for e in list(w.files.list_directory_contents(path)):
+        if e.is_directory:
+            rm_volume_tree(w, e.path)
+        else:
+            w.files.delete(e.path)
+    w.files.delete_directory(path)
+
+
 def warehouse_from_config(config: Path = CONFIG, profile: str = "") -> Optional[str]:
     """The gate warehouse of `profile` in the cluster config (its own key, then the global gate key, then the shared one)."""
     return gate_warehouse(config, profile)[0]
@@ -787,9 +798,7 @@ class Gate:
             w = self.client()
             if self.created["folder"]:
                 try:
-                    for e in w.files.list_directory_contents(self.folder):
-                        w.files.delete(e.path)
-                    w.files.delete_directory(self.folder)
+                    rm_volume_tree(w, self.folder)
                 except Exception as exc:  # noqa: BLE001 - report it in the evidence, do not hide the run's result
                     if "NOT_FOUND" not in str(exc).upper() and "does not exist" not in str(exc):
                         notes.append(f"Volume folder delete failed: {str(exc)[:200]}")

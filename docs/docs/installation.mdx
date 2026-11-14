@@ -340,6 +340,10 @@ The same steps run from Python, in `databricks.labs.gbx.stage`:
 
 - `download_deps(out, arches=None, extras=(), uc=False, wheel=None)` downloads and checks the wheels. It returns the path of `wheels.txt`.
 - `check_offline(folder, arch, targets, base)` checks that `targets` install from `folder` alone. It returns the `name==version` lines pip would install.
+- `dep_pins(arch, extras=())` returns each wheel an install needs on `arch`, beyond the runtime's own packages. Each maps a name to its version and sha256.
+- `uc_pins()` returns the pins of the Unity Catalog function environments, `h3` and `quadbin`.
+- `read_wheels_txt(folder)` returns the sha256 and relative path of each file in `wheels.txt`.
+- `install_lines(vol_dir, wheel, arches, extras=())` returns the install lines `gbx.stage_deps` prints for a staged folder.
 
 ### Stage the wheels on a Volume
 

@@ -19,6 +19,8 @@ Layout under the payload root (``databricks/labs/gbx/`` in an installed env whee
     _vendor/<arch>/           rasterio, pyogrio, pyproj, shapely, netCDF4 built against _native,
                               and GDAL's own osgeo from the same build
     _vendor/common/           rio-tiler, morecantile, mapbox-vector-tile, osgeo_utils (pure Python)
+    _native/deps/             the pinned, hashed dependency lists (``_native/_deps.py``), for an install
+                              without PyPI access (``python -m databricks.labs.gbx.stage deps``)
     _jar/                     the GeoBrix JAR
 
 ``<arch>`` is ``x86_64`` or ``aarch64`` (``platform.machine()``). The bindings are served under
@@ -189,6 +191,13 @@ def hdf5_plugin_path(
     happened yet; None where the payload cannot load."""
     a = arch(machine)
     return _rules.register_hdf5_plugins(root or payload_root(), a) if a else None
+
+
+def deps_dir(root: Optional[str] = None) -> Optional[str]:
+    """``<root>/_native/deps``, the env wheel's pinned, hashed dependency lists (see ``_native/_deps.py``), or None
+    (the plain wheel and a source checkout have none)."""
+    d = os.path.join(root or payload_root(), "_native", "deps")
+    return d if os.path.isdir(d) else None
 
 
 def jar_path(root: Optional[str] = None) -> Optional[str]:

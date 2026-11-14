@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -441,3 +442,200 @@ def test_stage_deps_is_exported_beside_stage_jar():
     import databricks.labs.gbx as gbx
 
     assert gbx.stage_deps is stage.stage_deps and "stage_deps" in gbx.__all__
+
+
+# --- the real readers: _native.deps_dir and the installed wheel's Requires-Dist ------------------------------------
+
+REPO = Path(__file__).resolve().parents[4]
+SRC_PKG = REPO / "python" / "geobrix" / "src" / "databricks" / "labs" / "gbx"
+DIST_ENV6 = sorted((REPO / "dist" / "env6").glob("geobrix-*+env6-py3-none-any.whl"))
+PAYLOAD_ENV6 = REPO / "build" / "env-wheel" / "env6" / "payload"
+
+
+def _installed_native(root, lists=True):
+    """The package's own ``_native/__init__.py``, copied to an installed layout (``<site>/databricks/labs/gbx/_native``)
+    with (``lists``) a ``deps/`` folder beside it, and loaded from there: payload_root follows its ``__file__``.
+    """
+    pkg = root / "site" / "databricks" / "labs" / "gbx"
+    shutil.copytree(
+        SRC_PKG / "_native",
+        pkg / "_native",
+        ignore=shutil.ignore_patterns("__pycache__", "deps"),
+    )
+    if lists:
+        (pkg / "_native" / "deps").mkdir()
+        (pkg / "_native" / "deps" / "env6-base.txt").write_text("numpy==2.3.4\n")
+    spec = importlib.util.spec_from_file_location(
+        f"gbx_native_copy_{abs(hash(str(root)))}", pkg / "_native" / "__init__.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return pkg, mod
+
+
+def test_deps_dir_is_the_installed_packages_own_folder(tmp_path, monkeypatch):
+    monkeypatch.delenv("GBX_NATIVE_ROOT", raising=False)
+    pkg, mod = _installed_native(tmp_path / "env")
+    assert mod.payload_root() == str(pkg)
+    assert mod.deps_dir() == str(pkg / "_native" / "deps")
+    _, plain = _installed_native(tmp_path / "plain", lists=False)
+    assert plain.deps_dir() is None  # a wheel without the lists (the plain wheel)
+
+
+def test_deps_dir_follows_gbx_native_root_and_the_source_tree_has_none(
+    tmp_path, monkeypatch
+):
+    """A source checkout serves the payload through GBX_NATIVE_ROOT (build/env-wheel/env<N>/payload); the source
+    tree itself never holds the lists (the build writes them into its scratch tree)."""
+    assert _native.deps_dir(str(SRC_PKG)) is None
+    payload = tmp_path / "payload"
+    monkeypatch.setenv("GBX_NATIVE_ROOT", str(payload))
+    assert _native.deps_dir() is None  # no _native/deps there yet
+    (payload / "_native" / "deps").mkdir(parents=True)
+    assert _native.deps_dir() == str(payload / "_native" / "deps")
+    assert (
+        _native.deps_dir(str(tmp_path / "elsewhere")) is None
+    )  # an explicit root wins
+
+
+@pytest.mark.skipif(
+    not (PAYLOAD_ENV6 / "_native" / "deps").is_dir(),
+    reason="no extracted env6 payload (gbx:build:wheel --env 6)",
+)
+def test_the_built_env6_payload_serves_its_lists_through_gbx_native_root(
+    monkeypatch,
+):
+    monkeypatch.setenv("GBX_NATIVE_ROOT", str(PAYLOAD_ENV6))
+    d = _native.deps_dir()
+    assert d == str(PAYLOAD_ENV6 / "_native" / "deps")
+    for a in _deps.ARCHES:
+        core = _deps.parse_list(open(os.path.join(d, _deps.list_name(6, a))).read())
+        uc = _deps.parse_list(
+            open(os.path.join(d, _deps.list_name(6, a, _deps.UC))).read()
+        )
+        assert {n: v for n, (v, _) in uc.items()} == UC_PINS
+        assert all(core[n] == p for n, p in uc.items())
+
+
+def _dist_info(root, version, requires):
+    """An installed ``geobrix`` distribution: a dist-info with ``requires`` as Requires-Dist, on ``root``."""
+    info = root / f"geobrix-{version}.dist-info"
+    info.mkdir(parents=True)
+    info.joinpath("METADATA").write_text(
+        f"Metadata-Version: 2.4\nName: geobrix\nVersion: {version}\n"
+        + "".join(f"Requires-Dist: {r}\n" for r in requires)
+    )
+    return root
+
+
+REQUIRES = [
+    "h3<5,>=4.1",
+    "numexpr>=2.14.1",
+    'zarr<3.5,>=3.4.1; extra == "zarr"',
+    'pystac-client<1,>=0.7; extra == "stac"',
+    'geobrix==0.6.0+env5; extra == "light-env5"',  # a tripwire
+]
+
+
+def test_requirement_lines_are_the_installed_wheels_unmarked_and_chosen_extras(
+    tmp_path, monkeypatch
+):
+    monkeypatch.syspath_prepend(
+        str(_dist_info(tmp_path / "site", "0.6.0+env6", REQUIRES))
+    )
+    assert stage._requirement_lines(()) == ["h3<5,>=4.1", "numexpr>=2.14.1"]
+    assert stage._requirement_lines(("zarr",)) == [
+        "h3<5,>=4.1",
+        "numexpr>=2.14.1",
+        "zarr<3.5,>=3.4.1",
+    ]
+    assert stage._requirement_lines(("zarr", "stac")) == [
+        "h3<5,>=4.1",
+        "numexpr>=2.14.1",
+        "zarr<3.5,>=3.4.1",
+        "pystac-client<1,>=0.7",
+    ]
+
+
+@pytest.mark.skipif(not DIST_ENV6, reason="no built env6 wheel in dist/env6")
+def test_requirement_lines_of_the_built_env6_wheel_are_core_txt_and_the_extra(
+    tmp_path, monkeypatch
+):
+    """The real wheel's METADATA: the unmarked lines are envs/env6/core.txt, an extra adds its extra-<name>.txt."""
+    from packaging.requirements import Requirement
+    from packaging.utils import canonicalize_name
+
+    with zipfile.ZipFile(DIST_ENV6[-1]) as zf:
+        for n in zf.namelist():
+            if ".dist-info/" in n:
+                zf.extract(n, tmp_path / "site")
+    monkeypatch.syspath_prepend(str(tmp_path / "site"))
+
+    def canon(lines):
+        return {
+            (canonicalize_name(r.name), str(r.specifier))
+            for r in map(Requirement, lines)
+        }
+
+    def of(path):
+        text = (REPO / "python/geobrix/envs/env6" / path).read_text().splitlines()
+        return canon(
+            ln.split("#", 1)[0].strip() for ln in text if ln.split("#", 1)[0].strip()
+        )
+
+    assert canon(stage._requirement_lines(())) == of("core.txt")
+    assert canon(stage._requirement_lines(("zarr",))) == of("core.txt") | of(
+        "extra-zarr.txt"
+    )
+
+
+def test_the_wheel_less_download_checks_the_installed_requirements_with_the_uc_pins(
+    tmp_path, monkeypatch, capsys
+):
+    """No --wheel: the offline check installs the installed wheel's own requirements (the real _requirement_lines),
+    from lists the real deps_dir finds under GBX_NATIVE_ROOT, and --uc adds the UC pins.
+    """
+    index = {"aarch64": _index(tmp_path, "aarch64")}
+    zarr = _wheel(str(tmp_path / "index" / "aarch64"), "zarr", "3.4.1")
+    core = {n: (v, s) for n, (v, s, _) in index["aarch64"].items()}
+    index["aarch64"]["zarr"] = ("3.4.1", _sha(open(zarr, "rb").read()), zarr)
+    payload = tmp_path / "payload"
+    d = payload / "_native" / "deps"
+    d.mkdir(parents=True)
+    d.joinpath("env6-base.txt").write_text(
+        "".join(f"{n}=={v}\n" for n, v in BASE.items())
+    )
+    d.joinpath("env6-aarch64.txt").write_text(_deps.format_list("test", core))
+    d.joinpath("env6-aarch64-zarr.txt").write_text(
+        _deps.format_list("test", {"zarr": index["aarch64"]["zarr"][:2]})
+    )
+    monkeypatch.setenv("GBX_NATIVE_ROOT", str(payload))
+    monkeypatch.syspath_prepend(
+        str(_dist_info(tmp_path / "site", "0.6.0+env6", REQUIRES))
+    )
+    monkeypatch.setattr("databricks.labs.gbx.__version__", "0.6.0+env6")
+    seen, checked = [], []
+    fake = _fake_pip(index, seen)
+
+    def run(cmd, **kw):
+        if "--dry-run" in cmd:
+            checked.append((open(cmd[cmd.index("-r") + 1]).read(), cmd))
+        return fake(cmd, **kw)
+
+    out = tmp_path / "out"
+    stage.download_deps(
+        str(out),
+        arches=("aarch64",),
+        extras=("zarr",),
+        uc=True,
+        python=sys.executable,
+        run=run,
+    )
+    ((requires, cmd),) = checked
+    assert requires == "h3<5,>=4.1\nnumexpr>=2.14.1\nzarr<3.5,>=3.4.1\n"
+    assert cmd[-2:] == [f"h3=={UC_PINS['h3']}", f"quadbin=={UC_PINS['quadbin']}"]
+    rels = sorted(r for _, r in stage.read_wheels_txt(str(out)))
+    assert rels == sorted(
+        f"aarch64/{os.path.basename(p)}" for _, _, p in index["aarch64"].values()
+    )
+    assert "holds no env wheel" in capsys.readouterr().out

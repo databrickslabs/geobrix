@@ -13,7 +13,14 @@ from databricks.labs.gbx import __version__, manifest
 from databricks.labs.gbx.uc import ddl, sqlbody
 
 ENV = "6"  # the UC functions run on Serverless env 6 (their wheel is the env 6 wheel)
-DEPS_MODES = ("per-function", "shared")
+DEPS_MODES = ("per-function", "shared", "volume")
+ARCHES = ("x86_64", "aarch64")
+# What a sandbox says when pip cannot get a package: no index access (a timeout), or no wheel for the pin.
+_PIP_FAILED = re.compile(
+    r"NO_MATCHING_DISTRIBUTION|No matching distribution found|Could not find a version that satisfies"
+    r"|Connection to \S+ timed out|ConnectTimeout|Failed to establish a new connection",
+    re.I,
+)
 
 
 def _public_version() -> str:
@@ -111,6 +118,123 @@ def _single_jar(volume_dir: str) -> Optional[str]:
     return ok[0] if ok else None
 
 
+def _volume_options(wheels_dir: str, arch: Optional[str], dry_run: bool) -> List[str]:
+    """The ENVIRONMENT options of ``deps="volume"``: ``--no-index`` and one ``--find-links=<wheels_dir>/<arch>`` per
+    architecture (``arch``, else every staged one; pip takes the wheels that fit the sandbox). Unless ``dry_run``, each
+    folder must hold every wheel the install needs for its architecture (no folder is read in a dry run).
+    """
+    from databricks.labs.gbx.ds._listing import list_files
+
+    root = wheels_dir.rstrip("/")
+    arches = [arch] if arch else list(ARCHES)
+    if not dry_run:
+        found = {
+            a: (
+                list_files(
+                    f"{root}/{a}",
+                    filter_regex=r".*\.whl$",
+                    recursive=False,
+                    raise_on_empty=False,
+                )
+                if os.path.isdir(f"{root}/{a}")
+                else []
+            )
+            for a in arches
+        }
+        if not arch:
+            arches = [a for a in arches if found[a]]
+        if not arches:
+            raise RuntimeError(
+                f"{root} holds no x86_64/ or aarch64/ wheel folder. Fix: download the wheels with "
+                "`python -m databricks.labs.gbx.stage deps --uc`, then put them there with gbx.stage_deps."
+            )
+        for a in arches:
+            missing = _missing_wheels(a, found[a])
+            if missing:
+                raise RuntimeError(
+                    f"{root}/{a} lacks {len(missing)} wheel(s) the UC functions need on {a}: {', '.join(missing[:8])}"
+                    f"{' ...' if len(missing) > 8 else ''}. Fix: run `python -m databricks.labs.gbx.stage deps --uc "
+                    f"--arch {a}` and gbx.stage_deps into {root} again."
+                )
+    return ["--no-index"] + [f"--find-links={root}/{a}" for a in arches]
+
+
+def _missing_wheels(arch: str, files: List[str]) -> List[str]:
+    """``name==version`` of each wheel ``arch`` needs that ``files`` lack: the UC pins, and the env wheel's own list for
+    ``arch`` when this wheel carries it."""
+    from databricks.labs.gbx import stage
+    from databricks.labs.gbx._native import _deps
+
+    have = set()
+    for f in files:
+        try:
+            have.add(_deps.wheel_name_version(f))
+        except ValueError:
+            continue
+    need = {_deps.canon(n): v for n, v in manifest.load().uc_dependencies.items()}
+    try:
+        need.update({n: v for n, (v, _) in stage.dep_pins(arch, env=int(ENV)).items()})
+    except RuntimeError:
+        pass  # a wheel without the lists (a source checkout): the UC pins only
+    return sorted(f"{n}=={v}" for n, v in need.items() if (n, v) not in have)
+
+
+def _install_failed(
+    exc: Exception, deps: str, wheels_dir: str
+) -> Optional[RuntimeError]:
+    """The error to raise when a CREATE failed because the sandbox could not install a package, or None."""
+    text = str(exc)
+    if not _PIP_FAILED.search(text):
+        return None
+    first = text.strip().splitlines()[0][:300] if text.strip() else type(exc).__name__
+    if deps == "volume":
+        return RuntimeError(
+            f"the UC sandbox found no wheel for a package in {wheels_dir} ({first}). Fix: run "
+            "`python -m databricks.labs.gbx.stage deps --uc` for the sandbox's architecture, then gbx.stage_deps again."
+        )
+    return RuntimeError(
+        f"the UC sandbox could not install the functions' packages from PyPI ({first}). Fix: stage the wheels on a "
+        'Volume with gbx.stage_deps and run gbx.uc.install(..., deps="volume"); see "Install without PyPI access" '
+        "in the installation docs."
+    )
+
+
+def _check_deps(
+    deps: str, wheels_dir: Optional[str], arch: Optional[str], volume_dir: str
+) -> Optional[str]:
+    """The checked ``deps`` arguments of ``install``: the wheel folder of ``deps="volume"`` (default ``volume_dir``), or
+    None."""
+    if deps not in DEPS_MODES:
+        raise ValueError(
+            f"install(deps=...) must be one of {DEPS_MODES} (got {deps!r}). "
+            "Fix: pass 'per-function' (each function its own packages), 'shared' (one environment for all) "
+            "or 'volume' (one environment, installed from a Volume without PyPI)."
+        )
+    if deps != "volume" and (wheels_dir is not None or arch is not None):
+        raise ValueError(
+            "install(wheels_dir=..., arch=...) applies to deps='volume' only. Fix: pass deps='volume' with them."
+        )
+    if arch is not None and arch not in ARCHES:
+        raise ValueError(
+            f"install(arch=...) must be one of {ARCHES} (got {arch!r}). Fix: pass the sandbox's architecture."
+        )
+    return ddl.check_volume_dir(wheels_dir or volume_dir) if deps == "volume" else None
+
+
+def _run(spark, stmts: List[str], deps: str, wheels_dir: Optional[str]) -> None:
+    """Send each statement; a CREATE whose sandbox could not install a package raises with a Fix."""
+    for s in stmts:
+        try:
+            spark.sql(s)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - re-raised, with a Fix when pip failed in the sandbox
+            better = _install_failed(exc, deps, wheels_dir)
+            if better is None:
+                raise
+            raise better from exc
+
+
 def _full_name(n: str) -> str:
     return n.lower() if n.lower().startswith("gbx_") else f"gbx_{n.lower()}"
 
@@ -157,6 +281,8 @@ def install(
     procedures: bool = False,
     stubs: bool = False,
     deps: str = "shared",
+    wheels_dir: Optional[str] = None,
+    arch: Optional[str] = None,
 ) -> List[str]:
     """Create the UC functions in ``catalog.schema`` from the wheel in ``volume_dir``; return the DDL.
 
@@ -179,19 +305,20 @@ def install(
 
     ``deps`` sets the ENVIRONMENT of each Python function and private routine. The default, ``"shared"``, gives every one
     the manifest's whole dependency list, so a statement that calls several GeoBrix functions starts one sandbox and
-    installs the packages once (the install takes about 45 s longer, once). ``"per-function"`` gives each function only
+    installs the packages once (the first create takes longer, once). ``"per-function"`` gives each function only
     the packages it imports: a smaller, faster install, but each distinct list is its own sandbox in a statement.
+    ``"volume"`` is ``"shared"`` with no PyPI access: pip installs from the wheel folders that ``gbx.stage_deps`` put in
+    ``wheels_dir`` (default ``volume_dir``), ``wheels_dir/<arch>``. ``arch`` (``"x86_64"`` or ``"aarch64"``, the
+    sandbox's) names one folder; by default every staged one is listed and pip takes the wheels that fit. Before any
+    statement the install checks that each folder holds every wheel it needs, and refuses with a Fix otherwise (a dry
+    run checks nothing). In the other modes, a CREATE that fails to reach PyPI raises with a Fix naming ``"volume"``.
     """
     # Everything that reaches a statement is checked before any statement is built or any folder read.
     ddl.quote_ident("catalog", catalog)
     ddl.quote_ident("schema", schema)
     ddl.check_volume_dir(volume_dir)
-    if deps not in DEPS_MODES:
-        raise ValueError(
-            f"install(deps=...) must be one of {DEPS_MODES} (got {deps!r}). "
-            "Fix: pass 'per-function' (each function its own packages) or 'shared' (one environment for all)."
-        )
-    shared = deps == "shared"
+    wheels_dir = _check_deps(deps, wheels_dir, arch, volume_dir)
+    shared = deps in ("shared", "volume")
     man = manifest.load()
     if only is not None:
         only = list(only)  # a generator would be used up by the first pass below
@@ -206,6 +333,7 @@ def install(
     names = _l4_names(only)
     if not dry_run:
         _require_env6()
+    opts = _volume_options(wheels_dir, arch, dry_run) if wheels_dir else []
     wheel = (
         f"{volume_dir.rstrip('/')}/{_env_wheel_name()}"
         if dry_run
@@ -235,6 +363,7 @@ def install(
                     man.uc_dependencies,
                     _public_version(),
                     shared_deps=shared,
+                    pip_options=opts,
                 )
             )
         fn = man.functions[n]
@@ -255,6 +384,7 @@ def install(
             jar_uri=jar,
             shared_deps=shared,
             helpers=False,
+            pip_options=opts,
         )
     stmts += [
         ddl.stub_ddl(man.functions[n], catalog, schema, _public_version())
@@ -273,7 +403,7 @@ def install(
         procedure_names = [name for name, _ in built]
         wanted = {c for n in procedure_names for c in _procedures.CALLS.get(n, ())}
         stmts += _private_for_procedures(
-            man, catalog, schema, "file://" + wheel, made_private, wanted, shared
+            man, catalog, schema, "file://" + wheel, made_private, wanted, shared, opts
         )
         stmts += [text for _, text in built]
     verified = (
@@ -288,8 +418,7 @@ def install(
             from pyspark.sql import SparkSession
 
             spark = SparkSession.builder.getOrCreate()
-        for s in stmts:
-            spark.sql(s)
+        _run(spark, stmts, deps, wheels_dir)
         verify(spark, catalog, schema, verified)
     return stmts
 
@@ -299,7 +428,7 @@ _PROCEDURE_ONLY = ("gbx__h3_cellfill_cells", "gbx__st_asmvt_features")
 
 
 def _private_for_procedures(
-    man, catalog, schema, wheel_uri, made, wanted, shared: bool = False
+    man, catalog, schema, wheel_uri, made, wanted, shared: bool = False, opts=()
 ) -> List[str]:
     """The DDL of the private routines the built procedures call (the ones no table function created), once each."""
     out = []
@@ -315,6 +444,7 @@ def _private_for_procedures(
                     man.uc_dependencies,
                     _public_version(),
                     shared_deps=shared,
+                    pip_options=opts,
                 )
             )
     return out

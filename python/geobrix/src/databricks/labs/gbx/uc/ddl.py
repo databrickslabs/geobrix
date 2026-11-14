@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence
 
 from databricks.labs.gbx.manifest import sql_type as _manifest_sql_type
 from databricks.labs.gbx.uc import sqlbody
@@ -122,6 +122,18 @@ def _env_deps(names, deps: Dict[str, str], shared: bool) -> List[str]:
     return [f"{n}=={deps[n]}" for n in names if n in deps]
 
 
+_PIP_OPTION = re.compile(r"--no-index|--find-links=/Volumes/[^\s'\"\\]+")
+
+
+def _check_pip_options(options: Sequence[str]) -> None:
+    """The ENVIRONMENT options an install from a Volume adds: ``--no-index`` and ``--find-links=/Volumes/...``."""
+    bad = [o for o in options if not _PIP_OPTION.fullmatch(o)]
+    if bad:
+        raise ValueError(
+            f"pip_options {bad}: only --no-index and --find-links=/Volumes/... are taken"
+        )
+
+
 def chosen_form(fn, jar_uri: Optional[str] = None, style: str = "scalar") -> str:
     """The form a UC function is created in: ``sql`` (a SQL kernel) over ``scala`` (with a JAR) over ``python``."""
     l4 = fn.levels["L4"]
@@ -185,6 +197,7 @@ def function_ddl(
     form: Optional[str] = None,
     shared_deps: bool = False,
     helpers: bool = True,
+    pip_options: Sequence[str] = (),
 ) -> List[str]:
     """One UC function (a SQL kernel, a Scala handler or a Python handler), plus a SQL wrapper that carries the
     DEFAULTs when a Python or Scala parameter has one.
@@ -201,6 +214,7 @@ def function_ddl(
     (a probe times the forms against each other); a form the row cannot be is a ValueError. ``helpers=False`` leaves the
     SQL kernel's helper functions to the caller (``gbx.uc.install`` creates each once). ``shared_deps`` makes the
     ENVIRONMENT of a Python function the manifest's whole dependency list instead of the function's own.
+    ``pip_options`` go first in that list (``--no-index`` and ``--find-links=<Volume folder>``: an install from a Volume).
     """
     if style not in ("scalar", "batch"):
         raise ValueError(f"style must be 'scalar' or 'batch' (got {style!r})")
@@ -217,6 +231,7 @@ def function_ddl(
         )
     if not _MANIFEST_NAME.fullmatch(sql_name):
         raise ValueError(f"function name {sql_name!r} is not a plain manifest name")
+    _check_pip_options(pip_options)
     l4 = fn.levels["L4"]
     if "tvf_over" in l4:
         return [
@@ -257,7 +272,9 @@ def function_ddl(
     else:
         mod, _, attr = l4["handler"].partition(":")
         env = json.dumps(
-            [f"geobrix @ {wheel_uri}"] + _env_deps(l4["deps"], deps, shared_deps)
+            list(pip_options)
+            + [f"geobrix @ {wheel_uri}"]
+            + _env_deps(l4["deps"], deps, shared_deps)
         )
         language = "LANGUAGE PYTHON\n" + (
             "PARAMETER STYLE PANDAS\n" if style == "batch" else ""
@@ -326,6 +343,7 @@ def private_ddl(
     deps: Dict[str, str],
     version: str,
     shared_deps: bool = False,
+    pip_options: Sequence[str] = (),
 ) -> str:
     """A private routine (``gbx__<x>``, a manifest ``uc_private`` entry): one Python function, no DEFAULTs, called only
     by a table function or a procedure of this package."""
@@ -338,9 +356,14 @@ def private_ddl(
     # a bench probe copy of a private routine is named gbx_probe_perf_<name>, beside the product's and never over it
     if not re.fullmatch(r"gbx__[a-z0-9_]+|gbx_probe_perf_[a-z0-9_]+", pf.name):
         raise ValueError(f"private routine name {pf.name!r} must be gbx__<name>")
+    _check_pip_options(pip_options)
     mod, _, attr = pf.handler.partition(":")
     params = ", ".join(f"{n} {sql_type(t)}" for n, t in pf.params)
-    env = json.dumps([f"geobrix @ {wheel_uri}"] + _env_deps(pf.deps, deps, shared_deps))
+    env = json.dumps(
+        list(pip_options)
+        + [f"geobrix @ {wheel_uri}"]
+        + _env_deps(pf.deps, deps, shared_deps)
+    )
     comment = quote_str(f"geobrix {version}: {pf.summary}".rstrip(": "))
     return (
         f"CREATE OR REPLACE FUNCTION {q}.{pf.name}({params})\n"

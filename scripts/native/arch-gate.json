@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "595d4e1e5405bdca558005f0143a3ec6db87d43fbbd38333f5fe68478fc728e1",
-  "date": "2026-11-13",
+  "native_inputs_sha256": "e54273efe983095f66ac412c609ca4dee294c1bb57d424754cfc59fb5a5c51c6",
+  "date": "2026-11-14",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "49b41b4b1b6f0873061231b50ea9a59d7c798275",
+  "built_from": "b5a3adb77afa2d3ed657a73d2b1b4c098e368b8c",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -55,7 +55,7 @@
     "python/geobrix/envs/env6/extra-vizx.txt": "57dad348f70098b5b9d0c192ed5f9c3d97da05d137453202a27ddbe50b903702",
     "python/geobrix/envs/env6/extra-zarr.txt": "862d2d2c48269b86a0609e94c271e967db7080c4384ed85c82eaf10b5f669c71",
     "python/geobrix/envs/env6/vendor-pure.txt": "b51fade9cd0e951bcbbf2063edc27c5f0a6b45e577e839043e521008d60213db",
-    "python/geobrix/envs/pyproject.env.toml": "4de73781efce5a4ac89cbed19af79abc25e14f40f65fb474b9762f2591ff02c7",
+    "python/geobrix/envs/pyproject.env.toml": "45f8d54ec8e90e9ca1b0cc9ebb7f291183c6efd0dc87e0ef925d1169ce0f7420",
     "python/geobrix/envs/runtimes/dbr17_3.txt": "ac5a33127ddb482bdfb8aa24af8993a91f5d46814a4483b5100fa5e9b5b2d96c",
     "python/geobrix/envs/runtimes/dbr18.txt": "b9bd936e2775f5d707d2b9265b43bfdeea74e1d6e7ee1f1609ddfff708c39019",
     "python/geobrix/envs/runtimes/dbr19.txt": "684ac7110900ec0ed40e5715fd5918044ca848ed17c11fe26e8a34d061ff9452",
@@ -67,7 +67,8 @@
     "python/geobrix/pyproject.toml": "98c5cfd10194e14a3ea88541ce7d01a6d424467f2be87abc0f1ac749b226b729",
     "python/geobrix/requirements-build.txt": "6f62c3d236582984ee9a5df564200e94b97e5ce162aac12071c493abc708e45e",
     "python/geobrix/src/_gbx_native_path.py": "91439a475d1c3910874667efef67770407ddd5ff03854c40bfa85d0bb2ce0361",
-    "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "5f5372383f99daf248cd9decc8c10b4eb643aab9cf64662b305c7d6f7964fad2",
+    "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "b4c7570a75640fd57ab6d5e0eebcbdb7694fcb3b1df3e419570f7276ca1f4429",
+    "python/geobrix/src/databricks/labs/gbx/_native/_deps.py": "298b86b71c112b7eb3dfe2b3af19110e27005504bb50e02ddd6d51a636f9e121",
     "python/geobrix/src/databricks/labs/gbx/_native/_rules.py": "c2d094f3a6379e6e5d7c6be3e0d9838629df5a02d584f5a20d70cb8c12ab14d6",
     "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "10823ad36b1b86b37ba6f55fe3a0f54afef129e6a2483f07d343bc4c1433d82d",
     "rust-toolchain.toml": "862adc14eccb8038bf8cead88a04def82032db0e59673d7cf228131e5e25d3b1",
@@ -95,7 +96,7 @@
     "scripts/native/build-requirements.in": "9a4df67eb8215282db860e4bc181c387205b2b72f14db042aaf2359db0b4be34",
     "scripts/native/build-rust-native.sh": "8f77856738e178be7a6a90a0a4709984c1b6ae35ff30cbf6dd774fdff7bced68",
     "scripts/native/build.Dockerfile": "e6dc9c46f06c8374b0955c8dfb841718dabc828d06e66d5440a9307b9ecb69c3",
-    "scripts/native/build_env_wheel.py": "ccd2310bccb77440ac41dea060c3907d45de10a9f6648ddd8d4618bee28235e6",
+    "scripts/native/build_env_wheel.py": "3320b7aa82719ccb6aa7e9f739cfbf73d631bd839bf13edadafe9ac14ff6d91b",
     "scripts/native/cargo-deny-ci.sh": "7343af663e7b1bf5693169bc91fc974fa8aa8aafd6b2e8071bcb96d35dfdb5b3",
     "scripts/native/cargo-offline.toml": "a8326789ecde9b687444088317921b38f25c1cdedcb0117b9a17f945216de55e",
     "scripts/native/cargo-vendor.sh": "535e5b173666967828b06a6f6d7f39bed70af5fd0d4a3df819cba41f62db990c",

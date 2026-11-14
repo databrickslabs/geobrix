@@ -120,7 +120,7 @@ The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in 
 
 Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles. These tiles roll up into the res-10 H3 gold grids:
 
-![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each dataset with its type, duration, output record count, and expectations. This run is from an earlier version of the example, where wc_lidar_pts was a materialized view.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
+![A full San Francisco wireless_coverage_lf_pipeline run. wc_lidar_pts (817 M records) feeds wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands. The gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids follow. Each dataset shows its type, duration, output record count, and expectations. This run is from an earlier version of the example, where wc_lidar_pts was a materialized view.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
 
 This run is from an earlier version of the example. There, `wc_lidar_pts` was a materialized view that re-read every tile on each update (shown as *Full recompute*). It is now a streaming table: after the first update, an update reads only the newly inventoried tiles.
 

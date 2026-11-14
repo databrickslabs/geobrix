@@ -2,6 +2,7 @@
 
 import dataclasses
 import importlib
+import json
 import re
 from pathlib import Path
 
@@ -193,6 +194,40 @@ def test_uc_pins_match_env6_lock():
             name,
             ver,
         )
+
+
+def test_uc_pins_are_only_what_neither_the_env_wheel_nor_the_base_provides():
+    """uc_dependencies pins only PyPI packages: a name the env wheel vendors (its _vendor build shadows a PyPI copy) or the
+    env 6 sandbox preinstalls is uc_provided, so the ENVIRONMENT never asks PyPI for it.
+    """
+    from databricks.labs.gbx._native import _selfcheck
+
+    vendor_pure = (REPO / "python/geobrix/envs/env6/vendor-pure.txt").read_text()
+    vendored = {b.lower() for b in _selfcheck.BINDINGS} | set(
+        re.findall(r"^([A-Za-z0-9_.-]+)==", vendor_pure, re.M)
+    )
+    base = dict(
+        ln.split("==")
+        for ln in (REPO / "python/geobrix/envs/env6/base.txt").read_text().split()
+        if "==" in ln
+    )
+    assert set(MAN.uc_dependencies) == {"h3", "quadbin"}
+    for name, kind in MAN.uc_provided.items():
+        assert (name in vendored) if kind == "vendored" else (name in base), (
+            name,
+            kind,
+        )
+    assert not set(MAN.uc_dependencies) & (vendored | set(base))
+
+
+def test_a_uc_dep_that_is_neither_pinned_nor_provided_is_refused():
+    raw = json.loads((Path(manifest.__file__).with_name("functions.json")).read_text())
+    raw["uc_provided"] = {k: v for k, v in raw["uc_provided"].items() if k != "shapely"}
+    with pytest.raises(ValueError, match="shapely"):
+        manifest.parse(raw)
+    raw["uc_provided"]["h3"] = "vendored"
+    with pytest.raises(ValueError, match="both pinned"):
+        manifest.parse(raw)
 
 
 def _caps(**kw):
@@ -3782,7 +3817,14 @@ def test_uc_private_routine_ddl_contract(name):
     assert "LANGUAGE PYTHON" in stmt and "environment_version = '6'" in stmt
     assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + pf.summary)}" in stmt
     assert "DEFAULT" not in stmt  # a Python function cannot declare one
-    assert all(f"=={MAN.uc_dependencies[d]}" in stmt for d in pf.deps)
+    assert all(
+        (
+            f"{d}=={MAN.uc_dependencies[d]}" in stmt
+            if d in MAN.uc_dependencies
+            else f'"{d}==' not in stmt
+        )
+        for d in pf.deps
+    )
     mod, _, attr = pf.handler.partition(":")
     assert callable(getattr(importlib.import_module(mod), attr))
     names = {f.sql_name for f in FNS}

@@ -119,7 +119,8 @@ def test_the_geometry_arguments_and_results_are_geometry_in_the_ddl():
             "RETURNS GEOMETRY(ANY)" in stmts
             and " GEOMETRY(ANY)" in stmts.split("\n")[0]
         ), name
-        assert "shapely" in stmts, name
+        # shapely is vendored in the env wheel (manifest uc_provided): the ENVIRONMENT pins nothing for it
+        assert "shapely==" not in stmts and '["geobrix @ file:///w.whl"]' in stmts, name
 
 
 # --- the array twins ------------------------------------------------------------------------------------------------------
@@ -143,7 +144,7 @@ def test_an_array_form_is_python_on_both_surfaces_and_its_aggregate_keeps_its_na
     stmts = "\n".join(
         ddl.function_ddl(fn, "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6")
     )
-    assert "LANGUAGE PYTHON" in stmts and "shapely" in stmts
+    assert "LANGUAGE PYTHON" in stmts and '["geobrix @ file:///w.whl"]' in stmts
 
 
 def _box(x0, x1):

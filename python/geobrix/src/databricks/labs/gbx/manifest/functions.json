@@ -3,12 +3,14 @@
   "level_table_version": "2026-11-08.level-table.22",
   "uc_dependencies": {
     "h3": "4.5.0",
-    "shapely": "2.1.2",
-    "rasterio": "1.5.0",
-    "pyproj": "3.7.2",
-    "quadbin": "0.2.2",
-    "scipy": "1.16.3",
-    "morecantile": "7.0.3"
+    "quadbin": "0.2.2"
+  },
+  "uc_provided": {
+    "morecantile": "vendored",
+    "pyproj": "vendored",
+    "rasterio": "vendored",
+    "scipy": "base",
+    "shapely": "vendored"
   },
   "helpers": [
     {

@@ -944,6 +944,39 @@ class Manifest:
     gdal: Optional[GdalSection] = None
     datasources: Tuple[DataSource, ...] = ()
     private: Mapping[str, PrivateRoutine] = MappingProxyType({})
+    # The names a UC handler imports that its ENVIRONMENT does not pin: "vendored" (the env wheel serves its own build
+    # from _vendor, which shadows a PyPI copy) or "base" (the env 6 sandbox preinstalls it). uc_dependencies pins the rest.
+    uc_provided: Mapping[str, str] = MappingProxyType({})
+
+
+UC_PROVIDED_KINDS = ("vendored", "base")
+
+
+def _check_uc_deps(raw: Mapping) -> None:
+    """Every name a UC handler or private routine declares is pinned (uc_dependencies) or provided (uc_provided), never
+    both, and a provided name is vendored or in the base."""
+    pinned, provided = set(raw["uc_dependencies"]), dict(raw.get("uc_provided", {}))
+    bad_kind = sorted(n for n, k in provided.items() if k not in UC_PROVIDED_KINDS)
+    if bad_kind:
+        raise ValueError(
+            f"uc_provided {bad_kind}: the kind must be one of {UC_PROVIDED_KINDS}"
+        )
+    if pinned & set(provided):
+        raise ValueError(
+            f"{sorted(pinned & set(provided))} are both pinned (uc_dependencies) and uc_provided"
+        )
+    declared = [
+        (r["sql_name"], d)
+        for r in raw["functions"]
+        for d in r["levels"].get("L4", {}).get("deps", ())
+    ] + [(r["name"], d) for r in raw.get("uc_private", []) for d in r["deps"]]
+    unknown = sorted(
+        {f"{n}: {d}" for n, d in declared if d not in pinned and d not in provided}
+    )
+    if unknown:
+        raise ValueError(
+            f"UC deps neither pinned (uc_dependencies) nor provided (uc_provided): {unknown}"
+        )
 
 
 def sql_type(t: str) -> str:
@@ -977,6 +1010,7 @@ def parse(raw: Mapping) -> Manifest:
         raise ValueError(
             f"functions.json schema_version {raw.get('schema_version')!r}, expected {SCHEMA_VERSION}"
         )
+    _check_uc_deps(raw)
     fns = {}
     for r in raw["functions"]:
         params = tuple(
@@ -1097,6 +1131,7 @@ def parse(raw: Mapping) -> Manifest:
                 for r in raw.get("uc_private", [])
             }
         ),
+        MappingProxyType(dict(raw.get("uc_provided", {}))),
     )
 
 

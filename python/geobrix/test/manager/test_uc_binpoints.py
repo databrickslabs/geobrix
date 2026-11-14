@@ -60,7 +60,9 @@ def test_the_partial_is_one_sql_body_for_the_session_and_uc_with_no_python():
 def test_the_finalize_is_a_python_handler_that_needs_rasterio():
     fn = MAN.functions[BPF]
     stmts = ddl.function_ddl(fn, "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6")
-    assert "LANGUAGE PYTHON" in stmts[-1] and "rasterio" in stmts[-1]
+    # rasterio is vendored in the env wheel (manifest uc_provided): declared, never pinned
+    assert "LANGUAGE PYTHON" in stmts[-1] and "rasterio" in fn.levels["L4"]["deps"]
+    assert "rasterio==" not in stmts[-1]
     assert fn.levels["L4"]["handler"].endswith(":rst_binpoints_finalize")
 
 

@@ -171,7 +171,9 @@ def test_the_ddl_is_a_python_function_over_a_tile(name):
             MAN.functions[name], "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6"
         )
     )
-    assert "LANGUAGE PYTHON" in stmts and "rasterio" in stmts
+    # rasterio is vendored in the env wheel (manifest uc_provided): declared, never pinned
+    assert "LANGUAGE PYTHON" in stmts and "rasterio==" not in stmts
+    assert "rasterio" in MAN.functions[name].levels["L4"]["deps"]
     assert (
         MAN.functions[name].params[0].uc == "TILE"
         and MAN.functions[name].returns_uc == "TILE"

@@ -105,8 +105,21 @@ def _params_sig(fn) -> str:
 
 def _env_deps(names, deps: Dict[str, str], shared: bool) -> List[str]:
     """The ``name==version`` pins of a Python function's ENVIRONMENT: its own list, or (``shared``) every pin of the
-    manifest's ``uc_dependencies``, so every function declares the same environment."""
-    return [f"{n}=={deps[n]}" for n in (deps if shared else names)]
+    manifest's ``uc_dependencies``, so every function declares the same environment.
+
+    A name the manifest lists as ``uc_provided`` gets no pin: the env wheel vendors it, or the sandbox base has it.
+    """
+    from databricks.labs.gbx import manifest
+
+    if shared:
+        return [f"{n}=={v}" for n, v in deps.items()]
+    provided = manifest.load().uc_provided
+    unknown = [n for n in names if n not in deps and n not in provided]
+    if unknown:
+        raise ValueError(
+            f"UC deps {unknown} are neither pinned nor provided by the env wheel or the sandbox base"
+        )
+    return [f"{n}=={deps[n]}" for n in names if n in deps]
 
 
 def chosen_form(fn, jar_uri: Optional[str] = None, style: str = "scalar") -> str:

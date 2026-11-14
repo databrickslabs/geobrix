@@ -437,7 +437,7 @@ def uc_smallagg_sql(
     q = f"`{catalog}`.`{schema}`"
     env = json.dumps(
         [f"geobrix @ file://{wheel_path}"]
-        + [f"{k}=={deps[k]}" for k in ("rasterio", "pyproj", "shapely")]
+        + [f"{k}=={deps[k]}" for k in ("rasterio", "pyproj", "shapely") if k in deps]
     )
     body = "from databricks.labs.gbx.pyrx.core.agg import merge_tiles\nreturn merge_tiles([bytes(r) for r in rasters])"
     stmts = [
@@ -612,7 +612,11 @@ def p2_statements(
     env = quote_str(
         json.dumps(
             [f"geobrix @ {wheel_uri}"]
-            + [f"{k}=={deps[k]}" for k in ("rasterio", "pyproj", "shapely")]
+            + [
+                f"{k}=={deps[k]}"
+                for k in ("rasterio", "pyproj", "shapely")
+                if k in deps
+            ]
         )
     )
     spec = f"ENVIRONMENT (dependencies = {env}, environment_version = '6')"
@@ -2365,12 +2369,16 @@ _M6_BODY = (
 
 
 def _env(wheel_uri: str, deps: dict, names: Sequence[str] = MECH_ENGINE_DEPS) -> str:
+    """A probe's ENVIRONMENT: the wheel and the pins ``deps`` has for ``names`` (a vendored name has none)."""
     from databricks.labs.gbx.uc.ddl import quote_str
 
     return (
         "ENVIRONMENT (dependencies = "
         + quote_str(
-            json.dumps([f"geobrix @ {wheel_uri}"] + [f"{k}=={deps[k]}" for k in names])
+            json.dumps(
+                [f"geobrix @ {wheel_uri}"]
+                + [f"{k}=={deps[k]}" for k in names if k in deps]
+            )
         )
         + ", environment_version = '6')"
     )

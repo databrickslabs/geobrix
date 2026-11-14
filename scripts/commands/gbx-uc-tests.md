@@ -19,6 +19,13 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
   - Before any build or stage, the run looks up the warehouse and the catalog in the workspace of `--profile`.
   - If either is missing there, the run stops with exit 1 and a Fix.
   - The run prints each value with its source, as `target: profile ...`.
+- `--deps pypi|volume` - where the UC functions' dependencies come from. Default `GBX_GATE_DEPS__<profile>`, else `pypi`.
+  - `volume` installs with no PyPI access, as the Geospatial Hub sandboxes need.
+  - The gate installs the env wheel in a python3.12 venv with no dependencies, only to read its pinned lists.
+  - It runs `python -m databricks.labs.gbx.stage deps --arch both --uc` on this host, which needs PyPI access and pip.
+  - It stages the result with `gbx.stage_deps` through the Files API of `--profile`, into the run's own `uc-it/<sha12>/` folder.
+  - The install job calls `gbx.uc.install(..., procedures=True, deps="volume", wheels_dir=<that folder>)`.
+  - `evidence.json` records `deps`. A parted run resumes only a record of the same mode.
 - `--batch N` - value cases per warehouse statement. Default `25`; `1` runs every case alone. The warehouse pays about 10 s per statement that calls a UC Python function, whatever it computes. So the cases of a batch share one statement (one row, one column per case). A case that must be refused (an expected error aborts a statement) and a recipe always run alone. A batch that fails as a whole is rerun case by case, so a failure still names its case. Every case is judged on its own, as without batching.
 - `--concurrency N` - warehouse statements in flight at once, per slice session. Default `16`.
 - `--shards N` - separate slice sessions (processes). Default `1`; each session batches only its own share of the cases, so more sessions mean smaller batches.
@@ -48,6 +55,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
   - `GBX_GATE_CATALOG__fevm_geospatial=geospatial_catalog`
   - `GBX_UC_GATE_WAREHOUSE_ID__fevm_geospatial=<warehouse id in that workspace>`
   - `GBX_GATE_VOLROOT__fevm_geospatial=/Volumes/geospatial_catalog/<schema>/<volume>`
+  - `GBX_GATE_DEPS__fevm_geospatial=volume` (the Hub sandboxes cannot reach PyPI)
 - Another workspace needs its own set of keys. An ID from one workspace is refused in another.
 
 ## Gated run steps

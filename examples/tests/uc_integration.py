@@ -34,6 +34,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -276,14 +277,19 @@ def target_problem(g, a) -> Optional[str]:
     return warehouse_problem(g.client(), g.warehouse, CONFIG, a.profile) or catalog_problem(g.client(), a.catalog, CONFIG, a.profile)
 
 
-def install_notebook(catalog: str, schema: str, folder: str) -> dict:
-    """The Serverless notebook that installs the functions and the procedures from `folder` into the schema."""
+def install_notebook(catalog: str, schema: str, folder: str, deps: str = "pypi") -> dict:
+    """The Serverless notebook that installs the functions and the procedures from `folder` into the schema.
+
+    deps="volume": the ENVIRONMENT of each function installs from the wheel folders beside the wheel in `folder`
+    (staged by gbx.stage_deps), with no PyPI access.
+    """
+    extra = f", deps='volume', wheels_dir={folder!r}" if deps == "volume" else ""
     code = f'''import time
 t0 = time.time()
 print("[UC IT] install START", flush=True)
 from databricks.labs.gbx import uc
 spark.sql("CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
-res = uc.install({catalog!r}, {schema!r}, {folder!r}, procedures=True)
+res = uc.install({catalog!r}, {schema!r}, {folder!r}, procedures=True{extra})
 n = len(res) if hasattr(res, "__len__") else -1
 print("[UC IT] install DONE %.1fs, %s statements" % (time.time() - t0, n), flush=True)
 # One UC function call reports the build it imports; the install fails here when it is not the staged wheel's.
@@ -495,6 +501,7 @@ def parse_args(argv=None):
     p.add_argument("--batch", type=int, default=DEFAULT_BATCH, help="value cases per warehouse statement (1 runs each alone); a case that must be refused always runs alone")
     p.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="warehouse statements in flight at once, per slice session")
     p.add_argument("--example-files-parallel", type=int, default=DEFAULT_EXAMPLE_PARALLEL, help="example files run side by side (file 00, the setup, always runs first)")
+    p.add_argument("--deps", choices=("pypi", "volume"), default=None, help="where the UC functions' dependencies come from: pypi, or volume (wheels staged beside the env wheel, no PyPI access). Default GBX_GATE_DEPS__<profile> in the cluster config, else pypi")
     p.add_argument("--rebuild", action="store_true", help="build the wheel even when dist/env6 holds a reusable one")
     p.add_argument("--keep", action="store_true", help="keep the schema and the Volume folder")
     p.add_argument("--install-timeout-min", type=int, default=90)
@@ -508,7 +515,10 @@ def parse_args(argv=None):
     p.add_argument("--install-into", metavar="SCHEMA", default=None, help="install the functions and procedures into SCHEMA and keep them: stage into <volroot>/uc-install/SCHEMA/, install, probe; no warehouse step, no evidence")
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     a = p.parse_args(argv)
-    apply_gate_target(a, CONFIG, DEFAULT_CATALOG, DEFAULT_VOLROOT)
+    try:
+        apply_gate_target(a, CONFIG, DEFAULT_CATALOG, DEFAULT_VOLROOT)
+    except ValueError as exc:
+        p.error(str(exc))
     return a
 
 
@@ -579,14 +589,42 @@ class Gate:
             raise StepFailed(f"the built wheel records commit {info['git_sha'][:12]} dirty={info['dirty']}, not a clean {self.sha12}")
         return dist[-1]
 
+    def stage_deps_volume(self, wheel: Path) -> None:
+        """Download the wheels the env wheel needs (both architectures, the UC pins) and stage them with the wheel.
+
+        What a customer without PyPI access does: install the env wheel in a venv (no dependencies: it only supplies
+        the pinned lists), run `python -m databricks.labs.gbx.stage deps`, then `gbx.stage_deps` to the Volume folder
+        through the Files API of this run's profile.
+        """
+        py = shutil.which("python3.12") or "/opt/homebrew/bin/python3.12"
+        venv, src = self.run_dir / "deps-venv", self.run_dir / "deps"
+        if src.exists():
+            shutil.rmtree(src)  # the download refuses a folder it did not fill itself
+        vpy = str(venv / "bin" / "python")
+        for label, argv in (
+            ("deps venv", [py, "-m", "venv", str(venv)]),
+            ("deps install", [vpy, "-m", "pip", "install", "--no-deps", "--quiet", str(wheel)]),
+            ("deps download", [vpy, "-I", "-m", "databricks.labs.gbx.stage", "deps", "--arch", "both", "--uc", "--wheel", str(wheel), "--out", str(src)]),
+        ):
+            rc, out = run_cmd(argv, self.run_dir / f"{label.replace(' ', '-')}.log", label, echo=False)
+            need(rc, f"the {label} step (needs a python3.12 with pip and PyPI access on this host)", out)
+        from databricks.labs.gbx import stage
+
+        stage.stage_deps(self.folder, str(src), client=self.client())
+
     def step_stage(self, wheel: Path, info: dict) -> str:
-        say(f"step 3/6: stage the wheel and its JAR alone into {self.folder}")
+        volume = getattr(self.a, "deps", "pypi") == "volume"
+        say(f"step 3/6: stage the wheel{', its dependency wheels' if volume else ''} and its JAR alone into {self.folder}")
+        self.run_dir.mkdir(parents=True, exist_ok=True)
         self.created["folder"] = True
-        rc, out = run_cmd(
-            ["bash", str(CMD / "gbx-data-stage-wheel.sh"), "--env", "6", "--dest", self.folder, "--profile", self.a.profile],
-            self.run_dir / "stage-wheel.log", "stage wheel", echo=False,
-        )
-        need(rc, "staging the wheel", out)
+        if volume:
+            self.stage_deps_volume(wheel)
+        else:
+            rc, out = run_cmd(
+                ["bash", str(CMD / "gbx-data-stage-wheel.sh"), "--env", "6", "--dest", self.folder, "--profile", self.a.profile],
+                self.run_dir / "stage-wheel.log", "stage wheel", echo=False,
+            )
+            need(rc, "staging the wheel", out)
         rc, out = run_cmd(
             ["bash", str(CMD / "gbx-data-stage-jar.sh"), "--from-wheel", str(wheel), "--dest", self.folder, "--profile", self.a.profile],
             self.run_dir / "stage-jar.log", "stage JAR", echo=False,
@@ -603,13 +641,13 @@ class Gate:
         return f"{self.folder}/{info['name']}"
 
     def step_install(self, volume_wheel: str) -> None:
-        say(f"step 4/6: install into {self.a.catalog}.{self.schema} from a Serverless env 6 job (procedures=True)")
+        say(f"step 4/6: install into {self.a.catalog}.{self.schema} from a Serverless env 6 job (procedures=True{', deps=volume' if getattr(self.a, 'deps', 'pypi') == 'volume' else ''})")
         me = self.client().current_user.me().user_name
         self.ws_dir = f"{jobs_root(me)}/uc-it-{self.sha12}"
         nb_dir = self.run_dir / "nb"
         nb_dir.mkdir(parents=True, exist_ok=True)
         nb = nb_dir / "uc_it_install.ipynb"
-        nb.write_text(json.dumps(install_notebook(self.a.catalog, self.schema, self.folder)))
+        nb.write_text(json.dumps(install_notebook(self.a.catalog, self.schema, self.folder, getattr(self.a, "deps", "pypi"))))
         self.created["ws"] = True
         rc, out = run_cmd(
             ["bash", str(CMD / "gbx-test-notebooks-serverless.sh"), "--notebook", str(nb), "--env-version", "6", "--wheel", volume_wheel,
@@ -847,7 +885,7 @@ def republish(a, sha12: str) -> int:
     sl, ex = merge_parts(done, state.get("expected", []), n)
     base = {"head_sha": uc_sources_hash.head_sha(REPO_ROOT), "sources_hash": src, "profile": a.profile, "warehouse_id": a.warehouse_id,
             "catalog": a.catalog, "schema": state["schema"], "volume_dir": state["volume_dir"], "scope": a.scope,
-            "finished": state.get("merged") or max(r["finished"] for r in done.values())}
+            "deps": state.get("deps", "pypi"), "finished": state.get("merged") or max(r["finished"] for r in done.values())}
     ev = parted_evidence(state, sl, ex, base, slice_tables(a.scope))
     ev.update({"republished_from": sha12, "republished": now(), "cleanup": state.get("dropped", "kept")})
     if ev["result"] != "pass":
@@ -867,7 +905,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
     src = uc_sources_hash.sources_hash(REPO_ROOT)
     def usable(st: dict) -> bool:
         return (st.get("sources_hash") == src and st.get("scope") == a.scope and st.get("parts") == n
-                and not st.get("dropped") and not st.get("merged"))
+                and st.get("deps", "pypi") == a.deps and not st.get("dropped") and not st.get("merged"))
 
     state = _load_json(path)
     if not usable(state):
@@ -888,7 +926,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
             break
     if not state:
         state = {"head_sha": g.head, "sources_hash": src, "scope": a.scope, "parts": n, "catalog": a.catalog,
-                 "schema": g.schema, "volume_dir": g.folder, "done": {}}
+                 "schema": g.schema, "volume_dir": g.folder, "deps": a.deps, "done": {}}
     say(f"part {part}/{n} of a gated {a.scope} run; its record is {path}")
     rec: dict = {"started": now(), "warehouse_id": g.warehouse, "head_sha": g.head}
     try:
@@ -931,7 +969,7 @@ def run_parted(g: "Gate", a, tables, known: Dict[str, str]) -> int:
         return 0 if ok else 1
     sl, ex = merge_parts(state["done"], state.get("expected", []), n)
     base = {"head_sha": g.head, "sources_hash": src, "profile": a.profile, "warehouse_id": g.warehouse, "catalog": a.catalog,
-            "schema": g.schema, "volume_dir": g.folder, "scope": a.scope, "finished": now()}
+            "schema": g.schema, "volume_dir": g.folder, "scope": a.scope, "deps": a.deps, "finished": now()}
     g.ev = parted_evidence(state, sl, ex, base, tables)
     g.write_evidence()
     state["merged"] = g.ev["finished"]  # merged: a later part starts a new run
@@ -1109,7 +1147,7 @@ def main(argv=None) -> int:
     g.ev = {
         "head_sha": g.head, "sources_hash": uc_sources_hash.sources_hash(REPO_ROOT), "started": started, "profile": a.profile,
         "warehouse_id": g.warehouse, "catalog": a.catalog, "schema": g.schema, "volume_dir": g.folder, "result": "fail",
-        "scope": a.scope,
+        "scope": a.scope, "deps": a.deps,
     }
     if a.against:
         g.ev["adhoc"] = True  # not evidence: the installed code may not match HEAD

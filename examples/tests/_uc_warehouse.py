@@ -7,6 +7,8 @@ character outside letters and digits turned into `_`, and is added after `__`:
     GBX_GATE_CATALOG__<profile>          the catalog of the scratch schemas
     GBX_UC_GATE_WAREHOUSE_ID__<profile>  the SQL warehouse
     GBX_GATE_VOLROOT__<profile>          the Volume folder that holds the staged wheel (the UC gate only)
+    GBX_GATE_DEPS__<profile>             pypi (default) or volume: where the UC functions' dependencies come from
+                                         (the UC gate only; volume installs from wheels staged beside the env wheel)
 
 An option (`--catalog`, `--warehouse-id`, `--volroot`) beats the key. A profile with no warehouse key falls back to
 GBX_UC_GATE_WAREHOUSE_ID, then GBX_UC_WAREHOUSE_ID. The run prints where each value came from.
@@ -26,6 +28,8 @@ UC_WAREHOUSE_KEYS = ("GBX_UC_GATE_WAREHOUSE_ID", "GBX_UC_WAREHOUSE_ID")
 GATE_WAREHOUSE_KEY = "GBX_UC_GATE_WAREHOUSE_ID"
 GATE_CATALOG_KEY = "GBX_GATE_CATALOG"
 GATE_VOLROOT_KEY = "GBX_GATE_VOLROOT"
+GATE_DEPS_KEY = "GBX_GATE_DEPS"
+DEPS_MODES = ("pypi", "volume")
 _DEAD_STATES = ("DELETED", "DELETING")
 
 
@@ -81,6 +85,15 @@ def apply_gate_target(a, config: Optional[Path], default_catalog: str, default_v
             key = profile_key(GATE_VOLROOT_KEY, profile) if profile else None
             value = config_value(config, key) if key else None
             a.volroot, src["volroot"] = (value, key) if value else (default_volroot, "default")
+    if hasattr(a, "deps"):
+        if a.deps:
+            src["deps"] = "option"
+        else:
+            key = profile_key(GATE_DEPS_KEY, profile) if profile else None
+            value = config_value(config, key) if key else None
+            if value and value not in DEPS_MODES:
+                raise ValueError(f"{key}={value} in the cluster config is not a mode. Fix: set it to pypi or volume.")
+            a.deps, src["deps"] = (value, key) if value else ("pypi", "default")
     a.target_source = src
 
 
@@ -90,6 +103,8 @@ def target_line(a, profile: str) -> str:
     parts = [f"catalog {a.catalog} ({src.get('catalog', '?')})", f"warehouse {a.warehouse_id or '-'} ({src.get('warehouse', '?')})"]
     if getattr(a, "volroot", None):
         parts.append(f"volroot {a.volroot} ({src.get('volroot', '?')})")
+    if getattr(a, "deps", None):
+        parts.append(f"deps {a.deps} ({src.get('deps', '?')})")
     return f"target: profile {profile}: " + "; ".join(parts)
 
 

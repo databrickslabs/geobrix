@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -474,6 +475,53 @@ def test_install_notebook_installs_with_procedures_and_asserts_routines(driver):
     # makes one UC function call that reports the imported build, after the install.
     probe = "uc_build_probe.assert_installed_build(spark, 'cat', 'sch', '/Volumes/c/s/v/uc-it/abc'"
     assert probe in code and code.index("uc.install(") < code.index(probe)
+
+
+def test_install_notebook_in_volume_mode_installs_from_the_folders_beside_the_wheel(driver):
+    nb = driver.install_notebook("cat", "sch", "/Volumes/c/s/v/uc-it/abc", deps="volume")
+    code = "".join(nb["cells"][0]["source"])
+    compile(code, "nb", "exec")
+    assert "deps='volume'" in code and "wheels_dir='/Volumes/c/s/v/uc-it/abc'" in code and "procedures=True" in code
+    # The default stays PyPI: no deps argument.
+    assert "deps=" not in "".join(driver.install_notebook("cat", "sch", "/Volumes/c/s/v/uc-it/abc")["cells"][0]["source"])
+
+
+def test_the_deps_option_is_parsed_and_refuses_other_values(driver):
+    assert driver.parse_args(["--profile", "p", "--deps", "volume"]).deps == "volume"
+    with pytest.raises(SystemExit):
+        driver.parse_args(["--profile", "p", "--deps", "wheelhouse"])
+
+
+def test_volume_deps_stage_the_wheel_through_stage_deps_not_the_wheel_script(driver, monkeypatch, tmp_path):
+    """Fail on revert: in volume mode the folder must hold <arch>/ wheel folders, staged by gbx.stage_deps in the
+    gate's own per-sha folder, with the wheel (stage_deps uploads it) and the JAR."""
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    cmds, staged = [], {}
+
+    def fake_run(argv, log, label, env=None, echo=True):
+        cmds.append((label, list(argv)))
+        return 0, ""
+
+    monkeypatch.setattr(driver, "run_cmd", fake_run)
+    monkeypatch.setattr(driver.Gate, "client", lambda self: SimpleNamespace(files=SimpleNamespace(list_directory_contents=lambda d: [
+        SimpleNamespace(name="geobrix-0.6.0+env6-py3-none-any.whl", file_size=10, is_directory=False),
+        SimpleNamespace(name="geobrix-0.6.0-jar-with-dependencies.jar", file_size=5, is_directory=False),
+        SimpleNamespace(name="x86_64", file_size=0, is_directory=True)])))
+    from databricks.labs.gbx import stage
+
+    monkeypatch.setattr(stage, "stage_deps", lambda vol, src, **k: staged.update(vol=vol, src=src, **k) or vol)
+    a = driver.parse_args(["--profile", "p", "--deps", "volume", "--volroot", "/Volumes/c/s/v", "--warehouse-id", "w"])
+    g = driver.Gate(a)
+    g.run_dir = tmp_path / "run"
+    info = {"name": "geobrix-0.6.0+env6-py3-none-any.whl", "size": 10, "jar_size": 5}
+    out = g.step_stage(Path("/dist/geobrix-0.6.0+env6-py3-none-any.whl"), info)
+    labels = [c[0] for c in cmds]
+    assert "stage wheel" not in labels and "stage JAR" in labels
+    assert staged["vol"] == g.folder and staged["src"].endswith("deps") and out == f"{g.folder}/{info['name']}"
+    assert any(l.startswith("deps") for l in labels)
+    download = next(argv for l, argv in cmds if l == "deps download")
+    assert "--arch" in download and download[download.index("--arch") + 1] == "both" and "--uc" in download
+    assert "--wheel" in download
 
 
 def test_wheel_reuse_refuses_a_wheel_built_from_a_dirty_tree(driver):

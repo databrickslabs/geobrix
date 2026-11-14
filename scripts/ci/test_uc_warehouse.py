@@ -250,3 +250,25 @@ def test_an_unreadable_shared_file_is_replaced(uw, tmp_path):
 def test_the_evidence_name_and_a_missing_profile_are_handled(uw, tmp_path):
     uw.publish_evidence({"result": "pass", "sources_hash": "x"}, tmp_path, name="evidence-x")
     assert (tmp_path / "evidence-x.json").is_file() and not (tmp_path / "evidence.json").exists()
+
+
+def test_the_deps_mode_comes_from_its_per_profile_key_and_the_option_beats_it(uw, tmp_path):
+    cfg = tmp_path / "c.env"
+    cfg.write_text(HUB_CFG + "GBX_GATE_DEPS__hub_ws=volume\n")
+    hub = args(profile="hub-ws", deps=None)
+    uw.apply_gate_target(hub, cfg, "dflt", "/Volumes/dflt")
+    assert hub.deps == "volume" and hub.target_source["deps"] == "GBX_GATE_DEPS__hub_ws"
+    e2 = args(profile="e2-demo", deps=None)
+    uw.apply_gate_target(e2, cfg, "dflt", "/Volumes/dflt")
+    assert e2.deps == "pypi" and e2.target_source["deps"] == "default"
+    opt = args(profile="hub-ws", deps="pypi")
+    uw.apply_gate_target(opt, cfg, "dflt", "/Volumes/dflt")
+    assert opt.deps == "pypi" and opt.target_source["deps"] == "option"
+    assert "deps volume" in uw.target_line(hub, "hub-ws")
+
+
+def test_a_bad_deps_key_value_is_refused_with_a_fix(uw, tmp_path):
+    cfg = tmp_path / "c.env"
+    cfg.write_text("GBX_GATE_DEPS__hub_ws=wheelhouse\n")
+    with pytest.raises(ValueError, match="pypi.*volume"):
+        uw.apply_gate_target(args(profile="hub-ws", deps=None), cfg, "dflt", "/Volumes/dflt")

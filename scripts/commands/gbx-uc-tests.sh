@@ -38,6 +38,11 @@ Options:
                           Before any build, the run looks up the warehouse and the catalog in the workspace of
                           --profile. It stops with a Fix when either is missing there. It prints each value
                           with its source
+  --deps pypi|volume      Where the UC functions' dependencies come from. Default: GBX_GATE_DEPS__<profile> in the
+                          cluster config, else pypi. volume installs without PyPI access (the Hub sandboxes have none):
+                          the gate installs the env wheel in a python3.12 venv, runs `python -m databricks.labs.gbx.stage
+                          deps --arch both --uc` (needs PyPI on this host), stages the result with gbx.stage_deps into the
+                          run's own uc-it/<sha12>/ folder, and installs with deps="volume"
   --batch N               Value cases per warehouse statement (default 25; 1 runs each alone). The warehouse
                           pays ~10 s per statement that calls a UC Python function, whatever it computes, so
                           the cases of a batch share one. A case that must be refused always runs alone, and a
@@ -98,7 +103,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts|--republish)
+    --profile|--catalog|--volroot|--deps|--scope|--against|--install-into|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min|--run-part|--drop-parts|--republish)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

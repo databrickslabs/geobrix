@@ -203,7 +203,8 @@ See [Zarr Stores](../../api/zarr-stores.mdx), [Zarr Reader](../../readers/zarr.m
   - Graviton (arm64): `mjohns797/geobrix:<version>-env6-arm`, or `mjohns797/geobrix:env6-arm` for the newest release.
   - x86 (amd64): `mjohns797/geobrix:<version>-env6-x86`, or `mjohns797/geobrix:env6-x86`.
 - **The image carries the env6 wheel with `[vizx]` and the GeoBrix JAR.** Each release attaches a Dockerfile to build your own.
-- **Limits.** The images passed their in-image checks but have not yet run on a cluster. There is no DBR 17.3 or 18 image.
+- **Verified.** Each image ran on a dedicated DBR 19 cluster before its release. The digests are on the [DCS page](../../installation/dcs.mdx).
+- **Limits.** There is no DBR 17.3 or 18 image.
 
 See [Databricks Container Service](../../installation/dcs.mdx).
 

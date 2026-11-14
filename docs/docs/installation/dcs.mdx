@@ -29,13 +29,17 @@ targets a dedicated cluster on DBR 19, on a Graviton (arm64) or an x86 (amd64) i
 
 | Compute | Image |
 |---|---|
-| **Dedicated** access mode, Graviton (arm64), DBR 19 | Built, and its in-image checks pass |
-| **Dedicated** access mode, x86 (amd64), DBR 19 | Built, and its in-image checks pass |
+| **Dedicated** access mode, Graviton (arm64), DBR 19 | Verified on a cluster |
+| **Dedicated** access mode, x86 (amd64), DBR 19 | Verified on a cluster |
 | DBR 17.3 / 18 | No image; use [cluster libraries](../installation.mdx#env-wheel-and-jar) |
 
 The in-image checks cover the GDAL stack, the JNI link, the plugin link and the locked packages.
-GeoBrix has not yet run the current image on a cluster. The env wheel and JAR route is the one
-verified on clusters, on DBR 17.3, 18 and 19.
+Each 0.6.0 image ran on a dedicated DBR 19 cluster before its release. The check covered the native stack, the Python and SQL self-checks, the Rust kernels and the JVM level.
+
+The 0.6.0 release digests:
+
+- Graviton (arm64): `mjohns797/geobrix@sha256:b1c026d0b08ca05bac9902bd928a842f85d7fc37d44ca1d9f9e2f3bae54f8320`
+- x86 (amd64): `mjohns797/geobrix@sha256:6d7478df66613e139b7b39010e59913f6e6aa8563e49e5f456a836d1b4f4aac5`
 
 There is no DBR 17.3 / 18 image. On that compute, install the env5 wheel and the GeoBrix JAR as
 [cluster libraries](../installation.mdx#env-wheel-and-jar).

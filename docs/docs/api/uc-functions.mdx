@@ -52,11 +52,17 @@ A plain `register(spark, catalog="main", schema="geobrix")` registers the sessio
 
 By default every Python function in the schema declares the same package list. A statement that calls several GeoBrix functions then starts one sandbox and installs the packages once.
 
-This costs time at install. The first create is about 45 s longer, once. The gain comes at query time. On Serverless, a statement with three functions took 33 s with a package list per function and 2.7 s with the shared list. A warehouse measured 28 s against 17 s. A statement with one function runs the same either way.
+The list pins `h3` and `quadbin` only. The env wheel carries its own rasterio, pyproj, shapely and morecantile, and the sandbox has scipy.
+
+This costs time at install. The first create takes longer, once. The gain comes at query time. On Serverless, a statement with three functions took 33 s with a package list per function and 2.7 s with the shared list. A warehouse measured 28 s against 17 s. A statement with one function runs the same either way.
 
 Pass `deps="per-function"` to give each function only the packages it imports. The install is smaller and faster. A statement that calls several functions with different package lists pays one sandbox start for each list.
 
 <CodeFromTest code={ucExamples} language="python" functionName="install_with_each_function_its_own_packages" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Install without PyPI access
+
+The sandbox installs the packages from PyPI. When it cannot reach PyPI, the create fails, and the error names the fix. Stage the wheels on a Volume with `gbx.stage_deps`, then pass `deps="volume"`. See [Install without PyPI access](../installation.mdx#offline-install).
 
 ## Where UC functions run
 

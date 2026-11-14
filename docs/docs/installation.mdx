@@ -7,6 +7,7 @@ import Link from '@docusaurus/Link';
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
+import offlineInstall from '!!raw-loader!../tests/python/installation/offline_install.py';
 import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
 import jvmJobBody from '!!raw-loader!../tests/scala/api/JvmJobBody.scala';
 
@@ -304,6 +305,92 @@ An owner installs the functions once. Run `gbx.uc.install` from a notebook on Se
 />
 
 Run it again after each upgrade. The [Unity Catalog functions](./api/uc-functions) page lists the functions and the permissions the owner needs.
+
+## Install without PyPI access {#offline-install}
+
+Some workspaces cannot reach PyPI, and on some the Unity Catalog sandbox cannot either. An install that needs PyPI then fails. The env wheel lists every wheel it needs, pinned and hashed, for each architecture. Download those wheels once, stage them on a Volume, then install from the Volume.
+
+### Download the wheels
+
+Run the download on any machine with PyPI access and Python 3.12. It needs the env wheel installed, and no GeoBrix checkout:
+
+<CodeFromTest
+  code={offlineInstall}
+  language="bash"
+  functionName="DOWNLOAD_SHELL"
+  title="Download the wheels the env wheel needs"
+  source="docs/tests/python/installation/offline_install.py"
+  testFile="docs/tests/python/installation/test_offline_install.py"
+/>
+
+The command does this:
+
+- It downloads binary wheels only, for x86_64 and aarch64, into `<out>/x86_64/` and `<out>/aarch64/`.
+- It checks each wheel against the sha256 its list pins.
+- It proves for each architecture that the folder covers the install offline (`pip install --dry-run --no-index`).
+- It copies the env wheel into the folder and writes `wheels.txt`, the sha256 of each file.
+
+The folder leaves out the packages the runtime already has, such as numpy, pandas, pyarrow and scipy. Options:
+
+- `--arch x86_64` or `--arch aarch64` downloads one architecture. The default is both.
+- `--extras zarr,vizx` adds the wheels of those extras.
+- `--uc` also checks the Unity Catalog pins, `h3` and `quadbin`.
+
+### Stage the wheels on a Volume
+
+`gbx.stage_deps` copies the folder to a Volume folder:
+
+<CodeFromTest
+  code={offlineInstall}
+  language="python"
+  functionName="STAGE_DEPS_PYTHON"
+  title="Stage the wheels with gbx.stage_deps"
+  source="docs/tests/python/installation/offline_install.py"
+  testFile="docs/tests/python/installation/test_offline_install.py"
+/>
+
+On Databricks compute it copies through the Volume's mount. Elsewhere it uses the Databricks SDK with its default authentication. It checks each file's sha256 before and after the copy. It refuses a folder that holds another GeoBrix wheel. It prints the install lines for that folder.
+
+### Install from the Volume
+
+Use the folder of your compute's architecture. A Graviton cluster is aarch64. In a notebook:
+
+<CodeFromTest
+  code={offlineInstall}
+  language="bash"
+  functionName="NOTEBOOK_PIP"
+  title="Install in a notebook"
+  source="docs/tests/python/installation/offline_install.py"
+  testFile="docs/tests/python/installation/test_offline_install.py"
+/>
+
+In a Serverless environment, add these lines to the environment's dependencies, one entry each:
+
+<CodeFromTest
+  code={offlineInstall}
+  language="text"
+  functionName="SERVERLESS_DEPENDENCIES"
+  title="Serverless environment dependencies"
+  source="docs/tests/python/installation/offline_install.py"
+  testFile="docs/tests/python/installation/test_offline_install.py"
+/>
+
+On a cluster, add `requirements-<arch>.txt` from the Volume folder as a cluster library. `gbx.stage_deps` writes one for each architecture.
+
+For the Unity Catalog functions, pass `deps="volume"`:
+
+<CodeFromTest
+  code={offlineInstall}
+  language="python"
+  functionName="UC_INSTALL_FROM_VOLUME"
+  title="Install the Unity Catalog functions from a Volume"
+  source="docs/tests/python/installation/offline_install.py"
+  testFile="docs/tests/python/installation/test_offline_install.py"
+/>
+
+The functions install from the Volume folders with `--no-index`. Pass `arch="aarch64"` or `arch="x86_64"` to name the sandbox's folder. By default the install lists both, and pip takes the wheels that fit. Before any statement, the install checks that each folder holds every wheel it needs. A missing wheel stops it with a `Fix:`.
+
+Use bare `/Volumes/...` paths. A `dbfs:/Volumes/...` path is refused.
 
 ## SQL from a JVM job {#jvm-sql}
 

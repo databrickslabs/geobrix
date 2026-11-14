@@ -47,6 +47,14 @@ See [GeoBrix's GDAL build](../../readers/raster.mdx#gdal-build) and [GDAL driver
 
 See [Env wheel and JAR](../../installation.mdx#env-wheel-and-jar).
 
+### Install without PyPI access {#offline-install}
+
+- **The env wheel lists every wheel it needs, pinned and hashed,** for x86_64 and aarch64, with each extra's and the Unity Catalog pins.
+- **`python -m databricks.labs.gbx.stage deps` downloads those wheels** on any machine with PyPI access. It checks each hash and proves offline that the set is complete.
+- **`gbx.stage_deps(vol_dir, src=...)` copies them to a Volume,** sha256-checked, and prints the install lines for a notebook, Serverless, a cluster and Unity Catalog.
+
+See [Install without PyPI access](../../installation.mdx#offline-install).
+
 ## Every function on every compute {#levels}
 
 - **Every function runs at the Python level.** It runs on Serverless, standard and dedicated clusters, Lakeflow pipelines and the Unity Catalog sandbox. No JAR is needed.
@@ -82,6 +90,7 @@ The [migration guide](../../migration-0-6.mdx#entry-points) maps each old import
 - **`gbx.uc.install` gives every Python function one shared package list by default.** A statement that calls several GeoBrix functions then starts one sandbox. Pass `deps="per-function"` to give each function its own list.
 - **`gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid` run as Scala functions when the install folder holds the JAR.** Stage it with [`gbx.stage_jar`](#stage-jar). Without the JAR they run as Python functions, with the same answers.
 - **`stubs=True` creates a raising function for each session-only scalar.** Its error names the route on Unity Catalog. Stubs are off by default.
+- **`deps="volume"` installs the functions without PyPI access.** The sandbox installs from wheels that `gbx.stage_deps` put on a Volume. See [Install without PyPI access](#offline-install).
 - **Each function's COMMENT starts with `geobrix <version>`.** `gbx.register(spark, catalog=..., schema=...)` says once when that schema holds another version.
 
 See [Unity Catalog functions](../../api/uc-functions.mdx) and [Installation](../../installation.mdx#uc-functions).

@@ -336,6 +336,11 @@ The folder leaves out the packages the runtime already has, such as numpy, panda
 - `--extras zarr,vizx` adds the wheels of those extras.
 - `--uc` also checks the Unity Catalog pins, `h3` and `quadbin`.
 
+The same steps run from Python, in `databricks.labs.gbx.stage`:
+
+- `download_deps(out, arches=None, extras=(), uc=False, wheel=None)` downloads and checks the wheels. It returns the path of `wheels.txt`.
+- `check_offline(folder, arch, targets, base)` checks that `targets` install from `folder` alone. It returns the `name==version` lines pip would install.
+
 ### Stage the wheels on a Volume
 
 `gbx.stage_deps` copies the folder to a Volume folder:
@@ -388,7 +393,7 @@ For the Unity Catalog functions, pass `deps="volume"`:
   testFile="docs/tests/python/installation/test_offline_install.py"
 />
 
-The functions install from the Volume folders with `--no-index`. Pass `arch="aarch64"` or `arch="x86_64"` to name the sandbox's folder. By default the install lists both, and pip takes the wheels that fit. Before any statement, the install checks that each folder holds every wheel it needs. A missing wheel stops it with a `Fix:`.
+The functions install from the Volume folders with `--no-index`. `wheels_dir` names the folder `gbx.stage_deps` filled. It defaults to `volume_dir`. Pass `arch="aarch64"` or `arch="x86_64"` to name the sandbox's folder. By default the install lists both, and pip takes the wheels that fit. Before any statement, the install checks that each folder holds every wheel it needs. A missing wheel stops it with a `Fix:`.
 
 Use bare `/Volumes/...` paths. A `dbfs:/Volumes/...` path is refused.
 

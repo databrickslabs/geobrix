@@ -2375,6 +2375,10 @@ def test_the_serverless_runner_installs_an_env_wheel_with_its_own_extras(monkeyp
         assert deps == want
     assert runner.wheel_env(runner.DEFAULT_WHEEL) == int(runner.DEFAULT_ENV_VERSION) == 6
     assert runner._split_deps("rich, overturemaps>=1.0.2,<2") == ["rich", "overturemaps>=1.0.2,<2"]
+    # Fail on revert: an option line of an offline install (--no-index, --find-links=DIR) is its own entry, not glued
+    # to its neighbours (pip: "Invalid requirement: --no-index,--find-links=...").
+    assert runner._split_deps("--no-index,--find-links=/V/x86_64,--find-links=/V/aarch64,geobrix @ file:///V/g.whl,h3==4.5.0") == [
+        "--no-index", "--find-links=/V/x86_64", "--find-links=/V/aarch64", "geobrix @ file:///V/g.whl", "h3==4.5.0"]
 
 
 @pytest.mark.parametrize(

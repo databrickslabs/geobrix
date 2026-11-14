@@ -169,8 +169,11 @@ def _env_extras_deps(env: int, extras: list[str]) -> list[str]:
 
 
 def _split_deps(csv: str) -> list[str]:
-    """Split a comma-separated requirement list, keeping a specifier's own commas (``a>=1,<2,b`` -> 2)."""
-    return [d.strip() for d in re.split(r",(?=\s*[A-Za-z])", csv) if d.strip()]
+    """Split a comma-separated requirement list, keeping a specifier's own commas (``a>=1,<2,b`` -> 2).
+
+    A pip option line (``--no-index``, ``--find-links=DIR``) is an entry of its own.
+    """
+    return [d.strip() for d in re.split(r",(?=\s*(?:[A-Za-z]|--))", csv) if d.strip()]
 
 
 def _load_extras_deps(extras: list[str]) -> list[str]:
